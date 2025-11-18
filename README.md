@@ -1,4 +1,4 @@
-# README: Google Ads API Developer Assistant (Gemini CLI Extension)
+# Google Ads API Developer Assistant (Gemini CLI Extension)
 
 **TL;DR:** This extension for the Gemini CLI lets you interact with the Google Ads API using natural language. Ask questions, generate GAQL and Python code, and execute API calls that read directly in your terminal.
 
