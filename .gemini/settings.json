@@ -1,0 +1,14 @@
+{
+  "ui": {
+    "accessibility": {
+      "disableLoadingPhrases": true
+    }
+  },
+  "context": {
+    "includeDirectories": [
+        "/path/to/your/extension/google-ads-api-developer-assistant/api_examples",
+        "/path/to/your/extension/google-ads-api-developer-assistant/saved_code",
+        "/path/to/your/library/google-ads-python"
+    ]
+  }
+}
