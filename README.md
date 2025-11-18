@@ -38,7 +38,7 @@ This extension leverages `gemini-cli`'s ability to use `GEMINI.md` files and the
 3.  A configured `google-ads.yaml` credentials file in your home directory (see [google-ads-python docs](https://github.com/googleads/google-ads-python/blob/main/google-ads.yaml)).
 4.  Gemini CLI installed (see [Gemini CLI docs](https://github.com/google-gemini/gemini-cli)).
 5.  A local clone of the [google-ads-python](https://github.com/googleads/google-ads-python) client library. Clone this in a directory that is NOT under the Google Ads API Developer Assistant project directory.
-6.  Python >= 3.9 installed and available on your system PATH.
+6.  Python >= 3.10 installed and available on your system PATH.
 
 ## Setup Guide
 
