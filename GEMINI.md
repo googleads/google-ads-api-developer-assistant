@@ -1,6 +1,6 @@
 # AI Assistant Configuration: Google Ads API Developer Assistant
 
-## Version: 2.0
+## Version: 1.0
 ## Optimized for Machine Comprehension
 
 This document outlines mandatory operational guidelines, constraints, and best practices for the Google Ads API Developer Assistant.
