@@ -42,15 +42,23 @@ This extension leverages `gemini-cli`'s ability to use `GEMINI.md` files and the
 
 ## Setup Guide
 
-1.  **Install Gemini CLI:** Ensure that [Gemini CLI](https://github.com/google-gemini/gemini-cli) is installed.
+1.  **Install Gemini CLI:** Ensure that [Gemini CLI](https://github.com/google-gemini/gemini-cli) is installed. **Pro tip**: Before starting the installation read the [authentication](https://github.com/google-gemini/gemini-cli?tab=readme-ov-file#-authentication-options) section.
 
-2.  **Clone Google Ads Python Library:** Clone the [google-ads-python](https://github.com/googleads/google-ads-python) repository to a local directory (e.g., `$HOME/path/to/google-ads-python`) that is not under the Google Ads API Developer Assistant project directory. This provides context for code generation.
+2.  **Clone the Extension:** `git clone https://github.com/googleads/google-ads-api-developer-assistant`. This becomes your project directory. You need to be in this directory when you run gemini-cli.
 
-3.  **Configure Credentials:** Make sure your [google-ads.yaml](https://github.com/googleads/google-ads-python/blob/main/google-ads.yaml) file with API credentials is in your `$HOME` directory.
+3. Run setup.sh
+    * Ensure that [ja](https://github.com/jqlang/jq?tab=readme-ov-file#installation) is installed. This is a json processor that allows us to write a valid settings.json.
+    * cd to <path>/google-ads-api-developer-extension
+    * run ./setup.sh <full path to where you want the python library installed>
 
-4.  **Clone the Extension:** `git clone https://github.com/googleads/google-ads-api-developer-assistant`. This becomes your project directory. You need to be in this directory when you run gemini-cli.
+4.  **Configure Credentials:** Make sure your [google-ads.yaml](https://github.com/googleads/google-ads-python/blob/main/google-ads.yaml) file with API credentials is in your `$HOME` directory.
 
-5.  **Set Context in Gemini:** The `gemini` command must be run from the root of the `google-ads-api-developer-assistant` project directory. Configure the context paths in `.gemini/settings.json`:
+5.  **Optional: Default Customer ID:** To set a default customer ID, create a file named `customer_id.txt` in the `google-ads-api-developer-assistant` directory with the content `customer_id=YOUR_CUSTOMER_ID` (e.g., `customer_id=1234567890`). You can then use prompts like *"Get campaigns for the default customer"*.
+
+### Manual Installation
+1.  **Clone Google Ads Python Library:** Clone the [google-ads-python](https://github.com/googleads/google-ads-python) repository to a local directory (e.g., `$HOME/path/to/google-ads-python`) that is not under the Google Ads API Developer Assistant project directory. This provides context for code generation.
+
+2.  **Set Context in Gemini:** The `gemini` command must be run from the root of the `google-ads-api-developer-assistant` project directory. Configure the context paths in `.gemini/settings.json`:
     *   Edit `/path/to/your/google-ads-api-developer-assistant/.gemini/settings.json`.
     *   Add the **full absolute paths** to the `context.includeDirectories` array:
         *   Your `google-ads-python` library clone.
@@ -70,8 +78,6 @@ This extension leverages `gemini-cli`'s ability to use `GEMINI.md` files and the
     }
     ```
     *Note: Replace the placeholder paths with the actual absolute paths on your system.*
-
-6.  **Optional: Default Customer ID:** To set a default customer ID, create a file named `customer_id.txt` in the `google-ads-api-developer-assistant` directory with the content `customer_id=YOUR_CUSTOMER_ID` (e.g., `customer_id=1234567890`). You can then use prompts like *"Get campaigns for the default customer"*.
 
 ## Usage Examples
 
