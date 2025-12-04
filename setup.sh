@@ -47,18 +47,22 @@ if ! command -v git &> /dev/null; then
 fi
 
 # --- Argument Parsing ---
-if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 <python_lib_parent_dir>" >&2
+if [[ $# -eq 0 ]]; then
+  readonly PYTHON_LIB_PARENT_DIR_ARG="${HOME}/python/src"
+  echo "No python_lib_parent_dir provided. Using default: ${PYTHON_LIB_PARENT_DIR_ARG}"
+elif [[ $# -eq 1 ]]; then
+  readonly PYTHON_LIB_PARENT_DIR_ARG="$1"
+else
+  echo "Usage: $0 [python_lib_parent_dir]" >&2
   echo "  Clones/updates the ${PYTHON_LIB_NAME} repository and modifies the settings file." >&2
   echo "  This script must be run from within the google-ads-api-developer-assistant git repository." >&2
-  echo "  <python_lib_parent_dir>: Fully qualified path to an existing directory" >&2
+  echo "  [python_lib_parent_dir]: Optional. Fully qualified path to an existing directory" >&2
   echo "                         where the '${PYTHON_LIB_NAME}' library will be cloned." >&2
+  echo "                         Defaults to: \${HOME}/python/src" >&2
   echo "                         This must NOT be under the project directory." >&2
   echo "  Example: $0 /home/user/development/libs" >&2
   exit 1
 fi
-readonly PYTHON_LIB_PARENT_DIR_ARG=$1
-
 # --- Project Directory Resolution ---
 # Determine the root directory of the current git repository.
 if ! PROJECT_DIR_ABS=$(git rev-parse --show-toplevel 2>/dev/null); then
@@ -69,16 +73,19 @@ readonly PROJECT_DIR_ABS
 echo "Detected project root: ${PROJECT_DIR_ABS}"
 
 # --- Python Lib Path Resolution and Validation ---
+if [[ ! -d "${PYTHON_LIB_PARENT_DIR_ARG}" ]]; then
+  echo "Directory ${PYTHON_LIB_PARENT_DIR_ARG} does not exist. Creating it..."
+  if ! mkdir -p "${PYTHON_LIB_PARENT_DIR_ARG}"; then
+    err "ERROR: Failed to create directory: ${PYTHON_LIB_PARENT_DIR_ARG}"
+    exit 1
+  fi
+fi
+
 if ! PYTHON_LIB_PARENT_DIR=$(realpath "${PYTHON_LIB_PARENT_DIR_ARG}" 2>/dev/null); then
   err "ERROR: Invalid path provided for python_lib_parent_dir: ${PYTHON_LIB_PARENT_DIR_ARG}"
   exit 1
 fi
 readonly PYTHON_LIB_PARENT_DIR
-
-if [[ ! -d "${PYTHON_LIB_PARENT_DIR}" ]]; then
-  err "ERROR: python_lib_parent_dir must be an existing directory: ${PYTHON_LIB_PARENT_DIR}"
-  exit 1
-fi
 
 readonly PYTHON_LIB_CLONE_PATH="${PYTHON_LIB_PARENT_DIR}/${PYTHON_LIB_NAME}"
 
@@ -161,7 +168,20 @@ fi
 
 # Register the extension with the gemini extensions manifest
 echo "Registering with the gemini extensions manifest"
-gemini extensions install "${PROJECT_DIR_ABS}"
+if ! INSTALL_OUTPUT=$(gemini extensions install "${PROJECT_DIR_ABS}" 2>&1); then
+  if [[ "${INSTALL_OUTPUT}" == *"already installed"* ]]; then
+    echo "Extension already installed. Reinstalling..."
+    # We ignore the uninstall error just in case, though it should exist if we got "already installed"
+    gemini extensions uninstall "google-ads-api-developer-assistant" || true
+    gemini extensions install "${PROJECT_DIR_ABS}"
+  else
+    echo "${INSTALL_OUTPUT}" >&2
+    err "ERROR: Failed to install extension."
+    exit 1
+  fi
+else
+  echo "${INSTALL_OUTPUT}"
+fi
 
 trap - EXIT # Clear the trap as the file has been moved.
 

@@ -34,7 +34,7 @@ This document outlines mandatory operational guidelines, constraints, and best p
 
 #### 1.2. API Versioning
 
-**MANDATORY FIRST STEP:** At the beginning of any task that involves the Google Ads API, you **MUST** perform a `google_web_search` to determine the latest stable version of the Google Ads API.
+**MANDATORY FIRST STEP:** At the beginning of any task that involves the Google Ads API, you **MUST** perform a `google_web_search` to determine the latest stable version of the Google Ads API. When you obtains the version show it to the user and ask if this is correct.
 
 *   **Search Query:** Use a query like "latest google ads api version".
 *   **Verification:** The search result should point to the official Google Ads API documentation on `developers.google.com`.
