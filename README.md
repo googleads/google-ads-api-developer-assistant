@@ -112,7 +112,17 @@ b.  **Set Context in Gemini:** The `gemini` command must be run from the root of
 
 ## Known Quirks
 
-*   The underlying model may have been trained on an older API version. It might occasionally generate code with deprecated fields. Execution errors often provide feedback that allows Gemini CLI to self-correct on the next attempt, using the context from the `google-ads-python` client library.
+*   The underlying model may have been trained on an older API version. It
+might occasionally generate code with deprecated fields. Execution errors
+often provide feedback that allows Gemini CLI to self-correct on the next
+attempt, using the context from the `google-ads-python` client library.
+
+## Maintenance
+
+We will release updates to both this extension and the google-ads-python client
+library. To ensure you are using the latest versions, run `update.sh` when a new
+version of the API is published or a new version of the client library is
+released.
 
 ## Contributing
 
