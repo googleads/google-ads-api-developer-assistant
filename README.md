@@ -53,7 +53,7 @@ This extension leverages `gemini-cli`'s ability to use `GEMINI.md` files and the
 
 4.  **Configure Credentials:** Make sure your [google-ads.yaml](https://github.com/googleads/google-ads-python/blob/main/google-ads.yaml) file with API credentials is in your `$HOME` directory.
 
-5.  **Optional: Default Customer ID:** To set a default customer ID, create a file named `customer_id.txt` in the `google-ads-api-developer-assistant` directory with the content `customer_id=YOUR_CUSTOMER_ID` (e.g., `customer_id=1234567890`). You can then use prompts like *"Get campaigns for the default customer"*.
+5.  **Optional: Default Customer ID:** To set a default customer ID, create a file named `customer_id.txt` in the `google-ads-api-developer-assistant` directory with the content `customer_id:YOUR_CUSTOMER_ID` (e.g., `customer_id: 1234567890`). You can then use prompts like *"Get campaigns for the default customer"*.
 
 ### Manual Setup
 
@@ -112,7 +112,7 @@ b.  **Set Context in Gemini:** The `gemini` command must be run from the root of
 
 ## Mutate Operations
 
-*   Assistant's Job: To help you by writing the code that would modify things (e.g., create or update a campaign, add a user).
+*   Assistant's Job: To help you by writing the code that would modify things (e.g., create or update a campaign, add a user), but NOT to execute this code.
 
 *   Your Job: To review that code for accuracy, decide if you want to run it, and then execute it yourself outside of the Assistant. The Assistant won't run it for you.
 
