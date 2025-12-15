@@ -74,7 +74,8 @@ echo "Detected project root: ${PROJECT_DIR_ABS}"
 
 # --- Python Lib Path Resolution and Validation ---
 if [[ ! -d "${PYTHON_LIB_PARENT_DIR_ARG}" ]]; then
-  echo "Directory ${PYTHON_LIB_PARENT_DIR_ARG} does not exist. Creating it..."
+  echo "Directory ${PYTHON_LIB_PARENT_DIR_ARG} does not exist. Creating it..."  
+  
   if ! mkdir -p "${PYTHON_LIB_PARENT_DIR_ARG}"; then
     err "ERROR: Failed to create directory: ${PYTHON_LIB_PARENT_DIR_ARG}"
     exit 1
