@@ -1,2 +1,8 @@
-* 1.0
+* 1.0.0
 - Release of verions 1.0
+
+* 1.1.0
+- Added support for PHP, Ruby, Java, and C#.
+- Find latest verion of the API and prompt user whether to use this version.
+- Modified setup.sh to clone copies of the client libraries.
+

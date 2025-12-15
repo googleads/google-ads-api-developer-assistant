@@ -307,4 +307,7 @@ echo "New contents of context.includeDirectories:"
 jq '.context.includeDirectories' "${SETTINGS_FILE}"
 
 echo "Setup complete."
+echo ""
+echo "IMPORTANT: You must manually configure a development environment for each language you wish to use."
+echo "           (e.g.,  run 'pip install google-ads' for Python, run 'composer install' for PHP, etc.)"
 
