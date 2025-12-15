@@ -32,8 +32,27 @@ err() {
 }
 
 # --- Configuration ---
-readonly PYTHON_LIB_REPO_URL="https://github.com/googleads/google-ads-python.git"
-readonly PYTHON_LIB_NAME="google-ads-python"
+readonly DEFAULT_PARENT_DIR="${HOME}/gaada"
+
+# Associative arrays for repo URLs and default names
+declare -A REPO_URLS=(
+  ["python"]="https://github.com/googleads/google-ads-python.git"
+  ["php"]="https://github.com/googleads/google-ads-php.git"
+  ["ruby"]="https://github.com/googleads/google-ads-ruby.git"
+  ["java"]="https://github.com/googleads/google-ads-java.git"
+  ["dotnet"]="https://github.com/googleads/google-ads-dotnet.git"
+)
+
+declare -A REPO_NAMES=(
+  ["python"]="google-ads-python"
+  ["php"]="google-ads-php"
+  ["ruby"]="google-ads-ruby"
+  ["java"]="google-ads-java"
+  ["dotnet"]="google-ads-dotnet"
+)
+
+# Defaults for paths (will be populated with defaults or overrides)
+declare -A LIB_PATHS
 
 # --- Dependency Check ---
 if ! command -v jq &> /dev/null; then
@@ -46,23 +65,62 @@ if ! command -v git &> /dev/null; then
   exit 1
 fi
 
+# --- Help Function ---
+usage() {
+  echo "Usage: $0 [OPTIONS]"
+  echo "  Clones/updates Google Ads client libraries and modifies the settings file."
+  echo ""
+  echo "  This script initializes the development environment for the Google Ads API Developer Assistant."
+  echo "  It clones the client libraries into '${DEFAULT_PARENT_DIR}' by default, or to specified paths."
+  echo ""
+  echo "  Options:"
+  echo "    -h, --help                 Show this help message and exit"
+  echo "    --python <path>            Override path for google-ads-python"
+  echo "    --php <path>               Override path for google-ads-php"
+  echo "    --ruby <path>              Override path for google-ads-ruby"
+  echo "    --java <path>              Override path for google-ads-java"
+  echo "    --dotnet <path>            Override path for google-ads-dotnet"
+  echo ""
+  echo "  Example:"
+  echo "    $0 --java /home/user/my-java-repo --python /home/user/my-python-repo"
+  echo ""
+}
+
 # --- Argument Parsing ---
-if [[ $# -eq 0 ]]; then
-  readonly PYTHON_LIB_PARENT_DIR_ARG="${HOME}/python/src"
-  echo "No python_lib_parent_dir provided. Using default: ${PYTHON_LIB_PARENT_DIR_ARG}"
-elif [[ $# -eq 1 ]]; then
-  readonly PYTHON_LIB_PARENT_DIR_ARG="$1"
-else
-  echo "Usage: $0 [python_lib_parent_dir]" >&2
-  echo "  Clones/updates the ${PYTHON_LIB_NAME} repository and modifies the settings file." >&2
-  echo "  This script must be run from within the google-ads-api-developer-assistant git repository." >&2
-  echo "  [python_lib_parent_dir]: Optional. Fully qualified path to an existing directory" >&2
-  echo "                         where the '${PYTHON_LIB_NAME}' library will be cloned." >&2
-  echo "                         Defaults to: \${HOME}/python/src" >&2
-  echo "                         This must NOT be under the project directory." >&2
-  echo "  Example: $0 /home/user/development/libs" >&2
-  exit 1
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --python)
+      LIB_PATHS["python"]="$2"
+      shift 2
+      ;;
+    --php)
+      LIB_PATHS["php"]="$2"
+      shift 2
+      ;;
+    --ruby)
+      LIB_PATHS["ruby"]="$2"
+      shift 2
+      ;;
+    --java)
+      LIB_PATHS["java"]="$2"
+      shift 2
+      ;;
+    --dotnet)
+      LIB_PATHS["dotnet"]="$2"
+      shift 2
+      ;;
+    *)
+      err "ERROR: Unknown argument: $1"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
 # --- Project Directory Resolution ---
 # Determine the root directory of the current git repository.
 if ! PROJECT_DIR_ABS=$(git rev-parse --show-toplevel 2>/dev/null); then
@@ -72,42 +130,77 @@ fi
 readonly PROJECT_DIR_ABS
 echo "Detected project root: ${PROJECT_DIR_ABS}"
 
-# --- Python Lib Path Resolution and Validation ---
-if [[ ! -d "${PYTHON_LIB_PARENT_DIR_ARG}" ]]; then
-  echo "Directory ${PYTHON_LIB_PARENT_DIR_ARG} does not exist. Creating it..."
-  if ! mkdir -p "${PYTHON_LIB_PARENT_DIR_ARG}"; then
-    err "ERROR: Failed to create directory: ${PYTHON_LIB_PARENT_DIR_ARG}"
-    exit 1
+# --- Path Resolution and Validation ---
+# Ensure default directory exists if we are going to use it
+if [[ ! -d "${DEFAULT_PARENT_DIR}" ]]; then
+  # We only create it if we actually need it (i.e., at least one lib is using default)
+  # But simpler to just create it if it doesn't exist, as it's the intended home.
+  echo "Creating default library directory: ${DEFAULT_PARENT_DIR}"
+  mkdir -p "${DEFAULT_PARENT_DIR}" || { err "ERROR: Failed to create ${DEFAULT_PARENT_DIR}"; exit 1; }
+fi
+
+for lang in "${!REPO_NAMES[@]}"; do
+  if [[ -z "${LIB_PATHS[$lang]:-}" ]]; then
+    # Use default path
+    LIB_PATHS["$lang"]="${DEFAULT_PARENT_DIR}/${REPO_NAMES[$lang]}"
   fi
-fi
+  
+  # Resolve to absolute path
+  # Note: The directory might not exist yet if it's a clone target, 
+  # but the parent should exist if we are to be safe? 
+  # Actually, 'git clone' creates the directory. 
+  # We should resolve the parent dir for validation if possible, or just resolve the path if it exists.
+  
+  # Logic:
+  # 1. If path exists, resolve it.
+  # 2. If path doesn't exist, check if parent exists.
+  
+  path="${LIB_PATHS[$lang]}"
+  parent_dir=$(dirname "$path")
+  
+  if [[ ! -d "$parent_dir" ]]; then
+     echo "Creating parent directory for $lang: $parent_dir"
+     mkdir -p "$parent_dir" || { err "ERROR: Failed to create parent directory $parent_dir"; exit 1; }
+  fi
 
-if ! PYTHON_LIB_PARENT_DIR=$(realpath "${PYTHON_LIB_PARENT_DIR_ARG}" 2>/dev/null); then
-  err "ERROR: Invalid path provided for python_lib_parent_dir: ${PYTHON_LIB_PARENT_DIR_ARG}"
-  exit 1
-fi
-readonly PYTHON_LIB_PARENT_DIR
+  # Now we can optimistically set the absolute path. 
+  # Ideally we want the canonical path. 
+  # 'realpath' works on non-existent files in some versions, or we can use -m.
+  # If -m is not supported, we can cd to parent and pwd.
+  
+  if command -v realpath &> /dev/null; then
+      # Try using -m if available (doesn't require existence), otherwise just path
+      ABS_PATH=$(realpath -m "$path")
+  else
+      # Fallback
+      ABS_PATH="$(cd "$parent_dir" && pwd)/$(basename "$path")"
+  fi
+  
+  LIB_PATHS["$lang"]="$ABS_PATH"
 
-readonly PYTHON_LIB_CLONE_PATH="${PYTHON_LIB_PARENT_DIR}/${PYTHON_LIB_NAME}"
+  # Validation: check against project dir
+  if [[ "${ABS_PATH}" == "${PROJECT_DIR_ABS}"* ]]; then
+     err "ERROR: ${lang} path (${ABS_PATH}) cannot be a subdirectory of the project directory (${PROJECT_DIR_ABS})"
+     exit 1
+  fi
+done
 
-# Ensure python_lib_parent_dir is NOT under the project_dir
-if [[ "${PYTHON_LIB_PARENT_DIR}" == "${PROJECT_DIR_ABS}"* ]]; then
-  err "ERROR: python_lib_parent_dir (${PYTHON_LIB_PARENT_DIR}) cannot be a subdirectory of the project directory (${PROJECT_DIR_ABS})"
-  exit 1
-fi
-
-# --- Clone/Update Python Lib Repository ---
+# --- Clone/Update Repositories ---
 clone_or_update() {
   local repo_url="$1"
   local clone_path="$2"
   local repo_name
-
+  
   repo_name=$(basename "${clone_path}")
 
   echo "Managing repository ${repo_name} in ${clone_path}"
   if [[ -d "${clone_path}/.git" ]]; then
-    echo "WARN: Directory ${clone_path} already exists and is a git repo. Skipping clone."
-    # Optionally, you could add git pull here:
-    # (cd "${clone_path}" && git pull) || err "Failed to pull updates for ${repo_name}"
+    echo "Directory ${clone_path} already exists. Updating..."
+    if ! (cd "${clone_path}" && git pull); then
+      echo "WARN: Failed to update ${repo_name}. Continuing..."
+    else
+      echo "Successfully updated ${repo_name}."
+    fi
   elif [[ -d "${clone_path}" ]]; then
      echo "WARN: Directory ${clone_path} exists but is not a git repo. Skipping."
   else
@@ -120,7 +213,9 @@ clone_or_update() {
   fi
 }
 
-clone_or_update "${PYTHON_LIB_REPO_URL}" "${PYTHON_LIB_CLONE_PATH}"
+for lang in "${!REPO_URLS[@]}"; do
+  clone_or_update "${REPO_URLS[$lang]}" "${LIB_PATHS[$lang]}"
+done
 
 # --- Modify settings.json ---
 readonly SETTINGS_FILE="${PROJECT_DIR_ABS}/.gemini/settings.json"
@@ -132,14 +227,32 @@ fi
 
 echo "Updating ${SETTINGS_FILE} with context paths..."
 
-# Define the includeDirectories paths, ensuring they are full paths
-readonly CONTEXT_PATH1="${PROJECT_DIR_ABS}/api_examples"
-readonly CONTEXT_PATH2="${PROJECT_DIR_ABS}/saved_code"
-if ! CONTEXT_PATH3=$(realpath "${PYTHON_LIB_CLONE_PATH}" 2>/dev/null); then
-    err "ERROR: Could not resolve absolute path for python lib clone: ${PYTHON_LIB_CLONE_PATH}"
-    exit 1
-fi
-readonly CONTEXT_PATH3
+# Define the always-included directories
+readonly CONTEXT_PATH_EXAMPLES="${PROJECT_DIR_ABS}/api_examples"
+readonly CONTEXT_PATH_SAVED="${PROJECT_DIR_ABS}/saved_code"
+
+# Collect all paths for jq
+# We build a JSON array string or pass args. Passing args is safer.
+# We have 5 dynamic paths + 2 static paths.
+
+# Construct jq args
+JQ_ARGS=(
+  --arg examples "${CONTEXT_PATH_EXAMPLES}"
+  --arg saved "${CONTEXT_PATH_SAVED}"
+)
+
+# Add each lib path as an arg
+for lang in "${!LIB_PATHS[@]}"; do
+  JQ_ARGS+=(--arg "lib_${lang}" "${LIB_PATHS[$lang]}")
+done
+
+# Construct the array construction string for jq
+# It should look like: [$examples, $saved, $lib_python, $lib_php, ...]
+JQ_ARRAY_STR="[\$examples, \$saved"
+for lang in "${!LIB_PATHS[@]}"; do
+  JQ_ARRAY_STR+=", \$lib_$lang"
+done
+JQ_ARRAY_STR+="]"
 
 # Use jq to modify the JSON file
 TMP_SETTINGS_FILE=""
@@ -151,10 +264,8 @@ if ! TMP_SETTINGS_FILE=$(mktemp "${SETTINGS_FILE}.XXXXXX"); then
 fi
 
 if ! jq \
-  --arg path1 "${CONTEXT_PATH1}" \
-  --arg path2 "${CONTEXT_PATH2}" \
-  --arg path3 "${CONTEXT_PATH3}" \
-  '.context.includeDirectories = [$path1, $path2, $path3]' \
+  "${JQ_ARGS[@]}" \
+  ".context.includeDirectories = ${JQ_ARRAY_STR}" \
   "${SETTINGS_FILE}" > "${TMP_SETTINGS_FILE}"; then
   err "ERROR: jq command failed to update ${SETTINGS_FILE}"
   exit 1
@@ -168,22 +279,28 @@ fi
 
 # Register the extension with the gemini extensions manifest
 echo "Registering with the gemini extensions manifest"
-if ! INSTALL_OUTPUT=$(gemini extensions install "${PROJECT_DIR_ABS}" 2>&1); then
-  if [[ "${INSTALL_OUTPUT}" == *"already installed"* ]]; then
-    echo "Extension already installed. Reinstalling..."
-    # We ignore the uninstall error just in case, though it should exist if we got "already installed"
-    gemini extensions uninstall "google-ads-api-developer-assistant" || true
-    gemini extensions install "${PROJECT_DIR_ABS}"
+if command -v gemini &> /dev/null; then
+  if ! INSTALL_OUTPUT=$(gemini extensions install "${PROJECT_DIR_ABS}" 2>&1); then
+    if [[ "${INSTALL_OUTPUT}" == *"already installed"* ]]; then
+      echo "Extension already installed. Reinstalling..."
+      # We ignore the uninstall error just in case
+      gemini extensions uninstall "google-ads-api-developer-assistant" || true
+      gemini extensions install "${PROJECT_DIR_ABS}"
+    else
+      echo "${INSTALL_OUTPUT}" >&2
+      err "ERROR: Failed to install extension."
+      exit 1
+    fi
   else
-    echo "${INSTALL_OUTPUT}" >&2
-    err "ERROR: Failed to install extension."
-    exit 1
+    echo "${INSTALL_OUTPUT}"
   fi
 else
-  echo "${INSTALL_OUTPUT}"
+  echo "WARN: 'gemini' command not found. Skipping extension registration."
+  echo "      This is normal if you are running this script outside of the Gemini environment"
+  echo "      or if 'gemini' is an alias not exported to this script."
 fi
 
-trap - EXIT # Clear the trap as the file has been moved.
+trap - EXIT # Clear the trap
 
 echo "Successfully updated ${SETTINGS_FILE}"
 echo "New contents of context.includeDirectories:"
