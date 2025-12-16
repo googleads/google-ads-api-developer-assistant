@@ -29,6 +29,27 @@ err() {
   echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*" >&2
 }
 
+# --- Help Function ---
+usage() {
+  echo "Usage: $0 [OPTIONS]"
+  echo "  Updates the Google Ads API Developer Assistant and configured client libraries."
+  echo ""
+  echo "  This script performs the following actions:"
+  echo "  1. Updates the 'google-ads-api-developer-assistant' repository (git pull)."
+  echo "  2. Reads '.gemini/settings.json' to find configured client libraries."
+  echo "  3. Updates each found client library repository (git pull)."
+  echo ""
+  echo "  Options:"
+  echo "    -h, --help    Show this help message and exit"
+  echo ""
+}
+
+# --- Argument Parsing ---
+if [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 # --- Dependency Check ---
 if ! command -v jq &> /dev/null; then
   err "ERROR: jq is not installed. Please install it to continue."
@@ -57,7 +78,7 @@ if ! git pull; then
 fi
 echo "Successfully updated google-ads-api-developer-assistant."
 
-# --- Locate and Update Python Lib ---
+# --- Locate and Update Client Libraries ---
 readonly SETTINGS_FILE="${PROJECT_DIR_ABS}/.gemini/settings.json"
 
 if [[ ! -f "${SETTINGS_FILE}" ]]; then
@@ -66,29 +87,57 @@ if [[ ! -f "${SETTINGS_FILE}" ]]; then
   exit 1
 fi
 
-echo "Reading ${SETTINGS_FILE} to find google-ads-python..."
+echo "Reading ${SETTINGS_FILE} to find client libraries..."
 
-# Extract the path ending with 'google-ads-python' from includeDirectories
-PYTHON_LIB_PATH=$(jq -r '.context.includeDirectories[] | select(endswith("google-ads-python"))' "${SETTINGS_FILE}")
+# Read all includeDirectories
+# Use mapfile to handle potential spaces in paths safely
+mapfile -t INCLUDE_DIRS < <(jq -r '.context.includeDirectories[]' "${SETTINGS_FILE}")
 
-if [[ -z "${PYTHON_LIB_PATH}" ]]; then
-    err "ERROR: Could not find google-ads-python path in ${SETTINGS_FILE}."
-    exit 1
+if [[ ${#INCLUDE_DIRS[@]} -eq 0 ]]; then
+    echo "WARN: No directories found in ${SETTINGS_FILE}."
+    exit 0
 fi
 
-echo "Found google-ads-python at: ${PYTHON_LIB_PATH}"
+echo "Found ${#INCLUDE_DIRS[@]} directories in settings."
 
-if [[ ! -d "${PYTHON_LIB_PATH}" ]]; then
-    err "ERROR: Directory not found: ${PYTHON_LIB_PATH}"
-    exit 1
-fi
+for lib_path in "${INCLUDE_DIRS[@]}"; do
+    # Skip if path is empty
+    [[ -z "${lib_path}" ]] && continue
 
-echo "Updating google-ads-python..."
-# Use a subshell to change directory and pull, so we don't affect the current script's CWD
-if ! (cd "${PYTHON_LIB_PATH}" && git pull); then
-    err "ERROR: Failed to update google-ads-python at ${PYTHON_LIB_PATH}"
-    exit 1
-fi
+    # Check if path exists
+    if [[ ! -d "${lib_path}" ]]; then
+        echo "WARN: Directory not found: ${lib_path}. Skipping."
+        continue
+    fi
 
-echo "Successfully updated google-ads-python."
+    # Resolve absolute path for comparison
+    if ! abs_lib_path=$(realpath "${lib_path}" 2>/dev/null); then
+         echo "WARN: Could not resolve path: ${lib_path}. Skipping."
+         continue
+    fi
+
+    # Skip if it is the project directory itself or a subdirectory of it
+    if [[ "${abs_lib_path}" == "${PROJECT_DIR_ABS}"* ]]; then
+        echo "Skipping internal directory: ${abs_lib_path}"
+        continue
+    fi
+
+    # Check if it is a git repository
+    if [[ ! -d "${abs_lib_path}/.git" ]]; then
+        echo "Skipping non-git directory: ${abs_lib_path}"
+        continue
+    fi
+
+    echo "Updating repository at: ${abs_lib_path}..."
+    if ! (cd "${abs_lib_path}" && git pull); then
+        err "ERROR: Failed to update ${abs_lib_path}"
+        # We continue updating other libraries even if one fails? 
+        # The prompt didn't specify, but usually best effort is good for updates.
+        # However, scripts usually exit on error. set -e is on.
+        # To fail fast:
+        exit 1
+    fi
+    echo "Successfully updated ${abs_lib_path}."
+done
+
 echo "Update complete."
