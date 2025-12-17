@@ -8,7 +8,6 @@
     2. Clones or updates the selected Google Ads client libraries into a specified directory.
     3. Updates the '.gemini/settings.json' file to include the project's API examples,
        saved code, and the cloned client libraries in the context.
-    4. Registers the project as a Gemini extension.
 
 .PARAMETER Python
     Include google-ads-python.

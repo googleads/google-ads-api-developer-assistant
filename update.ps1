@@ -35,18 +35,97 @@ Write-Host "Detected project root: $ProjectDirAbs"
 
 # --- Update Assistant Repo ---
 Write-Host "Updating google-ads-api-developer-assistant..."
+
+$SettingsFile = Join-Path $ProjectDirAbs ".gemini\settings.json"
+$TempSettingsFile = [System.IO.Path]::GetTempFileName()
+
 try {
+    # 1. Backup existing settings if they exist
+    if (Test-Path -LiteralPath $SettingsFile) {
+        Write-Host "Backing up $SettingsFile..."
+        Copy-Item -LiteralPath $SettingsFile -Destination $TempSettingsFile -Force
+
+        # 2. Reset local changes to settings.json to allow git pull
+        # Check if file is tracked by git
+        $GitStatus = git ls-files --error-unmatch $SettingsFile 2>$null
+        if ($LASTEXITCODE -eq 0) {
+             Write-Host "Resetting $SettingsFile to avoid merge conflicts..."
+             git checkout $SettingsFile
+        }
+    }
+
+    # 3. Update Repo
     git pull
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "ERROR: Failed to update google-ads-api-developer-assistant."
-        exit 1
+        throw "Failed to update google-ads-api-developer-assistant."
     }
     Write-Host "Successfully updated google-ads-api-developer-assistant."
+
+    # 4. Restore/Merge settings
+    if ((Test-Path -LiteralPath $TempSettingsFile) -and (Get-Item $TempSettingsFile).Length -gt 0) {
+        Write-Host "Merging preserved settings with new defaults..."
+        
+        # Read contents
+        $UserContent = Get-Content -LiteralPath $TempSettingsFile -Raw | ConvertFrom-Json
+        $RepoContent = Get-Content -LiteralPath $SettingsFile -Raw | ConvertFrom-Json
+        
+        # Merge Logic: User overrides Repo
+        # Helper function for recursive merge could go here, but for now we do specific top-level merge
+        # replicating jq * behavior for simple objects.
+        # Actually, let's just use strict property copy from User to Repo for top-level keys
+        # If deeply nested merge is needed, valid for context.includeDirectories?
+        # Usually settings.json is flat or 1-level deep.
+        
+        # Simple Merge: Add/Overwrite properties from User to Repo object
+        foreach ($Prop in $UserContent.PSObject.Properties) {
+             if ($Prop.Name -eq "context") {
+                 # Special handling for context if needed, or just overwrite?
+                 # jq * merges recursively.
+                 # Let's try to merge context if both have it.
+                 if ($RepoContent.PSObject.Properties["context"]) {
+                     foreach ($CtxProp in $Prop.Value.PSObject.Properties) {
+                         # e.g. includeDirectories
+                         if (-not $RepoContent.context.PSObject.Properties[$CtxProp.Name]) {
+                             $RepoContent.context | Add-Member -MemberType NoteProperty -Name $CtxProp.Name -Value $CtxProp.Value
+                         } else {
+                             $RepoContent.context.$($CtxProp.Name) = $CtxProp.Value
+                         }
+                     }
+                 } else {
+                     $RepoContent | Add-Member -MemberType NoteProperty -Name "context" -Value $Prop.Value
+                 }
+             } else {
+                 if (-not $RepoContent.PSObject.Properties[$Prop.Name]) {
+                     $RepoContent | Add-Member -MemberType NoteProperty -Name $Prop.Name -Value $Prop.Value
+                 } else {
+                     $RepoContent.$($Prop.Name) = $Prop.Value
+                 }
+             }
+        }
+        
+        # Save merged
+        $RepoContent | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
+        Write-Host "Settings restored and merged successfully."
+    }
+
 }
 catch {
-    Write-Error "ERROR: Failed to update google-ads-api-developer-assistant: $_"
+    Write-Error "ERROR: $_"
+    # Restore backup if pull failed or something went wrong involving the file
+    if ((Test-Path -LiteralPath $TempSettingsFile) -and (Get-Item $TempSettingsFile).Length -gt 0) {
+         if (-not (Test-Path -LiteralPath $SettingsFile) -or (Get-Item $SettingsFile).Length -eq 0) {
+             Write-Host "Restoring original settings after failure..."
+             Copy-Item -LiteralPath $TempSettingsFile -Destination $SettingsFile -Force
+         }
+    }
     exit 1
 }
+finally {
+    if (Test-Path -LiteralPath $TempSettingsFile) {
+        Remove-Item -LiteralPath $TempSettingsFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
 
 # --- Locate and Update Client Libraries ---
 $SettingsFile = Join-Path $ProjectDirAbs ".gemini\settings.json"
