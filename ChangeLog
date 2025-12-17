@@ -1,5 +1,5 @@
 * 1.0.0
-- Release of verions 1.0
+- Release of verion 1.0
 
 * 1.1.0
 - Added support for PHP, Ruby, Java, and C#.
@@ -7,9 +7,10 @@
 - Modified setup.sh to clone copies of the client libraries.
 
 * 1.2.0
-- Update README.md for clarity
+- Updated README.md for clarity
 - Modified setup.sh to work with Linux and macOS.
 - Modified update.sh to work with Linux and macOS.
 - Added PowerShell scripts for Windows.
+- Removed extension installation to manifest since it regularly hangs.
 
 
