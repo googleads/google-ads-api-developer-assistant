@@ -6,3 +6,10 @@
 - Find latest verion of the API and prompt user whether to use this version.
 - Modified setup.sh to clone copies of the client libraries.
 
+* 1.2.0
+- Update README.md for clarity
+- Modified setup.sh to work with Linux and macOS.
+- Modified update.sh to work with Linux and macOS.
+- Added PowerShell scripts for Windows.
+
+

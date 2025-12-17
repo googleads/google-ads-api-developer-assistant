@@ -20,7 +20,7 @@ This extension leverages `gemini-cli`'s ability to use `GEMINI.md` files and the
     *   *"Tell me about reporting for Performance Max campaigns."*
     *   *"How do I filter by date in GAQL?"*
 
-*   **Natural Language to GAQL & Python Code:** Convert requests into ready-to-run Python code.
+*   **Natural Language to GAQL & Client Library Code:** Convert requests into executable code using the Google Ads Client Libraries.
     *   Code is saved to `saved_code/`.
     *   *"Show me campaigns with the most conversions last 30 days."*
     *   *"Get all ad groups for customer '123-456-7890'."*
@@ -49,8 +49,8 @@ By default, Python is used for code generation. You can change this by prefacing
 2.  A Google Ads API developer token.
 3.  A configured credentials file in your home directory if using Python, PHP, or Ruby.
 4.  Gemini CLI installed (see [Gemini CLI docs](https://github.com/google-gemini/gemini-cli)).
-5.  A local clone of each client library for the languages you want to use. setup.sh can set this up for you.
-6.  Python >= 3.10 installed and available on your system PATH. This is because Python is the default language for code generation.
+5.  A local clone of each client library for the languages you want to use. `setup.sh` (Linux/macOS) or `setup.ps1` (Windows) can set this up for you.
+6.  Python >= 3.10 installed and available on your system PATH. This is required for executing the default generated Python code directly from the CLI.
 
 ## Setup
 
@@ -58,16 +58,23 @@ By default, Python is used for code generation. You can change this by prefacing
 
 2.  **Clone the Extension:** `git clone https://github.com/googleads/google-ads-api-developer-assistant`. This becomes your project directory. You need to be in this directory when you run gemini-cli.
 
-3. **Run setup.sh**
-    * Ensure that [jq](https://github.com/jqlang/jq?tab=readme-ov-file#installation) is installed. This is a json processor that allows us to write a valid settings.json.
-    * cd to <path>/google-ads-api-developer-assistant
-    * run ./setup.sh. Without command line arguments, it will clone the client libraries in `$HOME/gaada`. If you want to use custom locations, execute `./setup.sh --help` for more information.
+3. **Run setup script**
+    *   **Linux/macOS:**
+        *   Ensure that [jq](https://github.com/jqlang/jq?tab=readme-ov-file#installation) is installed.
+        *   Run `./setup.sh`.
+            *   By default (no arguments), this installs **ALL** supported client libraries to `$HOME/gaada`.
+            *   To install specific languages, use flags: `./setup.sh --python --php`.
+            *   Execute `./setup.sh --help` for more details.
+    *   **Windows:**
+        *   Open PowerShell and run `.\setup.ps1`.
+            *   By default, this installs **ALL** supported client libraries to `$HOME\gaada`.
+            *   To install specific languages, use parameters: `.\setup.ps1 -Python -Php`.
 4.  **Configure Credentials:** Make sure your API credentials configuration files are in your `$HOME` directory. Each language has its own configuration file naming convention and structure. 
 5.  **Optional: Default Customer ID:** To set a default customer ID, create a file named `customer_id.txt` in the `google-ads-api-developer-assistant` directory with the content `customer_id:YOUR_CUSTOMER_ID` (e.g., `customer_id: 1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.
 
 ### Manual Setup
 
-This replaces Step 3 above.
+This is an alternative method to running `setup.sh` / `setup.ps1`. Replace Step 3 above with the following:
 
 a.  **Clone Google Ads Client Libraries:** Clone the client libraries repository to a local directory  that is NOT under the Google Ads API Developer Assistant project directory. This provides context for code generation.
 
@@ -123,11 +130,7 @@ b.  **Set Context in Gemini:** The `gemini` command must be run from the root of
 
 ## Mutate Operations
 
-*   Assistant's Job: To help you by writing the code that would modify things (e.g., create or update a campaign, add a user), but NOT to execute this code.
-
-*   Your Job: To review that code for accuracy, decide if you want to run it, and then execute it yourself outside of the Assistant. The Assistant won't run it for you.
-
-*   See the TOOLING & EXECUTION PROTOCOL section in GEMINI.md for details.
+The Assistant is designed to generate code for mutate operations (e.g., creating campaigns, adding users) but will **not** execute them. This execution policy ensures you have full control over any changes to your Google Ads account. You must review the generated code for accuracy and execute it manually outside of the Assistant.
 
 ## Known Quirks
 
@@ -138,10 +141,10 @@ attempt, using the context from the client libraries.
 
 ## Maintenance
 
-We will release updates to both this extension and the google-ads-python client
-library. To ensure you are using the latest versions, run `update.sh` when a new
-version of the API is published or a new version of the client library is
-released.
+We will periodically release updates to both this extension and the client libraries.
+To ensure you are using the latest versions, run `update.sh` (Linux/macOS)
+or `update.ps1` (Windows) when a new version of the API is published or a new
+version of a client library is released.
 
 ## Contributing
 

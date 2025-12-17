@@ -33,33 +33,66 @@ err() {
 
 # --- Configuration ---
 readonly DEFAULT_PARENT_DIR="${HOME}/gaada"
+readonly ALL_LANGS="python php ruby java dotnet"
 
-# Associative arrays for repo URLs and default names
-declare -A REPO_URLS=(
-  ["python"]="https://github.com/googleads/google-ads-python.git"
-  ["php"]="https://github.com/googleads/google-ads-php.git"
-  ["ruby"]="https://github.com/googleads/google-ads-ruby.git"
-  ["java"]="https://github.com/googleads/google-ads-java.git"
-  ["dotnet"]="https://github.com/googleads/google-ads-dotnet.git"
-)
+# Helper functions for repo info (Replacing associative arrays for Bash 3.2 compatibility)
+get_repo_url() {
+  case "$1" in
+    python) echo "https://github.com/googleads/google-ads-python.git" ;;
+    php)    echo "https://github.com/googleads/google-ads-php.git" ;;
+    ruby)   echo "https://github.com/googleads/google-ads-ruby.git" ;;
+    java)   echo "https://github.com/googleads/google-ads-java.git" ;;
+    dotnet) echo "https://github.com/googleads/google-ads-dotnet.git" ;;
+  esac
+}
 
-declare -A REPO_NAMES=(
-  ["python"]="google-ads-python"
-  ["php"]="google-ads-php"
-  ["ruby"]="google-ads-ruby"
-  ["java"]="google-ads-java"
-  ["dotnet"]="google-ads-dotnet"
-)
+get_repo_name() {
+  case "$1" in
+    python) echo "google-ads-python" ;;
+    php)    echo "google-ads-php" ;;
+    ruby)   echo "google-ads-ruby" ;;
+    java)   echo "google-ads-java" ;;
+    dotnet) echo "google-ads-dotnet" ;;
+  esac
+}
 
-# Defaults for paths (will be populated with defaults or overrides)
-declare -A LIB_PATHS
+# --- Defaults ---
+# Simple variables to track selection (associative arrays not supported in Bash 3.2)
+INSTALL_PYTHON=false
+INSTALL_PHP=false
+INSTALL_RUBY=false
+INSTALL_JAVA=false
+INSTALL_DOTNET=false
+ANY_SELECTED=false
 
 # --- Dependency Check ---
 if ! command -v jq &> /dev/null; then
-  err "ERROR: jq is not installed. Please install it to continue."
-  err "See: https://jqlang.github.io/jq/download/"
-  exit 1
+  echo "jq is not installed. Attempting to install..."
+  if command -v brew &> /dev/null; then
+      echo "Homebrew detected. Installing jq..."
+      if brew install jq; then
+          echo "Successfully installed jq."
+      else
+          err "ERROR: Failed to install jq via Homebrew."
+          exit 1
+      fi
+  elif command -v apt-get &> /dev/null; then
+      if sudo apt-get update && sudo apt-get install -y jq; then
+          echo "Successfully installed jq."
+      else
+          err "ERROR: Failed to install jq automatically."
+          err "Please install jq manually to continue."
+          err "See: https://jqlang.github.io/jq/download/"
+          exit 1
+      fi
+  else
+      err "ERROR: jq is not installed and no supported package manager (brew/apt-get) found."
+      err "Please install jq manually to continue."
+      err "See: https://jqlang.github.io/jq/download/"
+      exit 1
+  fi
 fi
+
 if ! command -v git &> /dev/null; then
   err "ERROR: git is not installed. Please install it to continue."
   exit 1
@@ -71,18 +104,20 @@ usage() {
   echo "  Clones/updates Google Ads client libraries and modifies the settings file."
   echo ""
   echo "  This script initializes the development environment for the Google Ads API Developer Assistant."
-  echo "  It clones the client libraries into '${DEFAULT_PARENT_DIR}' by default, or to specified paths."
+  echo "  It clones the selected client libraries into '${DEFAULT_PARENT_DIR}'."
   echo ""
   echo "  Options:"
   echo "    -h, --help                 Show this help message and exit"
-  echo "    --python <path>            Override path for google-ads-python"
-  echo "    --php <path>               Override path for google-ads-php"
-  echo "    --ruby <path>              Override path for google-ads-ruby"
-  echo "    --java <path>              Override path for google-ads-java"
-  echo "    --dotnet <path>            Override path for google-ads-dotnet"
+  echo "    --python                   Include google-ads-python"
+  echo "    --php                      Include google-ads-php"
+  echo "    --ruby                     Include google-ads-ruby"
+  echo "    --java                     Include google-ads-java"
+  echo "    --dotnet                   Include google-ads-dotnet"
+  echo ""
+  echo "  If no language flags are provided, ALL supported languages will be installed."
   echo ""
   echo "  Example:"
-  echo "    $0 --java /home/user/my-java-repo --python /home/user/my-python-repo"
+  echo "    $0 --java --python         (Installs only Java and Python libraries)"
   echo ""
 }
 
@@ -94,24 +129,29 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     --python)
-      LIB_PATHS["python"]="$2"
-      shift 2
+      INSTALL_PYTHON=true
+      ANY_SELECTED=true
+      shift
       ;;
     --php)
-      LIB_PATHS["php"]="$2"
-      shift 2
+      INSTALL_PHP=true
+      ANY_SELECTED=true
+      shift
       ;;
     --ruby)
-      LIB_PATHS["ruby"]="$2"
-      shift 2
+      INSTALL_RUBY=true
+      ANY_SELECTED=true
+      shift
       ;;
     --java)
-      LIB_PATHS["java"]="$2"
-      shift 2
+      INSTALL_JAVA=true
+      ANY_SELECTED=true
+      shift
       ;;
     --dotnet)
-      LIB_PATHS["dotnet"]="$2"
-      shift 2
+      INSTALL_DOTNET=true
+      ANY_SELECTED=true
+      shift
       ;;
     *)
       err "ERROR: Unknown argument: $1"
@@ -130,58 +170,60 @@ fi
 readonly PROJECT_DIR_ABS
 echo "Detected project root: ${PROJECT_DIR_ABS}"
 
-# --- Path Resolution and Validation ---
-# Ensure default directory exists if we are going to use it
-if [[ ! -d "${DEFAULT_PARENT_DIR}" ]]; then
-  # We only create it if we actually need it (i.e., at least one lib is using default)
-  # But simpler to just create it if it doesn't exist, as it's the intended home.
-  echo "Creating default library directory: ${DEFAULT_PARENT_DIR}"
-  mkdir -p "${DEFAULT_PARENT_DIR}" || { err "ERROR: Failed to create ${DEFAULT_PARENT_DIR}"; exit 1; }
+# --- Language Selection Logic ---
+# If no languages selected, select all
+if [[ "${ANY_SELECTED}" == "false" ]]; then
+  echo "No specific languages selected. Defaulting to ALL languages."
+  INSTALL_PYTHON=true
+  INSTALL_PHP=true
+  INSTALL_RUBY=true
+  INSTALL_JAVA=true
+  INSTALL_DOTNET=true
 fi
 
-for lang in "${!REPO_NAMES[@]}"; do
-  if [[ -z "${LIB_PATHS[$lang]:-}" ]]; then
-    # Use default path
-    LIB_PATHS["$lang"]="${DEFAULT_PARENT_DIR}/${REPO_NAMES[$lang]}"
-  fi
-  
-  # Resolve to absolute path
-  # Note: The directory might not exist yet if it's a clone target, 
-  # but the parent should exist if we are to be safe? 
-  # Actually, 'git clone' creates the directory. 
-  # We should resolve the parent dir for validation if possible, or just resolve the path if it exists.
-  
-  # Logic:
-  # 1. If path exists, resolve it.
-  # 2. If path doesn't exist, check if parent exists.
-  
-  path="${LIB_PATHS[$lang]}"
-  parent_dir=$(dirname "$path")
-  
-  if [[ ! -d "$parent_dir" ]]; then
-     echo "Creating parent directory for $lang: $parent_dir"
-     mkdir -p "$parent_dir" || { err "ERROR: Failed to create parent directory $parent_dir"; exit 1; }
-  fi
+# --- Path Resolution and Validation ---
+# Ensure default directory exists
+echo "Ensuring default library directory exists: ${DEFAULT_PARENT_DIR}"
+mkdir -p "${DEFAULT_PARENT_DIR}" || { err "ERROR: Failed to create ${DEFAULT_PARENT_DIR}"; exit 1; }
 
-  # Now we can optimistically set the absolute path. 
-  # Ideally we want the canonical path. 
-  # 'realpath' works on non-existent files in some versions, or we can use -m.
-  # If -m is not supported, we can cd to parent and pwd.
-  
-  if command -v realpath &> /dev/null; then
-      # Try using -m if available (doesn't require existence), otherwise just path
-      ABS_PATH=$(realpath -m "$path")
-  else
-      # Fallback
-      ABS_PATH="$(cd "$parent_dir" && pwd)/$(basename "$path")"
-  fi
-  
-  LIB_PATHS["$lang"]="$ABS_PATH"
+# Helper to check if a language is enabled
+is_enabled() {
+  case "$1" in
+    python) [[ "${INSTALL_PYTHON}" == "true" ]] ;;
+    php)    [[ "${INSTALL_PHP}" == "true" ]] ;;
+    ruby)   [[ "${INSTALL_RUBY}" == "true" ]] ;;
+    java)   [[ "${INSTALL_JAVA}" == "true" ]] ;;
+    dotnet) [[ "${INSTALL_DOTNET}" == "true" ]] ;;
+    *)      return 1 ;;
+  esac
+}
 
-  # Validation: check against project dir
-  if [[ "${ABS_PATH}" == "${PROJECT_DIR_ABS}"* ]]; then
-     err "ERROR: ${lang} path (${ABS_PATH}) cannot be a subdirectory of the project directory (${PROJECT_DIR_ABS})"
-     exit 1
+# Resolve paths
+for lang in $ALL_LANGS; do
+  if is_enabled "$lang"; then
+    repo_name=$(get_repo_name "$lang")
+    path="${DEFAULT_PARENT_DIR}/${repo_name}"
+    
+    # Resolve to absolute path
+    if command -v realpath &> /dev/null; then
+        # Try using -m if available (doesn't require existence), otherwise just path
+        # On macOS, realpath might not support -m or might not exist (coreutils).
+        # We handle missing realpath below.
+        ABS_PATH=$(realpath -m "$path" 2>/dev/null || realpath "$path" 2>/dev/null || echo "$path")
+    else
+        # Fallback - parent (DEFAULT_PARENT_DIR) exists now
+        ABS_PATH="$(cd "${DEFAULT_PARENT_DIR}" && pwd)/$(basename "$path")"
+    fi
+    
+    # Store path in dynamic variable for later use (jq args)
+    # Bash 3.2 compatible way to set variable by name
+    eval "LIB_PATH_${lang}='${ABS_PATH}'"
+    
+    # Validation: check against project dir
+    if [[ "${ABS_PATH}" == "${PROJECT_DIR_ABS}"* ]]; then
+       err "ERROR: ${lang} path (${ABS_PATH}) cannot be a subdirectory of the project directory (${PROJECT_DIR_ABS})"
+       exit 1
+    fi
   fi
 done
 
@@ -213,8 +255,12 @@ clone_or_update() {
   fi
 }
 
-for lang in "${!REPO_URLS[@]}"; do
-  clone_or_update "${REPO_URLS[$lang]}" "${LIB_PATHS[$lang]}"
+for lang in $ALL_LANGS; do
+  if is_enabled "$lang"; then
+    eval "path=\"\$LIB_PATH_${lang}\""
+    url=$(get_repo_url "$lang")
+    clone_or_update "$url" "$path"
+  fi
 done
 
 # --- Modify settings.json ---
@@ -227,13 +273,8 @@ fi
 
 echo "Updating ${SETTINGS_FILE} with context paths..."
 
-# Define the always-included directories
 readonly CONTEXT_PATH_EXAMPLES="${PROJECT_DIR_ABS}/api_examples"
 readonly CONTEXT_PATH_SAVED="${PROJECT_DIR_ABS}/saved_code"
-
-# Collect all paths for jq
-# We build a JSON array string or pass args. Passing args is safer.
-# We have 5 dynamic paths + 2 static paths.
 
 # Construct jq args
 JQ_ARGS=(
@@ -242,15 +283,19 @@ JQ_ARGS=(
 )
 
 # Add each lib path as an arg
-for lang in "${!LIB_PATHS[@]}"; do
-  JQ_ARGS+=(--arg "lib_${lang}" "${LIB_PATHS[$lang]}")
+for lang in $ALL_LANGS; do
+  if is_enabled "$lang"; then
+    eval "path=\"\$LIB_PATH_${lang}\""
+    JQ_ARGS+=(--arg "lib_${lang}" "${path}")
+  fi
 done
 
 # Construct the array construction string for jq
-# It should look like: [$examples, $saved, $lib_python, $lib_php, ...]
 JQ_ARRAY_STR="[\$examples, \$saved"
-for lang in "${!LIB_PATHS[@]}"; do
-  JQ_ARRAY_STR+=", \$lib_$lang"
+for lang in $ALL_LANGS; do
+  if is_enabled "$lang"; then
+    JQ_ARRAY_STR+=", \$lib_$lang"
+  fi
 done
 JQ_ARRAY_STR+="]"
 
@@ -310,4 +355,3 @@ echo "Setup complete."
 echo ""
 echo "IMPORTANT: You must manually configure a development environment for each language you wish to use."
 echo "           (e.g.,  run 'pip install google-ads' for Python, run 'composer install' for PHP, etc.)"
-

@@ -90,8 +90,10 @@ fi
 echo "Reading ${SETTINGS_FILE} to find client libraries..."
 
 # Read all includeDirectories
-# Use mapfile to handle potential spaces in paths safely
-mapfile -t INCLUDE_DIRS < <(jq -r '.context.includeDirectories[]' "${SETTINGS_FILE}")
+INCLUDE_DIRS=()
+while IFS= read -r line; do
+    INCLUDE_DIRS+=("$line")
+done < <(jq -r '.context.includeDirectories[]' "${SETTINGS_FILE}")
 
 if [[ ${#INCLUDE_DIRS[@]} -eq 0 ]]; then
     echo "WARN: No directories found in ${SETTINGS_FILE}."
