@@ -39,6 +39,9 @@ Write-Host "Updating google-ads-api-developer-assistant..."
 $SettingsFile = Join-Path $ProjectDirAbs ".gemini\settings.json"
 $TempSettingsFile = [System.IO.Path]::GetTempFileName()
 
+$CustomerIdFile = Join-Path $ProjectDirAbs "customer_id.txt"
+$TempCustomerIdFile = [System.IO.Path]::GetTempFileName()
+
 try {
     # 1. Backup existing settings if they exist
     if (Test-Path -LiteralPath $SettingsFile) {
@@ -51,6 +54,19 @@ try {
         if ($LASTEXITCODE -eq 0) {
              Write-Host "Resetting $SettingsFile to avoid merge conflicts..."
              git checkout $SettingsFile
+        }
+    }
+
+    # 1b. Backup customer_id.txt if it exists
+    if (Test-Path -LiteralPath $CustomerIdFile) {
+        Write-Host "Backing up $CustomerIdFile..."
+        Copy-Item -LiteralPath $CustomerIdFile -Destination $TempCustomerIdFile -Force
+
+        # Reset local changes
+        $GitStatus = git ls-files --error-unmatch $CustomerIdFile 2>$null
+        if ($LASTEXITCODE -eq 0) {
+             Write-Host "Resetting $CustomerIdFile to avoid merge conflicts..."
+             git checkout $CustomerIdFile
         }
     }
 
@@ -106,6 +122,15 @@ try {
         # Save merged
         $RepoContent | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
         Write-Host "Settings restored and merged successfully."
+        Write-Host "Settings restored and merged successfully."
+    }
+
+    # 4b. Restore customer_id.txt
+    if ((Test-Path -LiteralPath $TempCustomerIdFile) -and (Get-Item $TempCustomerIdFile).Length -gt 0) {
+        Write-Host "Restoring preserved $CustomerIdFile..."
+        # Always overwrite with user's backup
+        Move-Item -LiteralPath $TempCustomerIdFile -Destination $CustomerIdFile -Force
+        Write-Host "Restored $CustomerIdFile successfully."
     }
 
 }
@@ -118,11 +143,20 @@ catch {
              Copy-Item -LiteralPath $TempSettingsFile -Destination $SettingsFile -Force
          }
     }
+    if ((Test-Path -LiteralPath $TempCustomerIdFile) -and (Get-Item $TempCustomerIdFile).Length -gt 0) {
+         if (-not (Test-Path -LiteralPath $CustomerIdFile) -or (Get-Item $CustomerIdFile).Length -eq 0) {
+             Write-Host "Restoring original customer_id.txt after failure..."
+             Copy-Item -LiteralPath $TempCustomerIdFile -Destination $CustomerIdFile -Force
+         }
+    }
     exit 1
 }
 finally {
     if (Test-Path -LiteralPath $TempSettingsFile) {
         Remove-Item -LiteralPath $TempSettingsFile -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $TempCustomerIdFile) {
+        Remove-Item -LiteralPath $TempCustomerIdFile -Force -ErrorAction SilentlyContinue
     }
 }
 

@@ -76,6 +76,9 @@ echo "Updating google-ads-api-developer-assistant..."
 SETTINGS_JSON=".gemini/settings.json"
 TEMP_SETTINGS=$(mktemp)
 
+CUSTOMER_ID_FILE="customer_id.txt"
+TEMP_CUSTOMER_ID=$(mktemp)
+
 # 1. Backup existing settings if they exist
 if [[ -f "${SETTINGS_JSON}" ]]; then
     echo "Backing up ${SETTINGS_JSON}..."
@@ -90,6 +93,18 @@ if [[ -f "${SETTINGS_JSON}" ]]; then
     fi
 fi
 
+# 1b. Backup customer_id.txt if it exists
+if [[ -f "${CUSTOMER_ID_FILE}" ]]; then
+    echo "Backing up ${CUSTOMER_ID_FILE}..."
+    cp "${CUSTOMER_ID_FILE}" "${TEMP_CUSTOMER_ID}"
+
+    # Reset local changes to customer_id.txt to allow git pull
+    if git ls-files --error-unmatch "${CUSTOMER_ID_FILE}" &> /dev/null; then
+        echo "Resetting ${CUSTOMER_ID_FILE} to avoid merge conflicts..."
+        git checkout "${CUSTOMER_ID_FILE}"
+    fi
+fi
+
 if ! git pull; then
     err "ERROR: Failed to update google-ads-api-developer-assistant."
     # Attempt to restore settings if they were backed up? 
@@ -99,6 +114,10 @@ if ! git pull; then
     if [[ -f "${TEMP_SETTINGS}" ]] && [[ -s "${TEMP_SETTINGS}" ]]; then
          echo "Restoring original settings after failed pull..."
          mv "${TEMP_SETTINGS}" "${SETTINGS_JSON}"
+    fi
+    if [[ -f "${TEMP_CUSTOMER_ID}" ]] && [[ -s "${TEMP_CUSTOMER_ID}" ]]; then
+         echo "Restoring original customer_id.txt after failed pull..."
+         mv "${TEMP_CUSTOMER_ID}" "${CUSTOMER_ID_FILE}"
     fi
     exit 1
 fi
@@ -119,6 +138,15 @@ if [[ -f "${TEMP_SETTINGS}" ]] && [[ -s "${TEMP_SETTINGS}" ]]; then
         mv "${TEMP_SETTINGS}" "${SETTINGS_JSON}"
     fi
     rm -f "${TEMP_SETTINGS}"
+fi
+
+# 3b. Restore customer_id.txt
+if [[ -f "${TEMP_CUSTOMER_ID}" ]] && [[ -s "${TEMP_CUSTOMER_ID}" ]]; then
+    echo "Restoring preserved ${CUSTOMER_ID_FILE}..."
+    # Always overwrite with user's backup
+    mv "${TEMP_CUSTOMER_ID}" "${CUSTOMER_ID_FILE}"
+    echo "${CUSTOMER_ID_FILE} restored successfully."
+    rm -f "${TEMP_CUSTOMER_ID}"
 fi
 
 echo "Successfully updated google-ads-api-developer-assistant."

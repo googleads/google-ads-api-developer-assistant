@@ -27,11 +27,11 @@ This document outlines mandatory operational guidelines, constraints, and best p
 - **NEVER** execute API calls that modify data (e.g., `create`, `update`, `delete`).
 
 #### 1.3. API Versioning and Pre-Task Validation
-**MANDATORY FIRST STEP:** Before **ANY** task, you **MUST** validate the API version.
+**MANDATORY FIRST STEP:** Before **ANY** task, you **MUST** validate the API version and **NEVER** save the confirmed API version to memory.
 
 1.  **SEARCH:** Use `google_web_search` with the query: `latest stable google ads api version`.
 2.  **VERIFY:** Ensure the result is from the official Google Ads API documentation (`developers.google.com`).
-3.  **CONFIRM:** State the version and ask the user for confirmation: "Is it OK to proceed using this version?".
+3.  **CONFIRM:** You must state the version you found and ask for confirmation. For example: "The latest stable Google Ads API version is vXX. Is it OK to proceed using this version?".
 4.  **AWAIT APPROVAL:** **DO NOT** proceed without user confirmation.
 5.  **REJECT/RETRY:** If the user rejects the version, repeat step 1.
 6.  **NEVER** save the confirmed API version to memory.
