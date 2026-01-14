@@ -77,7 +77,7 @@ if ! bash "${SETUP_SCRIPT_PATH}" --python; then
 fi
 
 # Check if directory created (mock clone)
-if [[ ! -d "${FAKE_HOME}/gaada/google-ads-python/.git" ]]; then
+if [[ ! -d "${FAKE_PROJECT}/client_libs/google-ads-python/.git" ]]; then
     echo "FAIL: google-ads-python was not 'cloned' (mocked)"
     exit 1
 fi
@@ -99,7 +99,7 @@ if ! bash "${SETUP_SCRIPT_PATH}" --java; then
 fi
 
 # Check if java directory created
-if [[ ! -d "${FAKE_HOME}/gaada/google-ads-java/.git" ]]; then
+if [[ ! -d "${FAKE_PROJECT}/client_libs/google-ads-java/.git" ]]; then
     echo "FAIL: google-ads-java was not 'cloned'"
     exit 1
 fi

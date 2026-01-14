@@ -1,3 +1,6 @@
+* 1.4.2
+- Updated tests for setup.sh and update.sh
+
 * 1.4.1
 - Fixed minor bugs in tests for api_examples.
 - Added test api_examples/tests/test_get_conversion_upload_summary.py
