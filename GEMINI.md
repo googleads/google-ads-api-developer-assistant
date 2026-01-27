@@ -1,6 +1,6 @@
 # Google Ads API Developer Assistant Configuration
 
-## Version: 3.0
+## Version: 2.0
 ## Optimized for Machine Comprehension
 
 This document outlines mandatory operational guidelines, constraints, and best practices for the Google Ads API Developer Assistant.
@@ -78,7 +78,7 @@ This document outlines mandatory operational guidelines, constraints, and best p
 - **References:**
     - **Structure:** `https://developers.google.com/google-ads/api/docs/query/`
     - **Entities:** `https://developers.google.com/google-ads/api/fields/vXX` (replace `vXX` with the confirmed API version).
-- **Validation:** Validate queries **before** execution.
+- **Validation:** Validate queries **before** execution. Specifically, be sure to execute all the rules outlined in section **"3.3.1. Rigorous GAQL Validation"** before outputting the query.
 - **Date Ranges:** Compute dates dynamically (no constants like `LAST_90_DAYS`).
 - **Conversion Summaries:** Use `daily_summaries` for date-segmented data from `offline_conversion_upload_conversion_action_summary` and `offline_conversion_upload_client_summary`.
 
@@ -95,6 +95,8 @@ This document outlines mandatory operational guidelines, constraints, and best p
    3. Segment Rule: You MUST verify that any segment field used in the WHERE clause is also present in the SELECT clause, unless it is a core date segment (segments.date, segments.week, segments.month, segments.quarter, segments.year).
 
    4. Prioritize Validator Errors: If the user provides an error message from a GAQL query validator, you MUST treat that error message as the definitive source of truth. You MUST immediately re-evaluate your validation and correct the query based on the error message.
+
+    **5. Core Date Segment Requirement:** If any core date segment (`segments.date`, `segments.week`, `segments.month`, `segments.quarter`, `segments.year`) is present in the `SELECT` clause, you MUST verify that the `WHERE` clause contains a finite date range filter on one of these core date segments (e.g., `WHERE segments.date DURING LAST_30_DAYS`).
 
 #### 3.4. Code Generation
 - **Language:** Infer the target language from user request, existing files, or project context. Default to Python if ambiguous.

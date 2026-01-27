@@ -318,6 +318,11 @@ if ! mv "${TMP_SETTINGS_FILE}" "${SETTINGS_FILE}"; then
   exit 1
 fi
 
+if is_enabled "python"; then
+  echo "Installing google-ads via pip..."
+  python -m pip install --upgrade google-ads
+fi
+
 trap - EXIT # Clear the trap
 
 echo "Successfully updated ${SETTINGS_FILE}"
