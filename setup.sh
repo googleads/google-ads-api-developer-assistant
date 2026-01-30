@@ -73,6 +73,7 @@ INSTALL_RUBY=false
 INSTALL_JAVA=false
 INSTALL_DOTNET=false
 ANY_SELECTED=false
+INSTALL_DEPS=false
 
 # --- Dependency Check ---
 if ! command -v jq &> /dev/null; then
@@ -116,7 +117,8 @@ usage() {
   echo "  It clones the selected client libraries into '${DEFAULT_PARENT_DIR}'."
   echo ""
   echo "  Options:"
-  echo "    -h, --help                 Show this help message and exit"
+  echo "    -h, --help                 Show this help message and exit
+    --install-deps             Install dependencies (e.g. pip packages)"
   echo "    --python                   Include google-ads-python"
   echo "    --php                      Include google-ads-php"
   echo "    --ruby                     Include google-ads-ruby"
@@ -160,6 +162,10 @@ while [[ $# -gt 0 ]]; do
     --dotnet)
       INSTALL_DOTNET=true
       ANY_SELECTED=true
+      shift
+      ;;
+    --install-deps)
+      INSTALL_DEPS=true
       shift
       ;;
     *)
@@ -318,7 +324,7 @@ if ! mv "${TMP_SETTINGS_FILE}" "${SETTINGS_FILE}"; then
   exit 1
 fi
 
-if is_enabled "python"; then
+if is_enabled "python" && [[ "${INSTALL_DEPS}" == "true" ]]; then
   echo "Installing google-ads via pip..."
   python -m pip install --upgrade google-ads
 fi
