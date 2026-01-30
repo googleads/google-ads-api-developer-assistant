@@ -329,6 +329,26 @@ if is_enabled "python" && [[ "${INSTALL_DEPS}" == "true" ]]; then
   python -m pip install --upgrade google-ads
 fi
 
+if is_enabled "php" && [[ "${INSTALL_DEPS}" == "true" ]]; then
+  echo "Installing google-ads-php dependencies via composer..."
+  eval "path=\"\$LIB_PATH_php\""
+  if [[ -f "${path}/composer.json" ]]; then
+    (cd "${path}" && composer install)
+  else
+    echo "WARN: composer.json not found in ${path}"
+  fi
+fi
+
+if is_enabled "ruby" && [[ "${INSTALL_DEPS}" == "true" ]]; then
+  echo "Installing google-ads-ruby dependencies via bundle..."
+  eval "path=\"\$LIB_PATH_ruby\""
+  if [[ -f "${path}/Gemfile" ]]; then
+    (cd "${path}" && bundle install)
+  else
+    echo "WARN: Gemfile not found in ${path}"
+  fi
+fi
+
 trap - EXIT # Clear the trap
 
 echo "Successfully updated ${SETTINGS_FILE}"
@@ -337,5 +357,6 @@ jq '.context.includeDirectories' "${SETTINGS_FILE}"
 
 echo "Setup complete."
 echo ""
-echo "IMPORTANT: You must manually configure a development environment for each language you wish to use."
+echo "IMPORTANT: You must configure and verify the development environment for each language you wish to use."
 echo "           (e.g.,  run 'pip install google-ads' for Python, run 'composer install' for PHP, etc.)"
+echo "           If you used --install-deps, you can verify the installation by running 'python -m pip show google-ads' for Python, 'composer show google/ads-api-php-client' for PHP, etc."

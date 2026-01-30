@@ -1,3 +1,6 @@
+* 1.6.0
+- Added --install-deps option to setup.sh and setup.ps1
+
 * 1.5.0
 - Added rigorous GAQL validation rules to GEMINI.md
 

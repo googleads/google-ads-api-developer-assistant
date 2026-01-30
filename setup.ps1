@@ -38,7 +38,9 @@ param(
     [switch]$Php,
     [switch]$Ruby,
     [switch]$Java,
-    [switch]$Dotnet
+    [switch]$Java,
+    [switch]$Dotnet,
+    [switch]$InstallDeps
 )
 
 $ErrorActionPreference = "Stop"
@@ -210,7 +212,36 @@ catch {
 
 
 
+
+if ($Python -and $InstallDeps) {
+    Write-Host "Installing google-ads via pip..."
+    python -m pip install --upgrade google-ads
+}
+
+if ($Php -and $InstallDeps) {
+    Write-Host "Installing google-ads-php dependencies via composer..."
+    $path = $LibPaths["php"]
+    if (Test-Path (Join-Path $path "composer.json")) {
+        Push-Location $path
+        try { composer install } finally { Pop-Location }
+    } else {
+        Write-Warning "composer.json not found in $path"
+    }
+}
+
+if ($Ruby -and $InstallDeps) {
+    Write-Host "Installing google-ads-ruby dependencies via bundle..."
+    $path = $LibPaths["ruby"]
+    if (Test-Path (Join-Path $path "Gemfile")) {
+        Push-Location $path
+        try { bundle install } finally { Pop-Location }
+    } else {
+        Write-Warning "Gemfile not found in $path"
+    }
+}
+
 Write-Host "Setup complete."
 Write-Host ""
 Write-Host "IMPORTANT: You must manually configure a development environment for each language you wish to use."
 Write-Host "           (e.g.,  run 'pip install google-ads' for Python, run 'composer install' for PHP, etc.)"
+Write-Host "           If you used -InstallDeps, you can verify the installation by running 'python -m pip show google-ads' for Python, 'composer show google/ads-api-php-client' for PHP, etc."
