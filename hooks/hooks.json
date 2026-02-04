@@ -5,7 +5,7 @@
         "name": "custom-config-python",
         "type": "command",
         "command": "python3 ${extensionPath}/hooks/SessionStart/custom_config_python.py",
-        "description": "Configures Google Ads environment at session start.",
+        "description": "Configures Google Ads environment at session start with a custom google-ads.yaml for Python.",
         "timeout": 30000
       }
     ]
