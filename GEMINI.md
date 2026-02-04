@@ -113,6 +113,10 @@ This document outlines mandatory operational guidelines, constraints, and best p
     - Use language-appropriate tooling for formatting and linting where available.
     - Pass `customer_id` as a command-line argument.
     - Use type hints, annotations, or other static typing features if the language supports them.
+
+#### 3.4.1. Python Configuration Loading
+- **Code Generation (to `saved_code/`):** When generating Python code that uses the `google-ads-python` client library and saves it to the `saved_code/` directory, any calls to `GoogleAdsClient.load_from_storage()` MUST NOT include a `path` argument. This ensures that the generated code, when run by the user outside of the Gemini CLI, will look for `google-ads.yaml` in their home directory (or other default locations as per the client library's behavior).
+- **Execution within Gemini CLI:** When executing Python code that uses `GoogleAdsClient.load_from_storage()` within the Gemini CLI, you MUST set the environment variable `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `config/google-ads.yaml` before running the script. This ensures the script uses the project's configuration file located at `config/google-ads.yaml` during execution within the CLI environment.
 - **Error Handling:** When using the Python client library, catch `GoogleAdsException` and inspect the `error` attribute. For other languages, use the equivalent exception type.
 
 #### 3.5. Troubleshooting

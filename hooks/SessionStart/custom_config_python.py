@@ -60,8 +60,6 @@ def configure():
 
 if __name__ == "__main__":
     timestamp = datetime.datetime.now()
-    message = f"SUCCESS: SessionStart hook 'custom_config_python.py' ran at {timestamp}"
-    # Print to standard output (should appear in Gemini CLI console)
-    print(message, file=sys.stdout)
-    print("This message goes to stderr", file=sys.stderr)
+    message = f"SUCCESS: SessionEnd hook 'cleanup_config.py' ran at {timestamp}"
+    print(message, file=sys.stderr)
     configure()
