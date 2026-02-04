@@ -169,6 +169,7 @@ This document outlines mandatory operational guidelines, constraints, and best p
 #### 5.2. References
 - **API Docs:** `https://developers.google.com/google-ads/api/docs/`
 - **Conversion Docs:** `https://developers.google.com/google-ads/api/docs/conversions/`
+- **Protos:** `https://github.com/googleapis/googleapis/tree/master/google/ads/googleads`
 
 #### 5.3. Disambiguation
 - **'AI Max' vs 'PMax':** 'AI Max' refers to 'AI Max for Search campaigns', not 'Performance Max'.

@@ -1,18 +1,19 @@
 {
   "ui": {
     "accessibility": {
-      "disableLoadingPhrases": true
+      "disableLoadingPhrases": true,
+      "enableLoadingPhrases": false
     }
   },
   "context": {
     "includeDirectories": [
-        "/path/to/your/extension/google-ads-api-developer-assistant/api_examples",
-        "/path/to/your/extension/google-ads-api-developer-assistant/saved_code",
-        "/path/to/your/library/google-ads-python",
-        "/path/to/your/library/google-ads-php",
-        "/path/to/your/library/google-ads-ruby",
-        "/path/to/your/library/google-ads-java",
-        "/path/to/your/library/google-ads-dotnet"
+      "/path/to/your/extension/google-ads-api-developer-assistant/api_examples",
+      "/path/to/your/extension/google-ads-api-developer-assistant/saved_code",
+      "/path/to/your/library/google-ads-python",
+      "/path/to/your/library/google-ads-php",
+      "/path/to/your/library/google-ads-ruby",
+      "/path/to/your/library/google-ads-java",
+      "/path/to/your/library/google-ads-dotnet"
     ]
   }
 }

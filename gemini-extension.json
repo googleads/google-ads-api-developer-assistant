@@ -1,5 +1,6 @@
 {
   "name": "google-ads-api-developer-assistant",
   "version": "1.6.0",
-  "contextFileName": "GEMINI.md"
+  "contextFileName": "GEMINI.md",
+  "hooks": "hooks/hooks.json"
 }

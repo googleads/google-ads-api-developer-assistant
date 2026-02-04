@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "name": "custom-config",
+        "type": "command",
+        "command": "python3 ${extensionPath}/hooks/SessionStart/01_configure.py",
+        "description": "Configures Google Ads environment at session start.",
+        "timeout": 30000
+      }
+    ]
+  }
+}
