@@ -6,14 +6,15 @@ import datetime
 
 def configure():
     """Configures the Google Ads environment."""
+
     # Determine paths
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    # hooks/SessionStart -> root is 2 levels up
-    root_dir = os.path.abspath(os.path.join(script_dir, "../.."))
+    project_root = os.path.abspath(os.path.join(script_dir, "../.."))
+
     source_yaml = os.path.join(os.path.expanduser("~"), "google-ads.yaml")
-    config_dir = os.path.join(root_dir, "config")
+    config_dir = os.path.join(project_root, "config")
     target_yaml = os.path.join(config_dir, "google-ads.yaml")
-    ext_version_script = os.path.join(root_dir, "skills/ext_version/scripts/get_extension_version.py")
+    ext_version_script = os.path.join(project_root, ".gemini/skills/ext_version/scripts/get_extension_version.py")
 
     # Check if source exists
     if not os.path.exists(source_yaml):
@@ -59,24 +60,4 @@ def configure():
     print(f"export GOOGLE_ADS_CONFIGURATION_FILE_PATH=\"{target_yaml}\"", file=sys.stdout)
 
 if __name__ == "__main__":
-    log_file = os.path.expanduser("~/gemini_hook_log.txt")
-    timestamp = datetime.datetime.now().isoformat()
-    try:
-        with open(log_file, "a") as f:
-            f.write(f"SessionStart HOOK: custom_config_python.py ran at {timestamp}\n")
-        print("DEBUG: custom_config_python.py wrote to log", file=sys.stderr)
-    except Exception as e:
-        # Try to print error to stderr, in case it's visible
-        print(f"DEBUG: custom_config_python.py ERROR: {e}", file=sys.stderr)
-        # Also write error to the log file
-        try:
-            with open(log_file, "a") as f:
-                f.write(f"SessionStart HOOK ERROR: {timestamp} - {e}\n")
-        except:
-            pass # Oh well, we tried
-    sys.stderr.flush()
-
-    timestamp = datetime.datetime.now()
-    message = f"SUCCESS: SessionEnd hook 'cleanup_config.py' ran at {timestamp}"
-    print(message, file=sys.stderr)
     configure()

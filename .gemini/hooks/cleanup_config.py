@@ -5,11 +5,18 @@ import datetime
 
 def cleanup():
     """Removes all files in the config directory."""
+    log_path = os.path.expanduser("~/gemini_hook_log.txt")
+    try:
+        with open(log_path, "a") as f:
+            f.write(f"[{datetime.datetime.now()}] cleanup_config hook started\n")
+    except Exception:
+        pass
+
     # Determine paths
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    # hooks/SessionEnd -> root is 2 levels up
-    root_dir = os.path.abspath(os.path.join(script_dir, "../.."))
-    config_dir = os.path.join(root_dir, "config")
+    # .gemini/hooks/ -> project root is 2 levels up
+    project_root = os.path.abspath(os.path.join(script_dir, "../.."))
+    config_dir = os.path.join(project_root, "config")
 
     if not os.path.exists(config_dir):
         print(f"Config directory {config_dir} does not exist. Nothing to clean.", file=sys.stderr)
@@ -36,7 +43,4 @@ def cleanup():
         sys.exit(1)
 
 if __name__ == "__main__":
-    timestamp = datetime.datetime.now()
-    message = f"SUCCESS: SessionEnd hook 'cleanup_config.py' ran at {timestamp}"
-    print(message, file=sys.stderr)
     cleanup()

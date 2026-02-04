@@ -1,0 +1,48 @@
+{
+  "ui": {
+    "accessibility": {
+      "disableLoadingPhrases": true,
+      "enableLoadingPhrases": false
+    }
+  },
+  "context": {
+    "includeDirectories": [
+      "/path/google-ads-api-developer-assistant/api_examples",
+      "/path/google-ads-api-developer-assistant/saved_code",
+      "/path/google-ads-api-developer-assistant/client_libs/google-ads-python"
+    ]
+  },
+  "tools": {
+    "enableHooks": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "name": "session-start-configure",
+            "type": "command",
+            "command": "python3 .gemini/hooks/SessionStart/custom_config_python.py",
+            "description": "Configure Google Ads API client to use interceptors",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "exit",
+        "hooks": [
+          {
+            "name": "session-end-cleanup",
+            "type": "command",
+            "command": "python3 .gemini/hooks/SessionEnd/cleanup_config.py",
+            "description": "Cleanup /config",
+            "timeout": 30000
+          }
+        ]
+      }
+    ]
+  }
+}

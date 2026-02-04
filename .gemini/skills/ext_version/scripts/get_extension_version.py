@@ -5,9 +5,9 @@ import sys
 def get_extension_version() -> None:
     """Reads gemini-extension.json and prints the version."""
     try:
-        # Assumes the script is in skills/version/scripts/
-        # gemini-extension.json is at the root, so 3 levels up
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        # Assumes the script is in .gemini/skills/ext_version/scripts/
+        # gemini-extension.json is at the root, so 4 levels up
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
         json_path = os.path.join(base_dir, "gemini-extension.json")
         
         if not os.path.exists(json_path):

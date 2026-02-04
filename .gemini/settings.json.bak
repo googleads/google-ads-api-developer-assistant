@@ -1,0 +1,29 @@
+{
+  "context": {
+    "fileFiltering": {
+      "enableRecursiveFileSearch": false
+    }
+  },
+  "ui": {
+    "theme": "Default Light"
+  },
+  "general": {
+    "preferredEditor": "vim"
+  },
+  "useSmartEdit": true,
+  "tools": {
+    "allowed": [
+      "read_file",
+      "read_many_files",
+      "list_directory",
+      "search_file_content",
+      "glob",
+      "web_fetch",
+      "google_web_search",
+      "save_memory",
+      "read_document"
+    ],
+    "enableHooks": true
+  },
+  "enableHooks": true
+}
