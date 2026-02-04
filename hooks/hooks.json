@@ -2,20 +2,29 @@
   "hooks": {
     "SessionStart": [
       {
-        "name": "custom-config-python",
-        "type": "command",
-        "command": "python3 ${extensionPath}/hooks/SessionStart/custom_config_python.py",
-        "description": "Configures Google Ads environment at session start with a custom google-ads.yaml for Python.",
-        "timeout": 30000
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${extensionPath}/hooks/path_normalizer/path_normalizer.py",
+            "description": "Test SessionEnd with touch",
+            "timeout": 30000
+          }
+        ]
       }
     ],
     "SessionEnd": [
       {
-        "name": "cleanup-config",
-        "type": "command",
-        "command": "python3 ${extensionPath}/hooks/SessionEnd/cleanup_config.py",
-        "description": "Cleans up the configuration directory at session end.",
-        "timeout": 30000
+        "matcher": "*",
+        "hooks": [
+          {
+           "name": "session-end-touch",
+            "type": "command",
+            "command": "bash ${extensionPath}/hooks/reconcile_changes/reconcile_changes.sh",
+            "description": "Test SessionEnd with touch",
+            "timeout": 30000
+          }
+        ]
       }
     ]
   }
