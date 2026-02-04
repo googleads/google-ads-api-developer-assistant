@@ -59,6 +59,23 @@ def configure():
     print(f"export GOOGLE_ADS_CONFIGURATION_FILE_PATH=\"{target_yaml}\"", file=sys.stdout)
 
 if __name__ == "__main__":
+    log_file = os.path.expanduser("~/gemini_hook_log.txt")
+    timestamp = datetime.datetime.now().isoformat()
+    try:
+        with open(log_file, "a") as f:
+            f.write(f"SessionStart HOOK: custom_config_python.py ran at {timestamp}\n")
+        print("DEBUG: custom_config_python.py wrote to log", file=sys.stderr)
+    except Exception as e:
+        # Try to print error to stderr, in case it's visible
+        print(f"DEBUG: custom_config_python.py ERROR: {e}", file=sys.stderr)
+        # Also write error to the log file
+        try:
+            with open(log_file, "a") as f:
+                f.write(f"SessionStart HOOK ERROR: {timestamp} - {e}\n")
+        except:
+            pass # Oh well, we tried
+    sys.stderr.flush()
+
     timestamp = datetime.datetime.now()
     message = f"SUCCESS: SessionEnd hook 'cleanup_config.py' ran at {timestamp}"
     print(message, file=sys.stderr)
