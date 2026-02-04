@@ -10,7 +10,7 @@ def configure():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     # hooks/SessionStart -> root is 2 levels up
     root_dir = os.path.abspath(os.path.join(script_dir, "../.."))
-    source_yaml = os.path.join(root_dir, "google-ads.yaml")
+    source_yaml = os.path.join(os.path.expanduser("~"), "google-ads.yaml")
     config_dir = os.path.join(root_dir, "config")
     target_yaml = os.path.join(config_dir, "google-ads.yaml")
     ext_version_script = os.path.join(root_dir, "skills/ext_version/scripts/get_extension_version.py")
@@ -56,7 +56,7 @@ def configure():
         sys.exit(1)
 
     # Output env var command
-    print(f"export GOOGLE_ADS_CONFIGURATION_FILE_PATH=\"{target_yaml}\"")
+    print(f"export GOOGLE_ADS_CONFIGURATION_FILE_PATH=\"{target_yaml}\"", file=sys.stdout)
 
 if __name__ == "__main__":
     timestamp = datetime.datetime.now()
