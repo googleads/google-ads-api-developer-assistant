@@ -3,6 +3,7 @@
 - Added skills/ext_version to get the extension version.
 - Added gemini-extension.json.
 - Added documentation resource for public protos.
+- Added hooks for start and end of a session.
 
 * 1.5.0
 - Added rigorous GAQL validation rules to GEMINI.md
