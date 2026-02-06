@@ -105,6 +105,8 @@ This document outlines mandatory operational guidelines, constraints, and best p
         - **INCORRECT:** `SELECT ad_group_ad.policy_summary FROM ad_group_ad`
         - **INCORRECT:** `SELECT ad_group_ad.policy_summary.approval_status FROM ad_group_ad`
 
+       **8. Service-Specific Query Syntax:** The `GoogleAdsService` is the **only** service that accepts standard GAQL queries containing a `FROM` clause (e.g., `SELECT ... FROM ...`). When querying other services, such as the `GoogleAdsFieldService`, you **MUST** use their specific methods (e.g., `get_google_ads_field` or `search_google_ads_fields` with its specialized query format) and **MUST NOT** include a `FROM` clause in the request.
+
 #### 3.3.2. MANDATORY GAQL Query Workflow
 Before generating or executing ANY GAQL query, you MUST follow this workflow without deviation:
 1.  **PLAN:** Formulate the GAQL query based on the user's request.
