@@ -86,23 +86,24 @@ This document outlines mandatory operational guidelines, constraints, and best p
 
   When validating a GAQL query, you MUST follow this process:
 
-   1. Initial Field Validation: For each field in the query, use GoogleAdsFieldService to verify that it is selectable and filterable.
-
-   2. Contextual Compatibility Check: Do not assume that a filterable field is filterable in all contexts. You MUST verify its compatibility with the resource in the FROM clause. To do this, you MUST:
-       * Query the GoogleAdsFieldService for the main resource in the FROM clause.
-       * Examine the selectable_with attribute of the main resource to find the correct fields for filtering.
-
-   3. Segment Rule: You MUST verify that any segment field used in the WHERE clause is also present in the SELECT clause, unless it is a core date segment (segments.date, segments.week, segments.month, segments.quarter, segments.year).
-
-   4. Prioritize Validator Errors: If the user provides an error message from a GAQL query validator, you MUST treat that error message as the definitive source of truth. You MUST immediately re-evaluate your validation and correct the query based on the error message.
-
-  **5. Core Date Segment Requirement:** If any core date segment (`segments.date`, `segments.week`, `segments.month`, `segments.quarter`, `segments.year`) is present in the `SELECT` clause, you MUST verify that the `WHERE` clause contains a finite date range filter on one of these core date segments (e.g., `WHERE segments.date DURING LAST_30_DAYS`).
-
-  **6. Policy-Summary Field Rules:**   The `ad_group_ad.policy_summary` field is a special case. You **MUST NOT** select the entire `ad_group_ad.policy_summary` object or its individual sub-fields (like `approval_status`, `policy_topic_entries.topic`, etc.) directly. The **ONLY** valid way to retrieve policy information is to select the `ad_group_ad.policy_summary.policy_topic_entries` field. You must then iterate through the results of this field in your code to access the individual policy topics.
-     - **CORRECT:** `SELECT ad_group_ad.policy_summary.policy_topic_entries FROM ad_group_ad`
-     - **INCORRECT:** `SELECT ad_group_ad.policy_summary FROM ad_group_ad`
-     - **INCORRECT:** `SELECT ad_group_ad.policy_summary.approval_status FROM ad_group_ad`
-
+      1. **Field Existence Verification:** Before using any field in a `SELECT` or `WHERE` clause, you MUST first verify its existence for the resource in the `FROM` clause using the `GoogleAdsFieldService`. You MUST NOT assume a field exists based on the resource name alone.
+   
+      2. Initial Field Validation: For each field in the query, use GoogleAdsFieldService to verify that it is selectable and filterable.
+   
+      3. Contextual Compatibility Check: Do not assume that a filterable field is filterable in all contexts. You MUST verify its compatibility with the resource in the FROM clause. To do this, you MUST:
+          * Query the GoogleAdsFieldService for the main resource in the FROM clause.
+          * Examine the selectable_with attribute of the main resource to find the correct fields for filtering.
+   
+      4. Segment Rule: You MUST verify that any segment field used in the WHERE clause is also present in the SELECT clause, unless it is a core date segment (segments.date, segments.week, segments.month, segments.quarter, segments.year).
+   
+      5. Prioritize Validator Errors: If the user provides an error message from a GAQL query validator, you MUST treat that error message as the definitive source of truth. You MUST immediately re-evaluate your validation and correct the query based on the error message.
+   
+       **6. Core Date Segment Requirement:** If any core date segment (`segments.date`, `segments.week`, `segments.month`, `segments.quarter`, `segments.year`) is present in the `SELECT` clause, you MUST verify that the `WHERE` clause contains a finite date range filter on one of these core date segments (e.g., `WHERE segments.date DURING LAST_30_DAYS`).
+   
+     **7. Policy-Summary Field Rules:**   The `ad_group_ad.policy_summary` field is a special case. You **MUST NOT** select the entire `ad_group_ad.policy_summary` object or its individual sub-fields (like `approval_status`, `policy_topic_entries.topic`, etc.) directly. The **ONLY** valid way to retrieve policy information is to select the `ad_group_ad.policy_summary.policy_topic_entries` field. You must then iterate through the results of this field in your code to access the individual policy topics.
+        - **CORRECT:** `SELECT ad_group_ad.policy_summary.policy_topic_entries FROM ad_group_ad`
+        - **INCORRECT:** `SELECT ad_group_ad.policy_summary FROM ad_group_ad`
+        - **INCORRECT:** `SELECT ad_group_ad.policy_summary.approval_status FROM ad_group_ad`
 
 #### 3.3.2. MANDATORY GAQL Query Workflow
 Before generating or executing ANY GAQL query, you MUST follow this workflow without deviation:
