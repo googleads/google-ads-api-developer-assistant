@@ -26,6 +26,8 @@ def cleanup():
         # User requested to remove *all files* in the config directory.
         # We could also remove the directory itself. Let's remove content.
         for filename in os.listdir(config_dir):
+            if filename == ".gitkeep":
+                continue
             file_path = os.path.join(config_dir, filename)
             try:
                 if os.path.isfile(file_path) or os.path.islink(file_path):

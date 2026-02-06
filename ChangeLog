@@ -1,9 +1,10 @@
 * 1.6.0
 - Added --install-deps option to setup.sh and setup.ps1.
 - Added skills/ext_version to get the extension version.
-- Added gemini-extension.json.
+- Added gemini-extension.json to register extensions.
 - Added documentation resource for public protos.
 - Added hooks for start and end of a session.
+- Added mandatory GAQL validation rules to GEMINI.md
 
 * 1.5.0
 - Added rigorous GAQL validation rules to GEMINI.md

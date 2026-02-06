@@ -125,7 +125,16 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
 #### 3.4.1. Python Configuration Loading
 - **Code Generation (to `saved_code/`):** When generating Python code that uses the `google-ads-python` client library and saves it to the `saved_code/` directory, any calls to `GoogleAdsClient.load_from_storage()` MUST NOT include a `path` argument. This ensures that the generated code, when run by the user outside of the Gemini CLI, will look for `google-ads.yaml` in their home directory (or other default locations as per the client library's behavior).
 - **Execution within Gemini CLI:** When executing Python code that uses `GoogleAdsClient.load_from_storage()` within the Gemini CLI, you MUST set the environment variable `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `config/google-ads.yaml` before running the script. This ensures the script uses the project's configuration file located at `config/google-ads.yaml` during execution within the CLI environment.
-- **Error Handling:** When using the Python client library, catch `GoogleAdsException` and inspect the `error` attribute. For other languages, use the equivalent exception type.
+- **Error Handling:** When using the Python client library, you **MUST** handle exceptions by catching `GoogleAdsException` as `ex`. The detailed error list is located
+     `ex.error.errors`. **NEVER** attempt to access `ex.errors`, as this will cause an `AttributeError`. A correct error handling loop looks like this:
+    ```python
+    try:
+        # ... Google Ads API call
+    except GoogleAdsException as ex:
+        for error in ex.error.errors:
+            # ... process each error
+
+    For other languages, use the equivalent exception type and inspect its structure.
 
 #### 3.5. Troubleshooting
 - **Conversions:**
