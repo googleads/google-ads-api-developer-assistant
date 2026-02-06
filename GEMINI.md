@@ -79,7 +79,7 @@ This document outlines mandatory operational guidelines, constraints, and best p
     - **Structure:** `https://developers.google.com/google-ads/api/docs/query/`
     - **Entities:** `https://developers.google.com/google-ads/api/fields/vXX` (replace `vXX` with the confirmed API version).
 - **Validation:** Validate queries **before** execution. Specifically, be sure to execute all the rules outlined in section **"3.3.1. Rigorous GAQL Validation"** before outputting the query.
-- **Date Ranges:** Compute dates dynamically (no constants like `LAST_90_DAYS`).
+- **Date Ranges:** The `DURING` clause in a GAQL query only accepts a limited set of predefined date constants (e.g., `LAST_7_DAYS`, `LAST_30_DAYS`). You MUST NOT invent constants like `LAST_33_DAYS`. For any non-standard time period, you MUST dynamically calculate the `start_date` and `end_date` and use the `BETWEEN 'YYYY-MM-DD' AND 'YYYY-MM-DD'` format.
 - **Conversion Summaries:** Use `daily_summaries` for date-segmented data from `offline_conversion_upload_conversion_action_summary` and `offline_conversion_upload_client_summary`.
 
 #### 3.3.1. Rigorous GAQL Validation
@@ -132,14 +132,22 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
 #### 3.4.1. Python Configuration Loading
 - **Code Generation (to `saved_code/`):** When generating Python code that uses the `google-ads-python` client library and saves it to the `saved_code/` directory, any calls to `GoogleAdsClient.load_from_storage()` MUST NOT include a `path` argument. This ensures that the generated code, when run by the user outside of the Gemini CLI, will look for `google-ads.yaml` in their home directory (or other default locations as per the client library's behavior).
 - **Execution within Gemini CLI:** When executing Python code that uses `GoogleAdsClient.load_from_storage()` within the Gemini CLI, you MUST set the environment variable `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `config/google-ads.yaml` before running the script. This ensures the script uses the project's configuration file located at `config/google-ads.yaml` during execution within the CLI environment.
-- **Error Handling:** When using the Python client library, you **MUST** handle exceptions by catching `GoogleAdsException` as `ex`. The detailed error list is located
-     `ex.error.errors`. **NEVER** attempt to access `ex.errors`, as this will cause an `AttributeError`. A correct error handling loop looks like this:
+- **Error Handling:** When using the Python client library, you **MUST** handle exceptions by catching `GoogleAdsException` as `ex`. The `ex` object contains the high-level, structured Google Ads failure details in the `ex.failure` attribute. To access the detailed list of errors, you **MUST** iterate over `ex.failure.errors`. **NEVER** attempt to access `ex.error.errors`, as `ex.error` is the underlying gRPC call object and does not have this attribute, which will cause an `AttributeError`. A correct error handling loop looks like this:
     ```python
     try:
         # ... Google Ads API call
     except GoogleAdsException as ex:
-        for error in ex.error.errors:
-            # ... process each error
+        print(
+            f"Request with ID '{ex.request_id}' failed with status "
+            f"'{ex.error.code().name}' and includes the following errors:"
+        )
+        for error in ex.failure.errors:
+            print(f"	Error with message '{error.message}'.")
+            if error.location:
+                for field_path_element in error.location.field_path_elements:
+                    print(f"		On field: '{field_path_element.field_name}'")
+
+    ```
 
     For other languages, use the equivalent exception type and inspect its structure.
 
