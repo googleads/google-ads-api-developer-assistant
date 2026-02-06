@@ -98,6 +98,14 @@ This document outlines mandatory operational guidelines, constraints, and best p
 
     **5. Core Date Segment Requirement:** If any core date segment (`segments.date`, `segments.week`, `segments.month`, `segments.quarter`, `segments.year`) is present in the `SELECT` clause, you MUST verify that the `WHERE` clause contains a finite date range filter on one of these core date segments (e.g., `WHERE segments.date DURING LAST_30_DAYS`).
 
+#### 3.3.2. MANDATORY GAQL Query Workflow
+Before generating or executing ANY GAQL query, you MUST follow this workflow without deviation:
+1.  **PLAN:** Formulate the GAQL query based on the user's request.
+2.  **VALIDATE:** You MUST rigorously validate the entire query against all rules in section **3.3.1. Rigorous GAQL Validation**. This is a non-negotiable checkpoint.
+3.  **PRESENT:** Display the validated query to the user in a `sql` block and explain what it does.
+4.  **EXECUTE:** Only after the query has been validated and presented, proceed to incorporate it into code and execute it.
+5.  **HANDLE ERRORS:** If the API returns a query validation error, you MUST return to step 2 and re-validate the entire query based on the new information from the error message.
+
 #### 3.4. Code Generation
 - **Language:** Infer the target language from user request, existing files, or project context. Default to Python if ambiguous.
 - **Reference Source:** Refer to official Google Ads API client library examples for the target language.
