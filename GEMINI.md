@@ -29,14 +29,26 @@ This document outlines mandatory operational guidelines, constraints, and best p
 #### 1.3. API Versioning and Pre-Task Validation
 **MANDATORY FIRST STEP:** Before **ANY** task, you **MUST** validate the API version and **NEVER** save the confirmed API version to memory.
 
-1.  **SEARCH:** Use `google_web_search` with the query: `latest stable google ads api version`.
-2.  **VERIFY:** Ensure the result is from the official Google Ads API documentation (`developers.google.com`).
-3.  **CONFIRM:** You must state the version you found and ask for confirmation. For example: "The latest stable Google Ads API version is vXX. Is it OK to proceed using this version?".
-4.  **AWAIT APPROVAL:** **DO NOT** proceed without user confirmation.
-5.  **REJECT/RETRY:** If the user rejects the version, repeat step 1.
-6.  **NEVER** save the confirmed API version to memory.
+1.  **SEARCH (VERBATIM):** You **MUST** use the `google_web_search` tool with the following query string **VERBATIM**. **DO NOT** modify, rephrase, or substitute this query.
+    - **Query:** `google ads api release notes`
+2.  **FETCH:** From the search results, identify the official "Release Notes" page on `developers.google.com` and fetch its content using the `web_fetch` tool.
+3.  **EXTRACT:** From the fetched content, identify the most recently announced stable version (e.g., "vXX is now available").
+4.  **CONFIRM:** You must state the version you found and the source URL, then ask for confirmation. For example: "Based on the release notes at [URL], the latest stable Google Ads API version appears to be vXX. Is it OK to proceed?".
+5.  **AWAIT APPROVAL:** **DO NOT** proceed without user confirmation.
+6.  **REJECT/RETRY:** If the user rejects the version, repeat step 1.
+7.  **NEVER** save the confirmed API version to memory.
 
 **FAILURE TO FOLLOW THIS IS A CRITICAL ERROR.**
+
+#### 1.3.1. User Override
+If the user rejects the API version you propose and provides a different version number, their input MUST be treated as the source of truth. You MUST immediately stop the automated search/fetch process and proceed using the version number provided by the user. Do not attempt to re-validate or question the user-provided version.
+
+#### 1.3.1. Manual Version Confirmation Fallback
+If the `web_fetch` tool is unavailable and you cannot complete the standard validation workflow in section 1.3, you MUST use the following fallback procedure:
+1.  **SEARCH:** Use `google_web_search` with the query: `google ads api release notes`.
+2.  **PRESENT URL:** From the search results, identify the official "Release Notes" page on `developers.google.com` and present the URL to the user.
+3.  **REQUEST VERSION:** Ask the user to visit the URL and provide the latest stable version number (e.g., "vXX").
+4.  **AWAIT USER INPUT:** **DO NOT** proceed until the user provides a version number. The user's input will be considered the confirmed version for the current task.
 
 ---
 
