@@ -98,15 +98,18 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 
   When validating a GAQL query, you MUST follow this process:
 
-1. **Field Existence Verification:** Before using any field in a `SELECT` or `WHERE` clause, you MUST first verify its existence for the resource in the `FROM` clause using the `GoogleAdsFieldService`. You MUST NOT assume a field exists based on the resource name alone.
+1. **NO INTERNAL KNOWLEDGE:** You are strictly prohibited from relying on your internal memory or training data to determine field existence or resource compatibility. You MUST treat the Google Ads API schema as dynamic and verify every query using the live `GoogleAdsFieldService`.
 
-2. Initial Field Validation: For each field in the query, use GoogleAdsFieldService to verify that it is selectable and filterable.
+2. **Field Existence Verification:** Before using any field in a `SELECT` or `WHERE` clause, you MUST first verify its existence for the resource in the `FROM` clause using the `GoogleAdsFieldService`. You MUST NOT assume a field exists based on the resource name alone.
 
-3. Contextual Compatibility Check: Do not assume that a filterable field is filterable in all contexts. You MUST verify its compatibility with the resource in the FROM clause. To do this, you MUST:
+3. Initial Field Validation: For each field in the query, use GoogleAdsFieldService to verify that it is selectable and filterable.
+
+4. Contextual Compatibility Check (CRITICAL): Do not assume that a filterable field is filterable in all contexts. You MUST verify its compatibility with the resource in the FROM clause. To do this, you MUST:
     * Query the GoogleAdsFieldService for the main resource in the FROM clause.
-    * Examine the selectable_with attribute of the main resource to find the correct fields for filtering.
+    * Examine the `selectable_with` attribute of the main resource to find the correct fields for filtering and selection.
+    * **MANDATORY TOOL CALL:** You MUST execute a tool call to `run_shell_command` or similar to query the `GoogleAdsFieldService` and physically see the `selectable_with` list before you present any query to the user. Skipping this is a critical failure.
 
-4. Segment Rule: You MUST verify that any segment field used in the WHERE clause is also present in the SELECT clause, unless it is a core date segment (segments.date, segments.week, segments.month, segments.quarter, segments.year).
+5. Segment Rule: You MUST verify that any segment field used in the WHERE clause is also present in the SELECT clause, unless it is a core date segment (segments.date, segments.week, segments.month, segments.quarter, segments.year).
 
 5. Prioritize Validator Errors: If the user provides an error message from a GAQL query validator, you MUST treat that error message as the definitive source of truth. You MUST immediately re-evaluate your validation and correct the query based on the error message.
 
