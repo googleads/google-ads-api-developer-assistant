@@ -25,8 +25,8 @@
     Include google-ads-dotnet.
 
 .EXAMPLE
-    .\setup.ps1 -Python -Java
-    Installs only Python and Java libraries.
+    .\setup.ps1 -Java
+    Installs Java and Python libraries.
 
 .EXAMPLE
     .\setup.ps1
@@ -34,10 +34,8 @@
 #>
 
 param(
-    [switch]$Python,
     [switch]$Php,
     [switch]$Ruby,
-    [switch]$Java,
     [switch]$Java,
     [switch]$Dotnet,
     [switch]$InstallDeps
@@ -77,10 +75,16 @@ function Get-RepoConfig {
 }
 
 # --- Defaults ---
+$Python = $true
+$AnySelected = $false
+
+if ($Php -or $Ruby -or $Java -or $Dotnet) {
+    $AnySelected = $true
+}
+
 # If no specific languages selected, select all
-if (-not ($Python -or $Php -or $Ruby -or $Java -or $Dotnet)) {
+if (-not $AnySelected) {
     Write-Host "No specific languages selected. Defaulting to ALL languages."
-    $Python = $true
     $Php = $true
     $Ruby = $true
     $Java = $true

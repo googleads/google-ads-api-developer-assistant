@@ -69,10 +69,10 @@ echo '{"context": {"includeDirectories": []}}' > "${FAKE_PROJECT}/.gemini/settin
 mkdir -p "${FAKE_PROJECT}/api_examples"
 mkdir -p "${FAKE_PROJECT}/saved_code"
 
-# --- Test Case 1: Run setup.sh with --python ---
-echo "--- Running setup.sh --python ---"
-if ! bash "${SETUP_SCRIPT_PATH}" --python; then
-    echo "FAIL: setup.sh failed with --python"
+# --- Test Case 1: Run setup.sh ---
+echo "--- Running setup.sh ---"
+if ! bash "${SETUP_SCRIPT_PATH}"; then
+    echo "FAIL: setup.sh failed"
     exit 1
 fi
 
@@ -124,11 +124,12 @@ else
     exit 1
 fi
 
-# Verify Python is gone (based on current implementation analysis)
+# Verify Python is present (Since Python is now always enabled)
 if grep -q "google-ads-python" "${FAKE_PROJECT}/.gemini/settings.json"; then
-    echo "INFO: google-ads-python is STILL present (Accumulative?)"
+    echo "INFO: google-ads-python is STILL present (Always enabled)"
 else
-    echo "INFO: google-ads-python is GONE (Expected per current logic if overwriting)"
+    echo "FAIL: google-ads-python is GONE (It should always be present)"
+    exit 1
 fi
 
 # Mock python
@@ -164,11 +165,11 @@ touch "${FAKE_PROJECT}/client_libs/google-ads-ruby/Gemfile"
 
 
 # --- Test Case 3: Install Deps ---
-echo "--- Running setup.sh --python --php --ruby --install-deps ---"
+echo "--- Running setup.sh --php --ruby --install-deps ---"
 # Clear log
 rm -f "${TEST_TMP_DIR}/install_log.txt"
 
-if ! bash "${SETUP_SCRIPT_PATH}" --python --php --ruby --install-deps; then
+if ! bash "${SETUP_SCRIPT_PATH}" --php --ruby --install-deps; then
     echo "FAIL: setup.sh failed with --install-deps"
     exit 1
 fi
@@ -199,10 +200,10 @@ else
 fi
 
 # --- Test Case 4: No Install Deps (Verify NO install) ---
-echo "--- Running setup.sh --python --php --ruby (NO deps) ---"
+echo "--- Running setup.sh --php --ruby (NO deps) ---"
 rm -f "${TEST_TMP_DIR}/install_log.txt"
 
-if ! bash "${SETUP_SCRIPT_PATH}" --python --php --ruby; then
+if ! bash "${SETUP_SCRIPT_PATH}" --php --ruby; then
     echo "FAIL: setup.sh failed without --install-deps"
     exit 1
 fi

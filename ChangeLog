@@ -7,6 +7,7 @@
 - Added mandatory GAQL validation rules to GEMINI.md
 - Introduced dynamic grpc interceptor for Python calls within extension.
 - Added hierachical context file for conversions troubleshooting.
+- Python is installed by default with setup.sh and setup.ps1.
 
 * 1.5.0
 - Added rigorous GAQL validation rules to GEMINI.md

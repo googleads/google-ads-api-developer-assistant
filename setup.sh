@@ -67,7 +67,7 @@ get_repo_name() {
 
 # --- Defaults ---
 # Simple variables to track selection (associative arrays not supported in Bash 3.2)
-INSTALL_PYTHON=false
+INSTALL_PYTHON=true
 INSTALL_PHP=false
 INSTALL_RUBY=false
 INSTALL_JAVA=false
@@ -115,11 +115,11 @@ usage() {
   echo ""
   echo "  This script initializes the development environment for the Google Ads API Developer Assistant."
   echo "  It clones the selected client libraries into '${DEFAULT_PARENT_DIR}'."
+  echo "  The google-ads-python library is always installed by default."
   echo ""
   echo "  Options:"
   echo "    -h, --help                 Show this help message and exit
     --install-deps             Install dependencies (e.g. pip packages)"
-  echo "    --python                   Include google-ads-python"
   echo "    --php                      Include google-ads-php"
   echo "    --ruby                     Include google-ads-ruby"
   echo "    --java                     Include google-ads-java"
@@ -128,7 +128,7 @@ usage() {
   echo "  If no language flags are provided, ALL supported languages will be installed."
   echo ""
   echo "  Example:"
-  echo "    $0 --java --python         (Installs only Java and Python libraries)"
+  echo "    $0 --java                  (Installs Java and Python libraries)"
   echo ""
 }
 
@@ -138,11 +138,6 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       usage
       exit 0
-      ;;
-    --python)
-      INSTALL_PYTHON=true
-      ANY_SELECTED=true
-      shift
       ;;
     --php)
       INSTALL_PHP=true

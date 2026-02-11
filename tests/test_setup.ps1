@@ -69,8 +69,8 @@ try {
     New-Item -ItemType Directory -Force -Path $RubyDir | Out-Null
     New-Item -ItemType File -Force -Path (Join-Path $RubyDir "Gemfile") | Out-Null
 
-    # --- Test Case 1: Run setup.ps1 -Python -Php -Ruby -InstallDeps ---
-    Write-Host "--- Running setup.ps1 -Python -Php -Ruby -InstallDeps ---"
+    # --- Test Case 1: Run setup.ps1 -Php -Ruby -InstallDeps ---
+    Write-Host "--- Running setup.ps1 -Php -Ruby -InstallDeps ---"
     Remove-Item -Force $InstallLog -ErrorAction SilentlyContinue
     
     # We must run it in the FakeProject dir so git rev-parse finds it? 
@@ -79,7 +79,7 @@ try {
     # Ah, our mock git `rev-parse` returns `$FakeProject`.
     
     # Execute setup.ps1
-    & $SetupScriptPath -Python -Php -Ruby -InstallDeps
+    & $SetupScriptPath -Php -Ruby -InstallDeps
     if ($LASTEXITCODE -ne 0) { throw "setup.ps1 failed" }
     
     $LogContent = Get-Content -Raw $InstallLog -ErrorAction SilentlyContinue
@@ -89,17 +89,41 @@ try {
     if ($LogContent -match "composer install") { Write-Host "PASS: composer install" } else { throw "FAIL: composer install missed" }
     if ($LogContent -match "bundle install") { Write-Host "PASS: bundle install" } else { throw "FAIL: bundle install missed" }
 
+    # Verify settings.json inclusion
+    $Settings = Get-Content -Raw (Join-Path $FakeProject ".gemini/settings.json") | ConvertFrom-Json
+    $IncludedDirs = $Settings.context.includeDirectories
+    if ($IncludedDirs -contains (Join-Path $FakeProject "client_libs/google-ads-python")) { Write-Host "PASS: settings contains python" } else { throw "FAIL: settings missing python" }
+    if ($IncludedDirs -contains (Join-Path $FakeProject "client_libs/google-ads-php")) { Write-Host "PASS: settings contains php" } else { throw "FAIL: settings missing php" }
+    if ($IncludedDirs -contains (Join-Path $FakeProject "client_libs/google-ads-ruby")) { Write-Host "PASS: settings contains ruby" } else { throw "FAIL: settings missing ruby" }
+
     # --- Test Case 2: Run setup.ps1 NO InstallDeps ---
     Write-Host "--- Running setup.ps1 (NO Deps) ---"
     Remove-Item -Force $InstallLog -ErrorAction SilentlyContinue
     
-    & $SetupScriptPath -Python -Php -Ruby
+    & $SetupScriptPath -Php -Ruby
     if ($LASTEXITCODE -ne 0) { throw "setup.ps1 failed" }
     
     if (Test-Path $InstallLog) {
         throw "FAIL: Install log exists, commands ran when they shouldn't have"
     } else {
         Write-Host "PASS: No install commands executed"
+    }
+
+    # Verify settings.json still has python
+    $Settings = Get-Content -Raw (Join-Path $FakeProject ".gemini/settings.json") | ConvertFrom-Json
+    if ($Settings.context.includeDirectories -contains (Join-Path $FakeProject "client_libs/google-ads-python")) { Write-Host "PASS: settings still contains python" } else { throw "FAIL: settings missing python in selective run" }
+
+    # --- Test Case 3: Run setup.ps1 Default (no flags) ---
+    Write-Host "--- Running setup.ps1 (Default) ---"
+    & $SetupScriptPath
+    if ($LASTEXITCODE -ne 0) { throw "setup.ps1 failed" }
+    
+    $Settings = Get-Content -Raw (Join-Path $FakeProject ".gemini/settings.json") | ConvertFrom-Json
+    $IncludedDirs = $Settings.context.includeDirectories
+    $Langs = @("python", "php", "ruby", "java", "dotnet")
+    foreach ($L in $Langs) {
+        $Expected = Join-Path $FakeProject "client_libs/google-ads-$L"
+        if ($IncludedDirs -contains $Expected) { Write-Host "PASS: settings contains $L" } else { throw "FAIL: settings missing $L in default run" }
     }
 
     Write-Host "ALL TESTS PASSED"

@@ -289,7 +289,7 @@ This document provides a technical reference for troubleshooting conversion-rela
         *   If you are using `partial_failure = True` in your API request, the rest of your conversions will still process, but you will see this error for the duplicate entries. You can safely ignore these errors if you know your data source occasionally has duplicates, but it's better to clean the data first to save on API overhead.
     *   **Summary**: To fix this, filter your list of conversions to ensure that no GCLID appears more than once for the same conversion action in a single API call.
 
-### 3. Verification Checklist
+### 3. Verification 
 
 1.  **GCLID Ownership**: Query the `click_view` resource to verify if a GCLID belongs to the specific customer account.
 2.  **Customer Terms**: Check `customer.offline_conversion_tracking_info.accepted_customer_data_terms` via the `customer` resource.
