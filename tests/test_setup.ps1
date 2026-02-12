@@ -115,15 +115,25 @@ try {
 
     # --- Test Case 3: Run setup.ps1 Default (no flags) ---
     Write-Host "--- Running setup.ps1 (Default) ---"
+    # Ensure client_libs is clean for this test case
+    Remove-Item -Recurse -Force (Join-Path $FakeProject "client_libs") -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject "client_libs") | Out-Null
+    
     & $SetupScriptPath
     if ($LASTEXITCODE -ne 0) { throw "setup.ps1 failed" }
     
     $Settings = Get-Content -Raw (Join-Path $FakeProject ".gemini/settings.json") | ConvertFrom-Json
     $IncludedDirs = $Settings.context.includeDirectories
-    $Langs = @("python", "php", "ruby", "java", "dotnet")
+    
+    # Check Python exists
+    $ExpectedPython = Join-Path $FakeProject "client_libs/google-ads-python"
+    if ($IncludedDirs -contains $ExpectedPython) { Write-Host "PASS: settings contains python" } else { throw "FAIL: settings missing python in default run" }
+    
+    # Check others don't exist
+    $Langs = @("php", "ruby", "java", "dotnet")
     foreach ($L in $Langs) {
-        $Expected = Join-Path $FakeProject "client_libs/google-ads-$L"
-        if ($IncludedDirs -contains $Expected) { Write-Host "PASS: settings contains $L" } else { throw "FAIL: settings missing $L in default run" }
+        $NotExpected = Join-Path $FakeProject "client_libs/google-ads-$L"
+        if ($IncludedDirs -contains $NotExpected) { throw "FAIL: settings contains $L but should not in default run" } else { Write-Host "PASS: settings correctly missing $L" }
     }
 
     Write-Host "ALL TESTS PASSED"

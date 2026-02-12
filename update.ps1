@@ -12,6 +12,36 @@
     .\update.ps1
 #>
 
+param(
+    [switch]$Python,
+    [switch]$Php,
+    [switch]$Ruby,
+    [switch]$Java,
+    [switch]$Dotnet
+)
+
+function Get-RepoUrl {
+    param($Lang)
+    switch ($Lang) {
+        "python" { return "https://github.com/googleads/google-ads-python.git" }
+        "php"    { return "https://github.com/googleads/google-ads-php.git" }
+        "ruby"   { return "https://github.com/googleads/google-ads-ruby.git" }
+        "java"   { return "https://github.com/googleads/google-ads-java.git" }
+        "dotnet" { return "https://github.com/googleads/google-ads-dotnet.git" }
+    }
+}
+
+function Get-RepoName {
+    param($Lang)
+    switch ($Lang) {
+        "python" { return "google-ads-python" }
+        "php"    { return "google-ads-php" }
+        "ruby"   { return "google-ads-ruby" }
+        "java"   { return "google-ads-java" }
+        "dotnet" { return "google-ads-dotnet" }
+    }
+}
+
 $ErrorActionPreference = "Stop"
 
 # --- Dependency Check ---
@@ -160,6 +190,51 @@ finally {
     }
 }
 
+
+# --- Handle Specific Library Additions ---
+$SpecifiedLangs = @()
+if ($Python) { $SpecifiedLangs += "python" }
+if ($Php)    { $SpecifiedLangs += "php" }
+if ($Ruby)   { $SpecifiedLangs += "ruby" }
+if ($Java)   { $SpecifiedLangs += "java" }
+if ($Dotnet) { $SpecifiedLangs += "dotnet" }
+
+if ($SpecifiedLangs.Count -gt 0) {
+    $DefaultParentDir = Join-Path $ProjectDirAbs "client_libs"
+
+    foreach ($Lang in $SpecifiedLangs) {
+        $RepoUrl = Get-RepoUrl $Lang
+        $RepoName = Get-RepoName $Lang
+        $LibPath = Join-Path $DefaultParentDir $RepoName
+
+        if (-not (Test-Path -LiteralPath $LibPath)) {
+            Write-Host "Library $RepoName not found. Cloning into $LibPath..."
+            New-Item -ItemType Directory -Force -Path $DefaultParentDir | Out-Null
+            git clone $RepoUrl $LibPath
+            if ($LASTEXITCODE -ne 0) { throw "Failed to clone $RepoUrl" }
+
+            # Add to settings.json if not present
+            if (Test-Path -LiteralPath $SettingsFile) {
+                # Ensure we have the most up to date settings after possible git pull
+                $SettingsJson = Get-Content -LiteralPath $SettingsFile -Raw | ConvertFrom-Json
+                $AbsPath = (Get-Item -LiteralPath $LibPath).FullName
+                
+                if ($null -eq $SettingsJson.context) {
+                    $SettingsJson | Add-Member -MemberType NoteProperty -Name "context" -Value @{ includeDirectories = @() }
+                }
+                if ($null -eq $SettingsJson.context.includeDirectories) {
+                    $SettingsJson.context | Add-Member -MemberType NoteProperty -Name "includeDirectories" -Value @()
+                }
+
+                if (-not ($SettingsJson.context.includeDirectories -contains $AbsPath)) {
+                    Write-Host "Registering $AbsPath in $SettingsFile..."
+                    $SettingsJson.context.includeDirectories += $AbsPath
+                    $SettingsJson | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
+                }
+            }
+        }
+    }
+}
 
 # --- Locate and Update Client Libraries ---
 $SettingsFile = Join-Path $ProjectDirAbs ".gemini\settings.json"

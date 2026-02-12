@@ -125,7 +125,7 @@ usage() {
   echo "    --java                     Include google-ads-java"
   echo "    --dotnet                   Include google-ads-dotnet"
   echo ""
-  echo "  If no language flags are provided, ALL supported languages will be installed."
+  echo "  If no language flags are provided, only the Python library will be installed."
   echo ""
   echo "  Example:"
   echo "    $0 --java                  (Installs Java and Python libraries)"
@@ -172,14 +172,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- Language Selection Logic ---
-# If no languages selected, select all
+# Python is always installed. Other languages are only installed if selected.
 if [[ "${ANY_SELECTED}" == "false" ]]; then
-  echo "No specific languages selected. Defaulting to ALL languages."
-  INSTALL_PYTHON=true
-  INSTALL_PHP=true
-  INSTALL_RUBY=true
-  INSTALL_JAVA=true
-  INSTALL_DOTNET=true
+  echo "No additional languages selected. Defaulting to Python only."
 fi
 
 # --- Path Resolution and Validation ---

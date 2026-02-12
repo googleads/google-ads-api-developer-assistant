@@ -82,6 +82,14 @@ if [[ ! -d "${FAKE_PROJECT}/client_libs/google-ads-python/.git" ]]; then
     exit 1
 fi
 
+# Check that other languages are NOT cloned
+for lang in php ruby java dotnet; do
+    if [[ -d "${FAKE_PROJECT}/client_libs/google-ads-${lang}" ]]; then
+        echo "FAIL: google-ads-${lang} was cloned but should not have been (default is Python only)"
+        exit 1
+    fi
+done
+
 # Check if settings.json updated
 if grep -q "google-ads-python" "${FAKE_PROJECT}/.gemini/settings.json"; then
     echo "PASS: settings.json contains google-ads-python"
@@ -90,6 +98,14 @@ else
     cat "${FAKE_PROJECT}/.gemini/settings.json"
     exit 1
 fi
+
+# Verify other languages are NOT in settings.json
+for lang in php ruby java dotnet; do
+    if grep -q "google-ads-${lang}" "${FAKE_PROJECT}/.gemini/settings.json"; then
+        echo "FAIL: settings.json contains google-ads-${lang} but should not (default is Python only)"
+        exit 1
+    fi
+done
 
 # --- Test Case 2: Run setup.sh --java (update existing check) ---
 echo "--- Running setup.sh --java ---"

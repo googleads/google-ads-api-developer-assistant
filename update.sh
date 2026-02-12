@@ -41,14 +41,94 @@ usage() {
   echo ""
   echo "  Options:"
   echo "    -h, --help    Show this help message and exit"
+  echo "    --python      Ensure google-ads-python is present and updated"
+  echo "    --php         Ensure google-ads-php is present and updated"
+  echo "    --ruby        Ensure google-ads-ruby is present and updated"
+  echo "    --java        Ensure google-ads-java is present and updated"
+  echo "    --dotnet      Ensure google-ads-dotnet is present and updated"
+  echo ""
+  echo "  If flags are provided, the script will ensure those libraries are installed"
+  echo "  (cloned) and registered in .gemini/settings.json if they weren't already."
   echo ""
 }
 
+# --- Defaults ---
+INSTALL_PYTHON=false
+INSTALL_PHP=false
+INSTALL_RUBY=false
+INSTALL_JAVA=false
+INSTALL_DOTNET=false
+ANY_SELECTED=false
+
 # --- Argument Parsing ---
-if [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --python)
+      INSTALL_PYTHON=true
+      ANY_SELECTED=true
+      shift
+      ;;
+    --php)
+      INSTALL_PHP=true
+      ANY_SELECTED=true
+      shift
+      ;;
+    --ruby)
+      INSTALL_RUBY=true
+      ANY_SELECTED=true
+      shift
+      ;;
+    --java)
+      INSTALL_JAVA=true
+      ANY_SELECTED=true
+      shift
+      ;;
+    --dotnet)
+      INSTALL_DOTNET=true
+      ANY_SELECTED=true
+      shift
+      ;;
+    *)
+      # Ignore unknown options or handle them
+      shift
+      ;;
+  esac
+done
+
+# Helper functions for repo info (Matching setup.sh)
+get_repo_url() {
+  case "$1" in
+    python) echo "https://github.com/googleads/google-ads-python.git" ;;
+    php)    echo "https://github.com/googleads/google-ads-php.git" ;;
+    ruby)   echo "https://github.com/googleads/google-ads-ruby.git" ;;
+    java)   echo "https://github.com/googleads/google-ads-java.git" ;;
+    dotnet) echo "https://github.com/googleads/google-ads-dotnet.git" ;;
+  esac
+}
+
+get_repo_name() {
+  case "$1" in
+    python) echo "google-ads-python" ;;
+    php)    echo "google-ads-php" ;;
+    ruby)   echo "google-ads-ruby" ;;
+    java)   echo "google-ads-java" ;;
+    dotnet) echo "google-ads-dotnet" ;;
+  esac
+}
+
+is_enabled() {
+  case "$1" in
+    python) [[ "${INSTALL_PYTHON}" == "true" ]] ;;
+    php)    [[ "${INSTALL_PHP}"    == "true" ]] ;;
+    ruby)   [[ "${INSTALL_RUBY}"   == "true" ]] ;;
+    java)   [[ "${INSTALL_JAVA}"   == "true" ]] ;;
+    dotnet) [[ "${INSTALL_DOTNET}" == "true" ]] ;;
+  esac
+}
 
 # --- Dependency Check ---
 if ! command -v jq &> /dev/null; then
@@ -150,6 +230,44 @@ if [[ -f "${TEMP_CUSTOMER_ID}" ]] && [[ -s "${TEMP_CUSTOMER_ID}" ]]; then
 fi
 
 echo "Successfully updated google-ads-api-developer-assistant."
+
+# --- Handle Specific Library Additions ---
+readonly ALL_LANGS="python php ruby java dotnet"
+readonly DEFAULT_PARENT_DIR="${PROJECT_DIR_ABS}/client_libs"
+
+for lang in $ALL_LANGS; do
+  if is_enabled "$lang"; then
+    repo_url=$(get_repo_url "$lang")
+    repo_name=$(get_repo_name "$lang")
+    lib_path="${DEFAULT_PARENT_DIR}/${repo_name}"
+
+    if [[ ! -d "${lib_path}" ]]; then
+        echo "Library ${repo_name} not found. Cloning into ${lib_path}..."
+        mkdir -p "${DEFAULT_PARENT_DIR}"
+        if ! git clone "${repo_url}" "${lib_path}"; then
+            err "ERROR: Failed to clone ${repo_url}"
+            exit 1
+        fi
+        
+        # Add to settings.json if not present
+        if [[ -f "${SETTINGS_JSON}" ]]; then
+            # Ensure path is absolute for settings.json
+            ABS_PATH=$(realpath "${lib_path}" 2>/dev/null || echo "${lib_path}")
+            echo "Registering ${ABS_PATH} in ${SETTINGS_JSON}..."
+            if ! jq --arg new_path "${ABS_PATH}" '
+                if (.context.includeDirectories | any(. == $new_path)) then 
+                    . 
+                else 
+                    .context.includeDirectories += [$new_path] 
+                end' "${SETTINGS_JSON}" > "${SETTINGS_JSON}.tmp"; then
+                err "ERROR: Failed to update ${SETTINGS_JSON}"
+                exit 1
+            fi
+            mv "${SETTINGS_JSON}.tmp" "${SETTINGS_JSON}"
+        fi
+    fi
+  fi
+done
 
 # --- Locate and Update Client Libraries ---
 readonly SETTINGS_FILE="${PROJECT_DIR_ABS}/.gemini/settings.json"

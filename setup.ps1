@@ -30,7 +30,11 @@
 
 .EXAMPLE
     .\setup.ps1
-    Installs ALL supported libraries.
+    Installs only the Python library.
+
+.EXAMPLE
+    .\setup.ps1 -Java
+    Installs Java and Python libraries.
 #>
 
 param(
@@ -82,13 +86,9 @@ if ($Php -or $Ruby -or $Java -or $Dotnet) {
     $AnySelected = $true
 }
 
-# If no specific languages selected, select all
+# If no specific languages selected, default to Python only
 if (-not $AnySelected) {
-    Write-Host "No specific languages selected. Defaulting to ALL languages."
-    $Php = $true
-    $Ruby = $true
-    $Java = $true
-    $Dotnet = $true
+    Write-Host "No additional languages selected. Defaulting to Python only."
 }
 
 # --- Dependency Check ---
