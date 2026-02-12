@@ -3,7 +3,7 @@ set -u
 
 # --- Test Setup ---
 TEST_TMP_DIR=$(mktemp -d)
-SETUP_SCRIPT_PATH="$(cd "$(dirname "$0")/.." && pwd)/setup.sh"
+SETUP_SCRIPT_PATH="$(cd "$(dirname "$0")/.." && pwd)/install.sh"
 
 echo "Running tests in ${TEST_TMP_DIR}"
 
@@ -60,19 +60,19 @@ if ! command -v jq &> /dev/null; then
 fi
 
 # 2. Setup "Project" in Temp Dir
-# setup.sh expects to be run from within the repo
+# install.sh expects to be run from within the repo
 # We will run it from FAKE_PROJECT, pretending it's the repo root
 mkdir -p "${FAKE_PROJECT}/.gemini"
 echo '{"context": {"includeDirectories": []}}' > "${FAKE_PROJECT}/.gemini/settings.json"
 
-# Create dummy directories that setup.sh references
+# Create dummy directories that install.sh references
 mkdir -p "${FAKE_PROJECT}/api_examples"
 mkdir -p "${FAKE_PROJECT}/saved_code"
 
-# --- Test Case 1: Run setup.sh ---
-echo "--- Running setup.sh ---"
+# --- Test Case 1: Run install.sh ---
+echo "--- Running install.sh ---"
 if ! bash "${SETUP_SCRIPT_PATH}"; then
-    echo "FAIL: setup.sh failed"
+    echo "FAIL: install.sh failed"
     exit 1
 fi
 
@@ -107,10 +107,10 @@ for lang in php ruby java dotnet; do
     fi
 done
 
-# --- Test Case 2: Run setup.sh --java (update existing check) ---
-echo "--- Running setup.sh --java ---"
+# --- Test Case 2: Run install.sh --java (update existing check) ---
+echo "--- Running install.sh --java ---"
 if ! bash "${SETUP_SCRIPT_PATH}" --java; then
-    echo "FAIL: setup.sh failed with --java"
+    echo "FAIL: install.sh failed with --java"
     exit 1
 fi
 
@@ -120,16 +120,16 @@ if [[ ! -d "${FAKE_PROJECT}/client_libs/google-ads-java/.git" ]]; then
     exit 1
 fi
 
-# Check if settings.json has both now (actually jq might rewrite/append, setup.sh overwrites the list based on selection?)
-# setup.sh reads: JQ_ARGS arguments based on enabled languages in THAT run.
+# Check if settings.json has both now (actually jq might rewrite/append, install.sh overwrites the list based on selection?)
+# install.sh reads: JQ_ARGS arguments based on enabled languages in THAT run.
 # It overwrites `context.includeDirectories` with `[$examples, $saved, ...selected_libs]`.
 # So if I run with ONLY --java, python might be REMOVED?
 # Let's check the script logic:
 # `for lang in $ALL_LANGS; do if is_enabled "$lang"; then ... JQ_ARGS+=...; fi; done`
 # `JQ_ARRAY_STR="[\$examples, \$saved"` ... `JQ_ARRAY_STR+=", \$lib_$lang"` ...
 # Yes, it overwrites with ONLY the currently selected languages + existing examples/saved.
-# THIS IS IMPORTANT. Running `setup.sh --java` AFTER `setup.sh --python` removes python from settings if `setup.sh` doesn't read existing settings.
-# Wait, `setup.sh` REPLACES the list.
+# THIS IS IMPORTANT. Running `install.sh --java` AFTER `install.sh --python` removes python from settings if `install.sh` doesn't read existing settings.
+# Wait, `install.sh` REPLACES the list.
 # Let's verify this behavior is what we expect or if it's a "bug" (or feature).
 # For now, I test that java IS present.
 
@@ -181,12 +181,12 @@ touch "${FAKE_PROJECT}/client_libs/google-ads-ruby/Gemfile"
 
 
 # --- Test Case 3: Install Deps ---
-echo "--- Running setup.sh --php --ruby --install-deps ---"
+echo "--- Running install.sh --php --ruby --install-deps ---"
 # Clear log
 rm -f "${TEST_TMP_DIR}/install_log.txt"
 
 if ! bash "${SETUP_SCRIPT_PATH}" --php --ruby --install-deps; then
-    echo "FAIL: setup.sh failed with --install-deps"
+    echo "FAIL: install.sh failed with --install-deps"
     exit 1
 fi
 
@@ -216,11 +216,11 @@ else
 fi
 
 # --- Test Case 4: No Install Deps (Verify NO install) ---
-echo "--- Running setup.sh --php --ruby (NO deps) ---"
+echo "--- Running install.sh --php --ruby (NO deps) ---"
 rm -f "${TEST_TMP_DIR}/install_log.txt"
 
 if ! bash "${SETUP_SCRIPT_PATH}" --php --ruby; then
-    echo "FAIL: setup.sh failed without --install-deps"
+    echo "FAIL: install.sh failed without --install-deps"
     exit 1
 fi
 

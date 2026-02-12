@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Test script for setup.ps1
+    Test script for install.ps1
 #>
 
 $ErrorActionPreference = "Stop"
@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 # --- Test Setup ---
 $TestTmpDir = [System.IO.Path]::GetTempPath() + [System.IO.Path]::GetRandomFileName()
 New-Item -ItemType Directory -Force -Path $TestTmpDir | Out-Null
-$SetupScriptPath = Resolve-Path (Join-Path $PSScriptRoot ".." "setup.ps1")
+$InstallScriptPath = Resolve-Path (Join-Path $PSScriptRoot ".." "install.ps1")
 
 Write-Host "Running tests in $TestTmpDir"
 
@@ -69,18 +69,18 @@ try {
     New-Item -ItemType Directory -Force -Path $RubyDir | Out-Null
     New-Item -ItemType File -Force -Path (Join-Path $RubyDir "Gemfile") | Out-Null
 
-    # --- Test Case 1: Run setup.ps1 -Php -Ruby -InstallDeps ---
-    Write-Host "--- Running setup.ps1 -Php -Ruby -InstallDeps ---"
+    # --- Test Case 1: Run install.ps1 -Php -Ruby -InstallDeps ---
+    Write-Host "--- Running install.ps1 -Php -Ruby -InstallDeps ---"
     Remove-Item -Force $InstallLog -ErrorAction SilentlyContinue
     
     # We must run it in the FakeProject dir so git rev-parse finds it? 
-    # setup.ps1 calls `git rev-parse --show-toplevel`.
+    # install.ps1 calls `git rev-parse --show-toplevel`.
     # Our mock git returns $FakeProject regardless of CWD if we mocked it correctly.
     # Ah, our mock git `rev-parse` returns `$FakeProject`.
     
-    # Execute setup.ps1
-    & $SetupScriptPath -Php -Ruby -InstallDeps
-    if ($LASTEXITCODE -ne 0) { throw "setup.ps1 failed" }
+    # Execute install.ps1
+    & $InstallScriptPath -Php -Ruby -InstallDeps
+    if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed" }
     
     $LogContent = Get-Content -Raw $InstallLog -ErrorAction SilentlyContinue
     Write-Host "Log Content:`n$LogContent"
@@ -96,12 +96,12 @@ try {
     if ($IncludedDirs -contains (Join-Path $FakeProject "client_libs/google-ads-php")) { Write-Host "PASS: settings contains php" } else { throw "FAIL: settings missing php" }
     if ($IncludedDirs -contains (Join-Path $FakeProject "client_libs/google-ads-ruby")) { Write-Host "PASS: settings contains ruby" } else { throw "FAIL: settings missing ruby" }
 
-    # --- Test Case 2: Run setup.ps1 NO InstallDeps ---
-    Write-Host "--- Running setup.ps1 (NO Deps) ---"
+    # --- Test Case 2: Run install.ps1 NO InstallDeps ---
+    Write-Host "--- Running install.ps1 (NO Deps) ---"
     Remove-Item -Force $InstallLog -ErrorAction SilentlyContinue
     
-    & $SetupScriptPath -Php -Ruby
-    if ($LASTEXITCODE -ne 0) { throw "setup.ps1 failed" }
+    & $InstallScriptPath -Php -Ruby
+    if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed" }
     
     if (Test-Path $InstallLog) {
         throw "FAIL: Install log exists, commands ran when they shouldn't have"
@@ -113,14 +113,14 @@ try {
     $Settings = Get-Content -Raw (Join-Path $FakeProject ".gemini/settings.json") | ConvertFrom-Json
     if ($Settings.context.includeDirectories -contains (Join-Path $FakeProject "client_libs/google-ads-python")) { Write-Host "PASS: settings still contains python" } else { throw "FAIL: settings missing python in selective run" }
 
-    # --- Test Case 3: Run setup.ps1 Default (no flags) ---
-    Write-Host "--- Running setup.ps1 (Default) ---"
+    # --- Test Case 3: Run install.ps1 Default (no flags) ---
+    Write-Host "--- Running install.ps1 (Default) ---"
     # Ensure client_libs is clean for this test case
     Remove-Item -Recurse -Force (Join-Path $FakeProject "client_libs") -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject "client_libs") | Out-Null
     
-    & $SetupScriptPath
-    if ($LASTEXITCODE -ne 0) { throw "setup.ps1 failed" }
+    & $InstallScriptPath
+    if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed" }
     
     $Settings = Get-Content -Raw (Join-Path $FakeProject ".gemini/settings.json") | ConvertFrom-Json
     $IncludedDirs = $Settings.context.includeDirectories

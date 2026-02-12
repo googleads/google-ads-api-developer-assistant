@@ -241,7 +241,7 @@ $SettingsFile = Join-Path $ProjectDirAbs ".gemini\settings.json"
 
 if (-not (Test-Path -LiteralPath $SettingsFile)) {
     Write-Error "ERROR: Settings file not found: $SettingsFile"
-    Write-Error "Please run setup.ps1 first."
+    Write-Error "Please run install.ps1 first."
     exit 1
 }
 

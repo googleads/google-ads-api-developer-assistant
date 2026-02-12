@@ -5,6 +5,16 @@
       "enableLoadingPhrases": false
     }
   },
+   "general": {
+    "checkpointing": {
+      "enabled": true
+    },
+   "sessionRetention": {
+      "enabled": true,
+      "maxAge": "30d",
+      "maxCount": 50
+    }
+  },
   "context": {
     "includeDirectories": [
       "/full/path/google-ads-api-developer-assistant/api_examples",

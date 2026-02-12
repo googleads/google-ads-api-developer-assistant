@@ -25,15 +25,15 @@
     Include google-ads-dotnet.
 
 .EXAMPLE
-    .\setup.ps1 -Java
+    .\install.ps1 -Java
     Installs Java and Python libraries.
 
 .EXAMPLE
-    .\setup.ps1
+    .\install.ps1
     Installs only the Python library.
 
 .EXAMPLE
-    .\setup.ps1 -Java
+    .\install.ps1 -Java
     Installs Java and Python libraries.
 #>
 
@@ -208,6 +208,30 @@ try {
     Write-Host "Successfully updated $SettingsFile"
     Write-Host "New contents of context.includeDirectories:"
     Write-Host ($SettingsJson.context.includeDirectories | Out-String)
+
+    Write-Host "Registering Google Ads API Developer Assistant as a Gemini extension..."
+    if (Get-Command gemini -ErrorAction SilentlyContinue) {
+        try {
+            $InstallOutput = "Y" | & gemini extensions install https://github.com/googleads/google-ads-api-developer-assistant.git 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+                if ($InstallOutput -match "already installed") {
+                    Write-Host "Extension already installed. Reinstalling..."
+                    gemini extensions uninstall "google-ads-api-developer-assistant" 2>&1 | Out-Null
+                    $InstallOutput = "Y" | & gemini extensions install https://github.com/googleads/google-ads-api-developer-assistant.git 2>&1 | Out-String
+                } else {
+                    Write-Warning $InstallOutput
+                    Write-Warning "Failed to register extension automatically. You may need to run 'gemini extensions install https://github.com/googleads/google-ads-api-developer-assistant.git' manually."
+                }
+            } else {
+                Write-Host $InstallOutput
+            }
+        }
+        catch {
+            Write-Warning "An unexpected error occurred during extension registration: $_"
+        }
+    } else {
+        Write-Warning "'gemini' command not found. Skipping extension registration."
+    }
 }
 catch {
     Write-Error "ERROR: Failed to update settings file: $_"
@@ -244,7 +268,7 @@ if ($Ruby -and $InstallDeps) {
     }
 }
 
-Write-Host "Setup complete."
+Write-Host "Installation complete."
 Write-Host ""
 Write-Host "IMPORTANT: You must manually configure a development environment for each language you wish to use."
 Write-Host "           (e.g.,  run 'pip install google-ads' for Python, run 'composer install' for PHP, etc.)"

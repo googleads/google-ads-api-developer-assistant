@@ -274,7 +274,7 @@ readonly SETTINGS_FILE="${PROJECT_DIR_ABS}/.gemini/settings.json"
 
 if [[ ! -f "${SETTINGS_FILE}" ]]; then
   err "ERROR: Settings file not found: ${SETTINGS_FILE}"
-  err "Please run setup.sh first."
+  err "Please run install.sh first."
   exit 1
 fi
 

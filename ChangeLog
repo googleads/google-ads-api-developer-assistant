@@ -1,14 +1,15 @@
 * 1.6.0
-- Added --install-deps option to setup.sh and setup.ps1.
-- Added skills/ext_version to get the extension version.
-- Added gemini-extension.json to register extensions with https://geminicli.com/extensions/
-- Added documentation resource for public protos.
-- Added hooks for start and end of a session.
-- Added mandatory GAQL validation rules to GEMINI.md
-- Introduced dynamic grpc interceptor for Python calls within extension.
-- Added hierachical context file for conversions troubleshooting.
-- Python is installed by default with setup.sh and setup.ps1.
+- Install-deps option to install.sh and install.ps1.
+- Skills/ext_version to get the extension version.
+- gemini-extension.json to register extensions with https://geminicli.com/extensions/
+- Documentation resource for public protos.
+- Hooks for start and end of a session.
+- Mandatory GAQL validation rules to GEMINI.md
+- Dynamic grpc interceptor for Python calls within extension.
+- Hierachical context file for conversions troubleshooting.
+- Python is installed by default with install.sh and install.ps1.
 - Updated update process to allow for adding additional client libraries.
+- Changed name of setup files to install and provided an uninstall procedure.
 
 * 1.5.0
 - Added rigorous GAQL validation rules to GEMINI.md

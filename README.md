@@ -49,7 +49,7 @@ By default, Python is used for code generation. You can change this by prefacing
 2.  A Google Ads API developer token.
 3.  A configured credentials file in your home directory if using Python, PHP, or Ruby.
 4.  Gemini CLI installed (see [Gemini CLI docs](https://github.com/google-gemini/gemini-cli)).
-5.  A local clone of each client library for the languages you want to use. `setup.sh` (Linux/macOS) or `setup.ps1` (Windows) can set this up for you.
+5.  A local clone of each client library for the languages you want to use. `install.sh` (Linux/macOS) or `install.ps1` (Windows) can set this up for you.
 6.  Python >= 3.10 installed and available on your system PATH. This is required for executing the default generated Python code directly from the CLI.
 
 ## Setup
@@ -58,23 +58,23 @@ By default, Python is used for code generation. You can change this by prefacing
 
 2.  **Clone the Extension:** `git clone https://github.com/googleads/google-ads-api-developer-assistant`. This becomes your project directory. You need to be in this directory when you run gemini-cli.
 
-3. **Run setup script**
+3. **Run install script**
     *   **Linux/macOS:**
         *   Ensure that [jq](https://github.com/jqlang/jq?tab=readme-ov-file#installation) is installed.
-        *   Run `./setup.sh`.
+        *   Run `./install.sh`.
             *   By default (no arguments), this installs **ALL** supported client libraries to `$HOME/gaada`.
-            *   To install specific languages, use flags: `./setup.sh --python --php`.
-            *   Execute `./setup.sh --help` for more details.
+            *   To install specific languages, use flags: `./install.sh --python --php`.
+            *   Execute `./install.sh --help` for more details.
     *   **Windows:**
-        *   Open PowerShell and run `.\setup.ps1`.
+        *   Open PowerShell and run `.\install.ps1`.
             *   By default, this installs **ALL** supported client libraries to `$HOME\gaada`.
-            *   To install specific languages, use parameters: `.\setup.ps1 -Python -Php`.
+            *   To install specific languages, use parameters: `.\install.ps1 -Python -Php`.
 4.  **Configure Credentials:** Make sure your API credentials configuration files are in your `$HOME` directory. Each language has its own configuration file naming convention and structure. 
 5.  **Optional: Default Customer ID:** To set a default customer ID, create a file named `customer_id.txt` in the `google-ads-api-developer-assistant` directory with the content `customer_id:YOUR_CUSTOMER_ID` (e.g., `customer_id: 1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.
 
 ### Manual Setup
 
-This is an alternative method to running `setup.sh` / `setup.ps1`. Replace Step 3 above with the following:
+This is an alternative method to running `install.sh` / `install.ps1`. Replace Step 3 above with the following:
 
 a.  **Clone Google Ads Client Libraries:** Clone the client libraries repository to a local directory  that is NOT under the Google Ads API Developer Assistant project directory. This provides context for code generation.
 
@@ -161,6 +161,22 @@ We will periodically release updates to both this extension and the client libra
 To ensure you are using the latest versions, run `update.sh` (Linux/macOS)
 or `update.ps1` (Windows) when a new version of the API is published or a new
 version of a client library is released.
+
+## Uninstallation
+
+If you wish to remove the extension and the project directory, you can use the uninstallation scripts:
+
+*   **Linux/macOS:**
+    ```bash
+    ./uninstall.sh
+    ```
+*   **Windows:**
+    ```powershell
+    .\uninstall.ps1
+    ```
+
+> [!CAUTION]
+> These scripts will prompt for confirmation before deleting the entire project directory.
 
 ## Contributing
 
