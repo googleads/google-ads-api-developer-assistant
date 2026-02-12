@@ -4,14 +4,6 @@ import sys
 import datetime
 
 def cleanup():
-    """Removes all files in the config directory."""
-    log_path = os.path.expanduser("~/gemini_hook_log.txt")
-    try:
-        with open(log_path, "a") as f:
-            f.write(f"[{datetime.datetime.now()}] cleanup_config hook started\n")
-    except Exception:
-        pass
-
     # Determine paths
     script_dir = os.path.dirname(os.path.abspath(__file__))
     # .gemini/hooks/ -> project root is 2 levels up
@@ -38,7 +30,6 @@ def cleanup():
                 print(f"Failed to delete {file_path}. Reason: {e}", file=sys.stderr)
         
         timestamp = datetime.datetime.now()
-        print(f"SUCCESS: SessionEnd hook cleaned up config directory at {timestamp}", file=sys.stdout)
 
     except Exception as e:
         print(f"Error cleaning up config directory: {e}", file=sys.stderr)
