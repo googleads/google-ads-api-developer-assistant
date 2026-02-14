@@ -122,6 +122,8 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 
 8. **Service-Specific Query Syntax:** The `GoogleAdsService` is the **only** service that accepts standard GAQL queries containing a `FROM` clause (e.g., `SELECT ... FROM ...`). When querying other services, such as the `GoogleAdsFieldService`, you **MUST** use their specific methods (e.g., `get_google_ads_field` or `search_google_ads_fields` with its specialized query format) and **MUST NOT** include a `FROM` clause in the request.
 
+9. **Inter-Field Mutual Compatibility (CRITICAL):** Do not assume that because multiple fields are selectable with the resource in the `FROM` clause, they are compatible with each other. For every field included in the `SELECT` and `WHERE` clauses, you MUST verify that every other field in the query is included in its `selectable_with` list. This is especially important when combining high-level attributes (like campaign settings) with lower-level segments (like `segments.search_term_match_source`) or metrics. If Field A and Field B are in the same query, Field B must be in Field A's `selectable_with` list, AND Field A must be in Field B's `selectable_with` list.
+
 #### 3.3.2. MANDATORY GAQL Query Workflow
 Before generating or executing ANY GAQL query, you MUST follow this workflow without deviation:
 1.  **PLAN:** Formulate the GAQL query based on the user's request.
