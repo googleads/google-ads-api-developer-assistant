@@ -109,7 +109,7 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
     * Examine the `selectable_with` attribute of the main resource to find the correct fields for filtering and selection.
     * **MANDATORY TOOL CALL:** You MUST execute a tool call to `run_shell_command` or similar to query the `GoogleAdsFieldService` and physically see the `selectable_with` list before you present any query to the user. Skipping this is a critical failure.
 
-5. Segment Rule: You MUST verify that any segment field used in the WHERE clause is also present in the SELECT clause, unless it is a core date segment (segments.date, segments.week, segments.month, segments.quarter, segments.year).
+5. Segment Rule: You MUST verify that any field (attribute or segment) used in the WHERE clause is also present in the SELECT clause, unless it is a core date segment (segments.date, segments.week, segments.month, segments.quarter, segments.year).
 
 5. Prioritize Validator Errors: If the user provides an error message from a GAQL query validator, you MUST treat that error message as the definitive source of truth. You MUST immediately re-evaluate your validation and correct the query based on the error message.
 
