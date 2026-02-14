@@ -224,7 +224,6 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
 
 #### 5.2. References
 - **API Docs:** `https://developers.google.com/google-ads/api/docs/`
-- **Conversion Docs:** `https://developers.google.com/google-ads/api/docs/conversions/`
 - **Protos:** `https://github.com/googleapis/googleapis/tree/master/google/ads/googleads`
 
 #### 5.3. Disambiguation
@@ -232,5 +231,4 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
 - **'Import' vs 'Upload':** These terms are interchangeable for conversions.
 
  #### 5.4. Displaying File Contents
-- When writing content to `explanation.txt`, `saved_code/` or any other file intended for user consumption,
-you MUST immediately follow up by displaying the content of that file directly to the user.
+- When writing content to `explanation.txt`, `saved_code/` or any other file intended for user consumption, you MUST immediately follow up by displaying the content of that file directly to the user.

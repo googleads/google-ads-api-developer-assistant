@@ -308,3 +308,8 @@ This document provides a technical reference for troubleshooting conversion-rela
 - **Conversions:**
     - Use `offline_conversion_upload_conversion_action_summary` and `offline_conversion_upload_client_summary` for recent conversion import issues.
     - Refer to official documentation for discrepancies and troubleshooting.
+
+### 5. Output and Documentation
+
+#### 5.1. References
+- **Conversion Docs:** `https://developers.google.com/google-ads/api/docs/conversions/`
