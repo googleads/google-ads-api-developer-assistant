@@ -110,7 +110,7 @@ def main(client: "GoogleAdsClient", customer_id: str) -> None:
 if __name__ == "__main__":
     # GoogleAdsClient will read the google-ads.yaml configuration file in the
     # home directory if none is specified.
-    google_ads_client = GoogleAdsClient.load_from_storage(version="v22")
+    google_ads_client = GoogleAdsClient.load_from_storage(version="v23")
 
     parser = argparse.ArgumentParser(
         description="Lists geo targets for all campaigns for a given customer ID."

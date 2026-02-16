@@ -87,7 +87,7 @@ def main(customer_ids: List[str], login_customer_id: Optional[str]) -> None:
         customer_ids: A list of customer IDs to run reports for.
         login_customer_id: The login customer ID to use (optional).
     """
-    googleads_client = GoogleAdsClient.load_from_storage(version="v22")
+    googleads_client = GoogleAdsClient.load_from_storage(version="v23")
 
     if login_customer_id:
         googleads_client.login_customer_id = login_customer_id

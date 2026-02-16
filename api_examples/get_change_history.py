@@ -103,7 +103,7 @@ def main(
 if __name__ == "__main__":
     # GoogleAdsClient will read the google-ads.yaml configuration file in the
     # home directory if none is specified.
-    googleads_client = GoogleAdsClient.load_from_storage(version="v22")
+    googleads_client = GoogleAdsClient.load_from_storage(version="v23")
 
     parser = argparse.ArgumentParser(description="Retrieves Google Ads change history.")
     # The following argument(s) are required to run the example.

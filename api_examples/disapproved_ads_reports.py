@@ -288,7 +288,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    googleads_client = GoogleAdsClient.load_from_storage(version="v22")
+    googleads_client = GoogleAdsClient.load_from_storage(version="v23")
 
     main(
         googleads_client,

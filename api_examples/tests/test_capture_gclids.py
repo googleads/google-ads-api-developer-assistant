@@ -48,6 +48,7 @@ class TestCaptureGCLIDs(unittest.TestCase):
 
         self.customer_id = "1234567890"
         self.gclid = "test_gclid_123"
+        self.conversion_date_time = "2026-02-16 12:32:45-08:00"
         self.captured_output = StringIO()
         sys.stdout = self.captured_output
 
@@ -72,7 +73,7 @@ class TestCaptureGCLIDs(unittest.TestCase):
         # Make conversions attribute a real list for testing append behavior
         self.mock_upload_click_conversions_request.conversions = []
 
-        main(self.mock_client, self.customer_id, self.gclid)
+        main(self.mock_client, self.customer_id, self.gclid, self.conversion_date_time)
 
         # Assert get_service calls
         self.mock_client.get_service.assert_any_call("ConversionUploadService")
@@ -94,7 +95,7 @@ class TestCaptureGCLIDs(unittest.TestCase):
             mock_conversion_action_response.resource_name,
         )
         self.assertEqual(
-            self.mock_click_conversion.conversion_date_time, "2024-01-01 12:32:45-08:00"
+            self.mock_click_conversion.conversion_date_time, self.conversion_date_time
         )
         self.assertEqual(self.mock_click_conversion.conversion_value, 23.41)
         self.assertEqual(self.mock_click_conversion.currency_code, "USD")
@@ -122,7 +123,7 @@ class TestCaptureGCLIDs(unittest.TestCase):
         self.mock_conversion_action_service.search_conversion_actions.return_value = []
 
         with self.assertRaises(SystemExit) as cm:
-            main(self.mock_client, self.customer_id, self.gclid)
+            main(self.mock_client, self.customer_id, self.gclid, self.conversion_date_time)
 
         self.assertEqual(cm.exception.code, 1)
         output = self.captured_output.getvalue()
@@ -157,7 +158,7 @@ class TestCaptureGCLIDs(unittest.TestCase):
         )
 
         with self.assertRaises(GoogleAdsException) as cm:
-            main(self.mock_client, self.customer_id, self.gclid)
+            main(self.mock_client, self.customer_id, self.gclid, self.conversion_date_time)
 
         # The exception object is now directly the GoogleAdsException
         ex = cm.exception

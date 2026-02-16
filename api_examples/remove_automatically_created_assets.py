@@ -17,7 +17,7 @@ import sys
 
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
-from google.ads.googleads.v22.enums import AssetFieldTypeEnum
+from google.ads.googleads.v23.enums import AssetFieldTypeEnum
 
 
 def main(
@@ -120,13 +120,13 @@ if __name__ == "__main__":
         help=(
             "The field type of the asset to remove (e.g., HEADLINE, DESCRIPTION). "
             "Refer to the AssetFieldTypeEnum documentation for possible values: "
-            "https://developers.google.com/google-ads/api/reference/rpc/v22/AssetFieldTypeEnum"
+            "https://developers.google.com/google-ads/api/reference/rpc/v23/AssetFieldTypeEnum"
         ),
     )
     args = parser.parse_args()
 
     # GoogleAdsClient will read the google-ads.yaml file from the home directory.
-    googleads_client = GoogleAdsClient.load_from_storage(version="v22")
+    googleads_client = GoogleAdsClient.load_from_storage(version="v23")
 
     main(
         googleads_client,

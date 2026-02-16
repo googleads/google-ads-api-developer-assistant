@@ -298,11 +298,12 @@ This document provides a technical reference for troubleshooting conversion-rela
 
 ### 4. Troubleshooting Workflow
 
-1.  **Check API Error Details**: Inspect the `GoogleAdsException` for specific `ErrorCode` and `message`.
-2.  **Verify Timestamps**: Ensure `conversion_date_time` is in `yyyy-mm-dd hh:mm:ss+|-hh:mm` format and falls within the lookback window.
-3.  **Validate Identifiers**: For `CLICK_NOT_FOUND`, ensure you are not mixing `gclid` with `gbraid` or `wbraid` inappropriately. Use only one per conversion.
-4.  **Wait for Processing**: Conversions can take up to 3 hours to appear in reporting after a successful upload.
-5.  **Check Conversion Settings**: Ensure the conversion action's `status` is `ENABLED` and it is configured for the correct `type`.
+1.  **MANDATORY FIRST STEP: Diagnostic Summaries**: Before investigating specific errors or identifiers, you **MUST** execute queries against `offline_conversion_upload_client_summary` and `offline_conversion_upload_conversion_action_summary`. These resources provide the most accurate view of recent import health and systemic failures.
+2.  **Check API Error Details**: Inspect the `GoogleAdsException` for specific `ErrorCode` and `message`.
+3.  **Verify Timestamps**: Ensure `conversion_date_time` is in `yyyy-mm-dd hh:mm:ss+|-hh:mm` format and falls within the lookback window.
+4.  **Validate Identifiers**: For `CLICK_NOT_FOUND`, ensure you are not mixing `gclid` with `gbraid` or `wbraid` inappropriately. Use only one per conversion.
+5.  **Wait for Processing**: Conversions can take up to 3 hours to appear in reporting after a successful upload.
+6.  **Check Conversion Settings**: Ensure the conversion action's `status` is `ENABLED` and it is configured for the correct `type`.
 
 #### 4.1. General Troubleshooting
 - **Conversions:**

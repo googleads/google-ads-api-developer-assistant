@@ -127,10 +127,11 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 #### 3.3.2. MANDATORY GAQL Query Workflow
 Before generating or executing ANY GAQL query, you MUST follow this workflow without deviation:
 1.  **PLAN:** Formulate the GAQL query based on the user's request.
-2.  **VALIDATE:** You MUST rigorously validate the entire query against all rules in section **3.3.1. Rigorous GAQL Validation**. This is a non-negotiable checkpoint.
-3.  **PRESENT:** Display the validated query to the user in a `sql` block and explain what it does.
-4.  **EXECUTE:** Only after the query has been validated and presented, proceed to incorporate it into code and execute it.
-5.  **HANDLE ERRORS:** If the API returns a query validation error, you MUST return to step 2 and re-validate the entire query based on the new information from the error message.
+2.  **SYNTAX GUARD (CRITICAL):** Identify the target service. If the service is NOT `GoogleAdsService`, you MUST explicitly remove the `FROM` clause and any associated resource name from the query string before proceeding.
+3.  **VALIDATE:** You MUST rigorously validate the entire query against all rules in section **3.3.1. Rigorous GAQL Validation**. This is a non-negotiable checkpoint.
+4.  **PRESENT:** Display the validated query to the user in a `sql` block and explain what it does.
+5.  **EXECUTE:** Only after the query has been validated and presented, proceed to incorporate it into code and execute it.
+6.  **HANDLE ERRORS:** If the API returns a query validation error, you MUST return to step 2 and re-validate the entire query based on the new information from the error message.
 
 #### 3.4. Code Generation
 - **Language:** Infer the target language from user request, existing files, or project context. Default to Python if ambiguous.
@@ -173,6 +174,7 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
 
 #### 3.5. Troubleshooting
 - **Conversions:**
+    - **MANDATORY:** For ALL conversion-related troubleshooting, you MUST follow the workflow defined in `conversions/GEMINI.md`. The absolute first step is executing diagnostic queries against `offline_conversion_upload_client_summary` and `offline_conversion_upload_conversion_action_summary`.
     - Use `offline_conversion_upload_conversion_action_summary` and `offline_conversion_upload_client_summary` for recent conversion import issues.
     - Refer to official documentation for discrepancies and troubleshooting.
 - **Performance Max:**

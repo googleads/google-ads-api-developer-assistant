@@ -158,9 +158,9 @@ if __name__ == "__main__":
 
     # The GoogleAdsClient.load_from_storage method takes the API version as a parameter.
     # The version parameter is a string that specifies the API version to be used.
-    # For example, "v22".
+    # For example, "v23".
     # This value has been user-confirmed and saved to the agent's memory.
-    googleads_client = GoogleAdsClient.load_from_storage(version="v22")
+    googleads_client = GoogleAdsClient.load_from_storage(version="v23")
 
     try:
         main(googleads_client, args.customer_id)
