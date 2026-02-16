@@ -67,7 +67,7 @@ echo '{"context": {"includeDirectories": []}}' > "${FAKE_PROJECT}/.gemini/settin
 
 # Create dummy directories that install.sh references
 mkdir -p "${FAKE_PROJECT}/api_examples"
-mkdir -p "${FAKE_PROJECT}/saved_code"
+mkdir -p "${FAKE_PROJECT}/saved/code"
 
 # --- Test Case 1: Run install.sh ---
 echo "--- Running install.sh ---"

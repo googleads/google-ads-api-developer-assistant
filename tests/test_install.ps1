@@ -58,7 +58,7 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject ".gemini") | Out-Null
     Set-Content -Path (Join-Path $FakeProject ".gemini/settings.json") -Value '{"context": {"includeDirectories": []}}'
     New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject "api_examples") | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject "saved_code") | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject "saved/code") | Out-Null
     
     # Create dummy composer.json and Gemfile
     $PhpDir = Join-Path $FakeProject "client_libs/google-ads-php"

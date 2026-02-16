@@ -266,7 +266,7 @@ fi
 echo "Updating ${SETTINGS_FILE} with context paths..."
 
 readonly CONTEXT_PATH_EXAMPLES="${PROJECT_DIR_ABS}/api_examples"
-readonly CONTEXT_PATH_SAVED="${PROJECT_DIR_ABS}/saved_code"
+readonly CONTEXT_PATH_SAVED="${PROJECT_DIR_ABS}/saved/code"
 
 # Construct jq args
 JQ_ARGS=(

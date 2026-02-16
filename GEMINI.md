@@ -64,10 +64,10 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 - Prompt the user **only** if a configuration file for the target language is not found.
 
 #### 2.2. File System
-- **Allowed Write Directories:** `saved_code/`, `saved_csv/`.
+- **Allowed Write Directories:** `saved/code/`, `saved/csv/`.
 - **Prohibited Write Directories:** Client library source directories (e.g., `google-ads-python/`, `google-ads-perl/`), `api_examples/`, or other project source directories unless explicitly instructed.
-- **NEVER** modify the files in `api_examples/`. If you need to use a file as a base for a request, copy the comments and put the file with modifications in `saved_code/`.
-- **All new or modified code MUST be written to the `saved_code/` directory.**
+- **NEVER** modify the files in `api_examples/`. If you need to use a file as a base for a request, copy the comments and put the file with modifications in `saved/code/`.
+- **All new or modified code MUST be written to the `saved/code/` directory.**
 - **File Naming:** Use descriptive, language-appropriate names (e.g., `get_campaign_metrics.py`, `GetCampaignMetrics.java`).
 - **Temporary Files:** Use the system's temporary directory.
 
@@ -166,7 +166,7 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
     - Use type hints, annotations, or other static typing features if the language supports them.
 
 #### 3.4.1. Python Configuration Loading
-- **Code Generation (to `saved_code/`):** When generating Python code that uses the `google-ads-python` client library and saves it to the `saved_code/` directory, any calls to `GoogleAdsClient.load_from_storage()` MUST NOT include a `path` argument. This ensures that the generated code, when run by the user outside of the Gemini CLI, will look for `google-ads.yaml` in their home directory (or other default locations as per the client library's behavior).
+- **Code Generation (to `saved/code/`):** When generating Python code that uses the `google-ads-python` client library and saves it to the `saved/code/` directory, any calls to `GoogleAdsClient.load_from_storage()` MUST NOT include a `path` argument. This ensures that the generated code, when run by the user outside of the Gemini CLI, will look for `google-ads.yaml` in their home directory (or other default locations as per the client library's behavior).
 - **CRITICAL Execution within Gemini CLI:** When executing Python code that uses `GoogleAdsClient.load_from_storage()` within the Gemini CLI, you **MUST** set the environment variable `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `config/google-ads.yaml` before running the script. **NEVER** use `client_libs/google-ads-python/google-ads.yaml`. This ensures the script uses the project's configuration file located at `config/google-ads.yaml` during execution within the CLI environment.
 - **User Instructions:** When providing commands or instructions to a user for running a script, you MUST NOT include the `GOOGLE_ADS_CONFIGURATION_FILE_PATH` environment variable. This variable is strictly for internal use by the assistant when executing scripts within the Gemini CLI. User-facing instructions should assume the user has configured their `google-ads.yaml` in the standard default location (e.g., their home directory).
 - **Error Handling:** When using the Python client library, you **MUST** handle exceptions by catching `GoogleAdsException` as `ex`. The `ex` object contains the high-level, structured Google Ads failure details in the `ex.failure` attribute. To access the detailed list of errors, you **MUST** iterate over `ex.failure.errors`. **NEVER** attempt to access `ex.error.errors`, as `ex.error` is the underlying gRPC call object and does not have this attribute, which will cause an `AttributeError`. A correct error handling loop looks like this:
@@ -259,4 +259,4 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
 - **'Import' vs 'Upload':** These terms are interchangeable for conversions.
 
  #### 5.4. Displaying File Contents
-- When writing content to `explanation.txt`, `saved_code/` or any other file intended for user consumption, you MUST immediately follow up by displaying the content of that file directly to the user.
+- When writing content to `explanation.txt`, `saved/code/` or any other file intended for user consumption, you MUST immediately follow up by displaying the content of that file directly to the user.

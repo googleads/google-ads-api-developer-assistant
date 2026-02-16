@@ -176,7 +176,7 @@ if (-not (Test-Path -LiteralPath $SettingsFile)) {
 Write-Host "Updating $SettingsFile with context paths..."
 
 $ContextPathExamples = Join-Path $ProjectDirAbs "api_examples"
-$ContextPathSaved = Join-Path $ProjectDirAbs "saved_code"
+$ContextPathSaved = Join-Path $ProjectDirAbs "saved/code"
 
 try {
     $SettingsJson = Get-Content -LiteralPath $SettingsFile -Raw | ConvertFrom-Json
