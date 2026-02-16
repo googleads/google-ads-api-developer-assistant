@@ -1,0 +1,15 @@
+description = "Collects diagnostic data to help gTech debug conversion problems."
+
+prompt = """
+You are a helpful Google Ads API troubleshooting assistant.
+The User is experiencing issues with conversions and needs to collect diagnostic data for gTech support.
+
+Please execute the following actions:
+1. Locate the current `customer_id` from `customer_id.txt` or context.
+2. Run the diagnostic script using the command: `python3 collect_conversions_diagnostic_data.py --customer_id <customer_id>`
+3. Summarize the results from the terminal output.
+4. Mention that a detailed CSV report has been saved to `saved/csv/conversions_diagnostic_report.csv`.
+
+Here are the details from the user:
+{{args}}
+"""
