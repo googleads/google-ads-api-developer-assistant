@@ -299,6 +299,7 @@ This document provides a technical reference for troubleshooting conversion-rela
     *   **Normalization**: Ensure both click and conversion timestamps are in the same timezone (preferably UTC) before comparing.
     *   **No Pre-Click Conversions**: The conversion timestamp MUST be strictly after the click timestamp to avoid `CONVERSION_PRECEDES_EVENT`.
     *   **Lookback Window**: The click MUST have occurred within the `click_through_lookback_window_days` defined for the conversion action to avoid `EXPIRED_EVENT`.
+6.  **No OR Operator (CRITICAL)**: GAQL does not support the `OR` operator in the `WHERE` clause. You **MUST** perform multiple separate queries or filter results in code to achieve "OR" logic.
 
 ### 4. Troubleshooting Workflow
 

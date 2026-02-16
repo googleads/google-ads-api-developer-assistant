@@ -128,6 +128,8 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 
 11. **Metadata Query Pitfall (CRITICAL):** If you receive `query_error: UNEXPECTED_FROM_CLAUSE` with message `"The FROM clause cannot be used in queries to any service except GoogleAdsService."`, it means you included a `FROM` clause in a `GoogleAdsFieldService` request (e.g., `SearchGoogleAdsFields`). You **MUST** remove the `FROM` clause and any resource name following it, and filter instead using `WHERE name = 'resource_name'` or `WHERE name LIKE 'resource_name.%'`.
 
+12. **Metadata Query Syntax Restriction (CRITICAL):** The `GoogleAdsFieldService` (e.g., `SearchGoogleAdsFields`) uses a highly restricted query language. You **MUST NOT** use parentheses `()` or complex boolean logic (like combining `AND` and `OR`) in the `WHERE` clause. Queries MUST be flat and simple. If you need complex filtering for metadata, you **MUST** retrieve a broader set of results and perform the filtering in your Python code.
+
 12. **Unrecognized Field Pitfall (CRITICAL):** If you receive `query_error: UNRECOGNIZED_FIELD`, it means one or more fields in your `SELECT` or `WHERE` clause do not exist in the confirmed API version. You **MUST NOT** guess or try alternative names based on intuition. You **MUST** immediately query the `GoogleAdsFieldService` to find the exact valid field names for that resource in the confirmed version before attempting the query again.
 
 13. **Mandatory Schema Discovery:** Before querying any resource for the first time in a session, you **MUST** execute a schema-discovery query against `GoogleAdsFieldService` to list its valid fields. Relying on memory for field names is strictly prohibited and leads to avoidable `UNRECOGNIZED_FIELD` errors.
@@ -139,6 +141,10 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 16. **Limit Requirement for Change Status (CRITICAL):** When querying the `change_status` resource, you **MUST** specify a `LIMIT` clause in your query. The limit must be less than or equal to 10,000. Failure to specify a limit results in a `LIMIT_NOT_SPECIFIED` error.
 
 17. **Single Day Filter for Click View (CRITICAL):** When querying the `click_view` resource, you **MUST** include a filter that limits the results to a single day (e.g., `WHERE segments.date = 'YYYY-MM-DD'`). Failure to do so results in an `EXPECTED_FILTER_ON_A_SINGLE_DAY` error.
+
+18. **Field Name Verification (CRITICAL):** To prevent `UNRECOGNIZED_FIELD` errors, you **MUST** verify the exact name of every field used in a `SELECT` or `WHERE` clause by querying the `GoogleAdsFieldService` before presenting or executing the query. This is especially mandatory when querying a resource for the first time in a session or when attempting to 'join' related resources. Guessing field names based on resource names is strictly prohibited.
+
+19. **Metadata Resource Pitfall (CRITICAL):** The `google_ads_field` resource can ONLY be queried using the `GoogleAdsFieldService`. You MUST NOT attempt to query it using `GoogleAdsService.search` or `search_stream`.
 
 #### 3.3.2. MANDATORY GAQL Query Workflow
 Before generating or executing ANY GAQL query, you MUST follow this workflow without deviation:
@@ -192,10 +198,21 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
 
 #### 3.4.2. Safe Attribute and Method Access (CRITICAL)
 - **Favor GoogleAdsService for Retrieval:** Most resource-specific `get_` methods (e.g., `get_campaign`, `get_conversion_action`) are deprecated or removed in modern API versions. You **MUST** always use `GoogleAdsService.search` or `GoogleAdsService.search_stream` to retrieve individual resources by filtering on their resource name or ID.
+- **Query Result Processing Pitfall:** When processing results from a `search` or `search_stream` call, if a field is a message type (e.g., `row.resource.nested_message` or a repeated field like `alerts`), you **MUST NOT** assume the attribute names of that nested message. You MUST verify the attribute names by executing a one-liner to inspect an instance of the message using `dir()` or `instance.pb.DESCRIPTOR.fields_by_name` before writing code that accesses those attributes.
+- **Proto-plus Class Inspection Pitfall (CRITICAL):** When inspecting a Google Ads API message **class** (rather than an instance) to discover field names, you **MUST NOT** assume that `Class.pb.DESCRIPTOR` is accessible. In many versions of the library, `Class.pb` is a property or function, and accessing it directly on the class will result in an `AttributeError: 'function' object has no attribute 'DESCRIPTOR'`. Instead, you MUST use `Class.meta.pb.DESCRIPTOR` to access the underlying protobuf descriptor for discovery, or preferably, instantiate the class and use the instance inspection rules defined above.
+- **Python Object Inspection Mandate (CRITICAL):** When encountering a Google Ads API object in Python for the first time, or if an attribute access fails, you MUST NOT guess its structure. You MUST execute a one-liner to perform a "deep inspection" that prints: 1) `type(instance)`, 2) `dir(instance)`, and 3) `str(instance)`. You MUST NOT use `.pb` or `.DESCRIPTOR` unless they are explicitly confirmed to exist in the `dir()` output.
+- **Proto-plus Descriptor Pitfall:** When using the Python client library, objects returned from the API are typically proto-plus messages. These objects **DO NOT** have a top-level `DESCRIPTOR` attribute. If you need to access the descriptor (e.g., to see `fields_by_name`), you **MUST** first verify that the object has a `.pb` attribute using `dir()`. If it does, use `message_instance.pb.DESCRIPTOR`. If it does not, it may be a pure protobuf message (which has `DESCRIPTOR` but no `.pb`) or a specialized wrapper.
+- **Nested Message Class Pitfall:** When using the Python client library, you **MUST NOT** assume that nested messages are accessible as class attributes of their parent message (e.g., `ParentMessage.NestedMessage`). Accessing them this way often leads to `AttributeError`. Instead, you MUST always use the `.pb` attribute of an instance to access the underlying protobuf message and its types, or use `dir(instance)` to discover the correct proto-plus attributes.
 - **Attribute Verification for Nested Messages:** Do not assume attribute names for nested messages or repeated fields (e.g., fields inside `alerts` or `policy_summary`). You **MUST** verify the correct attribute names by:
     1. Querying `GoogleAdsFieldService` to find the `type_url` of the field.
     2. Using a one-liner script (e.g., `python3 -c "from google.ads.googleads.vXX.resources.types... import ...; print(dir(...))"`) to inspect the actual class attributes if you cannot find them in documentation.
 - **Triple-Quote Safety:** When generating Python scripts that include multiline strings or SQL queries, you **MUST** use triple quotes (`"""`) and ensure there are no unescaped literal newlines within a single-quoted string to avoid `SyntaxError`.
+
+#### 3.4.3. Python One-Liner Constraints (CRITICAL)
+- When executing Python code via `run_shell_command` using the `-c` flag, you MUST keep the script extremely simple.
+- You MUST NOT use `for` loops, `if` statements, or complex multi-line logic in a one-liner.
+- You MUST NOT use `f-strings` in a one-liner that contain nested quotes that could break the shell command's quoting.
+- For any operation requiring iteration, conditional logic, or complex setup, you MUST write the code to a temporary file and execute the file.
 
 #### 3.5. Troubleshooting
 - **Conversions:**
