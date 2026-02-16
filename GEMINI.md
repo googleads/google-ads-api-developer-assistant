@@ -124,6 +124,22 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 
 9. **Inter-Field Mutual Compatibility (CRITICAL):** Do not assume that because multiple fields are selectable with the resource in the `FROM` clause, they are compatible with each other. For every field included in the `SELECT` and `WHERE` clauses, you MUST verify that every other field in the query is included in its `selectable_with` list. This is especially important when combining high-level attributes (like campaign settings) with lower-level segments (like `segments.search_term_match_source`) or metrics. If Field A and Field B are in the same query, Field B must be in Field A's `selectable_with` list, AND Field A must be in Field B's `selectable_with` list.
 
+10. **No OR Operator:** GAQL does not support the `OR` operator in the `WHERE` clause. If multiple criteria are required (e.g., searching for multiple name patterns), you **MUST** generate separate queries or perform the "OR" logic by filtering results in Python.
+
+11. **Metadata Query Pitfall (CRITICAL):** If you receive `query_error: UNEXPECTED_FROM_CLAUSE` with message `"The FROM clause cannot be used in queries to any service except GoogleAdsService."`, it means you included a `FROM` clause in a `GoogleAdsFieldService` request (e.g., `SearchGoogleAdsFields`). You **MUST** remove the `FROM` clause and any resource name following it, and filter instead using `WHERE name = 'resource_name'` or `WHERE name LIKE 'resource_name.%'`.
+
+12. **Unrecognized Field Pitfall (CRITICAL):** If you receive `query_error: UNRECOGNIZED_FIELD`, it means one or more fields in your `SELECT` or `WHERE` clause do not exist in the confirmed API version. You **MUST NOT** guess or try alternative names based on intuition. You **MUST** immediately query the `GoogleAdsFieldService` to find the exact valid field names for that resource in the confirmed version before attempting the query again.
+
+13. **Mandatory Schema Discovery:** Before querying any resource for the first time in a session, you **MUST** execute a schema-discovery query against `GoogleAdsFieldService` to list its valid fields. Relying on memory for field names is strictly prohibited and leads to avoidable `UNRECOGNIZED_FIELD` errors.
+
+14. **Enum Value Verification (CRITICAL):** If you receive `query_error: BAD_ENUM_CONSTANT`, it means the enum value used in your `WHERE` clause is invalid for that field. You **MUST** query the `GoogleAdsFieldService` for the field's `enum_values` attribute to retrieve the exact valid string constants for the confirmed API version.
+
+15. **Finite Date Range for Change Status (CRITICAL):** When querying the `change_status` resource, you **MUST** include a finite date range filter on `change_status.last_change_date_time` using both a start and an end boundary (e.g., `BETWEEN 'YYYY-MM-DD HH:MM:SS' AND 'YYYY-MM-DD HH:MM:SS'`). Providing only a start boundary (e.g., `>=`) results in a `CHANGE_DATE_RANGE_INFINITE` error.
+
+16. **Limit Requirement for Change Status (CRITICAL):** When querying the `change_status` resource, you **MUST** specify a `LIMIT` clause in your query. The limit must be less than or equal to 10,000. Failure to specify a limit results in a `LIMIT_NOT_SPECIFIED` error.
+
+17. **Single Day Filter for Click View (CRITICAL):** When querying the `click_view` resource, you **MUST** include a filter that limits the results to a single day (e.g., `WHERE segments.date = 'YYYY-MM-DD'`). Failure to do so results in an `EXPECTED_FILTER_ON_A_SINGLE_DAY` error.
+
 #### 3.3.2. MANDATORY GAQL Query Workflow
 Before generating or executing ANY GAQL query, you MUST follow this workflow without deviation:
 1.  **PLAN:** Formulate the GAQL query based on the user's request.
@@ -170,11 +186,21 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
 
     ```
 
+- **Suppress Tracebacks (CRITICAL):** When executing any Python code (including one-liners via `python3 -c`), you **MUST** wrap Google Ads API calls in a `try...except GoogleAdsException` block. You **MUST** print only the structured error details (Request ID, Error Code, and Error Messages). You **MUST NOT** allow the exception to bubble up unhandled, as the library's internal gRPC interceptors will trigger noisy "During handling of the above exception, another exception occurred" tracebacks.
+
     For other languages, use the equivalent exception type and inspect its structure.
+
+#### 3.4.2. Safe Attribute and Method Access (CRITICAL)
+- **Favor GoogleAdsService for Retrieval:** Most resource-specific `get_` methods (e.g., `get_campaign`, `get_conversion_action`) are deprecated or removed in modern API versions. You **MUST** always use `GoogleAdsService.search` or `GoogleAdsService.search_stream` to retrieve individual resources by filtering on their resource name or ID.
+- **Attribute Verification for Nested Messages:** Do not assume attribute names for nested messages or repeated fields (e.g., fields inside `alerts` or `policy_summary`). You **MUST** verify the correct attribute names by:
+    1. Querying `GoogleAdsFieldService` to find the `type_url` of the field.
+    2. Using a one-liner script (e.g., `python3 -c "from google.ads.googleads.vXX.resources.types... import ...; print(dir(...))"`) to inspect the actual class attributes if you cannot find them in documentation.
+- **Triple-Quote Safety:** When generating Python scripts that include multiline strings or SQL queries, you **MUST** use triple quotes (`"""`) and ensure there are no unescaped literal newlines within a single-quoted string to avoid `SyntaxError`.
 
 #### 3.5. Troubleshooting
 - **Conversions:**
     - **MANDATORY:** For ALL conversion-related troubleshooting, you MUST follow the workflow defined in `conversions/GEMINI.md`. The absolute first step is executing diagnostic queries against `offline_conversion_upload_client_summary` and `offline_conversion_upload_conversion_action_summary`.
+    - **Upload Validation:** When generating or executing conversion upload scripts, you MUST implement logical time checks (timestamp normalization and lookback window validation) as defined in `conversions/GEMINI.md`.
     - Use `offline_conversion_upload_conversion_action_summary` and `offline_conversion_upload_client_summary` for recent conversion import issues.
     - Refer to official documentation for discrepancies and troubleshooting.
 - **Performance Max:**

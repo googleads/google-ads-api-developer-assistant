@@ -295,6 +295,10 @@ This document provides a technical reference for troubleshooting conversion-rela
 2.  **Customer Terms**: Check `customer.offline_conversion_tracking_info.accepted_customer_data_terms` via the `customer` resource.
 3.  **Data Normalization**: Ensure email addresses, phone numbers, and names are correctly normalized (trimmed, lowercased) and hashed (SHA-256) before sending.
 4.  **Consent**: Verify that `ClickConversion.consent` is properly set in the upload if required by regional policies.
+5.  **Logical Time Verification**: Before uploading any conversion, you MUST verify that the `conversion_date_time` is logically valid:
+    *   **Normalization**: Ensure both click and conversion timestamps are in the same timezone (preferably UTC) before comparing.
+    *   **No Pre-Click Conversions**: The conversion timestamp MUST be strictly after the click timestamp to avoid `CONVERSION_PRECEDES_EVENT`.
+    *   **Lookback Window**: The click MUST have occurred within the `click_through_lookback_window_days` defined for the conversion action to avoid `EXPIRED_EVENT`.
 
 ### 4. Troubleshooting Workflow
 
