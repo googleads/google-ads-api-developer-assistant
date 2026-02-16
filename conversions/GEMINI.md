@@ -45,8 +45,8 @@ This document provides a technical reference for troubleshooting conversion-rela
         *   If you want to check if the setting is correctly enabled using code, Gemini can execute this query against the `customer` resource for you:
             ```sql
             SELECT
-              customer.offline_conversion_tracking_info.enable_enhanced_conversions_for_leads,
-              customer.offline_conversion_tracking_info.accepted_customer_data_terms
+              customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled,
+              customer.conversion_tracking_setting.accepted_customer_data_terms
             FROM customer
             ```
     *   **Note**: After enabling the setting, it can sometimes take a few minutes for the API to recognize the change. If you still see the error immediately after saving, wait about 15–30 minutes and try your upload again.
@@ -140,7 +140,7 @@ This document provides a technical reference for troubleshooting conversion-rela
         *   You can run a quick check via the API to confirm the terms are now "Accepted":
             ```sql
             SELECT
-              customer.offline_conversion_tracking_info.accepted_customer_data_terms
+              customer.conversion_tracking_setting.accepted_customer_data_terms
             FROM customer
             ```
 
@@ -292,7 +292,7 @@ This document provides a technical reference for troubleshooting conversion-rela
 ### 3. Verification 
 
 1.  **GCLID Ownership**: Query the `click_view` resource to verify if a GCLID belongs to the specific customer account.
-2.  **Customer Terms**: Check `customer.offline_conversion_tracking_info.accepted_customer_data_terms` via the `customer` resource.
+2.  **Customer Terms**: Check `customer.conversion_tracking_setting.accepted_customer_data_terms` via the `customer` resource.
 3.  **Data Normalization**: Ensure email addresses, phone numbers, and names are correctly normalized (trimmed, lowercased) and hashed (SHA-256) before sending.
 4.  **Consent**: Verify that `ClickConversion.consent` is properly set in the upload if required by regional policies.
 5.  **Logical Time Verification**: Before uploading any conversion, you MUST verify that the `conversion_date_time` is logically valid:
