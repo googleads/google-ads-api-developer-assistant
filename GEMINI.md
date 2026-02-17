@@ -124,7 +124,11 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 
 9. **Inter-Field Mutual Compatibility (CRITICAL):** Do not assume that because multiple fields are selectable with the resource in the `FROM` clause, they are compatible with each other. For every field included in the `SELECT` and `WHERE` clauses, you MUST verify that every other field in the query is included in its `selectable_with` list. This is especially important when combining high-level attributes (like campaign settings) with lower-level segments (like `segments.search_term_match_source`) or metrics. If Field A and Field B are in the same query, Field B must be in Field A's `selectable_with` list, AND Field A must be in Field B's `selectable_with` list.
 
-10. **No OR Operator:** GAQL does not support the `OR` operator in the `WHERE` clause. If multiple criteria are required (e.g., searching for multiple name patterns), you **MUST** generate separate queries or perform the "OR" logic by filtering results in Python.
+10. **No OR Operator (CRITICAL):** GAQL does NOT support the `OR` operator in the `WHERE` clause for any service, including `GoogleAdsService` and `GoogleAdsFieldService`. If you need to filter by multiple conditions that would normally use `OR`, you MUST either:
+    - Use the `IN` operator if the conditions apply to the same field (e.g., `WHERE resource.status IN ('ENABLED', 'PAUSED')`).
+    - Execute multiple separate queries and combine the results in your code.
+    - Retrieve a broader set of results (e.g., using `LIKE`) and perform the "OR" logic by filtering the data in Python.
+    - Failure to follow this will result in a `query_error: UNEXPECTED_INPUT` with the message `"Error in query: unexpected input OR."`
 
 11. **Metadata Query Pitfall (CRITICAL):** If you receive `query_error: UNEXPECTED_FROM_CLAUSE` with message `"The FROM clause cannot be used in queries to any service except GoogleAdsService."`, it means you included a `FROM` clause in a `GoogleAdsFieldService` request (e.g., `SearchGoogleAdsFields`). You **MUST** remove the `FROM` clause and any resource name following it, and filter instead using `WHERE name = 'resource_name'` or `WHERE name LIKE 'resource_name.%'`.
 
