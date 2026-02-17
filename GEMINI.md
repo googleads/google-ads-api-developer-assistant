@@ -113,7 +113,7 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 
 5. Prioritize Validator Errors: If the user provides an error message from a GAQL query validator, you MUST treat that error message as the definitive source of truth. You MUST immediately re-evaluate your validation and correct the query based on the error message.
 
-6. **Core Date Segment Requirement:** If any core date segment (`segments.date`, `segments.week`, `segments.month`, `segments.quarter`, `segments.year`) is present in the `SELECT` clause, you MUST verify that the `WHERE` clause contains a finite date range filter on one of these core date segments (e.g., `WHERE segments.date DURING LAST_30_DAYS`).
+6. **Core Date Segment Requirement (CRITICAL):** If any core date segment (`segments.date`, `segments.week`, `segments.month`, `segments.quarter`, `segments.year`) is present in the `SELECT` or `WHERE` clause, you MUST verify that the `WHERE` clause contains a **finite** date range filter. This MUST be achieved using either `DURING` with a valid constant (e.g., `LAST_30_DAYS`) or `BETWEEN 'YYYY-MM-DD' AND 'YYYY-MM-DD'`. Using single-sided operators like `>=` or `<=` is strictly prohibited for date segments as it triggers `query_error: EXPECTED_FILTERS_ON_DATE_RANGE` with the message `"Expects filters on the following field to limit a finite date range: 'segments.date'"`.
 
 7. **Policy-Summary Field Rules:** The `ad_group_ad.policy_summary` field is a special case. You **MUST NOT** select the entire `ad_group_ad.policy_summary` object or its individual sub-fields (like `approval_status`, `policy_topic_entries.topic`, etc.) directly. The **ONLY** valid way to retrieve policy information is to select the `ad_group_ad.policy_summary.policy_topic_entries` field. You must then iterate through the results of this field in your code to access the individual policy topics.
     - **CORRECT:** `SELECT ad_group_ad.policy_summary.policy_topic_entries FROM ad_group_ad`
@@ -149,6 +149,8 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 18. **Field Name Verification (CRITICAL):** To prevent `UNRECOGNIZED_FIELD` errors, you **MUST** verify the exact name of every field used in a `SELECT` or `WHERE` clause by querying the `GoogleAdsFieldService` before presenting or executing the query. This is especially mandatory when querying a resource for the first time in a session or when attempting to 'join' related resources. Guessing field names based on resource names is strictly prohibited.
 
 19. **Metadata Resource Pitfall (CRITICAL):** The `google_ads_field` resource can ONLY be queried using the `GoogleAdsFieldService`. You MUST NOT attempt to query it using `GoogleAdsService.search` or `search_stream`.
+
+20. **Prohibited 'OR' Operator (CRITICAL):** You are strictly forbidden from using the `OR` operator in the `WHERE` clause of any GAQL query for any service. This includes `GoogleAdsService` and `GoogleAdsFieldService`. Any attempt to use `OR` will result in a `query_error: UNEXPECTED_INPUT` with the message `"Error in query: unexpected input OR."` To achieve "OR" logic, you MUST either use the `IN` operator (if for the same field) or execute multiple separate queries and combine the results.
 
 #### 3.3.2. MANDATORY GAQL Query Workflow
 Before generating or executing ANY GAQL query, you MUST follow this workflow without deviation:
