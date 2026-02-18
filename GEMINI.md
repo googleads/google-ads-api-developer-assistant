@@ -43,7 +43,7 @@ This document outlines mandatory operational guidelines, constraints, and best p
 #### 1.3.1. User Override
 If the user rejects the API version you propose and provides a different version number, their input MUST be treated as the source of truth. You MUST immediately stop the automated search/fetch process and proceed using the version number provided by the user. Do not attempt to re-validate or question the user-provided version.
 
-#### 1.3.1. Manual Version Confirmation Fallback
+#### 1.3.2. Manual Version Confirmation Fallback
 If the `web_fetch` tool is unavailable and you cannot complete the standard validation workflow in section 1.3, you MUST use the following fallback procedure:
 1.  **SEARCH:** Use `google_web_search` with the query: `google ads api release notes`.
 2.  **PRESENT URL:** From the search results, identify the official "Release Notes" page on `developers.google.com` and present the URL to the user.
@@ -237,6 +237,13 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
 - **SharedSet:** Reusable collection of criteria.
 - **SharedCriterion:** Criterion within a SharedSet.
 
+#### 3.7. Structured Reporting Mandate
+When generating diagnostic reports or using automated troubleshooting scripts (e.g., 'collect_conversions_troubleshooting_data.py'):
+1. **Manual File Post-Processing:** You MUST NOT assume that the script handles custom formatting. After the script executes, you MUST use `read_file` to verify the output and `write_file` to manually prepend:
+    - The mandatory header: "Created by the Google Ads API Developer Assistant".
+    - Any "Previous Diagnostic Analysis" found in the current session or in recent files within `saved/data/`.
+2. **Verification Check:** You MUST confirm the final file content contains all requested elements before reporting completion to the user.
+
 ---
 
 ### 4. Tool Usage
@@ -252,7 +259,7 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
 *   **Mutate Prohibition:** You are strictly prohibited from executing scripts that contain any service calls that modify data (e.g., any method named `mutate`, `mutate_campaigns`, `mutate_asset_groups`, etc.). If a script contains such-operations, you MUST NOT execute it and must explain to the user why it cannot be run.
         - **Dependency Errors:** For missing dependencies (e.g., Python's `ModuleNotFoundError`), attempt to install the dependency using the appropriate package manager (e.g., `pip`, `composer`).
         - **Explain Modifying Commands:** Explain file system modifying commands BEFORE execution.
-        - **Parameter Retrieval:** Retrieve script parameters (e.g., `customer_id`) from `customer_id.txt`; NEVER ask the user.
+        - **Parameter Retrieval:** Retrieve script parameters (e.g., `customer_id`) from the user prompt or session context if available. Only use `customer_id.txt` as a fallback if no ID is specified by the user. NEVER ask the user.
         - **Non-Executable Commands:** To display an example command that should *not* be executed (like a mutate operation), format it as a code block in a text response. DO NOT wrap it in the `run_shell_command` tool.
 - `write_file`: Write new or modified scripts.
 - `replace`: Replace text in a file.
