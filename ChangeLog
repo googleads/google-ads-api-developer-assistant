@@ -1,4 +1,11 @@
-* 1.6.0
+* 2.0.0
+- Hierachical context file for conversions troubleshooting.
+- Added Conversion Troubleshooting & Diagnostics functionality (api_examples/collect_conversions_troubleshooting_data.py).
+- Updated examples to use Google Ads API v23.
+- Updated README.md 
+- Changed directory structure to use a single sub-directory for all saved data.
+- Added unit test coverage for new diagnostic tools and examples.
+- Reformatted GEMINI.md for better clarity on conversion types and autonomous diagnostic prompts.
 - Install-deps option to install.sh and install.ps1.
 - Skills/ext_version to get the extension version.
 - gemini-extension.json to register extensions with https://geminicli.com/extensions/
@@ -6,10 +13,10 @@
 - Hooks for start and end of a session.
 - Mandatory GAQL validation rules to GEMINI.md
 - Dynamic grpc interceptor for Python calls within extension.
-- Hierachical context file for conversions troubleshooting.
 - Python is installed by default with install.sh and install.ps1.
 - Updated update process to allow for adding additional client libraries.
 - Changed name of setup files to install and provided an uninstall procedure.
+- Added additional rules for GAQL edge cases to GEMINI.md.
 
 * 1.5.0
 - Added rigorous GAQL validation rules to GEMINI.md
