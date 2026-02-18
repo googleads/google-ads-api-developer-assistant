@@ -299,7 +299,13 @@ This document provides a technical reference for troubleshooting conversion-rela
     *   **Normalization**: Ensure both click and conversion timestamps are in the same timezone (preferably UTC) before comparing.
     *   **No Pre-Click Conversions**: The conversion timestamp MUST be strictly after the click timestamp to avoid `CONVERSION_PRECEDES_EVENT`.
     *   **Lookback Window**: The click MUST have occurred within the `click_through_lookback_window_days` defined for the conversion action to avoid `EXPIRED_EVENT`.
-6.  **No OR Operator (CRITICAL)**: GAQL does not support the `OR` operator in the `WHERE` clause. You **MUST** perform multiple separate queries or filter results in code to achieve "OR" logic.
+
+### 3.1 Rigorous GAQL Validation for Conversions
+1.  **No OR Operator (CRITICAL)**: GAQL does not support the `OR` operator in the `WHERE` clause. You **MUST** perform multiple separate queries or filter results in code to achieve "OR" logic.
+2. **Conversion Metric Incompatibility (CRITICAL):** The `metrics.conversions` field is incompatible with the `conversion_action` resource in the `FROM` clause. To retrieve conversion metrics segmented by conversion action, you MUST use a compatible resource such as `customer`, `campaign`, or `ad_group` in the `FROM` clause and include `segments.conversion_action` in the `SELECT` clause. Any attempt to use `FROM conversion_action` with `metrics.conversions` will result in a `PROHIBITED_METRIC_IN_SELECT_OR_WHERE_CLAUSE` error.
+3. **Metadata Query Syntax (CRITICAL):** When querying metadata resources (like `google_ads_field`) via services like `GoogleAdsFieldService`, you **MUST NOT** include a `FROM` clause in your GAQL query. Including a `FROM` clause will result in a `query_error: UNEXPECTED_FROM_CLAUSE`. Filter by `name` or other attributes in the `WHERE` clause instead.
+    - **CORRECT:** `SELECT name, selectable WHERE name = 'campaign.id'`
+    - **INCORRECT:** `SELECT name, selectable FROM google_ads_field WHERE name = 'campaign.id'`
 
 ### 4. Troubleshooting Workflow
 
