@@ -35,11 +35,6 @@ def configure_language(lang_name, home_config, target_config, version, is_python
             sep = ":" if is_python else "="
             f.write(f"\ngaada {sep} \"{version}\"\n")
         
-        if is_python:
-            # Python hook originally exported this env var
-            print(f"export GOOGLE_ADS_CONFIGURATION_FILE_PATH=\"{target_config}\"", file=sys.stdout)
-        
-        print(f"Configured {lang_name} at {target_config}")
         return True
     except Exception as e:
         print(f"Error configuring {lang_name}: {e}", file=sys.stderr)
