@@ -173,6 +173,7 @@ def main():
         languages = [
             {"id": "google-ads-php", "name": "PHP", "filename": "google_ads_php.ini", "home": os.path.join(home_dir, "google_ads_php.ini")},
             {"id": "google-ads-ruby", "name": "Ruby", "filename": "google_ads_config.rb", "home": os.path.join(home_dir, "google_ads_config.rb")},
+            {"id": "google-ads-java", "name": "Java", "filename": "ads.properties", "home": os.path.join(home_dir, "ads.properties")},
         ]
 
         for lang in languages:
