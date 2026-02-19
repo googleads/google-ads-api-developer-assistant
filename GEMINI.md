@@ -36,7 +36,8 @@ This document outlines mandatory operational guidelines, constraints, and best p
 4.  **CONFIRM:** You must state the version you found and the source URL, then ask for confirmation. For example: "Based on the release notes at [URL], the latest stable Google Ads API version appears to be vXX. Is it OK to proceed?".
 5.  **AWAIT APPROVAL:** **DO NOT** proceed without user confirmation.
 6.  **REJECT/RETRY:** If the user rejects the version, repeat step 1.
-7.  **NEVER** save the confirmed API version to memory.
+7.  **SESSION PERSISTENCE:** Once the latest stable version has been confirmed by the user within a specific session, you MUST NOT repeat the validation workflow for subsequent tasks in that same session.
+8.  **NEVER** save the confirmed API version to memory.
 
 **FAILURE TO FOLLOW THIS IS A CRITICAL ERROR.**
 
@@ -109,9 +110,9 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
     * Examine the `selectable_with` attribute of the main resource to find the correct fields for filtering and selection.
     * **MANDATORY TOOL CALL:** You MUST execute a tool call to `run_shell_command` or similar to query the `GoogleAdsFieldService` and physically see the `selectable_with` list before you present any query to the user. Skipping this is a critical failure.
 
-5. Segment Rule: You MUST verify that any field (attribute or segment) used in the WHERE clause is also present in the SELECT clause, unless it is a core date segment (segments.date, segments.week, segments.month, segments.quarter, segments.year).
+5. **Referenced Field Rule (CRITICAL):** You MUST verify that any field (attribute or segment) used in the `WHERE` clause is also present in the `SELECT` clause. Failure to do so will result in a `query_error: EXPECTED_REFERENCED_FIELD_IN_SELECT_CLAUSE`. The only exceptions are core date segments (`segments.date`, `segments.week`, `segments.month`, `segments.quarter`, `segments.year`).
 
-5. Prioritize Validator Errors: If the user provides an error message from a GAQL query validator, you MUST treat that error message as the definitive source of truth. You MUST immediately re-evaluate your validation and correct the query based on the error message.
+6. Prioritize Validator Errors: If the user provides an error message from a GAQL query validator, you MUST treat that error message as the definitive source of truth. You MUST immediately re-evaluate your validation and correct the query based on the error message.
 
 6. **Core Date Segment Requirement (CRITICAL):** If any core date segment (`segments.date`, `segments.week`, `segments.month`, `segments.quarter`, `segments.year`) is present in the `SELECT` or `WHERE` clause, you MUST verify that the `WHERE` clause contains a **finite** date range filter. This MUST be achieved using either `DURING` with a valid constant (e.g., `LAST_30_DAYS`) or `BETWEEN 'YYYY-MM-DD' AND 'YYYY-MM-DD'`. Using single-sided operators like `>=` or `<=` is strictly prohibited for date segments as it triggers `query_error: EXPECTED_FILTERS_ON_DATE_RANGE` with the message `"Expects filters on the following field to limit a finite date range: 'segments.date'"`.
 
@@ -259,7 +260,7 @@ When generating diagnostic reports or using automated troubleshooting scripts (e
 *   **Mutate Prohibition:** You are strictly prohibited from executing scripts that contain any service calls that modify data (e.g., any method named `mutate`, `mutate_campaigns`, `mutate_asset_groups`, etc.). If a script contains such-operations, you MUST NOT execute it and must explain to the user why it cannot be run.
         - **Dependency Errors:** For missing dependencies (e.g., Python's `ModuleNotFoundError`), attempt to install the dependency using the appropriate package manager (e.g., `pip`, `composer`).
         - **Explain Modifying Commands:** Explain file system modifying commands BEFORE execution.
-        - **Parameter Retrieval:** Retrieve script parameters (e.g., `customer_id`) from the user prompt or session context if available. Only use `customer_id.txt` as a fallback if no ID is specified by the user. NEVER ask the user.
+        - **Parameter Retrieval:** Retrieve script parameters (e.g., `customer_id`) from the user prompt or session context if available. If the session is already investigating a specific `customer_id`, you MUST NOT check `customer_id.txt` for that parameter. Only use `customer_id.txt` as a fallback if no ID is specified by the user and no active investigation CID exists in the session context. NEVER ask the user.
         - **Non-Executable Commands:** To display an example command that should *not* be executed (like a mutate operation), format it as a code block in a text response. DO NOT wrap it in the `run_shell_command` tool.
 - `write_file`: Write new or modified scripts.
 - `replace`: Replace text in a file.

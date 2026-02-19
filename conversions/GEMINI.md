@@ -322,7 +322,19 @@ This document provides a technical reference for troubleshooting conversion-rela
     - Use `offline_conversion_upload_conversion_action_summary` and `offline_conversion_upload_client_summary` for recent conversion import issues.
     - Refer to official documentation for discrepancies and troubleshooting.
 
-### 5. Output and Documentation
+### 6. Structured Diagnostic Reporting
+When providing a final diagnostic summary to the user, you MUST follow this structured format to ensure maximum technical clarity:
 
-#### 5.1. References
+1.  **Introductory Analysis Statement**: Start with "I have analyzed the data for Customer ID XXX-XXX-XXXX [and Job ID/Action ID if applicable], and I have identified the primary reason why [describe the core issue]..."
+2.  **Numbered Technical Findings**: Provide detailed, numbered sections for each key factor (e.g., "1. 'Include in Conversions' Setting", "2. Job Status and Processing").
+3.  **Specific Observations**: Use bullet points within findings to highlight data-backed observations (e.g., success rates, metric discrepancies, or attribute settings).
+4.  **Actionable Recommendations**: Conclude with a "Recommendations" section listing specific steps for the user or partner.
+5.  **Handling Empty Diagnostic Sections (CRITICAL)**: If the automated diagnostic report (e.g., from `collect_conversions_troubleshooting_data.py`) contains empty sections for "[2] Conversion Actions" or "[3] Offline Conversion Upload Summaries", you MUST perform a manual update to the report file (using `write_file` or `replace`) to append the reason why those sections are blank:
+    - **Empty Conversion Actions**: Append: "Reason: No non-removed conversion actions found for this Customer ID."
+    - **Empty Upload Summaries**: Append: "Reason: These summaries only track standard offline imports (GCLID/Call). No such imports have been detected in the last 90 days. Note that Store Sales (managed via Offline User Data Jobs) are not reflected in these specific summaries."
+    - This explanation MUST appear within the file itself before you present it to the user.
+
+---
+
+### 7. References
 - **Conversion Docs:** `https://developers.google.com/google-ads/api/docs/conversions/`

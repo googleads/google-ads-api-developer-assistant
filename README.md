@@ -97,11 +97,13 @@ b.  **Set Context in Gemini:** The `gemini` command must be run from the root of
           "/path/to/your/google-ads-api-developer-assistant/api_examples",
           "/path/to/your/google-ads-api-developer-assistant/saved/code",
           "/path/to/your/google-ads-python",
-          "/path/to/your/google-ads-php"
+          "client_libs/google-ads-php",
+          "client_libs/google-ads-ruby"
         ]
       }
     }
     ```
+    *Note: Including `client_libs/google-ads-php` or `client_libs/google-ads-ruby` will automatically configure those languages by copying `~/google_ads_php.ini` or `~/google_ads_config.rb` to the `config/` directory at session start. Python is always configured.*
     *Note: Replace the placeholder paths with the actual absolute paths on your system.*
 
 ## Usage
@@ -132,7 +134,7 @@ This is a partial list of custom commands:
 
 * `/explain <request>` - Format the response from the model to be more readable. It attempts to use real world analogies to explain a concept.
 * `/step_by_step <request>` - Format the response as series of steps. Show the model's thinking process. This is useful for debugging.
-* `/conversions_support_data <customer_id>` - Collects structured diagnostic data for gTech conversion troubleshooting and saves a report to `saved/data/`.
+* `/conversions_support_data` - Collects structured diagnostic data for gTech conversion troubleshooting and saves a report to `saved/data/`.
 
 To see the full list, from within the Assistant, `ls -l .gemini/commands`. This
 will provide a list of the .toml files that define the commands. For example, `explain.toml`
