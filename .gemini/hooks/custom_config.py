@@ -110,7 +110,11 @@ def configure_language(lang_name, home_config, target_config, version, is_python
         shutil.copy2(home_config, target_config)
         with open(target_config, "a", encoding="utf-8") as f:
             sep = ":" if is_python else "="
-            f.write(f"\ngaada {sep} \"{version}\"\n")
+            f.write(f"\ngaada{sep} \"{version}\"\n")
+        
+        if is_python:
+            print(f"export GOOGLE_ADS_CONFIGURATION_FILE_PATH=\"{target_config}\"", file=sys.stdout)
+            
         return True
     except Exception as e:
         print(f"Error configuring {lang_name}: {e}", file=sys.stderr)
@@ -148,11 +152,13 @@ def main():
                 data = parser(path)
                 if write_yaml_config(data, python_target, version):
                     print(f"Successfully converted {lang} config to {python_target}")
+                    print(f"export GOOGLE_ADS_CONFIGURATION_FILE_PATH=\"{python_target}\"", file=sys.stdout)
                     found_fallback = True
                     break
         
         if not found_fallback:
-            print("Warning: No Google Ads configuration found in home directory.", file=sys.stderr)
+            print("Error: No Google Ads configuration found in home directory. Please create ~/google-ads.yaml.", file=sys.stderr)
+            sys.exit(1)
 
     # 3. Configure other languages if requested by workspace context
     settings_path = os.path.join(project_root, ".gemini/settings.json")

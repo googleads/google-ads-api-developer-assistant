@@ -13,27 +13,31 @@ import importlib
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 
-def main():
-    parser = argparse.ArgumentParser(description="Validates a GAQL query.")
-    parser.add_argument("--customer_id", required=True, help="Google Ads Customer ID.")
-    parser.add_argument("--api_version", required=True, help="API Version (e.g., v23).")
-    args = parser.parse_args()
+def main(client=None, customer_id=None, api_version=None, query=None):
+    if client is None:
+        parser = argparse.ArgumentParser(description="Validates a GAQL query.")
+        parser.add_argument("--customer_id", required=True, help="Google Ads Customer ID.")
+        parser.add_argument("--api_version", required=True, help="API Version (e.g., v23).")
+        args = parser.parse_args()
 
-    # Read query from stdin to handle multiline/quoted strings safely
-    query = sys.stdin.read().strip()
+        customer_id = args.customer_id
+        api_version = args.api_version
+        # Read query from stdin to handle multiline/quoted strings safely
+        query = sys.stdin.read().strip()
+
+        # Initialize client
+        try:
+            client = GoogleAdsClient.load_from_storage()
+        except Exception as e:
+            print(f"CRITICAL ERROR: Failed to load Google Ads configuration: {e}")
+            sys.exit(1)
+
     if not query:
-        print("Error: No query provided via stdin.")
-        sys.exit(1)
-
-    # Initialize client
-    try:
-        client = GoogleAdsClient.load_from_storage()
-    except Exception as e:
-        print(f"CRITICAL ERROR: Failed to load Google Ads configuration: {e}")
+        print("Error: No query provided.")
         sys.exit(1)
 
     # Dynamically handle versioned types
-    api_version = args.api_version.lower()
+    api_version = api_version.lower()
     module_path = f"google.ads.googleads.{api_version}.services.types.google_ads_service"
     try:
         module = importlib.import_module(module_path)
@@ -43,7 +47,7 @@ def main():
         sys.exit(1)
 
     ga_service = client.get_service("GoogleAdsService")
-    customer_id = "".join(re.findall(r'\d+', args.customer_id))
+    customer_id = "".join(re.findall(r'\d+', str(customer_id)))
 
     try:
         request = SearchGoogleAdsRequest(
