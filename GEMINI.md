@@ -118,10 +118,11 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 
 6. **Policy-Summary Field Rules:** You **MUST NOT** select sub-fields of `ad_group_ad.policy_summary` (e.g., `approval_status`). The **ONLY** valid way to retrieve policy info is to select `ad_group_ad.policy_summary.policy_topic_entries` and iterate through the results in code.
 
-7. **METADATA SERVICE CONSTRAINTS (CRITICAL):** When querying the `GoogleAdsFieldService` (e.g., `SearchGoogleAdsFields` or the `google_ads_field` resource):
-    - **NO FROM CLAUSE:** You MUST NOT include a `FROM` clause. Use `WHERE name = 'resource_name'` instead.
-    - **FLAT SYNTAX:** You MUST NOT use parentheses `()` or complex boolean logic.
-    - **PREFIXING:** When using `GoogleAdsService.search` for metadata, all fields MUST be prefixed with `google_ads_field.` (e.g., `google_ads_field.name`).
+7. **METADATA DISCOVERY & SERVICE CONSTRAINTS (CRITICAL):**
+    - **Preferred Service:** You MUST use `GoogleAdsFieldService.search_google_ads_fields` for all resource schema and metadata discovery.
+    - **Query Syntax for Field Service:** When calling `search_google_ads_fields`, the GAQL query **MUST NOT** include a `FROM` clause, and fields **MUST NOT** be prefixed with `google_ads_field.` (e.g., use `SELECT name, selectable`, NOT `SELECT google_ads_field.name`).
+    - **GoogleAdsService Fallback:** If you MUST use `GoogleAdsService.search` for the `google_ads_field` resource, the query **MUST** include a `FROM google_ads_field` clause and all fields **MUST** be prefixed with `google_ads_field.` (e.g., `google_ads_field.name`). Note that this service may have limited support for metadata fields compared to the specialized field service.
+    - **FLAT SYNTAX:** For both services, metadata queries MUST NOT use parentheses `()` or complex boolean logic.
 
 8. **Inter-Field Mutual Compatibility (CRITICAL):** For every field in the `SELECT` and `WHERE` clauses, you MUST verify that every other field in the query is included in its `selectable_with` list. Verify this via `GoogleAdsFieldService` for EVERY query.
 
@@ -139,14 +140,31 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 
 15. **Change Event Resource Selection (CRITICAL):** You **MUST NOT** select sub-fields of `change_event.new_resource` or `change_event.old_resource`. Select the top-level fields and perform extraction in code.
 
+16. **Repeated Field Selection Constraint (CRITICAL):** You MUST NOT attempt to select sub-fields of a repeated message (where `is_repeated` is `true`). For example, if `ad_group.labels` is repeated, you cannot select `ad_group.labels.name`. You must select the top-level repeated field and process the collection in code.
+
+17. **`ORDER BY` Visibility and Sortability Rule (CRITICAL):** Any field used in the `ORDER BY` clause MUST be present in the `SELECT` clause, unless the field belongs directly to the primary resource specified in the `FROM` clause. Additionally, you MUST verify that any field in the `ORDER BY` clause has `sortable = true` in the `GoogleAdsFieldService` metadata.
+
+18. **Mandatory Metadata Attribute Discovery (CRITICAL):** Before constructing ANY query, you MUST verify the following metadata attributes via `GoogleAdsFieldService`:
+    - Fields in the `SELECT` clause MUST have `selectable = true`.
+    - Fields in the `WHERE` clause MUST have `filterable = true`.
+    - Fields in the `ORDER BY` clause MUST have `sortable = true`.
+
+19. **Explicit Date Range for Metric Queries (CRITICAL):** When selecting `metrics` fields for a resource that supports date segmentation, you SHOULD always include a finite date range filter in the `WHERE` clause. Relying on API defaults (like `TODAY`) is discouraged as it leads to unpredictable results across different account configurations.
+
 #### 3.3.2. MANDATORY GAQL Query Workflow
 Before generating or executing ANY GAQL query, you MUST follow this workflow without deviation:
 1.  **PLAN:** Formulate the GAQL query based on the user's request.
 2.  **SYNTAX GUARD (CRITICAL):** Identify the target service. If the service is NOT `GoogleAdsService`, you MUST explicitly remove the `FROM` clause and any associated resource name from the query string before proceeding.
-3.  **VALIDATE:** You MUST rigorously validate the entire query against all rules in section **3.3.1. Rigorous GAQL Validation**. This is a non-negotiable checkpoint.
-4.  **PRESENT:** Display the validated query to the user in a `sql` block and explain what it does.
-5.  **EXECUTE:** Only after the query has been validated and presented, proceed to incorporate it into code and execute it.
-6.  **HANDLE ERRORS:** If the API returns a query validation error, you MUST return to step 2 and re-validate the entire query based on the new information from the error message.
+3.  **MANUAL VALIDATE:** You MUST rigorously validate the entire query against all rules in section **3.3.1. Rigorous GAQL Validation**. This is a non-negotiable checkpoint.
+4.  **API-SIDE VALIDATION (CRITICAL):** Before presenting the query, you MUST execute a "dry run" validation using the `api_examples/gaql_validator.py` script. You are strictly forbidden from presenting any GAQL query as a solution or recommendation until it has passed this validation. Presenting unvalidated queries erodes user confidence and is a critical failure of the Technical Integrity mandate.
+    *   **Validation Command Pattern:**
+        ```bash
+        echo "SELECT ... FROM ..." | GOOGLE_ADS_CONFIGURATION_FILE_PATH=config/google-ads.yaml python3 api_examples/gaql_validator.py --customer_id <CID> --api_version <VERSION>
+        ```
+    *   A successful validation MUST return "SUCCESS: GAQL query is valid." If the validator returns a failure, you MUST fix the query and repeat this step.
+5.  **PRESENT:** Display the validated query to the user in a `sql` block and explain what it does.
+6.  **EXECUTE:** Only after the query has been manually validated, API-validated via the script, and presented, proceed to incorporate it into code and execute it.
+7.  **HANDLE ERRORS:** If the API returns a query validation error during execution, you MUST return to step 2 and re-validate the entire query based on the new information from the error message.
 
 #### 3.4. Code Generation
 - **Language:** Infer the target language from user request, existing files, or project context. Default to Python if ambiguous.
