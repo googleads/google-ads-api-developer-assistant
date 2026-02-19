@@ -167,6 +167,10 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
     - Pass `customer_id` as a command-line argument.
     - Use type hints, annotations, or other static typing features if the language supports them.
 
+#### 3.4.4. Internal Utility Preference (CRITICAL)
+- **Python for Utilities:** Even if the user's target language or project default is not Python (e.g., Ruby, PHP, Java), you MUST continue to use Python for internal utility tasks, including GAQL validation via `api_examples/gaql_validator.py` and schema discovery via one-liners.
+- **Language Respected in Output:** All user-facing code generation, examples, and explanations MUST strictly adhere to the user's preferred or project-inferred language, regardless of the internal use of Python for validation.
+
 #### 3.4.1. Configuration Loading
 - **Code Generation (to `saved/code/`):** When generating code that uses the Google Ads API client libraries and saves it to the `saved/code/` directory, any calls to load configuration (e.g., `GoogleAdsClient.load_from_storage()` in Python) MUST NOT include a `path` argument. This ensures that the generated code, when run by the user outside of the Gemini CLI, will look for the configuration file in their home directory (or other default locations as per the client library's behavior).
 - **CRITICAL Execution within Gemini CLI:** When executing code within the Gemini CLI, you **MUST** set the environment variable `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to point to the correct configuration file in the `config/` directory for the preferred language:
