@@ -154,6 +154,8 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 
 20. **Prohibited 'OR' Operator (CRITICAL):** You are strictly forbidden from using the `OR` operator in the `WHERE` clause of any GAQL query for any service. This includes `GoogleAdsService` and `GoogleAdsFieldService`. Any attempt to use `OR` will result in a `query_error: UNEXPECTED_INPUT` with the message `"Error in query: unexpected input OR."` To achieve "OR" logic, you MUST either use the `IN` operator (if for the same field) or execute multiple separate queries and combine the results.
 
+21. **Change Event Resource Selection (CRITICAL):** When querying the `change_event` resource, you **MUST NOT** attempt to select sub-fields of `change_event.new_resource` or `change_event.old_resource` (e.g., `SELECT change_event.new_resource.ad_group_asset.asset`). These nested fields are not selectable. You MUST select the top-level `change_event.new_resource` and `change_event.old_resource` fields and perform any necessary field extraction or inspection within your Python code after receiving the response.
+
 #### 3.3.2. MANDATORY GAQL Query Workflow
 Before generating or executing ANY GAQL query, you MUST follow this workflow without deviation:
 1.  **PLAN:** Formulate the GAQL query based on the user's request.
