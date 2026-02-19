@@ -99,16 +99,16 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 
   When validating a GAQL query, you MUST follow this process:
 
-1. **MANDATORY SCHEMA DISCOVERY & FIELD VERIFICATION (CRITICAL):** You are strictly prohibited from relying on internal memory. Before constructing ANY query, you MUST execute a discovery query against `GoogleAdsFieldService` to verify that every field in your `SELECT` and `WHERE` clauses:
+1. **MANDATORY SCHEMA & METADATA DISCOVERY (CRITICAL):** You are strictly prohibited from relying on internal memory. Before constructing ANY query, you MUST use `GoogleAdsFieldService.search_google_ads_fields` to verify that every field in your `SELECT`, `WHERE`, and `ORDER BY` clauses:
     - Exists in the confirmed API version (to avoid `UNRECOGNIZED_FIELD`).
-    - Is both **selectable** and **filterable** for the resource in the `FROM` clause.
     - Matches the exact case-sensitive name provided by the service.
+    - Has the correct metadata attributes: `selectable = true` for `SELECT`, `filterable = true` for `WHERE`, and `sortable = true` for `ORDER BY`.
+    - **Syntax for Field Service:** Metadata queries MUST NOT include a `FROM` clause, and fields MUST NOT be prefixed with `google_ads_field.` (e.g., use `SELECT name, selectable`, NOT `SELECT google_ads_field.name`). Metadata queries MUST NOT use parentheses `()` or complex boolean logic.
     - This discovery MUST be performed for every resource queried for the first time in a session.
 
-2. **Contextual Compatibility Check (CRITICAL):** Do not assume that a filterable field is filterable in all contexts. You MUST:
-    * Query the `GoogleAdsFieldService` for the main resource in the `FROM` clause.
-    * Examine the `selectable_with` attribute of the main resource to find the correct fields for filtering and selection.
-    * **MANDATORY TOOL CALL:** You MUST physically see the `selectable_with` list via a tool call before presenting any query to the user.
+2. **Contextual & Mutual Compatibility (CRITICAL):** Do not assume that a filterable field is filterable in all contexts. You MUST:
+    - Examine the `selectable_with` attribute of the main resource in the `FROM` clause and verify that every other field in the query (in `SELECT`, `WHERE`, or `ORDER BY`) is included in its `selectable_with` list.
+    - **MANDATORY TOOL CALL:** You MUST physically see the `selectable_with` list via a tool call before presenting any query to the user.
 
 3. **Referenced Field Rule (CRITICAL):** You MUST verify that any field used in the `WHERE` clause is also present in the `SELECT` clause (except for core date segments). Failure to do so results in `EXPECTED_REFERENCED_FIELD_IN_SELECT_CLAUSE`.
 
@@ -118,38 +118,23 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
 
 6. **Policy-Summary Field Rules:** You **MUST NOT** select sub-fields of `ad_group_ad.policy_summary` (e.g., `approval_status`). The **ONLY** valid way to retrieve policy info is to select `ad_group_ad.policy_summary.policy_topic_entries` and iterate through the results in code.
 
-7. **METADATA DISCOVERY & SERVICE CONSTRAINTS (CRITICAL):**
-    - **Preferred Service:** You MUST use `GoogleAdsFieldService.search_google_ads_fields` for all resource schema and metadata discovery.
-    - **Query Syntax for Field Service:** When calling `search_google_ads_fields`, the GAQL query **MUST NOT** include a `FROM` clause, and fields **MUST NOT** be prefixed with `google_ads_field.` (e.g., use `SELECT name, selectable`, NOT `SELECT google_ads_field.name`).
-    - **GoogleAdsService Fallback:** If you MUST use `GoogleAdsService.search` for the `google_ads_field` resource, the query **MUST** include a `FROM google_ads_field` clause and all fields **MUST** be prefixed with `google_ads_field.` (e.g., `google_ads_field.name`). Note that this service may have limited support for metadata fields compared to the specialized field service.
-    - **FLAT SYNTAX:** For both services, metadata queries MUST NOT use parentheses `()` or complex boolean logic.
+7. **PROHIBITED 'OR' OPERATOR (CRITICAL):** GAQL does NOT support the `OR` operator in the `WHERE` clause for any service. You MUST use the `IN` operator (if for the same field) or execute multiple separate queries and combine results in code. Failure results in `unexpected input OR`.
 
-8. **Inter-Field Mutual Compatibility (CRITICAL):** For every field in the `SELECT` and `WHERE` clauses, you MUST verify that every other field in the query is included in its `selectable_with` list. Verify this via `GoogleAdsFieldService` for EVERY query.
+8. **Enum Value Verification (CRITICAL):** If you receive `BAD_ENUM_CONSTANT`, you MUST query the field's `enum_values` attribute in `GoogleAdsFieldService` to retrieve the valid string constants for the confirmed version.
 
-9. **PROHIBITED 'OR' OPERATOR (CRITICAL):** GAQL does NOT support the `OR` operator in the `WHERE` clause for any service. You MUST use the `IN` operator (if for the same field) or execute multiple separate queries and combine results in code. Failure results in `unexpected input OR`.
+9. **Change Status Constraints (CRITICAL):** Queries for the `change_status` resource MUST:
+    - Include a finite date range filter on `change_status.last_change_date_time` using `BETWEEN` with both start and end boundaries.
+    - Specify a `LIMIT` clause (maximum 10,000).
 
-10. **Unrecognized Field Pitfall (CRITICAL):** If you receive `UNRECOGNIZED_FIELD`, do not guess alternative names. Immediately query `GoogleAdsFieldService` to find the valid field names for the confirmed version.
+10. **Single Day Filter for Click View (CRITICAL):** Queries for the `click_view` resource MUST include a filter limiting results to a single day (`WHERE segments.date = 'YYYY-MM-DD'`).
 
-11. **Enum Value Verification (CRITICAL):** If you receive `BAD_ENUM_CONSTANT`, you MUST query the field's `enum_values` attribute in `GoogleAdsFieldService` to retrieve the valid string constants for the confirmed version.
+11. **Change Event Resource Selection (CRITICAL):** You **MUST NOT** select sub-fields of `change_event.new_resource` or `change_event.old_resource`. Select the top-level fields and perform extraction in code.
 
-12. **Finite Date Range for Change Status (CRITICAL):** Queries for the `change_status` resource MUST include a finite date range filter on `change_status.last_change_date_time` using `BETWEEN` with both start and end boundaries.
+12. **Repeated Field Selection Constraint (CRITICAL):** You MUST NOT attempt to select sub-fields of a repeated message (where `is_repeated` is `true`). For example, if `ad_group.labels` is repeated, you cannot select `ad_group.labels.name`. You must select the top-level repeated field and process the collection in code.
 
-13. **Limit Requirement for Change Status (CRITICAL):** Queries for `change_status` MUST specify a `LIMIT` clause (maximum 10,000).
+13. **Explicit Date Range for Metric Queries (CRITICAL):** When selecting `metrics` fields for a resource that supports date segmentation, you SHOULD always include a finite date range filter in the `WHERE` clause. Relying on API defaults (like `TODAY`) is discouraged.
 
-14. **Single Day Filter for Click View (CRITICAL):** Queries for the `click_view` resource MUST include a filter limiting results to a single day (`WHERE segments.date = 'YYYY-MM-DD'`).
-
-15. **Change Event Resource Selection (CRITICAL):** You **MUST NOT** select sub-fields of `change_event.new_resource` or `change_event.old_resource`. Select the top-level fields and perform extraction in code.
-
-16. **Repeated Field Selection Constraint (CRITICAL):** You MUST NOT attempt to select sub-fields of a repeated message (where `is_repeated` is `true`). For example, if `ad_group.labels` is repeated, you cannot select `ad_group.labels.name`. You must select the top-level repeated field and process the collection in code.
-
-17. **`ORDER BY` Visibility and Sortability Rule (CRITICAL):** Any field used in the `ORDER BY` clause MUST be present in the `SELECT` clause, unless the field belongs directly to the primary resource specified in the `FROM` clause. Additionally, you MUST verify that any field in the `ORDER BY` clause has `sortable = true` in the `GoogleAdsFieldService` metadata.
-
-18. **Mandatory Metadata Attribute Discovery (CRITICAL):** Before constructing ANY query, you MUST verify the following metadata attributes via `GoogleAdsFieldService`:
-    - Fields in the `SELECT` clause MUST have `selectable = true`.
-    - Fields in the `WHERE` clause MUST have `filterable = true`.
-    - Fields in the `ORDER BY` clause MUST have `sortable = true`.
-
-19. **Explicit Date Range for Metric Queries (CRITICAL):** When selecting `metrics` fields for a resource that supports date segmentation, you SHOULD always include a finite date range filter in the `WHERE` clause. Relying on API defaults (like `TODAY`) is discouraged as it leads to unpredictable results across different account configurations.
+14. **`ORDER BY` Visibility Rule (CRITICAL):** Any field used in the `ORDER BY` clause MUST be present in the `SELECT` clause, unless the field belongs directly to the primary resource specified in the `FROM` clause. Verification of `sortable = true` is mandatory per Rule 1.
 
 #### 3.3.2. MANDATORY GAQL Query Workflow
 Before generating or executing ANY GAQL query, you MUST follow this workflow without deviation:
