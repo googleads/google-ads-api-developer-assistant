@@ -172,6 +172,12 @@ def main():
             sys.exit(1)
 
     # 3. Configure other languages if requested by workspace context
+    languages = [
+        {"id": "google-ads-php", "name": "PHP", "filename": "google_ads_php.ini", "home": os.path.join(home_dir, "google_ads_php.ini")},
+        {"id": "google-ads-ruby", "name": "Ruby", "filename": "google_ads_config.rb", "home": os.path.join(home_dir, "google_ads_config.rb")},
+        {"id": "google-ads-java", "name": "Java", "filename": "ads.properties", "home": os.path.join(home_dir, "ads.properties")},
+    ]
+
     settings_path = os.path.join(project_root, ".gemini/settings.json")
     if os.path.exists(settings_path):
         try:
@@ -180,12 +186,6 @@ def main():
             include_dirs = settings.get("context", {}).get("includeDirectories", [])
         except Exception:
             include_dirs = []
-
-        languages = [
-            {"id": "google-ads-php", "name": "PHP", "filename": "google_ads_php.ini", "home": os.path.join(home_dir, "google_ads_php.ini")},
-            {"id": "google-ads-ruby", "name": "Ruby", "filename": "google_ads_config.rb", "home": os.path.join(home_dir, "google_ads_config.rb")},
-            {"id": "google-ads-java", "name": "Java", "filename": "ads.properties", "home": os.path.join(home_dir, "ads.properties")},
-        ]
 
         for lang in languages:
             if any(lang["id"] in d for d in include_dirs):
