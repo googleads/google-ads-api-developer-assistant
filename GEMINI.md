@@ -32,7 +32,7 @@ This document outlines mandatory operational guidelines, constraints, and best p
 1.  **SEARCH (VERBATIM):** You **MUST** use the `google_web_search` tool with the following query string **VERBATIM**. **DO NOT** modify, rephrase, or substitute this query.
     - **Query:** `google ads api release notes`
 2.  **FETCH:** From the search results, identify the official "Release Notes" page on `developers.google.com` and fetch its content using the `web_fetch` tool.
-3.  **EXTRACT:** From the fetched content, identify the most recently announced stable version (e.g., "vXX is now available").
+3.  **EXTRACT:** From the fetched content, identify the most recently announced MAJOR stable version (e.g., "vXX is now available").
 4.  **CONFIRM:** You must state the version you found and the source URL, then ask for confirmation. For example: "Based on the release notes at [URL], the latest stable Google Ads API version appears to be vXX. Is it OK to proceed?".
 5.  **AWAIT APPROVAL:** **DO NOT** proceed without user confirmation.
 6.  **REJECT/RETRY:** If the user rejects the version, repeat step 1.
@@ -103,7 +103,7 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
     - Exists in the confirmed API version (to avoid `UNRECOGNIZED_FIELD`).
     - Matches the exact case-sensitive name provided by the service.
     - Has the correct metadata attributes: `selectable = true` for `SELECT`, `filterable = true` for `WHERE`, and `sortable = true` for `ORDER BY`.
-    - **Syntax for Field Service:** Metadata queries MUST NOT include a `FROM` clause, and fields MUST NOT be prefixed with `google_ads_field.` (e.g., use `SELECT name, selectable`, NOT `SELECT google_ads_field.name`). Metadata queries MUST NOT use parentheses `()` or complex boolean logic.
+    - **Syntax for Field Service:** Metadata queries MUST NOT include a `FROM` clause, and fields MUST NOT be prefixed with `google_ads_field.` (e.g., use `SELECT name, selectable`, NOT `SELECT google_ads_field.name`). Metadata queries MUST NOT use parentheses `()` or complex boolean logic. Failure to follow this syntax results in `query_error: UNRECOGNIZED_FIELD` with a message identifying the prefixed fields as unrecognized.
     - This discovery MUST be performed for every resource queried for the first time in a session.
 
 2. **Contextual & Mutual Compatibility (CRITICAL):** Do not assume that a filterable field is filterable in all contexts. You MUST:
@@ -215,6 +215,7 @@ Before generating or executing ANY GAQL query, you MUST follow this workflow wit
 
 #### 3.4.3. Python One-Liner Constraints (CRITICAL)
 - When executing Python code via `run_shell_command` using the `-c` flag, you MUST keep the script extremely simple.
+- **CONFIGURATION PATH MANDATE:** You MUST explicitly set the `GOOGLE_ADS_CONFIGURATION_FILE_PATH` environment variable within the shell command before the `python3 -c` call to ensure it uses the correct configuration file (e.g., `GOOGLE_ADS_CONFIGURATION_FILE_PATH=config/google-ads.yaml python3 -c "..."`). You MUST NOT allow `load_from_storage()` to default to the `$HOME` directory.
 - You MUST NOT use `for` loops, `if` statements, or complex multi-line logic in a one-liner.
 - You MUST NOT use `f-strings` in a one-liner that contain nested quotes that could break the shell command's quoting.
 - For any operation requiring iteration, conditional logic, or complex setup, you MUST write the code to a temporary file and execute the file.

@@ -306,6 +306,7 @@ This document provides a technical reference for troubleshooting conversion-rela
 3. **Metadata Query Syntax (CRITICAL):** When querying metadata resources (like `google_ads_field`) via services like `GoogleAdsFieldService`, you **MUST NOT** include a `FROM` clause in your GAQL query. Including a `FROM` clause will result in a `query_error: UNEXPECTED_FROM_CLAUSE`. Filter by `name` or other attributes in the `WHERE` clause instead.
     - **CORRECT:** `SELECT name, selectable WHERE name = 'campaign.id'`
     - **INCORRECT:** `SELECT name, selectable FROM google_ads_field WHERE name = 'campaign.id'`
+4. **Referenced Conversion Action Rule (CRITICAL):** If you use `segments.conversion_action` in the `WHERE` clause to filter metrics, you MUST also include `segments.conversion_action` in the `SELECT` clause. Failure to do so will result in the error: `The following field must be present in SELECT clause: 'segments.conversion_action'`.
 
 ### 4. Troubleshooting Workflow
 
