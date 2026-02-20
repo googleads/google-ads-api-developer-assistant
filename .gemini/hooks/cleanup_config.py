@@ -2,8 +2,22 @@ import os
 import shutil
 import sys
 import datetime
+import time
 
 def cleanup():
+    # Deduplication Guard: Prevent running twice in quick succession (e.g. < 5s)
+    lock_file = os.path.join(os.path.expanduser("~"), ".gaada_cleanup.lock")
+    if os.path.exists(lock_file):
+        if time.time() - os.path.getmtime(lock_file) < 5:
+            return
+
+    # Update/Create lock file
+    try:
+        with open(lock_file, "w") as f:
+            f.write(str(os.getpid()))
+    except Exception:
+        pass
+
     # Determine paths
     script_dir = os.path.dirname(os.path.abspath(__file__))
     # .gemini/hooks/ -> project root is 2 levels up
