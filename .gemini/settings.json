@@ -3,7 +3,8 @@
     "accessibility": {
       "disableLoadingPhrases": true,
       "enableLoadingPhrases": false
-    }
+    },
+    "loadingPhrases": "off"
   },
   "general": {
     "checkpointing": {
@@ -30,26 +31,16 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup",
-        "hooks": [
-          {
-            "name": "init",
-            "type": "command",
-            "command": "python3 .gemini/hooks/custom_config.py"
-          }
-        ]
+        "name": "init",
+        "type": "command",
+        "command": "python3 .gemini/hooks/custom_config.py"
       }
     ],
     "SessionEnd": [
       {
-        "matcher": "exit",
-        "hooks": [
-          {
-            "name": "cleanup",
-            "type": "command",
-            "command": "python3 .gemini/hooks/cleanup_config.py"
-          }
-        ]
+        "name": "cleanup",
+        "type": "command",
+        "command": "python3 .gemini/hooks/cleanup_config.py"
       }
     ]
   }
