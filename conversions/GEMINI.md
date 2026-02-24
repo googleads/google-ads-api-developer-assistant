@@ -60,6 +60,7 @@
     *   **[PITFALL] Attribute Name**: Use `successful_count` and `failed_count`. DO NOT use `success_count`.
     *   **[PITFALL] Summary Object**: `daily_summaries` (OfflineConversionSummary) DOES NOT have a `total_count` field. Use `successful_count + failed_count + pending_count` for a total. `total_event_count` is only available at the top-level resource, not within `daily_summaries`.
     *   **[PITFALL] Alert Object**: `alerts` (OfflineConversionAlert) uses `error` and `error_percentage`. DO NOT use `error_code` or `error_count`.
+    *   **[PITFALL] Alerts Field Location**: The `alerts` field is located at the top-level resource (`offline_conversion_upload_client_summary` or `offline_conversion_upload_conversion_action_summary`), NOT within the `daily_summaries` list.
 2.  **STEP 2: Exception Inspection**: Catch `GoogleAdsException` and iterate over `ex.failure.errors`.
 3.  **STEP 3: Identity & Consent**: Verify GCLID ownership and `consent` settings.
 
@@ -71,11 +72,34 @@ The AI MUST format final reports as follows:
 3.  **Specific Observations**: Bulleted data points (success rates, specific errors).
 4.  **Actionable Recommendations**: Clear next steps for the user.
 5.  **Empty Section Handling**: If summaries are empty, AI MUST append "Reason: No standard offline imports detected in last 90 days" inside the report.
+6.  **Full Diagnostic Data Mandate**: The report MUST contain the verbatim output or detailed data from the `offline_conversion_upload_client_summary` and `offline_conversion_upload_conversion_action_summary` queries to ensure transparency and complete diagnostic visibility.
+7.  **Structured Analysis Mandate**: The report MUST include a structured section containing "Primary Errors Identified" (with root causes and fixes), "Specific Action Failures", "General Health" assessment, and "Actionable Recommendations" as presented to the user.
 
-**Consolidation Mandate**: All findings, including terminal summaries and data from external troubleshooting scripts, MUST be consolidated into a **single, uniquely named text file** in `saved/data/` (e.g., `support_package_<timestamp>.txt`). This file MUST be the sole artifact submitted to the user for support. It must start with the header "Created by the Google Ads API Developer Assistant".
+**Consolidation Mandate**: All findings, including terminal summaries, the structured analysis, and data from external troubleshooting scripts, MUST be consolidated into a **single, uniquely named text file** in `saved/data/` (e.g., `support_package_<timestamp>.txt`). This file MUST be the sole artifact submitted to the user for support. It must start with the header "Created by the Google Ads API Developer Assistant".
 
 ---
 
 ### 6. References
 - **Official Docs**: `https://developers.google.com/google-ads/api/docs/conversions/`
 - **GAQL Structure**: `https://developers.google.com/google-ads/api/docs/query/`
+
+---
+
+### 7. Python Object Inspection & Error Handling [MANDATORY]
+
+#### 7.1. Proto-plus Message Inspection
+*   **No Direct Descriptor Access**: NEVER use `obj.DESCRIPTOR`, `obj.pb`, or `obj.meta` on a message instance or class. These are hidden by the `proto-plus` wrapper.
+*   **Correct Inspection**: Use `type(obj).pb(obj)` for instances or `Class.pb(Class)` for classes to access the underlying protobuf descriptor (e.g., `type(obj).pb(obj).DESCRIPTOR.fields`).
+*   **AttributeError Handling**: If an `AttributeError: Unknown field for <Type>: <field>` occurs, it means the attribute is not defined in the protobuf message. Immediately verify the field name against the official API documentation or use `dir(obj)` to see available attributes.
+
+#### 7.2. Conversion-Specific Object Pitfalls
+*   **OfflineConversionAlert**: 
+    *   **CRITICAL: Error Field Structure**: The `alert.error` field is NOT a direct enum. it is a `oneof` message (type `OfflineConversionError`) containing fields for different error categories (e.g., `conversion_upload_error`, `conversion_adjustment_upload_error`).
+    *   **Mandatory Access Pattern**: To get the error string, you MUST identify which field in the `oneof` is set and then access its `.name`.
+    *   **Example Code**: 
+        ```python
+        error_type = type(alert.error).pb(alert.error).WhichOneof("error")
+        error_val = getattr(alert.error, error_type)
+        error_name = error_val.name
+        ```
+*   **Diagnostic Reports**: When summarizing failed conversions, always include the error name and the `error_percentage` from `OfflineConversionAlert`.
