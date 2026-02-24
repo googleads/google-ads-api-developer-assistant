@@ -76,6 +76,7 @@ Before presenting or executing ANY GAQL query, you MUST pass this 4-step sequenc
     - `WHERE` fields MUST be in `SELECT` (unless core date segments).
     - `OR` is forbidden. Use `IN` or multiple queries.
     - No `FROM` clause in metadata queries.
+    - **Metadata Field Names:** When using `GoogleAdsFieldService.search_google_ads_fields`, field names MUST NOT be prefixed with the resource name (e.g., use `name`, not `google_ads_field.name`). Do NOT use `GoogleAdsService` to query `google_ads_field`. Failure results in `UNRECOGNIZED_FIELD`.
 4.  **Runtime Dry Run:** Execute `python3 api_examples/gaql_validator.py`.
     - **Success:** Proceed to implementation.
     - **Failure:** Fix query based on validator output and restart from Step 1.

@@ -1,67 +1,51 @@
 # Copyright 2026 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Downloads multiple reports in parallel using structured logging."""
+"""Parallel report downloader with optimized concurrency and retry logic."""
 
 import argparse
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent import futures
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def fetch_report_threaded(
-    client: GoogleAdsClient, customer_id: str, query: str, report_name: str
-) -> Tuple[str, Optional[List[Any]], Optional[GoogleAdsException]]:
-    """Fetches a single report with centralized exception handling."""
+def _get_date_range_strings() -> tuple[str, str]:
+    """Computes a 7-day date range for reporting."""
+    end = datetime.now().strftime("%Y-%m-%d")
+    start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    return start, end
+
+
+def fetch_report_threaded(client: GoogleAdsClient, customer_id: str, query: str, log_tag: str) -> Dict:
+    """Fetches a report using search_stream for memory efficiency."""
+    logger.info("Fetching for customer %s [%s]", customer_id, log_tag)
     ga_service = client.get_service("GoogleAdsService")
-    logger.info("[%s] Fetching for customer %s...", report_name, customer_id)
-    rows = []
-    exception = None
     try:
         stream = ga_service.search_stream(customer_id=customer_id, query=query)
+        rows = []
         for batch in stream:
             for row in batch.results:
                 rows.append(row)
-        logger.info("[%s] Completed. Found %d rows.", report_name, len(rows))
+        logger.info("Completed. Found %d rows.", len(rows))
+        return {"customer_id": customer_id, "rows": rows}
     except GoogleAdsException as ex:
-        logger.error("[%s] Request ID %s failed: %s", report_name, ex.request_id, ex.error.code().name)
-        exception = ex
-    return report_name, rows, exception
+        logger.error("Request ID %s failed for customer %s", ex.request_id, customer_id)
+        raise
 
 
-def _get_date_range_strings() -> Tuple[str, str]:
-    """Helper for testing compatibility."""
-    end = datetime.now()
-    start = end - timedelta(days=30)
-    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
-
-
-def main(customer_ids: List[str], login_id: Optional[str], workers: int = 5) -> None:
+def main(
+    customer_ids: List[str],
+    login_id: Optional[str],
+    api_version: str,
+    workers: int = 5,
+) -> None:
     """Main execution loop for parallel report retrieval."""
-    client = GoogleAdsClient.load_from_storage(version="v23")
+    client = GoogleAdsClient.load_from_storage(version=api_version)
     if login_id:
         client.login_customer_id = login_id
 
@@ -70,27 +54,27 @@ def main(customer_ids: List[str], login_id: Optional[str], workers: int = 5) -> 
     report_defs = [
         {
             "name": "Campaign_Performance",
-            "query": f"SELECT campaign.id, metrics.clicks FROM campaign WHERE segments.date BETWEEN '{start}' AND '{end}' LIMIT 5"
+            "query": f"SELECT campaign.id, metrics.clicks FROM campaign WHERE segments.date BETWEEN '{start}' AND '{end}' LIMIT 5",
         }
     ]
 
-    results: Dict[str, Dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_to_name = {
-            executor.submit(fetch_report_threaded, client, cid, rd["query"], f"{rd['name']}_{cid}"): f"{rd['name']}_{cid}"
-            for cid in customer_ids for rd in report_defs
+    with futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_report = {
+            executor.submit(fetch_report_threaded, client, cid, rd["query"], rd["name"]): (
+                cid,
+                rd["name"],
+            )
+            for cid in customer_ids
+            for rd in report_defs
         }
 
-        for future in as_completed(future_to_name):
-            name = future_to_name[future]
-            _, rows, ex = future.result()
-            results[name] = {"rows": rows, "exception": ex}
-
-    for name, data in results.items():
-        if data["exception"]:
-            logger.warning("Report %s failed.", name)
-        else:
-            logger.info("Report %s: %d rows retrieved.", name, len(data["rows"]))
+        for future in futures.as_completed(future_to_report):
+            cid, name = future_to_report[future]
+            try:
+                future.result()
+                logger.info("Finished processing %s for customer %s", name, cid)
+            except Exception:
+                logger.warning("Report %s for customer %s failed.", name, cid)
 
 
 if __name__ == "__main__":
@@ -98,5 +82,8 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--customer_ids", nargs="+", required=True)
     parser.add_argument("-l", "--login_id")
     parser.add_argument("-w", "--workers", type=int, default=5)
+    parser.add_argument(
+        "-v", "--api_version", type=str, default="v23", help="The Google Ads API version."
+    )
     args = parser.parse_args()
-    main(args.customer_ids, args.login_id, args.workers)
+    main(args.customer_ids, args.login_id, args.api_version, args.workers)

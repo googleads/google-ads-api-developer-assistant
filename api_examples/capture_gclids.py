@@ -64,10 +64,6 @@ def main(
 
 
 if __name__ == "__main__":
-    # GoogleAdsClient will read the google-ads.yaml configuration file in the
-    # home directory if none is specified.
-    googleads_client = GoogleAdsClient.load_from_storage(version="v23")
-
     parser = argparse.ArgumentParser(
         description="Uploads a click conversion for a given GCLID."
     )
@@ -87,15 +83,14 @@ if __name__ == "__main__":
         help="The GCLID for the ad click.",
     )
     parser.add_argument(
-        "-t",
-        "--conversion_date_time",
-        type=str,
-        required=True,
-        help="The date and time of the conversion (should be after the click "
-        "time). The format is 'yyyy-mm-dd hh:mm:ss+|-hh:mm', e.g. "
-        "'2021-01-01 12:32:45-08:00'.",
+        "-v", "--api_version", type=str, default="v23", help="The Google Ads API version."
     )
     args = parser.parse_args()
+
+    # GoogleAdsClient will read the google-ads.yaml configuration file in the
+    # home directory if none is specified.
+    googleads_client = GoogleAdsClient.load_from_storage(version=args.api_version)
+
     try:
         main(
             googleads_client,

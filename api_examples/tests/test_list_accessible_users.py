@@ -29,7 +29,7 @@ class TestListAccessibleUsers(unittest.TestCase):
         mock_accessible.resource_names = ["customers/1", "customers/2"]
         mock_service.list_accessible_customers.return_value = mock_accessible
         
-        main()
+        main(mock_client)
         output = self.captured_output.getvalue()
         self.assertIn("Found 2 accessible customers.", output)
         self.assertIn("customers/1", output)

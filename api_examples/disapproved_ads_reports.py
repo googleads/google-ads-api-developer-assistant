@@ -36,6 +36,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--customer_id", required=True)
     parser.add_argument("-o", "--output", default="saved_csv/disapproved_ads.csv")
+    parser.add_argument(
+        "-v", "--api_version", type=str, default="v23", help="The Google Ads API version."
+    )
     args = parser.parse_args()
-    client = GoogleAdsClient.load_from_storage(version="v23")
+    client = GoogleAdsClient.load_from_storage(version=args.api_version)
     main(client, args.customer_id, args.output)

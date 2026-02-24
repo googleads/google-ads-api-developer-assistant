@@ -22,7 +22,6 @@ from unittest.mock import MagicMock
 from io import StringIO
 
 from google.ads.googleads.errors import GoogleAdsException
-from google.ads.googleads.client import GoogleAdsClient
 
 # Import the main function from the script
 from api_examples.remove_automatically_created_assets import main

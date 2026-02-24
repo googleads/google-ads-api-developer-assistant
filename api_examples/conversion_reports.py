@@ -212,10 +212,10 @@ if __name__ == "__main__":
     parser.add_argument("--date_range_preset", default="LAST_30_DAYS")
     parser.add_argument("--metrics", nargs="+", default=["conversions"])
     parser.add_argument("--filters", nargs="*", default=[])
-    parser.add_argument("--limit", type=int)
+    parser.add_argument("-v", "--api_version", type=str, default="v23", help="The Google Ads API version.")
 
     args = parser.parse_args()
-    googleads_client = GoogleAdsClient.load_from_storage(version="v23")
+    googleads_client = GoogleAdsClient.load_from_storage(version=args.api_version)
 
     if args.report_type == "actions":
         get_conversion_actions_report(googleads_client, args.customer_id, args.output_file)

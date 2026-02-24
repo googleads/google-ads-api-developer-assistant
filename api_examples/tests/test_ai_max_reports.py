@@ -20,7 +20,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 import unittest
 from unittest.mock import MagicMock, patch, mock_open
 from io import StringIO
-from datetime import datetime, timedelta
 
 from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.client import GoogleAdsClient

@@ -202,10 +202,6 @@ def modify_treatment_campaign(client, customer_id, draft_campaign_resource_name)
 
 
 if __name__ == "__main__":
-    # GoogleAdsClient will read the google-ads.yaml configuration file in the
-    # home directory if none is specified.
-    googleads_client = GoogleAdsClient.load_from_storage(version="v23")
-
     parser = argparse.ArgumentParser(
         description="Create a campaign experiment based on a campaign draft."
     )
@@ -224,7 +220,14 @@ if __name__ == "__main__":
         required=True,
         help="The ID of the base campaign to use for the experiment.",
     )
+    parser.add_argument(
+        "-v", "--api_version", type=str, default="v23", help="The Google Ads API version."
+    )
     args = parser.parse_args()
+
+    # GoogleAdsClient will read the google-ads.yaml configuration file in the
+    # home directory if none is specified.
+    googleads_client = GoogleAdsClient.load_from_storage(version=args.api_version)
 
     try:
         main(googleads_client, args.customer_id, args.base_campaign_id)
