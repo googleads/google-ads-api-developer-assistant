@@ -58,6 +58,8 @@
 
 1.  **STEP 1: Diagnostic Summaries**: Execute queries against `offline_conversion_upload_client_summary` and `offline_conversion_upload_conversion_action_summary`.
     *   **[PITFALL] Attribute Name**: Use `successful_count` and `failed_count`. DO NOT use `success_count`.
+    *   **[PITFALL] Summary Object**: `daily_summaries` (OfflineConversionSummary) DOES NOT have a `total_count` field. Use `successful_count + failed_count + pending_count` for a total. `total_event_count` is only available at the top-level resource, not within `daily_summaries`.
+    *   **[PITFALL] Alert Object**: `alerts` (OfflineConversionAlert) uses `error` and `error_percentage`. DO NOT use `error_code` or `error_count`.
 2.  **STEP 2: Exception Inspection**: Catch `GoogleAdsException` and iterate over `ex.failure.errors`.
 3.  **STEP 3: Identity & Consent**: Verify GCLID ownership and `consent` settings.
 
@@ -69,6 +71,8 @@ The AI MUST format final reports as follows:
 3.  **Specific Observations**: Bulleted data points (success rates, specific errors).
 4.  **Actionable Recommendations**: Clear next steps for the user.
 5.  **Empty Section Handling**: If summaries are empty, AI MUST append "Reason: No standard offline imports detected in last 90 days" inside the report.
+
+**Consolidation Mandate**: All findings, including terminal summaries and data from external troubleshooting scripts, MUST be consolidated into a **single, uniquely named text file** in `saved/data/` (e.g., `support_package_<timestamp>.txt`). This file MUST be the sole artifact submitted to the user for support. It must start with the header "Created by the Google Ads API Developer Assistant".
 
 ---
 
