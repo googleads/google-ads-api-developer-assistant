@@ -17,6 +17,7 @@
 - Updated update process to allow for adding additional client libraries.
 - Changed name of setup files to install and provided an uninstall procedure.
 - Added additional rules for GAQL edge cases to GEMINI.md.
+- Added command conversions_support_data.
 
 * 1.5.0
 - Added rigorous GAQL validation rules to GEMINI.md
