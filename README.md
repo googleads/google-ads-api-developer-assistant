@@ -197,7 +197,7 @@ may occasionally generate code with deprecated fields. Execution errors
 often provide feedback that allows Gemini CLI to self-correct on the next
 attempt, using the context from the client libraries. To avoid these errors, we always search for the latest version of the API when initializing the session and ask you to verify the version.
 
-*   The exit hook will execute `cleanup_config.py` twice to remove the temporary configuration files. This is a known problem that does not affect performance.
+*   The exit hook may execute `cleanup_config.py` twice to remove the temporary configuration files. This is a known problem that does not affect performance.
 
 ## Maintenance
 
