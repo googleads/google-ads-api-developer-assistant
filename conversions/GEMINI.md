@@ -50,8 +50,9 @@
 3.  **Metadata Query Syntax**: `GoogleAdsFieldService` queries MUST NOT include a `FROM` clause.
     *   **Correct**: `SELECT name, selectable WHERE name = 'campaign.id'`
     *   **[PITFALL] Field Names**: Use `data_type`. DO NOT use `type` in `GoogleAdsFieldService` queries; it will result in an `UNRECOGNIZED_FIELD` error.
-4.  **Referenced Action Rule**: If `segments.conversion_action` is in `WHERE`, it MUST be in `SELECT`.
-5.  **Logical Time Verification**: Before upload, AI MUST verify:
+4.  **Referenced Action Rule**: If `segments.conversion_action` is in `WHERE`, it MUST be in `SELECT`. Failure to do so results in `EXPECTED_REFERENCED_FIELD_IN_SELECT_CLAUSE`.
+5.  **No Metrics for Managers**: Metrics (e.g., `metrics.conversions`) CANNOT be requested for a manager account (MCC). You MUST identify and query each client account separately. Failure results in `REQUESTED_METRICS_FOR_MANAGER`.
+6.  **Logical Time Verification**: Before upload, AI MUST verify:
     *   `conversion_date_time` > `click_time`.
     *   Click is within Lookback Window.
 
