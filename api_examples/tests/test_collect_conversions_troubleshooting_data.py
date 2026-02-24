@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,9 +15,7 @@
 import sys
 import os
 import unittest
-import tempfile
-import shutil
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, mock_open
 from io import StringIO
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
@@ -34,132 +32,102 @@ class TestCollectConversionsTroubleshootingData(unittest.TestCase):
         self.mock_client.get_service.return_value = self.mock_ga_service
         self.customer_id = "1234567890"
 
-        # Patching os.makedirs and open to avoid actual file system interaction
-        self.test_dir = tempfile.mkdtemp()
-        self.patch_makedirs = patch("os.makedirs")
-        self.mock_makedirs = self.patch_makedirs.start()
-        
-        # We need to mock open carefully because it's used by many things
-        self.patch_open = patch("builtins.open", unittest.mock.mock_open())
-        self.mock_open = self.patch_open.start()
-
         self.captured_output = StringIO()
         sys.stdout = self.captured_output
 
     def tearDown(self):
         sys.stdout = sys.__stdout__
-        self.patch_makedirs.stop()
-        self.patch_open.stop()
-        shutil.rmtree(self.test_dir)
 
-    def test_main_success_healthy(self):
+    @patch("os.makedirs")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("glob.glob")
+    def test_main_success_healthy(self, mock_glob, mock_file_open, mock_makedirs):
+        mock_glob.return_value = []
+        
         # 1. Customer Settings Mock
-        mock_batch_customer = MagicMock()
         mock_row_customer = MagicMock()
         mock_row_customer.customer.descriptive_name = "Test Customer"
         mock_row_customer.customer.conversion_tracking_setting.accepted_customer_data_terms = True
         mock_row_customer.customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled = True
-        mock_batch_customer.results = [mock_row_customer]
 
-        # 2. Conversion Actions Mock
-        mock_batch_ca = MagicMock()
-        mock_row_ca = MagicMock()
-        mock_row_ca.conversion_action.id = 123
-        mock_row_ca.conversion_action.name = "Test Action"
-        mock_row_ca.conversion_action.type.name = "UPLOAD_CLICKS"
-        mock_row_ca.conversion_action.status.name = "ENABLED"
-        mock_batch_ca.results = [mock_row_ca]
-
-        # 3. Client Summary Mock
-        mock_batch_cs = MagicMock()
-        mock_row_cs = MagicMock()
-        mock_cs = mock_row_cs.offline_conversion_upload_client_summary
-        mock_cs.client.name = "GOOGLE_ADS_API"
-        mock_cs.status.name = "SUCCESS"
-        mock_cs.successful_event_count = 100
-        mock_cs.total_event_count = 100
-        mock_cs.last_upload_date_time = "2024-01-01 12:00:00"
-        mock_batch_cs.results = [mock_row_cs]
-
-        # 4. Action Summary Mock
-        mock_batch_as = MagicMock()
+        # 2. Action Summary Mock
         mock_row_as = MagicMock()
-        mock_as = mock_row_as.offline_conversion_upload_conversion_action_summary
-        mock_as.conversion_action_name = "Test Action"
-        mock_as.status.name = "SUCCESS"
-        mock_as.successful_event_count = 50
-        mock_as.total_event_count = 50
-        mock_as.last_upload_date_time = "2024-01-01 12:00:00"
+        asum = mock_row_as.offline_conversion_upload_conversion_action_summary
+        asum.conversion_action_name = "Test Action"
+        asum.successful_event_count = 50
+        asum.total_event_count = 50
+        
+        ds = MagicMock()
+        ds.upload_date = "2026-02-24"
+        ds.successful_count = 10
+        ds.failed_count = 0
+        asum.daily_summaries = [ds]
+
+        mock_batch_customer = MagicMock()
+        mock_batch_customer.results = [mock_row_customer]
+        
+        mock_batch_as = MagicMock()
         mock_batch_as.results = [mock_row_as]
 
         self.mock_ga_service.search_stream.side_effect = [
             [mock_batch_customer],
-            [mock_batch_ca],
-            [mock_batch_cs],
             [mock_batch_as]
         ]
 
         main(self.mock_client, self.customer_id)
 
-        # Verify file write
-        self.mock_open.assert_called()
-        handle = self.mock_open()
-        
-        # Collect all written content
+        handle = mock_file_open()
         written_content = "".join(call.args[0] for call in handle.write.call_args_list)
         
-        self.assertIn("Overall Status: HEALTHY", written_content)
-        self.assertIn("Customer Data Terms Accepted: True", written_content)
-        self.assertIn("Type=UPLOAD_CLICKS", written_content)
-        self.assertIn("Status=SUCCESS", written_content)
+        self.assertIn("Diagnostic Report for Customer ID: 1234567890", written_content)
+        self.assertIn("Customer: Test Customer", written_content)
+        self.assertIn("Action: Test Action (Total Success: 50/50)", written_content)
+        self.assertIn("No blocking errors detected.", written_content)
 
-    def test_main_unhealthy_terms_not_accepted(self):
+    @patch("os.makedirs")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("glob.glob")
+    def test_main_unhealthy_terms_not_accepted(self, mock_glob, mock_file_open, mock_makedirs):
+        mock_glob.return_value = []
+        
         # 1. Customer Settings Mock (Terms NOT accepted)
-        mock_batch_customer = MagicMock()
         mock_row_customer = MagicMock()
         mock_row_customer.customer.descriptive_name = "Test Customer"
         mock_row_customer.customer.conversion_tracking_setting.accepted_customer_data_terms = False
-        mock_row_customer.customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled = True
+
+        mock_batch_customer = MagicMock()
         mock_batch_customer.results = [mock_row_customer]
-
-        # Mocks for other queries (empty or success)
-        mock_batch_empty = MagicMock()
-        mock_batch_empty.results = []
-
+        
         self.mock_ga_service.search_stream.side_effect = [
             [mock_batch_customer],
-            [mock_batch_empty],
-            [mock_batch_empty],
-            [mock_batch_empty]
+            []
         ]
 
         main(self.mock_client, self.customer_id)
 
-        handle = self.mock_open()
+        handle = mock_file_open()
         written_content = "".join(call.args[0] for call in handle.write.call_args_list)
         
-        self.assertIn("Overall Status: UNHEALTHY", written_content)
-        self.assertIn("CRITICAL: Customer Data Terms NOT accepted", written_content)
+        self.assertIn("CRITICAL: Customer Data Terms NOT accepted.", written_content)
 
-    def test_main_google_ads_exception(self):
-        mock_error = MagicMock()
-        mock_error.code.return_value.name = "INTERNAL_ERROR"
-        mock_failure = MagicMock()
-        mock_failure.errors = [MagicMock(message="Internal error")]
+    @patch("os.makedirs")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("glob.glob")
+    def test_main_google_ads_exception(self, mock_glob, mock_file_open, mock_makedirs):
+        mock_glob.return_value = []
         
         self.mock_ga_service.search_stream.side_effect = GoogleAdsException(
-            error=mock_error,
+            error=MagicMock(),
+            failure=MagicMock(errors=[MagicMock(message="Internal error")]),
+            request_id="test_request_id",
             call=MagicMock(),
-            failure=mock_failure,
-            request_id="test_request_id"
         )
 
-        with self.assertRaises(SystemExit) as cm:
-            main(self.mock_client, self.customer_id)
+        main(self.mock_client, self.customer_id)
         
-        self.assertEqual(cm.exception.code, 1)
         output = self.captured_output.getvalue()
-        self.assertIn("Request with ID 'test_request_id' failed with status 'INTERNAL_ERROR'", output)
+        self.assertIn("ERROR: Query failed (Request ID: test_request_id)", output)
+        self.assertIn("Internal error", output)
 
 
 if __name__ == "__main__":

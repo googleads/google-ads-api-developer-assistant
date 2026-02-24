@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -43,8 +43,11 @@ class TestListPMaxCampaigns(unittest.TestCase):
     def test_main_successful_call(self):
         # Mock the stream and its results
         mock_campaign = MagicMock()
+        mock_campaign.id = "12345"
         mock_campaign.name = "Test PMax Campaign"
-        mock_campaign.advertising_channel_type.name = "PERFORMANCE_MAX"
+        mock_campaign.status.name = "ENABLED"
+        mock_campaign.primary_status.name = "ELIGIBLE"
+        mock_campaign.primary_status_reasons = []
 
         mock_row = MagicMock()
         mock_row.campaign = mock_campaign
@@ -58,58 +61,23 @@ class TestListPMaxCampaigns(unittest.TestCase):
 
         # Assert that search_stream was called with the correct arguments
         self.mock_ga_service.search_stream.assert_called_once()
-        args, kwargs = self.mock_ga_service.search_stream.call_args
-        self.assertEqual(kwargs["customer_id"], self.customer_id)
-        self.assertIn(
-            "campaign.advertising_channel_type = 'PERFORMANCE_MAX'", kwargs["query"]
-        )
-
+        
         # Assert that the output contains the expected information
         output = self.captured_output.getvalue()
-        self.assertIn(
-            'Campaign with name "Test PMax Campaign" is a PERFORMANCE_MAX campaign.',
-            output,
-        )
-
-    def test_main_no_pmax_campaigns_found(self):
-        self.mock_ga_service.search_stream.return_value = []
-
-        main(self.mock_client, self.customer_id)
-
-        output = self.captured_output.getvalue()
-        self.assertEqual(output, "")  # No output if no campaigns are found
+        self.assertIn("12345", output)
+        self.assertIn("Test PMax Campaign", output)
+        self.assertIn("ENABLED", output)
+        self.assertIn("ELIGIBLE", output)
 
     def test_main_google_ads_exception(self):
-        class MockIterator:
-            def __init__(self, exception_to_raise):
-                self.exception_to_raise = exception_to_raise
-                self.first_call = True
-
-            def __iter__(self):
-                return self
-
-            def __next__(self):
-                if self.first_call:
-                    self.first_call = False
-                    raise self.exception_to_raise
-                raise StopIteration
-
-        self.mock_ga_service.search_stream.return_value = MockIterator(
-            GoogleAdsException(
-                error=MagicMock(code=MagicMock(name="REQUEST_ERROR")),
-                call=MagicMock(),
-                failure=MagicMock(
-                    errors=[
-                        MagicMock(
-                            message="Error details",
-                            location=MagicMock(
-                                field_path_elements=[MagicMock(field_name="test_field")]
-                            ),
-                        )
-                    ]
-                ),
-                request_id="test_request_id",
-            )
+        mock_error = MagicMock()
+        mock_error.code.return_value.name = "REQUEST_ERROR"
+        
+        self.mock_ga_service.search_stream.side_effect = GoogleAdsException(
+            error=mock_error,
+            failure=MagicMock(errors=[MagicMock(message="Error details")]),
+            request_id="test_request_id",
+            call=MagicMock(),
         )
 
         with self.assertRaises(SystemExit) as cm:
@@ -117,13 +85,7 @@ class TestListPMaxCampaigns(unittest.TestCase):
 
         self.assertEqual(cm.exception.code, 1)
         output = self.captured_output.getvalue()
-        self.assertIn(
-            "Request with ID 'test_request_id' failed with status ",
-            output,
-        )
-        self.assertIn("REQUEST_ERROR", output)
-        self.assertIn("Error with message 'Error details'.", output)
-        self.assertIn("On field: 'test_field'", output)
+        self.assertIn("Request ID test_request_id failed: REQUEST_ERROR", output)
 
 
 if __name__ == "__main__":

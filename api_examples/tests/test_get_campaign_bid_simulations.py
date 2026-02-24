@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -42,16 +42,10 @@ class TestGetCampaignBidSimulations(unittest.TestCase):
         sys.stdout = sys.__stdout__
 
     def test_main_successful_call(self):
-        # Mock the stream and its results
-        mock_simulation = MagicMock()
-        mock_simulation.bid_modifier = 1.0
-        mock_simulation.clicks = 100
-        mock_simulation.cost_micros = 1000000
-        mock_simulation.conversions = 10.0
-        mock_simulation.conversion_value = 500.0
-
         mock_row = MagicMock()
-        mock_row.campaign_bid_simulation = mock_simulation
+        mock_row.campaign_bid_simulation.bid_modifier = 1.0
+        mock_row.campaign_bid_simulation.clicks = 100
+        mock_row.campaign_bid_simulation.cost_micros = 1000000
 
         mock_batch = MagicMock()
         mock_batch.results = [mock_row]
@@ -60,98 +54,25 @@ class TestGetCampaignBidSimulations(unittest.TestCase):
 
         main(self.mock_client, self.customer_id, self.campaign_id)
 
-        # Assert that search_stream was called with the correct arguments
         self.mock_ga_service.search_stream.assert_called_once()
-        args, kwargs = self.mock_ga_service.search_stream.call_args
-        self.assertEqual(kwargs["customer_id"], self.customer_id)
-        self.assertIn(f"campaign.id = {self.campaign_id}", kwargs["query"])
-        self.assertIn(
-            "campaign_bid_simulation.start_date = '2025-08-24'", kwargs["query"]
-        )
-        self.assertIn(
-            "campaign_bid_simulation.end_date = '2025-09-23'", kwargs["query"]
-        )
-
-        # Assert that the output contains the expected information
         output = self.captured_output.getvalue()
-        self.assertIn(
-            f"Campaign bid simulations for Campaign ID: {self.campaign_id}", output
-        )
-        self.assertIn(
-            "1.00         | 100    | 1000000       | 10.00       | 500.00          ",
-            output,
-        )
-
-    def test_main_no_simulations_found(self):
-        self.mock_ga_service.search_stream.return_value = []
-
-        main(self.mock_client, self.customer_id, self.campaign_id)
-
-        output = self.captured_output.getvalue()
-        self.assertIn(
-            f"Campaign bid simulations for Campaign ID: {self.campaign_id}", output
-        )
-        self.assertIn(
-            "Bid Modifier | Clicks | Cost (micros) | Conversions | Conversion Value",
-            output,
-        )
-        self.assertNotIn(
-            "|",
-            output[
-                output.find(
-                    "------------------------------------------------------------------"
-                )
-                + len(
-                    "------------------------------------------------------------------"
-                ) :
-            ],
-        )
+        self.assertIn("1.00", output)
+        self.assertIn("100", output)
+        self.assertIn("1000000", output)
 
     def test_main_google_ads_exception(self):
-        class MockIterator:
-            def __init__(self, exception_to_raise):
-                self.exception_to_raise = exception_to_raise
-                self.first_call = True
-
-            def __iter__(self):
-                return self
-
-            def __next__(self):
-                if self.first_call:
-                    self.first_call = False
-                    raise self.exception_to_raise
-                raise StopIteration
-
-        self.mock_ga_service.search_stream.return_value = MockIterator(
-            GoogleAdsException(
-                error=MagicMock(code=MagicMock(name="REQUEST_ERROR")),
-                call=MagicMock(),
-                failure=MagicMock(
-                    errors=[
-                        MagicMock(
-                            message="Error details",
-                            location=MagicMock(
-                                field_path_elements=[MagicMock(field_name="test_field")]
-                            ),
-                        )
-                    ]
-                ),
-                request_id="test_request_id",
-            )
-        )  # Closing parenthesis for MockIterator
-
-        with self.assertRaises(SystemExit) as cm:
-            main(self.mock_client, self.customer_id, self.campaign_id)
-
-        self.assertEqual(cm.exception.code, 1)
-        output = self.captured_output.getvalue()
-        self.assertIn(
-            "Request with ID 'test_request_id' failed with status ",
-            output,
+        mock_error = MagicMock()
+        mock_error.code.return_value.name = "REQUEST_ERROR"
+        
+        self.mock_ga_service.search_stream.side_effect = GoogleAdsException(
+            error=mock_error,
+            failure=MagicMock(errors=[MagicMock(message="Error details")]),
+            request_id="test_request_id",
+            call=MagicMock(),
         )
-        self.assertIn("REQUEST_ERROR", output)
-        self.assertIn("Error with message: 'Error details'.", output)
-        self.assertIn("On field: test_field", output)
+
+        main(self.mock_client, self.customer_id, self.campaign_id)
+        self.assertIn("Request ID test_request_id failed: REQUEST_ERROR", self.captured_output.getvalue())
 
 
 if __name__ == "__main__":

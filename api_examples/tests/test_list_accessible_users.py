@@ -1,8 +1,12 @@
 # Copyright 2026 Google LLC
-import unittest
 import sys
+import os
+import unittest
 from unittest.mock import MagicMock, patch
 from io import StringIO
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+
 from api_examples.list_accessible_users import main
 
 class TestListAccessibleUsers(unittest.TestCase):

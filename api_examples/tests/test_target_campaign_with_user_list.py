@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 import unittest
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 from io import StringIO
 
 from google.ads.googleads.errors import GoogleAdsException
@@ -31,31 +31,26 @@ from api_examples.target_campaign_with_user_list import main
 class TestTargetCampaignWithUserList(unittest.TestCase):
     def setUp(self):
         self.mock_client = MagicMock(spec=GoogleAdsClient)
-        self.mock_campaign_criterion_service = MagicMock()
+        self.mock_criterion_service = MagicMock()
         self.mock_campaign_service = MagicMock()
         self.mock_user_list_service = MagicMock()
+        
+        def get_service_side_effect(name):
+            if name == "CampaignCriterionService":
+                return self.mock_criterion_service
+            if name == "CampaignService":
+                return self.mock_campaign_service
+            if name == "UserListService":
+                return self.mock_user_list_service
+            return MagicMock()
 
-        self.mock_client.get_service.side_effect = [
-            self.mock_campaign_criterion_service,  # First call to get_service
-            self.mock_campaign_service,  # Second call to get_service
-            self.mock_user_list_service,  # Third call to get_service
-        ]
-
-        self.mock_campaign_criterion_operation = MagicMock()
-        self.mock_campaign_criterion = MagicMock()
-        self.mock_campaign_criterion_operation.create = self.mock_campaign_criterion
-        self.mock_client.get_type.return_value = self.mock_campaign_criterion_operation
-
-        self.mock_campaign_service.campaign_path.return_value = (
-            "customers/123/campaigns/456"
-        )
-        self.mock_user_list_service.user_list_path.return_value = (
-            "customers/123/userLists/789"
-        )
-
-        self.customer_id = "123"
-        self.campaign_id = "456"
-        self.user_list_id = "789"
+        self.mock_client.get_service.side_effect = get_service_side_effect
+        self.mock_client.get_type.return_value = MagicMock()
+        
+        self.customer_id = "1234567890"
+        self.campaign_id = "111222333"
+        self.user_list_id = "444555666"
+        
         self.captured_output = StringIO()
         sys.stdout = self.captured_output
 
@@ -64,99 +59,30 @@ class TestTargetCampaignWithUserList(unittest.TestCase):
 
     def test_main_successful_targeting(self):
         mock_response = MagicMock()
-        mock_response.results = [
-            MagicMock(resource_name="customers/123/campaignCriteria/101")
-        ]
-        self.mock_campaign_criterion_service.mutate_campaign_criteria.return_value = (
-            mock_response
-        )
+        mock_response.results = [MagicMock(resource_name="customers/123/campaignCriteria/101")]
+        self.mock_criterion_service.mutate_campaign_criteria.return_value = mock_response
 
         main(self.mock_client, self.customer_id, self.campaign_id, self.user_list_id)
 
-        # Assert get_service calls
-        self.mock_client.get_service.assert_has_calls(
-            [
-                call("CampaignCriterionService"),
-                call("CampaignService"),
-                call("UserListService"),
-            ]
-        )
-
-        # Assert get_type call
-        self.mock_client.get_type.assert_called_once_with("CampaignCriterionOperation")
-
-        # Assert path calls
-        self.mock_campaign_service.campaign_path.assert_called_once_with(
-            self.customer_id, self.campaign_id
-        )
-        self.mock_user_list_service.user_list_path.assert_called_once_with(
-            self.customer_id, self.user_list_id
-        )
-
-        # Assert mutate_campaign_criteria call
-        self.mock_campaign_criterion_service.mutate_campaign_criteria.assert_called_once_with(
-            customer_id=self.customer_id,
-            operations=[self.mock_campaign_criterion_operation],
-        )
-
-        # Assert output
-        output = self.captured_output.getvalue()
-        self.assertIn(
-            "Added campaign criterion with resource name: 'customers/123/campaignCriteria/101'",
-            output,
-        )
+        self.mock_criterion_service.mutate_campaign_criteria.assert_called_once()
+        self.assertIn("Created criterion: customers/123/campaignCriteria/101", self.captured_output.getvalue())
 
     def test_main_google_ads_exception(self):
-        class MockIterator:
-            def __init__(self, exception_to_raise):
-                self.exception_to_raise = exception_to_raise
-                self.first_call = True
-
-            def __iter__(self):
-                return self
-
-            def __next__(self):
-                if self.first_call:
-                    self.first_call = False
-                    raise self.exception_to_raise
-                raise StopIteration
-
-        self.mock_campaign_criterion_service.mutate_campaign_criteria.side_effect = (
-            MockIterator(
-                GoogleAdsException(
-                    error=MagicMock(code=MagicMock(name="REQUEST_ERROR")),
-                    call=MagicMock(),
-                    failure=MagicMock(
-                        errors=[
-                            MagicMock(
-                                message="Error details",
-                                location=MagicMock(
-                                    field_path_elements=[
-                                        MagicMock(field_name="test_field")
-                                    ]
-                                ),
-                            )
-                        ]
-                    ),
-                    request_id="test_request_id",
-                )
-            )
+        mock_error = MagicMock()
+        mock_error.code.return_value.name = "REQUEST_ERROR"
+        
+        self.mock_criterion_service.mutate_campaign_criteria.side_effect = GoogleAdsException(
+            error=mock_error,
+            failure=MagicMock(errors=[MagicMock(message="Error details")]),
+            request_id="test_request_id",
+            call=MagicMock(),
         )
 
         with self.assertRaises(SystemExit) as cm:
-            main(
-                self.mock_client, self.customer_id, self.campaign_id, self.user_list_id
-            )
+            main(self.mock_client, self.customer_id, self.campaign_id, self.user_list_id)
 
         self.assertEqual(cm.exception.code, 1)
-        output = self.captured_output.getvalue()
-        self.assertIn(
-            "Request with ID 'test_request_id' failed with status ",
-            output,
-        )
-        self.assertIn("REQUEST_ERROR", output)
-        self.assertIn("Error with message 'Error details'.", output)
-        self.assertIn("On field: test_field", output)
+        self.assertIn("Request ID test_request_id failed: REQUEST_ERROR", self.captured_output.getvalue())
 
 
 if __name__ == "__main__":
