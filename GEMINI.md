@@ -103,7 +103,7 @@ If the `web_fetch` tool is unavailable and you cannot complete the standard vali
     - Exists in the confirmed API version (to avoid `UNRECOGNIZED_FIELD`).
     - Matches the exact case-sensitive name provided by the service.
     - Has the correct metadata attributes: `selectable = true` for `SELECT`, `filterable = true` for `WHERE`, and `sortable = true` for `ORDER BY`.
-    - **Syntax for Field Service:** Metadata queries MUST NOT include a `FROM` clause, and fields MUST NOT be prefixed with `google_ads_field.` (e.g., use `SELECT name, selectable`, NOT `SELECT google_ads_field.name`). Metadata queries MUST NOT use parentheses `()` or complex boolean logic. Failure to follow this syntax results in `query_error: UNRECOGNIZED_FIELD` with a message identifying the prefixed fields as unrecognized.
+    - **Syntax for Field Service:** Metadata queries MUST NOT include a `FROM` clause, and fields MUST NOT be prefixed with `google_ads_field.` (e.g., use `SELECT name, selectable`, NOT `SELECT google_ads_field.name`). Metadata queries MUST NOT use parentheses `()` or complex boolean logic. Commonly used valid fields include `name`, `category`, `selectable`, `filterable`, `sortable`, `type_url`, and `enum_values`. You **MUST NOT** include `description`, as it is not a valid field for this service. Failure to follow this syntax results in `query_error: UNRECOGNIZED_FIELD` with a message identifying the unrecognized or prefixed fields.
     - This discovery MUST be performed for every resource queried for the first time in a session.
 
 2. **Contextual & Mutual Compatibility (CRITICAL):** Do not assume that a filterable field is filterable in all contexts. You MUST:
