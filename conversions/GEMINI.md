@@ -49,6 +49,7 @@
     *   **Mandatory Fix**: Use `FROM customer`, `campaign`, or `ad_group` and `SELECT segments.conversion_action`.
 3.  **Metadata Query Syntax**: `GoogleAdsFieldService` queries MUST NOT include a `FROM` clause.
     *   **Correct**: `SELECT name, selectable WHERE name = 'campaign.id'`
+    *   **[PITFALL] Field Names**: Use `data_type`. DO NOT use `type` in `GoogleAdsFieldService` queries; it will result in an `UNRECOGNIZED_FIELD` error.
 4.  **Referenced Action Rule**: If `segments.conversion_action` is in `WHERE`, it MUST be in `SELECT`.
 5.  **Logical Time Verification**: Before upload, AI MUST verify:
     *   `conversion_date_time` > `click_time`.
@@ -75,7 +76,7 @@ The AI MUST format final reports as follows:
 6.  **Full Diagnostic Data Mandate**: The report MUST contain the verbatim output or detailed data from the `offline_conversion_upload_client_summary` and `offline_conversion_upload_conversion_action_summary` queries to ensure transparency and complete diagnostic visibility.
 7.  **Structured Analysis Mandate**: The report MUST include a structured section containing "Primary Errors Identified" (with root causes and fixes), "Specific Action Failures", "General Health" assessment, and "Actionable Recommendations" as presented to the user.
 
-**Consolidation Mandate**: All findings, including terminal summaries, the structured analysis, and data from external troubleshooting scripts, MUST be consolidated into a **single, uniquely named text file** in `saved/data/` (e.g., `support_package_<timestamp>.txt`). This file MUST be the sole artifact submitted to the user for support. It must start with the header "Created by the Google Ads API Developer Assistant".
+**Consolidation Mandate**: All findings, including terminal summaries, the structured analysis, and the **complete verbatim data** from all troubleshooting scripts and queries, MUST be consolidated into a **single, uniquely named text file** in `saved/data/` (e.g., `support_package_<timestamp>.txt`). This file MUST be the sole artifact submitted to the user for support. It must start with the header "Created by the Google Ads API Developer Assistant". Placeholders or references to other files for "details" are strictly prohibited; all data must be contained within this single file.
 
 ---
 
@@ -89,16 +90,18 @@ The AI MUST format final reports as follows:
 
 #### 7.1. Proto-plus Message Inspection
 *   **No Direct Descriptor Access**: NEVER use `obj.DESCRIPTOR`, `obj.pb`, or `obj.meta` on a message instance or class. These are hidden by the `proto-plus` wrapper.
-*   **Correct Inspection**: Use `type(obj).pb(obj)` for instances or `Class.pb(Class)` for classes to access the underlying protobuf descriptor (e.g., `type(obj).pb(obj).DESCRIPTOR.fields`).
+*   **Correct Inspection**: Use `type(obj).pb(obj)` for instances. For classes, use `Class.meta.pb.DESCRIPTOR` to access the underlying protobuf descriptor.
+*   **Linter Compliance**: When using `type(obj).pb(obj)` for inspection, ensure the resulting object is actually used or use a leading underscore (e.g., `_pb_obj`) to avoid "unused variable" linter errors (e.g., Ruff F841).
 *   **AttributeError Handling**: If an `AttributeError: Unknown field for <Type>: <field>` occurs, it means the attribute is not defined in the protobuf message. Immediately verify the field name against the official API documentation or use `dir(obj)` to see available attributes.
 
 #### 7.2. Conversion-Specific Object Pitfalls
 *   **OfflineConversionAlert**: 
     *   **CRITICAL: Error Field Structure**: The `alert.error` field is NOT a direct enum. it is a `oneof` message (type `OfflineConversionError`) containing fields for different error categories (e.g., `conversion_upload_error`, `conversion_adjustment_upload_error`).
-    *   **Mandatory Access Pattern**: To get the error string, you MUST identify which field in the `oneof` is set and then access its `.name`.
+    *   **Mandatory Access Pattern**: To get the error string, you MUST identify which field in the `oneof` is set and then access its `.name`. The `oneof` field name in `OfflineConversionError` is `error_code`.
     *   **Example Code**: 
         ```python
-        error_type = type(alert.error).pb(alert.error).WhichOneof("error")
+        # Mandatory access pattern for OfflineConversionError oneof
+        error_type = type(alert.error).pb(alert.error).WhichOneof("error_code")
         error_val = getattr(alert.error, error_type)
         error_name = error_val.name
         ```
