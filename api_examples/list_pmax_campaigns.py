@@ -1,96 +1,42 @@
-# Copyright 2025 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""This example lists PMax campaigns.
-
-To get campaigns, run get_campaigns.py.
-"""
+# Copyright 2026 Google LLC
+"""Lists Performance Max campaigns with enhanced status diagnostics."""
 
 import argparse
 import sys
-
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 
-
-def main(client: "GoogleAdsClient", customer_id: str) -> None:
-    """The main method that creates all necessary entities for the example.
-
-    Args:
-        client: an initialized GoogleAdsClient instance.
-        customer_id: a client customer ID.
-    """
+def main(client: GoogleAdsClient, customer_id: str) -> None:
     ga_service = client.get_service("GoogleAdsService")
-
     query = """
         SELECT
+            campaign.id,
             campaign.name,
-            campaign.advertising_channel_type
+            campaign.status,
+            campaign.primary_status,
+            campaign.primary_status_reasons
         FROM
             campaign
         WHERE
-            campaign.advertising_channel_type = 'PERFORMANCE_MAX'"""
-
-    # Issues a search request using streaming.
-    response = ga_service.search_stream(customer_id=customer_id, query=query)
+            campaign.advertising_channel_type = 'PERFORMANCE_MAX'
+            AND campaign.status != 'REMOVED'"""
 
     try:
+        response = ga_service.search_stream(customer_id=customer_id, query=query)
+        print(f"{'ID':<15} | {'Name':<30} | {'Status':<15} | {'Primary Status'}")
+        print("-" * 85)
         for batch in response:
             for row in batch.results:
-                print(
-                    f'Campaign with name "{row.campaign.name}" '
-                    f"is a {row.campaign.advertising_channel_type.name} campaign."
-                )
+                campaign = row.campaign
+                reasons = f" ({', '.join([r.name for r in campaign.primary_status_reasons])})" if campaign.primary_status_reasons else ""
+                print(f"{campaign.id:<15} | {campaign.name[:30]:<30} | {campaign.status.name:<15} | {campaign.primary_status.name}{reasons}")
     except GoogleAdsException as ex:
-        print(
-            f"Request with ID '{ex.request_id}' failed with status "
-            f"'{ex.error.code().name}' and includes the following errors:"
-        )
-        for error in ex.failure.errors:
-            print(f"\tError with message '{error.message}'.")
-            if error.location:
-                for field_path_element in error.location.field_path_elements:
-                    print(f"\t\tOn field: '{field_path_element.field_name}'")
+        print(f"Request ID {ex.request_id} failed: {ex.error.code().name}")
         sys.exit(1)
-
 
 if __name__ == "__main__":
-    # GoogleAdsClient will read the google-ads.yaml configuration file in the
-    # home directory if none is specified.
-    googleads_client = GoogleAdsClient.load_from_storage(version="v23")
-
-    parser = argparse.ArgumentParser(description="Lists Performance Max campaigns.")
-    # The following argument(s) are required to run the example.
-    parser.add_argument(
-        "-c",
-        "--customer_id",
-        type=str,
-        required=True,
-        help="The Google Ads customer ID.",
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-c", "--customer_id", required=True)
     args = parser.parse_args()
-
-    try:
-        main(googleads_client, args.customer_id)
-    except GoogleAdsException as ex:
-        print(
-            f"Request with ID '{ex.request_id}' failed with status "
-            f"'{ex.error.code().name}' and includes the following errors:"
-        )
-        for error in ex.failure.errors:
-            print(f"\tError with message '{error.message}'.")
-            if error.location:
-                for field_path_element in error.location.field_path_elements:
-                    print(f"\t\tOn field: '{field_path_element.field_name}'")
-        sys.exit(1)
+    googleads_client = GoogleAdsClient.load_from_storage(version="v23")
+    main(googleads_client, args.customer_id)

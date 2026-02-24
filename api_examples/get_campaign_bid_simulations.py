@@ -1,114 +1,40 @@
-# Copyright 2025 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""This example gets campaign bid simulations.
-
-To get campaigns, run get_campaigns.py.
-"""
+# Copyright 2026 Google LLC
+"""Retrieves campaign bid simulations with dynamic date ranges."""
 
 import argparse
-import sys
-from typing import TYPE_CHECKING
-
+from datetime import datetime, timedelta
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 
-
-def main(client: "GoogleAdsClient", customer_id: str, campaign_id: str) -> None:
-    """The main method that creates all necessary entities for the example.
-
-    Args:
-        client: an initialized GoogleAdsClient instance.
-        customer_id: a client customer ID.
-        campaign_id: a campaign ID.
-    """
+def main(client: GoogleAdsClient, customer_id: str, campaign_id: str) -> None:
     ga_service = client.get_service("GoogleAdsService")
-
-    # Construct the GAQL query to get campaign bid simulations.
-    # The date range is fixed for this example, but in a real application,
-    # you might want to make it dynamic.
+    end = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    start = (datetime.now() - timedelta(days=8)).strftime("%Y-%m-%d")
+    
     query = f"""
-        SELECT
-            campaign_bid_simulation.campaign_id,
-            campaign_bid_simulation.bid_modifier,
-            campaign_bid_simulation.clicks,
-            campaign_bid_simulation.cost_micros,
-            campaign_bid_simulation.conversions,
-            campaign_bid_simulation.conversion_value
-        FROM
-            campaign_bid_simulation
-        WHERE
-            campaign.id = {campaign_id}
-            AND campaign_bid_simulation.start_date = '2025-08-24'
-            AND campaign_bid_simulation.end_date = '2025-09-23'
-        ORDER BY
-            campaign_bid_simulation.bid_modifier"""
+        SELECT campaign_bid_simulation.campaign_id, campaign_bid_simulation.bid_modifier,
+               campaign_bid_simulation.clicks, campaign_bid_simulation.cost_micros
+        FROM campaign_bid_simulation
+        WHERE campaign.id = {campaign_id}
+        AND campaign_bid_simulation.start_date = '{start}'
+        AND campaign_bid_simulation.end_date = '{end}'
+        ORDER BY campaign_bid_simulation.bid_modifier"""
 
     try:
         stream = ga_service.search_stream(customer_id=customer_id, query=query)
-
-        print(f"Campaign bid simulations for Campaign ID: {campaign_id}")
-        print("Bid Modifier | Clicks | Cost (micros) | Conversions | Conversion Value")
-        print("------------------------------------------------------------------")
-
+        print(f"{'Modifier':<10} | {'Clicks':<10} | {'Cost (micros)'}")
+        print("-" * 40)
         for batch in stream:
             for row in batch.results:
-                simulation = row.campaign_bid_simulation
-                print(
-                    f"{simulation.bid_modifier:<12.2f} | "
-                    f"{simulation.clicks:<6} | "
-                    f"{simulation.cost_micros:<13} | "
-                    f"{simulation.conversions:<11.2f} | "
-                    f"{simulation.conversion_value:<16.2f}"
-                )
-
+                sim = row.campaign_bid_simulation
+                print(f"{sim.bid_modifier:<10.2f} | {sim.clicks:<10} | {sim.cost_micros}")
     except GoogleAdsException as ex:
-        print(
-            f"Request with ID '{ex.request_id}' failed with status "
-            f"'{ex.error.code().name}' and includes the following errors:"
-        )
-        for error in ex.failure.errors:
-            print(f"\tError with message: '{error.message}'.")
-            if error.location:
-                for field_path_element in error.location.field_path_elements:
-                    print(f"\t\tOn field: {field_path_element.field_name}")
-        sys.exit(1)
-
+        print(f"Request ID {ex.request_id} failed: {ex.error.code().name}")
 
 if __name__ == "__main__":
-    # GoogleAdsClient will read the google-ads.yaml configuration file in the
-    # home directory if none is specified.
-    googleads_client = GoogleAdsClient.load_from_storage(version="v23")
-
-    parser = argparse.ArgumentParser(
-        description="Retrieves campaign bid simulations for a given campaign ID."
-    )
-    # The following argument(s) are required to run the example.
-    parser.add_argument(
-        "-c",
-        "--customer_id",
-        type=str,
-        required=True,
-        help="The Google Ads customer ID.",
-    )
-    parser.add_argument(
-        "-i",
-        "--campaign_id",
-        type=str,
-        required=True,
-        help="The ID of the campaign to retrieve bid simulations for.",
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-c", "--customer_id", required=True)
+    parser.add_argument("-i", "--campaign_id", required=True)
     args = parser.parse_args()
-
-    main(googleads_client, args.customer_id, args.campaign_id)
+    client = GoogleAdsClient.load_from_storage(version="v23")
+    main(client, args.customer_id, args.campaign_id)
