@@ -78,8 +78,15 @@ The AI MUST format final reports as follows:
 5.  **Empty Section Handling**: If summaries are empty, AI MUST append "Reason: No standard offline imports detected in last 90 days" inside the report.
 6.  **Full Diagnostic Data Mandate**: The report MUST contain the verbatim output or detailed data from the `offline_conversion_upload_client_summary` and `offline_conversion_upload_conversion_action_summary` queries to ensure transparency and complete diagnostic visibility.
 7.  **Structured Analysis Mandate**: The report MUST include a structured section containing "Primary Errors Identified" (with root causes and fixes), "Specific Action Failures", "General Health" assessment, and "Actionable Recommendations" as presented to the user.
+8.  **Verbatim Screen Output Mandate**: The report MUST ALWAYS include the verbatim structured analysis and recommendations text presented to the user on the screen (e.g. detailed findings for EXPIRED_EVENT, specific action failures, and timing issues).
 
-**Consolidation Mandate**: All findings, including terminal summaries, the structured analysis, and the **complete verbatim data** from all troubleshooting scripts and queries, MUST be consolidated into a **single, uniquely named text file** in `saved/data/` (e.g., `support_package_<timestamp>.txt`). This file MUST be the sole artifact submitted to the user for support. It must start with the header "Created by the Google Ads API Developer Assistant". Placeholders or references to other files for "details" are strictly prohibited; all data must be contained within this single file.
+**Consolidation Mandate**: All findings, including terminal summaries, the structured analysis, the verbatim screen output, and the **complete verbatim data** from all troubleshooting scripts and queries, MUST be consolidated into a **single, uniquely named text file** in `saved/data/`. 
+
+**Mandatory Naming Rule**:
+- For reports generated via the `/conversions_support_package` command, the file MUST be named exactly `conversions_support_package_<epoch>.text`.
+- For any other conversion-related reports or files, DO NOT use this specific naming convention.
+
+This file MUST be the sole artifact submitted to the user for support. It must start with the header "Created by the Google Ads API Developer Assistant". Placeholders or references to other files for "details" are strictly prohibited; all data must be contained within this single file.
 
 ---
 

@@ -113,8 +113,9 @@ except GoogleAdsException as ex:
 2.  **Click View:** Requires a single-day filter (`WHERE segments.date = 'YYYY-MM-DD'`).
 3.  **Change Status:** Requires a finite `BETWEEN` filter on `last_change_date_time` and a `LIMIT` (max 10,000).
 4.  **Policy Summary:** Select `ad_group_ad.policy_summary.policy_topic_entries`. Do NOT select sub-fields like `approval_status`.
-5.  **Repeated Fields:** Never select sub-fields of repeated messages (e.g., `ad_group.labels.name`). Select the parent and iterate.
+5. **Repeated Fields:** Never select sub-fields of repeated messages (e.g., `ad_group.labels.name`). Select the parent and iterate.
 6.  **Ordering:** Fields in `ORDER BY` MUST be in `SELECT` unless they belong to the primary resource.
+7.  **Forbidden Operators:** The `OR` operator is strictly forbidden in GAQL `WHERE` clauses. Use `IN` for multiple values or execute separate queries to avoid `UNEXPECTED_INPUT` errors.
 
 #### 4.3. Python Object Inspection (CRITICAL)
 NEVER guess the structure of an API object.
