@@ -49,6 +49,8 @@
     *   **Mandatory Fix**: Use `FROM customer`, `campaign`, or `ad_group` and `SELECT segments.conversion_action`.
 3.  **Metadata Query Syntax**: `GoogleAdsFieldService` queries MUST NOT include a `FROM` clause.
     *   **Correct**: `SELECT name, selectable WHERE name = 'campaign.id'`
+    *   **[PITFALL] Service Selection**: NEVER use `GoogleAdsService` to query `google_ads_field`. You MUST use `GoogleAdsFieldService.search_google_ads_fields`.
+    *   **[PITFALL] Field Prefixes**: Metadata fields MUST NOT be prefixed with the resource name (e.g., use `name`, NOT `google_ads_field.name`).
     *   **[PITFALL] Field Names**: Use `data_type`. DO NOT use `type` in `GoogleAdsFieldService` queries; it will result in an `UNRECOGNIZED_FIELD` error.
 4.  **Referenced Action Rule**: If `segments.conversion_action` is in `WHERE`, it MUST be in `SELECT`. Failure to do so results in `EXPECTED_REFERENCED_FIELD_IN_SELECT_CLAUSE`.
 5.  **No Metrics for Managers**: Metrics (e.g., `metrics.conversions`) CANNOT be requested for a manager account (MCC). You MUST identify and query each client account separately. Failure results in `REQUESTED_METRICS_FOR_MANAGER`.
