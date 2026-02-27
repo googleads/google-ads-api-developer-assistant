@@ -1,3 +1,9 @@
+* 2.0.1
+- Added unit tests for custom_config.py hook script.
+- Added unit tests for cleanup_config.py hook script.
+- Verified project tests pass by isolating from client_libs collection errors.
+- Fixed linting errors in new test files.
+
 * 2.0.0
 - Hierachical context file for conversions troubleshooting.
 - Added Conversion Troubleshooting & Diagnostics functionality (api_examples/collect_conversions_troubleshooting_data.py).
@@ -18,7 +24,6 @@
 - Changed name of setup files to install and provided an uninstall procedure.
 - Added additional rules for GAQL edge cases to GEMINI.md.
 - Added command conversions_support_data.
->>>>>>> v1.6.0
 
 * 1.5.0
 - Added rigorous GAQL validation rules to GEMINI.md
