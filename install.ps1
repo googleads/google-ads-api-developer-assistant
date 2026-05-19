@@ -47,16 +47,20 @@ param(
 $ErrorActionPreference = "Stop"
 
 # --- Project Directory Resolution ---
-# Determine the root directory of the current git repository.
-try {
-    $ProjectDirAbs = git rev-parse --show-toplevel 2>$null
-    if (-not $ProjectDirAbs) { throw "Not in a git repo" }
-    # Normalize path separator
-    $ProjectDirAbs = (Get-Item -LiteralPath $ProjectDirAbs).FullName
-}
-catch {
-    Write-Error "ERROR: This script must be run from within the google-ads-api-developer-assistant git repository."
-    exit 1
+# Determine the root directory. Check local folder first for integration.
+if (Test-Path ".\GEMINI.md") {
+    $ProjectDirAbs = (Get-Item ".\").FullName
+} else {
+    try {
+        $ProjectDirAbs = git rev-parse --show-toplevel 2>$null
+        if (-not $ProjectDirAbs) { throw "Not in a git repo" }
+        # Normalize path separator
+        $ProjectDirAbs = (Get-Item -LiteralPath $ProjectDirAbs).FullName
+    }
+    catch {
+        Write-Error "ERROR: This script must be run from within the google-ads-api-developer-assistant git repository."
+        exit 1
+    }
 }
 
 Write-Host "Detected project root: $ProjectDirAbs"
@@ -99,7 +103,8 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 # --- Path Resolution and Validation ---
 Write-Host "Ensuring default library directory exists: $DefaultParentDir"
 if (-not (Test-Path -LiteralPath $DefaultParentDir)) {
-    New-Item -ItemType Directory -Force -LiteralPath $DefaultParentDir | Out-Null
+    # Using -Path here for PS 5.1 compatibility as New-Item didn't support -LiteralPath until Core
+    New-Item -ItemType Directory -Force -Path $DefaultParentDir | Out-Null
 }
 
 # Helper to check if enabled
