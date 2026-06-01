@@ -206,6 +206,15 @@ To ensure you are using the latest versions, run `update.sh` (Linux/macOS)
 or `update.ps1` (Windows) when a new version of the API is published or a new
 version of a client library is released.
 
+### Running Tests
+
+Run the Python test suite with pytest plugin autoload disabled so unrelated
+globally installed pytest plugins do not affect this project:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q
+```
+
 ## Uninstallation
 
 If you wish to remove the extension and the project directory, you can use the uninstallation scripts:
