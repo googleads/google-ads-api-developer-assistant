@@ -1,0 +1,6 @@
+{
+  "name": "google-ads-api-developer-assistant",
+  "version": "3.0.0",
+  "contextFileName": "AGENTS.md",
+  "description": "For Google Ads API Developers. From natural language; generate code, troubleshoot, optimize queries, and explain API concepts and best practices."
+}

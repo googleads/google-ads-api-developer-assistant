@@ -55,8 +55,7 @@ try {
     # Git needs to be git.exe on Windows. This test likely only runs on Linux per the environment.
     
     # 2. Setup Fake Project
-    New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject ".gemini") | Out-Null
-    Set-Content -Path (Join-Path $FakeProject ".gemini/settings.json") -Value '{"context": {"includeDirectories": []}}'
+
     New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject "api_examples") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject "saved/code") | Out-Null
     
@@ -72,7 +71,6 @@ try {
 
 
 
-
     # --- Test Case 3: Run install.ps1 Default (no flags) ---
     Write-Host "--- Running install.ps1 (Default) ---"
     # Ensure client_libs is clean for this test case
@@ -82,18 +80,15 @@ try {
     & $InstallScriptPath
     if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed" }
     
-    $Settings = Get-Content -Raw (Join-Path $FakeProject ".gemini/settings.json") | ConvertFrom-Json
-    $IncludedDirs = $Settings.context.includeDirectories
-    
-    # Check Python exists
+    # Check Python exists (filesystem check)
     $ExpectedPython = Join-Path $FakeProject "client_libs/google-ads-python"
-    if ($IncludedDirs -contains $ExpectedPython) { Write-Host "PASS: settings contains python" } else { throw "FAIL: settings missing python in default run" }
+    if (Test-Path -LiteralPath (Join-Path $ExpectedPython ".git")) { Write-Host "PASS: google-ads-python was cloned" } else { throw "FAIL: google-ads-python was not cloned" }
     
     # Check others don't exist
     $Langs = @("php", "ruby", "java", "dotnet")
     foreach ($L in $Langs) {
         $NotExpected = Join-Path $FakeProject "client_libs/google-ads-$L"
-        if ($IncludedDirs -contains $NotExpected) { throw "FAIL: settings contains $L but should not in default run" } else { Write-Host "PASS: settings correctly missing $L" }
+        if (Test-Path -LiteralPath $NotExpected) { throw "FAIL: google-ads-$L was cloned but should not have been" } else { Write-Host "PASS: google-ads-$L correctly missing" }
     }
 
     Write-Host "ALL TESTS PASSED"

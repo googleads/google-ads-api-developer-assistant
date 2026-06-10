@@ -1,3 +1,34 @@
+* 3.0.0
+- Fixed a breaking bug in install.ps1 and tests/test_install.ps1 where legacy settings.json references caused the Windows installation to crash.
+- Changed the assistant's role description in AGENTS.md to "Expert Developer for the Google Ads API".
+- Added a rule to AGENTS.md requiring report-type queries to print retrieved results to stdout in a structured table format.
+- Migrate from gemini-cli to antigravity.
+- Moved GAQL validation to a skill.
+- Added skill to fetch all child accounts under an MCC.
+- Added rule to AGENTS.md to always check Devsite first for current version.
+- Added rule to AGENTS.md to prevent using SQL aggregate functions in GAQL queries.
+- Converted explain command to a skill.
+- Converted step_by_step command to a skill.
+- Replaced conversions_support_package with troubleshoot_conversions skill.
+- Relocated conversion troubleshooting and upload summary scripts and tests into troubleshoot_conversions skill directory.
+- Added troubleshoot_conversions skill with EVAL.txtpb evaluation definitions and TEST.md test documentation.
+- Added datetime stamps to all log messages.
+- Log file is now written to .agents/ directory and is not reset on each run.
+- Made structure of directory and files Antigravity compliant.
+- Added required api_version argument to get_cids_under_mcc, validate_gaql, and troubleshoot_conversions skills.
+- Added static query checks to validate_gaql for date segments, click_view, and change_status.
+- Added new inspect_object skill for dynamically looking up Protobuf messages and Enums.
+- Added new pmax_listing_filter skill for creating Performance Max webpage URL exclusions.
+- Added validate_conversion_upload helper script to troubleshoot_conversions skill to pre-validate upload file formatting.
+- Streamlined AGENTS.md and de-duplicated conversions/AGENTS.md to use new programmatic skills.
+- Resolved Namespace AttributeError bug in api_examples/conversion_reports.py by adding the limit argument.
+- Renamed skill simply to explain.
+- Drastically reduced the size of conversions/AGENTS.md by migrating most of the functionality to a skill.
+- Created cache file for current API version with TTL of 19 hours.
+- .venv is not deleted at the end of the session. Its Python version is checked on startup and if a newer version
+   is available a new .venv is created.
+
+
 * 2.3.0
 - Added context_dir argument to update scripts to add additional directories. (e.g., your codebase)
 - When the assistant executes Python code it is in a virtual environment that has the Google Ads API Client Libraries installed.
@@ -13,7 +44,7 @@ available.
 - Documented Rule 4.5 Workspace Isolation Compliance enforcing explicit binary pointers.
 - Zero tolerance rule to prevent OR operator in GAQL.
 - Zero tolerance rule to prevent FROM operator in metadata queries.
-- Fiaex formatting in README.md.
+- Fix formatting in README.md.
 
 * 2.2.0
 - api_examples: api version is a required argument with no default value.

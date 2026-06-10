@@ -29,10 +29,12 @@ echo "Running tests in ${TEST_DIR}"
 FAKE_HOME="${TEST_DIR}/fake_home"
 FAKE_PROJECT="${TEST_DIR}/fake_project"
 mkdir -p "${FAKE_HOME}/bin"
-mkdir -p "${FAKE_PROJECT}/.gemini"
+mkdir -p "${FAKE_HOME}/.gemini/config/projects"
+mkdir -p "${FAKE_PROJECT}/.agents"
 
 # Resolve real script path before mocking git
-REAL_UPDATE_SCRIPT="$(git rev-parse --show-toplevel)/update.sh"
+REAL_ROOT=$(git rev-parse --show-toplevel)
+REAL_UPDATE_SCRIPT="${REAL_ROOT}/update.sh"
 
 # Mock git
 cat > "${FAKE_HOME}/bin/git" <<EOF
@@ -63,24 +65,42 @@ cat > "${FAKE_HOME}/bin/jq" <<EOF
 EOF
 chmod +x "${FAKE_HOME}/bin/jq"
 
-# Add fake bin to PATH
+# Add fake bin to PATH and export FAKE_HOME as HOME
 export PATH="${FAKE_HOME}/bin:${PATH}"
+export HOME="${FAKE_HOME}"
 
-# Create dummy settings.json
-echo '{"context": {"includeDirectories": ["'"${FAKE_PROJECT}"'/client_libs/google-ads-python"]}}' > "${FAKE_PROJECT}/.gemini/settings.json"
+# Create dummy python repository structure under client_libs/
 mkdir -p "${FAKE_PROJECT}/client_libs/google-ads-python/.git"
 
-# Copy the real update.sh for testing
+# Copy the real update.sh and helper script for testing
 UPDATE_SCRIPT_PATH="${FAKE_PROJECT}/update.sh"
 cp "${REAL_UPDATE_SCRIPT}" "${UPDATE_SCRIPT_PATH}"
 chmod +x "${UPDATE_SCRIPT_PATH}"
 
+cp "${REAL_ROOT}/update_project_context.py" "${FAKE_PROJECT}/update_project_context.py"
+
+# Create fake virtual env python for script execution
+mkdir -p "${FAKE_PROJECT}/.venv/bin"
+ln -s "$(which python3)" "${FAKE_PROJECT}/.venv/bin/python3"
+
+# Setup fake project configuration
+cat > "${FAKE_HOME}/.gemini/config/projects/6039b1bb-7a20-43ad-b2b7-e64ce62a74ce.json" <<EOF
+{
+  "id": "6039b1bb-7a20-43ad-b2b7-e64ce62a74ce",
+  "name": "${FAKE_PROJECT}",
+  "projectResources": {
+    "resources": [
+      {
+        "folderUri": "file://${FAKE_PROJECT}"
+      }
+    ]
+  }
+}
+EOF
+
 # --- Test Case 1: Run update.sh (no flags) ---
 echo "--- Test Case 1: Default Update ---"
 (cd "${FAKE_PROJECT}" && bash update.sh)
-
-# Verify python was "updated"
-# (Mock pull output would be in stdout, but the script continues if it works)
 
 # --- Test Case 2: Run update.sh --php (Add new library) ---
 echo "--- Test Case 2: Add PHP library ---"
@@ -92,82 +112,32 @@ if [[ ! -d "${FAKE_PROJECT}/client_libs/google-ads-php/.git" ]]; then
     exit 1
 fi
 
-# Check if settings.json updated
-if /usr/bin/jq -r '.context.includeDirectories[]' "${FAKE_PROJECT}/.gemini/settings.json" | grep -q "google-ads-php"; then
-    echo "PASS: settings.json updated with php path"
-else
-    echo "FAIL: settings.json missing php path"
-    cat "${FAKE_PROJECT}/.gemini/settings.json"
-    exit 1
-fi
-
 # --- Test Case 3: Run update.sh --php (Already exists) ---
 echo "--- Test Case 3: Update existing PHP library ---"
 # We just run it again, it should not clone but pull (mock handled)
 (cd "${FAKE_PROJECT}" && bash update.sh --php)
 echo "PASS: update.sh --php ran successfully with existing lib"
 
-# --- Test Case 4: Run update.sh --context_dir (Valid) ---
-echo "--- Test Case 4: Add valid context directory ---"
+# --- Test Case 4: Run update.sh with valid context path ---
+echo "--- Test Case 4: Add valid context path ---"
 VALID_DIR="${TEST_DIR}/valid_dir"
-mkdir -p "$VALID_DIR"
-(cd "${FAKE_PROJECT}" && bash update.sh --context_dir "$VALID_DIR")
+mkdir -p "${VALID_DIR}"
+(cd "${FAKE_PROJECT}" && bash update.sh --context_path "${VALID_DIR}")
 
-# Check if settings.json updated
-if /usr/bin/jq -r '.context.includeDirectories[]' "${FAKE_PROJECT}/.gemini/settings.json" | grep -q "valid_dir"; then
-    echo "PASS: settings.json updated with valid context_dir"
-else
-    echo "FAIL: settings.json missing valid context_dir"
-    cat "${FAKE_PROJECT}/.gemini/settings.json"
+# Verify it was added to json
+if ! grep -q "valid_dir" "${FAKE_HOME}/.gemini/config/projects/6039b1bb-7a20-43ad-b2b7-e64ce62a74ce.json"; then
+    echo "FAIL: valid_dir was not added to project configuration"
     exit 1
 fi
+echo "PASS: valid context path added"
 
-# --- Test Case 5: Run update.sh --context_dir (Invalid) ---
-echo "--- Test Case 5: Add invalid context directory ---"
+# --- Test Case 5: Run update.sh with invalid context path ---
+echo "--- Test Case 5: Add invalid context path ---"
 INVALID_DIR="${TEST_DIR}/non_existent_dir"
-
-# We capture stderr to check for error message
-(cd "${FAKE_PROJECT}" && bash update.sh --context_dir "$INVALID_DIR" 2> "${TEST_DIR}/stderr.txt")
-
-# Check if error message printed to stderr
-if grep -q "ERROR: Directory not found" "${TEST_DIR}/stderr.txt"; then
-    echo "PASS: error message printed to stderr for invalid context_dir"
-else
-    echo "FAIL: missing error message for invalid context_dir"
-    cat "${TEST_DIR}/stderr.txt"
+if (cd "${FAKE_PROJECT}" && bash update.sh --context_path "${INVALID_DIR}" 2>/dev/null); then
+    echo "FAIL: update.sh succeeded with non-existent context path"
     exit 1
 fi
-
-# Verify it was NOT added to settings.json
-if /usr/bin/jq -r '.context.includeDirectories[]' "${FAKE_PROJECT}/.gemini/settings.json" | grep -q "non_existent_dir"; then
-    echo "FAIL: settings.json updated with invalid context_dir"
-    exit 1
-else
-    echo "PASS: settings.json not updated with invalid context_dir"
-fi
-
-# --- Test Case 6: Run update.sh --context_dir (Comma separated list with invalid) ---
-echo "--- Test Case 6: Multiple context dirs, some valid, some invalid ---"
-VALID_DIR2="${TEST_DIR}/valid_dir2"
-mkdir -p "$VALID_DIR2"
-INVALID_DIR2="${TEST_DIR}/non_existent_dir2"
-
-(cd "${FAKE_PROJECT}" && bash update.sh --context_dir "$VALID_DIR2,$INVALID_DIR2")
-
-# Verify VALID_DIR2 was added
-if /usr/bin/jq -r '.context.includeDirectories[]' "${FAKE_PROJECT}/.gemini/settings.json" | grep -q "valid_dir2"; then
-    echo "PASS: valid_dir2 added from mixed list"
-else
-    echo "FAIL: valid_dir2 missing from mixed list"
-    exit 1
-fi
-
-# Verify INVALID_DIR2 was NOT added
-if /usr/bin/jq -r '.context.includeDirectories[]' "${FAKE_PROJECT}/.gemini/settings.json" | grep -q "non_existent_dir2"; then
-    echo "FAIL: non_existent_dir2 added from mixed list"
-    exit 1
-else
-    echo "PASS: non_existent_dir2 not added from mixed list"
-fi
+echo "PASS: invalid context path rejected"
 
 echo "ALL TESTS PASSED"

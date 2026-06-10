@@ -212,6 +212,7 @@ if __name__ == "__main__":
     parser.add_argument("--date_range_preset", default="LAST_30_DAYS")
     parser.add_argument("--metrics", nargs="+", default=["conversions"])
     parser.add_argument("--filters", nargs="*", default=[])
+    parser.add_argument("--limit", type=int, default=None, help="Maximum number of records to return.")
     parser.add_argument("-v", "--api_version", type=str, required=True, help="The Google Ads API version.")
 
     args = parser.parse_args()

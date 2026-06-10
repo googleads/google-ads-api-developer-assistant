@@ -5,14 +5,12 @@
 .DESCRIPTION
     This script performs the following steps:
     1. Updates the 'google-ads-api-developer-assistant' repository (git pull).
-    2. Reads '.gemini/settings.json' to locate configured client library repositories.
-    3. Updates each found client library repository (git pull).
+    2. Clones or updates selected client libraries in 'client_libs/'.
+    3. If -ContextPath is provided, registers the specified directory in the project configuration.
+    4. Updates each found client library repository (git pull).
 
-.PARAMETER ContextDir
-    Comma-separated list of directories to add to .gemini/settings.json context.includeDirectories.
-
-.EXAMPLE
-    .\update.ps1
+.PARAMETER ContextPath
+    Comma-separated list of directories to add to the project configuration for context.
 #>
 
 param(
@@ -21,7 +19,7 @@ param(
     [switch]$Ruby,
     [switch]$Java,
     [switch]$Dotnet,
-    [string[]]$ContextDir
+    [string[]]$ContextPath
 )
 
 function Get-RepoUrl {
@@ -70,28 +68,11 @@ Write-Host "Detected project root: $ProjectDirAbs"
 # --- Update Assistant Repo ---
 Write-Host "Updating google-ads-api-developer-assistant..."
 
-$SettingsFile = Join-Path $ProjectDirAbs ".gemini\settings.json"
-$TempSettingsFile = [System.IO.Path]::GetTempFileName()
-
 $CustomerIdFile = Join-Path $ProjectDirAbs "customer_id.txt"
 $TempCustomerIdFile = [System.IO.Path]::GetTempFileName()
 
 try {
-    # 1. Backup existing settings if they exist
-    if (Test-Path -LiteralPath $SettingsFile) {
-        Write-Host "Backing up $SettingsFile..."
-        Copy-Item -LiteralPath $SettingsFile -Destination $TempSettingsFile -Force
-
-        # 2. Reset local changes to settings.json to allow git pull
-        # Check if file is tracked by git
-        $GitStatus = git ls-files --error-unmatch $SettingsFile 2>$null
-        if ($LASTEXITCODE -eq 0) {
-             Write-Host "Resetting $SettingsFile to avoid merge conflicts..."
-             git checkout $SettingsFile
-        }
-    }
-
-    # 1b. Backup customer_id.txt if it exists
+    # Backup customer_id.txt if it exists
     if (Test-Path -LiteralPath $CustomerIdFile) {
         Write-Host "Backing up $CustomerIdFile..."
         Copy-Item -LiteralPath $CustomerIdFile -Destination $TempCustomerIdFile -Force
@@ -104,79 +85,22 @@ try {
         }
     }
 
-    # 3. Update Repo
+    # Update Repo
     git pull
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to update google-ads-api-developer-assistant."
     }
     Write-Host "Successfully updated google-ads-api-developer-assistant."
 
-    # 4. Restore/Merge settings
-    if ((Test-Path -LiteralPath $TempSettingsFile) -and (Get-Item $TempSettingsFile).Length -gt 0) {
-        Write-Host "Merging preserved settings with new defaults..."
-        
-        # Read contents
-        $UserContent = Get-Content -LiteralPath $TempSettingsFile -Raw | ConvertFrom-Json
-        $RepoContent = Get-Content -LiteralPath $SettingsFile -Raw | ConvertFrom-Json
-        
-        # Merge Logic: User overrides Repo
-        # Helper function for recursive merge could go here, but for now we do specific top-level merge
-        # replicating jq * behavior for simple objects.
-        # Actually, let's just use strict property copy from User to Repo for top-level keys
-        # If deeply nested merge is needed, valid for context.includeDirectories?
-        # Usually settings.json is flat or 1-level deep.
-        
-        # Simple Merge: Add/Overwrite properties from User to Repo object
-        foreach ($Prop in $UserContent.PSObject.Properties) {
-             if ($Prop.Name -eq "context") {
-                 # Special handling for context if needed, or just overwrite?
-                 # jq * merges recursively.
-                 # Let's try to merge context if both have it.
-                 if ($RepoContent.PSObject.Properties["context"]) {
-                     foreach ($CtxProp in $Prop.Value.PSObject.Properties) {
-                         # e.g. includeDirectories
-                         if (-not $RepoContent.context.PSObject.Properties[$CtxProp.Name]) {
-                             $RepoContent.context | Add-Member -MemberType NoteProperty -Name $CtxProp.Name -Value $CtxProp.Value
-                         } else {
-                             $RepoContent.context.$($CtxProp.Name) = $CtxProp.Value
-                         }
-                     }
-                 } else {
-                     $RepoContent | Add-Member -MemberType NoteProperty -Name "context" -Value $Prop.Value
-                 }
-             } else {
-                 if (-not $RepoContent.PSObject.Properties[$Prop.Name]) {
-                     $RepoContent | Add-Member -MemberType NoteProperty -Name $Prop.Name -Value $Prop.Value
-                 } else {
-                     $RepoContent.$($Prop.Name) = $Prop.Value
-                 }
-             }
-        }
-        
-        # Save merged
-        $RepoContent | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
-        Write-Host "Settings restored and merged successfully."
-        Write-Host "Settings restored and merged successfully."
-    }
-
-    # 4b. Restore customer_id.txt
+    # Restore customer_id.txt
     if ((Test-Path -LiteralPath $TempCustomerIdFile) -and (Get-Item $TempCustomerIdFile).Length -gt 0) {
         Write-Host "Restoring preserved $CustomerIdFile..."
-        # Always overwrite with user's backup
         Move-Item -LiteralPath $TempCustomerIdFile -Destination $CustomerIdFile -Force
         Write-Host "Restored $CustomerIdFile successfully."
     }
-
 }
 catch {
     Write-Error "ERROR: $_"
-    # Restore backup if pull failed or something went wrong involving the file
-    if ((Test-Path -LiteralPath $TempSettingsFile) -and (Get-Item $TempSettingsFile).Length -gt 0) {
-         if (-not (Test-Path -LiteralPath $SettingsFile) -or (Get-Item $SettingsFile).Length -eq 0) {
-             Write-Host "Restoring original settings after failure..."
-             Copy-Item -LiteralPath $TempSettingsFile -Destination $SettingsFile -Force
-         }
-    }
     if ((Test-Path -LiteralPath $TempCustomerIdFile) -and (Get-Item $TempCustomerIdFile).Length -gt 0) {
          if (-not (Test-Path -LiteralPath $CustomerIdFile) -or (Get-Item $CustomerIdFile).Length -eq 0) {
              Write-Host "Restoring original customer_id.txt after failure..."
@@ -186,14 +110,10 @@ catch {
     exit 1
 }
 finally {
-    if (Test-Path -LiteralPath $TempSettingsFile) {
-        Remove-Item -LiteralPath $TempSettingsFile -Force -ErrorAction SilentlyContinue
-    }
     if (Test-Path -LiteralPath $TempCustomerIdFile) {
         Remove-Item -LiteralPath $TempCustomerIdFile -Force -ErrorAction SilentlyContinue
     }
 }
-
 
 # --- Handle Specific Library Additions ---
 $InvalidContextDirs = @()
@@ -204,9 +124,9 @@ if ($Ruby)   { $SpecifiedLangs += "ruby" }
 if ($Java)   { $SpecifiedLangs += "java" }
 if ($Dotnet) { $SpecifiedLangs += "dotnet" }
 
-if ($SpecifiedLangs.Count -gt 0) {
-    $DefaultParentDir = Join-Path $ProjectDirAbs "client_libs"
+$DefaultParentDir = Join-Path $ProjectDirAbs "client_libs"
 
+if ($SpecifiedLangs.Count -gt 0) {
     foreach ($Lang in $SpecifiedLangs) {
         $RepoUrl = Get-RepoUrl $Lang
         $RepoName = Get-RepoName $Lang
@@ -217,37 +137,14 @@ if ($SpecifiedLangs.Count -gt 0) {
             New-Item -ItemType Directory -Force -Path $DefaultParentDir | Out-Null
             git clone $RepoUrl $LibPath
             if ($LASTEXITCODE -ne 0) { throw "Failed to clone $RepoUrl" }
-
-            # Add to settings.json if not present
-            if (Test-Path -LiteralPath $SettingsFile) {
-                # Ensure we have the most up to date settings after possible git pull
-                $SettingsJson = Get-Content -LiteralPath $SettingsFile -Raw | ConvertFrom-Json
-                $AbsPath = (Get-Item -LiteralPath $LibPath).FullName
-                
-                if ($null -eq $SettingsJson.context) {
-                    $SettingsJson | Add-Member -MemberType NoteProperty -Name "context" -Value @{ includeDirectories = @() }
-                }
-                if ($null -eq $SettingsJson.context.includeDirectories) {
-                    $SettingsJson.context | Add-Member -MemberType NoteProperty -Name "includeDirectories" -Value @()
-                }
-
-                if (-not ($SettingsJson.context.includeDirectories -contains $AbsPath)) {
-                    Write-Host "Registering $AbsPath in $SettingsFile..."
-                    $SettingsJson.context.includeDirectories += $AbsPath
-                    $SettingsJson | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
-                }
-            }
         }
     }
 }
 
-# --- Locate and Update Client Libraries ---
-$SettingsFile = Join-Path $ProjectDirAbs ".gemini\settings.json"
-
-# --- Handle ContextDir argument ---
-if ($null -ne $ContextDir -and $ContextDir.Count -gt 0) {
+# --- Handle ContextPath argument ---
+if ($null -ne $ContextPath -and $ContextPath.Count -gt 0) {
     $Dirs = @()
-    foreach ($Item in $ContextDir) {
+    foreach ($Item in $ContextPath) {
         if ($Item -like "*,*") {
             $Dirs += $Item -split ','
         } else {
@@ -264,78 +161,89 @@ if ($null -ne $ContextDir -and $ContextDir.Count -gt 0) {
         }
         
         $AbsDir = (Get-Item -LiteralPath $Dir).FullName
-        Write-Host "Adding context directory: $AbsDir to settings.json..."
+        Write-Host "Registering context path: $AbsDir..."
         
-        # Read and update settings.json
-        $SettingsJson = Get-Content -LiteralPath $SettingsFile -Raw | ConvertFrom-Json
-        
-        if ($null -eq $SettingsJson.context) {
-            $SettingsJson | Add-Member -MemberType NoteProperty -Name "context" -Value @{ includeDirectories = @() }
+        # Resolve Python interpreter path
+        $PythonExe = Join-Path $ProjectDirAbs ".venv\bin\python3"
+        if (-not (Test-Path -LiteralPath $PythonExe)) {
+            $PythonExe = Join-Path $ProjectDirAbs ".venv\Scripts\python.exe"
         }
-        if ($null -eq $SettingsJson.context.includeDirectories) {
-            $SettingsJson.context | Add-Member -MemberType NoteProperty -Name "includeDirectories" -Value @()
-        }
-        
-        if (-not ($SettingsJson.context.includeDirectories -contains $AbsDir)) {
-            $SettingsJson.context.includeDirectories += $AbsDir
-            $SettingsJson | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
-        }
-    }
-}
-
-Write-Host "Reading $SettingsFile to find client libraries..."
-
-try {
-    $SettingsJson = Get-Content -LiteralPath $SettingsFile -Raw | ConvertFrom-Json
-    
-    if (-not $SettingsJson.context -or -not $SettingsJson.context.includeDirectories) {
-        Write-Warning "No directories found in settings."
-        exit 0
-    }
-
-    $IncludeDirs = $SettingsJson.context.includeDirectories
-    Write-Host "Found $($IncludeDirs.Count) directories in settings."
-
-    foreach ($LibPath in $IncludeDirs) {
-        if ([string]::IsNullOrWhiteSpace($LibPath)) { continue }
-        
-        # Check if path exists
-        if (-not (Test-Path -LiteralPath $LibPath)) {
-            Write-Warning "Directory not found: $LibPath. Skipping."
-            continue
-        }
-
-        $AbsLibPath = (Get-Item -LiteralPath $LibPath).FullName
-
-
-
-        # Check if it is a git repository
-        if (-not (Test-Path -LiteralPath (Join-Path $AbsLibPath ".git"))) {
-            Write-Warning "Skipping non-git directory: $AbsLibPath"
-            continue
-        }
-
-        Write-Host "Updating repository at: $AbsLibPath..."
-        Push-Location $AbsLibPath
-        try {
-            git pull
-            if ($LASTEXITCODE -eq 0) {
-                 Write-Host "Successfully updated $AbsLibPath."
-            } else {
-                 Write-Error "ERROR: Failed to update $AbsLibPath"
-                 # We exit on error to match update.sh behavior of failing fast-ish? 
-                 # Actually update.sh likely fails fast due to set -e.
-                 exit 1 
+        if (-not (Test-Path -LiteralPath $PythonExe)) {
+            $PythonExe = "python3"
+            if (-not (Get-Command $PythonExe -ErrorAction SilentlyContinue)) {
+                $PythonExe = "python"
             }
         }
-        finally {
-            Pop-Location
+        
+        & $PythonExe (Join-Path $ProjectDirAbs "update_project_context.py") $ProjectDirAbs $AbsDir
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "ERROR: Failed to register context path: $AbsDir"
+            exit 1
         }
     }
 }
-catch {
-    Write-Error "ERROR: An error occurred while processing settings or updating libraries: $_"
-    exit 1
+
+# --- Locate and Update Client Libraries ---
+Write-Host "Locating client libraries in $DefaultParentDir..."
+
+$IncludeDirs = @()
+if (Test-Path -LiteralPath $DefaultParentDir) {
+    foreach ($Dir in Get-ChildItem -LiteralPath $DefaultParentDir -Directory) {
+        if (Test-Path -LiteralPath (Join-Path $Dir.FullName ".git")) {
+            $IncludeDirs += $Dir.FullName
+        }
+    }
+}
+
+if ($IncludeDirs.Count -eq 0) {
+    Write-Host "No client libraries found to update in $DefaultParentDir."
+    if ($InvalidContextDirs.Count -gt 0) {
+        foreach ($Err in $InvalidContextDirs) {
+            [Console]::Error.WriteLine("ERROR: $Err")
+        }
+    }
+    Write-Host "Update complete."
+    exit 0
+}
+
+Write-Host "Found $($IncludeDirs.Count) client libraries to update."
+
+foreach ($LibPath in $IncludeDirs) {
+    if ([string]::IsNullOrWhiteSpace($LibPath)) { continue }
+    
+    # Check if path exists
+    if (-not (Test-Path -LiteralPath $LibPath)) {
+        Write-Warning "Directory not found: $LibPath. Skipping."
+        continue
+    }
+
+    $AbsLibPath = (Get-Item -LiteralPath $LibPath).FullName
+
+    # Skip the main assistant workspace since we already updated it
+    if ($AbsLibPath -eq $ProjectDirAbs) {
+        continue
+    }
+
+    # Check if it is a git repository
+    if (-not (Test-Path -LiteralPath (Join-Path $AbsLibPath ".git"))) {
+        Write-Warning "Skipping non-git directory: $AbsLibPath"
+        continue
+    }
+
+    Write-Host "Updating repository at: $AbsLibPath..."
+    Push-Location $AbsLibPath
+    try {
+        git pull
+        if ($LASTEXITCODE -eq 0) {
+             Write-Host "Successfully updated $AbsLibPath."
+        } else {
+             Write-Error "ERROR: Failed to update $AbsLibPath"
+             exit 1 
+        }
+    }
+    finally {
+        Pop-Location
+    }
 }
 
 if ($InvalidContextDirs.Count -gt 0) {

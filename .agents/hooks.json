@@ -1,0 +1,17 @@
+{
+  "initialize-env": {
+    "enabled": true,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 hooks/check_github_version.py",
+        "timeout": 30
+      },
+      {
+        "type": "command",
+        "command": "python3 hooks/configure_environment.py",
+        "timeout": 30
+      }
+    ]
+  }
+}

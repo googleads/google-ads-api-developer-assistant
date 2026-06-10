@@ -1,6 +1,0 @@
-{
-  "name": "google-ads-api-developer-assistant",
-  "version": "2.3.0",
-  "contextFileName": "GEMINI.md",
-  "description": "For Google Ads API Developers. From natural language; generate code, troubleshoot, optimize queries, and explain API concepts and best practices."
-}

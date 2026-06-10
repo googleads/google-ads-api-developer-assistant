@@ -35,11 +35,6 @@ try {
     Set-Content -Path (Join-Path $FakeBin "git") -Value "#!/bin/bash`nif [[ `"`$1`" == `"rev-parse`" ]]; then echo `"$FakeProject`"; else echo `"Mock git`"; fi"
     if ($IsLinux) { chmod +x (Join-Path $FakeBin "git") }
 
-    # gemini mock
-    $UninstallLog = Join-Path $TestTmpDir "uninstall_log.txt"
-    Set-Content -Path (Join-Path $FakeBin "gemini") -Value "#!/bin/bash`necho `"MOCK: gemini `$*`" >> `"$UninstallLog`""
-    if ($IsLinux) { chmod +x (Join-Path $FakeBin "gemini") }
-
     # 2. Setup Fake Project
     Set-Content -Path (Join-Path $FakeProject "some_file.txt") -Value "test"
 
@@ -63,12 +58,6 @@ try {
         throw "FAIL: project directory still exists"
     } else {
         Write-Host "PASS: Directory removed"
-    }
-
-    if (Get-Content $UninstallLog | Select-String "extensions uninstall google-ads-api-developer-assistant") {
-        Write-Host "PASS: gemini extensions uninstall called"
-    } else {
-        throw "FAIL: gemini extensions uninstall NOT called"
     }
 
     Write-Host "ALL POWERSHELL UNINSTALL TESTS PASSED"

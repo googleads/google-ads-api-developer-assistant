@@ -15,8 +15,7 @@
 # limitations under the License.
 
 # Description:
-#   This script uninstalls the Google Ads API Developer Assistant extension
-#   and removes the local project directory.
+#   This script uninstalls the Google Ads API Developer Assistant and removes the local project directory.
 
 set -eu
 
@@ -26,7 +25,7 @@ if ! PROJECT_DIR_ABS=$(git rev-parse --show-toplevel 2>/dev/null); then
   exit 1
 fi
 
-echo "This will uninstall the Google Ads API Developer Assistant extension"
+echo "This will uninstall the Google Ads API Developer Assistant"
 echo "and DELETE the entire directory: ${PROJECT_DIR_ABS}"
 read -p "Are you sure you want to proceed? (Y/n): " confirm
 
@@ -35,12 +34,6 @@ if [[ ! "${confirm}" =~ ^[Yy]$ ]]; then
   exit 0
 fi
 
-if command -v gemini &> /dev/null; then
-  echo "Uninstalling Gemini extension..."
-  gemini extensions uninstall "google-ads-api-developer-assistant" || echo "WARN: Extension was not registered or failed to uninstall. Continuing..."
-else
-  echo "WARN: 'gemini' command not found. Skipping extension uninstallation."
-fi
 
 echo "Removing project directory: ${PROJECT_DIR_ABS}..."
 # Use a temporary script to remove the directory because the current script is inside it

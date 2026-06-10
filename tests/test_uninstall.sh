@@ -41,13 +41,6 @@ fi
 EOF
 chmod +x "${FAKE_HOME}/bin/git"
 
-# Create mock gemini
-cat > "${FAKE_HOME}/bin/gemini" <<EOF
-#!/bin/bash
-echo "MOCK: gemini \$*" >> "${TEST_TMP_DIR}/uninstall_log.txt"
-EOF
-chmod +x "${FAKE_HOME}/bin/gemini"
-
 # 2. Setup "Project" in Mock Dir
 cd "${FAKE_PROJECT}"
 touch "some_file.txt"
@@ -81,14 +74,5 @@ if [[ -d "${FAKE_PROJECT}" ]]; then
     exit 1
 fi
 echo "PASS: Directory removed"
-
-# Check if gemini uninstall was called
-if grep -q "gemini extensions uninstall google-ads-api-developer-assistant" "${TEST_TMP_DIR}/uninstall_log.txt"; then
-    echo "PASS: gemini extensions uninstall called"
-else
-    echo "FAIL: gemini extensions uninstall NOT called"
-    cat "${TEST_TMP_DIR}/uninstall_log.txt"
-    exit 1
-fi
 
 echo "ALL BASH UNINSTALL TESTS PASSED"

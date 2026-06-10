@@ -15,14 +15,14 @@
 import sys
 import os
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-# Add .gemini/hooks to sys.path
+# Add .agents/hooks to sys.path
 script_dir = os.path.dirname(os.path.abspath(__file__))
-hooks_dir = os.path.join(script_dir, "../.gemini/hooks")
+hooks_dir = os.path.join(script_dir, "../.agents/hooks")
 sys.path.append(hooks_dir)
 
-import configure_environment
+import configure_environment  # noqa: E402
 
 class TestCustomConfig(unittest.TestCase):
 
