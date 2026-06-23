@@ -182,6 +182,7 @@ When generating diagnostic reports:
 - **GAQL:** Use `sql` blocks.
 - **Transparency:** Always `read_file` any content written to `saved/` and display it to the user.
 - **Report Output:** When executing report-type queries, always print the retrieved results to the console (stdout) in a structured table format.
+- **Class and File Separation**: Do not refer to python source files (e.g., `asset.py`) as "objects" or "classes". Refer to the class name (e.g., the `Asset` class) and its definition file (e.g., `asset.py`) separately and explicitly.
 
 #### 6.3. Disambiguation
 - **AI Max:** Refers to "AI Max for Search campaigns", NOT "Performance Max" campaigns.
