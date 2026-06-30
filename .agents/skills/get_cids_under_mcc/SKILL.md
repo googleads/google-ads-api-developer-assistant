@@ -5,27 +5,61 @@ description: Retrieves a list of all child customer account IDs (CIDs) under a g
 
 # Get CIDs Under MCC
 
- Retrieves all child accounts under a specified Google Ads Manager Account (MCC).
+Use this skill to retrieve the hierarchy of child accounts under a Google Ads Manager Account (MCC). This is useful when you need to perform operations across multiple client accounts or understand the account structure.
 
-## Usage
+## Protocol
 
-1. **Prompt User**: If the MCC account ID was not provided in the initial request, prompt the user to provide their MCC account ID.
-2. **Execute Script**: Once the MCC account ID is obtained, run the following command:
+1.  **Identify MCC ID:**
+    *   Search the session context or user prompt for the Manager Account ID (MCC).
+    *   If not explicitly provided, check if the default ID in `customer_id.txt` is a Manager Account.
+    *   If still undetermined, ask the user to provide the MCC ID before proceeding.
 
-```bash
-./.venv/bin/python3 .agents/skills/get_cids_under_mcc/scripts/get_cids_under_mcc.py --customer_id <mcc_account_id> --api_version <api_version>
-```
+2.  **Execute Retrieval:** Run the retrieval script in the sequestered virtual environment. **Always** pass the `--customer_id` and `--api_version` arguments to avoid interactive prompts.
 
-### Optional Flags
-- `--save_csv`: Saves the results directly to a CSV file in `saved/csv/`.
-- `--print_cids`: Prints the detailed table of child customer accounts (Customer ID, Level, Is MCC) to the console.
+    *   **To get a summary count only:**
+        ```bash
+        ./.venv/bin/python3 .agents/skills/get_cids_under_mcc/scripts/get_cids_under_mcc.py --customer_id <mcc_id> --api_version <api_version>
+        ```
 
-```bash
-./.venv/bin/python3 .agents/skills/get_cids_under_mcc/scripts/get_cids_under_mcc.py --customer_id <mcc_account_id> --api_version <api_version> --save_csv --print_cids
-```
+    *   **To print the detailed list to console:**
+        ```bash
+        ./.venv/bin/python3 .agents/skills/get_cids_under_mcc/scripts/get_cids_under_mcc.py --customer_id <mcc_id> --api_version <api_version> --print_cids
+        ```
 
-### Output Handling
-- **Default Output (neither flag)**: Prints a summary count of child accounts (e.g. `Found X child accounts under MCC Y.`).
-- **Console Output (with `--print_cids`)**: Displays a formatted table of child accounts.
-- **CSV Output (with `--save_csv`)**: Saves the results to `saved/csv/cids_under_mcc_<mcc_account_id>.csv` and prints a success confirmation.
-- **Failure (Exit Code 1)**: Review the gRPC error output or invalid customer ID message, correct the input, and retry.
+    *   **To save the list to a CSV file (saved in `saved/csv/`):**
+        ```bash
+        ./.venv/bin/python3 .agents/skills/get_cids_under_mcc/scripts/get_cids_under_mcc.py --customer_id <mcc_id> --api_version <api_version> --save_csv
+        ```
+
+3.  **Output Processing:**
+    *   If `--print_cids` was used, parse the console output to get the CIDs, their depth level, and whether they are sub-managers.
+    *   If `--save_csv` was used, verify the file was created at `saved/csv/cids_under_mcc_<mcc_id>.csv`.
+
+---
+
+## Examples
+
+### Example 1: Printing CIDs to Console
+*   **Command:**
+    ```bash
+    ./.venv/bin/python3 .agents/skills/get_cids_under_mcc/scripts/get_cids_under_mcc.py --customer_id 1234567890 --api_version v17 --print_cids
+    ```
+*   **Output:**
+    ```
+    Child accounts under MCC 1234567890:
+    Customer ID     Level   Is MCC  
+    --------------------------------
+    2345678901      1       No      
+    3456789012      1       Yes     
+    4567890123      2       No      
+    ```
+
+### Example 2: Saving to CSV
+*   **Command:**
+    ```bash
+    ./.venv/bin/python3 .agents/skills/get_cids_under_mcc/scripts/get_cids_under_mcc.py --customer_id 1234567890 --api_version v17 --save_csv
+    ```
+*   **Output:**
+    ```
+    SUCCESS: Results saved to /usr/local/google/home/rwh/google-ads-api-developer-assistant/saved/csv/cids_under_mcc_1234567890.csv
+    ```
