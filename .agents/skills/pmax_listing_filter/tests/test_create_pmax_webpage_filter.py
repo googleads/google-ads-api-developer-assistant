@@ -32,6 +32,7 @@ from google.ads.googleads.errors import GoogleAdsException
 class TestCreatePMaxWebpageFilter(unittest.TestCase):
     def setUp(self) -> None:
         self.mock_client = mock.create_autospec(GoogleAdsClient, instance=True)
+        self.mock_client.enums = mock.MagicMock()
         self.mock_service = mock.MagicMock()
         self.mock_client.get_service.return_value = self.mock_service
 
