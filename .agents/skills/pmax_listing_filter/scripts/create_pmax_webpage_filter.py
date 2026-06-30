@@ -51,15 +51,15 @@ def create_pmax_webpage_filter(
     parent_filter.asset_group = client.get_service("AssetGroupService").asset_group_path(
         customer_id, asset_group_id
     )
-    parent_filter.type_ = client.get_type(
-        "ListingGroupFilterTypeEnum"
-    ).ListingGroupFilterType.SUBDIVISION
-    parent_filter.vertical = client.get_type(
-        "ListingGroupFilterVerticalEnum"
-    ).ListingGroupFilterVertical.WEBPAGE
+    parent_filter.type_ = (
+        client.enums.ListingGroupFilterTypeEnum.SUBDIVISION
+    )
+    parent_filter.listing_source = (
+        client.enums.ListingGroupFilterListingSourceEnum.WEBPAGE
+    )
     # Temporary resource name for parenting child nodes in the same transaction
     parent_resource_name = asset_group_listing_filter_service.asset_group_listing_group_filter_path(
-        customer_id, asset_group_id, "root"
+        customer_id, asset_group_id, "-1"
     )
     parent_filter.resource_name = parent_resource_name
 
@@ -68,23 +68,16 @@ def create_pmax_webpage_filter(
     child_filter = child_filter_op.create
     child_filter.asset_group = parent_filter.asset_group
     child_filter.parent_listing_group_filter = parent_resource_name
-    child_filter.type_ = client.get_type(
-        "ListingGroupFilterTypeEnum"
-    ).ListingGroupFilterType.UNIT_INCLUDED
-    child_filter.vertical = parent_filter.vertical
+    child_filter.type_ = (
+        client.enums.ListingGroupFilterTypeEnum.UNIT_INCLUDED
+    )
+    child_filter.listing_source = parent_filter.listing_source
 
     # Set Webpage condition: URL contains the exclusion rule
     condition = child_filter.case_value.webpage
-    condition.conditions.append(
-        client.get_type("WebpageConditionInfo")
-    )
-    condition.conditions[0].operand = client.get_type(
-        "WebpageConditionOperandEnum"
-    ).WebpageConditionOperand.URL
-    condition.conditions[0].operator = client.get_type(
-        "WebpageConditionOperatorEnum"
-    ).WebpageConditionOperator.CONTAINS
-    condition.conditions[0].argument = url_exclusion
+    webpage_condition = client.get_type("ListingGroupFilterDimension").WebpageCondition()
+    webpage_condition.url_contains = url_exclusion
+    condition.conditions.append(webpage_condition)
 
     # Build transaction operations
     operations = [parent_filter_op, child_filter_op]
