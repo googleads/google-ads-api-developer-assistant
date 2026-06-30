@@ -1,16 +1,37 @@
 ---
 name: get-extension-version
-description: Extracts the version from agent.json and makes it available during the session.
+description: Retrieves the current version of the Google Ads API Developer Assistant from agent.json.
 ---
 
 # Get Extension Version
 
-Extracts the version from `agent.json`.
+Use this skill to retrieve the version of the Google Ads API Developer Assistant. This is useful when diagnosing issues, verifying the environment, or when the user explicitly asks for the version.
 
-## Usage
+## Protocol
 
-Run the python script to get the version:
+1.  **Execution:** Run the version extraction script in the sequestered virtual environment:
 
-```bash
-./.venv/bin/python3 .agents/skills/ext_version/scripts/get_extension_version.py
-```
+    ```bash
+    ./.venv/bin/python3 .agents/skills/ext_version/scripts/get_extension_version.py
+    ```
+
+2.  **Output Handling:**
+    *   The script will print the version string (e.g., `3.0.0`) to `stdout`.
+    *   If `agent.json` is missing or invalid, it will print an error to `stderr` and exit with code `1`.
+
+## When to Use
+
+*   When the user asks "What version are you?" or "What is the assistant version?".
+*   Before generating diagnostic reports (to include the version in the report header as per `AGENTS.md` Section 5.2).
+*   When troubleshooting environment-specific issues.
+
+## Example
+
+*   **Command:**
+    ```bash
+    ./.venv/bin/python3 .agents/skills/ext_version/scripts/get_extension_version.py
+    ```
+*   **Output:**
+    ```
+    3.0.0
+    ```
