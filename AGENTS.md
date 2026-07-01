@@ -182,7 +182,9 @@ When generating diagnostic reports:
 - **GAQL:** Use `sql` blocks.
 - **Transparency:** Always `read_file` any content written to `saved/` and display it to the user.
 - **Report Output:** When executing report-type queries, always print the retrieved results to the console (stdout) in a structured table format.
-- **Class, Resource, and File Separation**: Do not refer to Google Ads API resources (e.g., the `ad_group_ad` resource) or classes (e.g., the `Ad` class) as python files (e.g., `ad.py`). Always refer to resources, classes, and Python source files separately and explicitly.
+- **Class, Resource, and File Separation**: Do not refer to Google Ads API resources (e.g., the `ad_group_ad` resource) or classes (e.g., the `Ad` or `SharedSet` class) as Python files (e.g., `ad.py` or `shared_set.py`). Always refer to resources, classes, and Python source files separately and explicitly. When discussing an API resource, refer to it strictly by its API resource or class name (e.g., `SharedSet`), not the file name. Under no circumstances should Python (.py) source files be referred to as "resources" or "containers"; these terms are strictly reserved for Google Ads API resources and logical data containers.
+  - **Constraint on Linking**: In high-level conceptual explanations or documentation (such as the `/explain` command outputs), do NOT link API resources or concepts to client library Python source files (e.g., do not link `SharedSet` to `shared_set.py`), as this confuses the conceptual API resource with its client library file wrapper. Only link to files when the user explicitly asks for code implementations, code references, or file structures.
+
 
 #### 6.3. Disambiguation
 - **AI Max:** Refers to "AI Max for Search campaigns", NOT "Performance Max" campaigns.
