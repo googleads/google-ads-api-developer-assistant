@@ -106,6 +106,7 @@ Every Python script generated MUST follow this automated linting pipeline:
 2.  **Lint:** Run `./.venv/bin/python3 -m ruff check --fix saved/code/tmp_lint.py`.
 3.  **Read:** Read the fixed code from the temporary file.
 4.  **Finalize:** Use the fixed code in the `write_file` or `run_shell_command` tool and delete the temporary file.
+5.  **Type Annotations**: Always use type annotations for function/method parameters, return types, and variables when generating Python code.
 
 #### 3.2. Error Handling (Python)
 Catch `GoogleAdsException` as `ex`. Iterate over `ex.failure.errors`.
