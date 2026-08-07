@@ -1,0 +1,4 @@
+{
+  "name": "google-ads-api-developer-assistant",
+  "description": "Exposes expert Google Ads API capabilities: GAQL static analysis & live dry-runs, Protobuf object inspection, conversion diagnostics, PMax webpage filters, MCC account hierarchy retrieval, interactive tutorial, and Ruff-linted Python code generation."
+}

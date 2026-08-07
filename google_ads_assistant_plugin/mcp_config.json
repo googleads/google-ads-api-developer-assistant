@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "google-ads-api-assistant": {
+      "command": "python3",
+      "args": ["-m", "google_ads_assistant_mcp"],
+      "env": {
+        "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "~/.config/google-ads/google-ads.yaml"
+      }
+    }
+  }
+}

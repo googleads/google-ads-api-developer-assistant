@@ -1,3 +1,8 @@
+* 3.1.0
+- Optimized skills
+- Added rules to distinguish between concrete objects and their representation in Python files.
+- Added plugin
+
 * 3.0.0
 - Fixed a breaking bug in install.ps1 and tests/test_install.ps1 where legacy settings.json references caused the Windows installation to crash.
 - Changed the assistant's role description in AGENTS.md to "Expert Developer for the Google Ads API".
