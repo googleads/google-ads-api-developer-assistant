@@ -73,9 +73,31 @@ if [[ ! -d "${FAKE_PROJECT}" ]]; then
 fi
 echo "PASS: Cancellation respected"
 
-# --- Test Case 4: Run uninstall.sh --type plugin with cancellation and success ---
+# --- Test Case 4: Run uninstall.sh --type project --java (Partial Removal) ---
+mkdir -p "${FAKE_PROJECT}/client_libs/google-ads-java"
+mkdir -p "${FAKE_PROJECT}/client_libs/google-ads-python"
+
+echo "--- Running uninstall.sh --type project --java (Partial Removal) ---"
+if ! bash "${UNINSTALL_SCRIPT_PATH}" --type project --java; then
+    echo "FAIL: uninstall.sh failed with --type project --java"
+    exit 1
+fi
+
+if [[ -d "${FAKE_PROJECT}/client_libs/google-ads-java" ]]; then
+    echo "FAIL: google-ads-java was not removed from project"
+    exit 1
+fi
+
+if [[ ! -d "${FAKE_PROJECT}/client_libs/google-ads-python" ]]; then
+    echo "FAIL: google-ads-python was unexpectedly removed from project"
+    exit 1
+fi
+echo "PASS: Project library partial removal successful"
+
+# --- Test Case 5: Run uninstall.sh --type plugin with cancellation and partial removal ---
 FAKE_PLUGIN_DIR="${FAKE_HOME}/.gemini/config/plugins/google_ads_assistant_plugin"
-mkdir -p "${FAKE_PLUGIN_DIR}"
+mkdir -p "${FAKE_PLUGIN_DIR}/client_libs/google-ads-java"
+mkdir -p "${FAKE_PLUGIN_DIR}/client_libs/google-ads-python"
 touch "${FAKE_PLUGIN_DIR}/plugin.json"
 
 echo "--- Running uninstall.sh --type plugin with 'n' (Cancellation) ---"
@@ -90,6 +112,24 @@ if [[ ! -d "${FAKE_PLUGIN_DIR}" ]]; then
 fi
 echo "PASS: Plugin cancellation respected"
 
+echo "--- Running uninstall.sh --type plugin --java (Partial Removal) ---"
+if ! bash "${UNINSTALL_SCRIPT_PATH}" --type plugin --java; then
+    echo "FAIL: uninstall.sh failed with --type plugin --java"
+    exit 1
+fi
+
+if [[ -d "${FAKE_PLUGIN_DIR}/client_libs/google-ads-java" ]]; then
+    echo "FAIL: google-ads-java was not removed from plugin"
+    exit 1
+fi
+
+if [[ ! -d "${FAKE_PLUGIN_DIR}/client_libs/google-ads-python" ]]; then
+    echo "FAIL: google-ads-python was unexpectedly removed from plugin"
+    exit 1
+fi
+echo "PASS: Plugin library partial removal successful"
+
+# --- Test Case 6: Run uninstall.sh --type plugin --yes (Full Removal) ---
 echo "--- Running uninstall.sh --type plugin with --yes (Success) ---"
 if ! bash "${UNINSTALL_SCRIPT_PATH}" --type plugin --yes; then
     echo "FAIL: uninstall.sh failed with --type plugin --yes"
@@ -102,7 +142,7 @@ if [[ -d "${FAKE_PLUGIN_DIR}" ]]; then
 fi
 echo "PASS: Plugin directory removed"
 
-# --- Test Case 5: Run uninstall.sh --type project with 'Y' (Success) ---
+# --- Test Case 7: Run uninstall.sh --type project with 'Y' (Full Removal) ---
 echo "--- Running uninstall.sh --type project with 'Y' (Success) ---"
 if ! echo "Y" | bash "${UNINSTALL_SCRIPT_PATH}" --type project; then
     echo "FAIL: uninstall.sh failed"
