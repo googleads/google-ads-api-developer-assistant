@@ -4,16 +4,28 @@
 
 .DESCRIPTION
     This script performs the following steps:
-    1. Updates the 'google-ads-api-developer-assistant' repository (git pull).
-    2. Clones or updates selected client libraries in 'client_libs/'.
-    3. If -ContextPath is provided, registers the specified directory in the project configuration.
-    4. Updates each found client library repository (git pull).
+    1. If -Type project:
+       a. Updates the 'google-ads-api-developer-assistant' repository (git pull).
+       b. Clones or updates selected client libraries in 'client_libs/'.
+       c. If -ContextPath is provided, registers the specified directory in the project configuration.
+       d. Updates each found client library repository in 'client_libs/' (git pull).
+    2. If -Type plugin:
+       a. Locates the plugin directory at $env:USERPROFILE\.gemini\config\plugins\google_ads_assistant_plugin.
+       b. Clones any newly requested client libraries into the plugin's 'client_libs/'.
+       c. Updates each found client library repository in the plugin's 'client_libs/' (git pull).
+
+.PARAMETER Type
+    Required. Update type: 'project' or 'plugin'.
 
 .PARAMETER ContextPath
-    Comma-separated list of directories to add to the project configuration for context.
+    Comma-separated list of directories to add to the project configuration for context (project mode only).
 #>
 
 param(
+    [Parameter(Mandatory=$true, Position=0, HelpMessage="Update type: 'project' or 'plugin'")]
+    [ValidateSet("project", "plugin", IgnoreCase=$true)]
+    [string]$Type,
+
     [switch]$Python,
     [switch]$Php,
     [switch]$Ruby,
@@ -44,6 +56,26 @@ function Get-RepoName {
     }
 }
 
+function Set-LatestApiVersion {
+    param(
+        [string]$SearchDir,
+        [string]$TargetConfigDir
+    )
+    if (Test-Path -LiteralPath $SearchDir) {
+        $VersionDirs = Get-ChildItem -Directory -Path $SearchDir -Filter "v*" |
+            Where-Object { $_.Name -match "^v\d+$" } |
+            Sort-Object { [int]($_.Name.Substring(1)) }
+        if ($VersionDirs) {
+            $Latest = $VersionDirs[-1].Name
+            if (-not (Test-Path -LiteralPath $TargetConfigDir)) {
+                New-Item -ItemType Directory -Force -LiteralPath $TargetConfigDir | Out-Null
+            }
+            Set-Content -Path (Join-Path $TargetConfigDir "api_version.txt") -Value $Latest
+            Write-Host "Configured API version $Latest in $(Join-Path $TargetConfigDir 'api_version.txt')"
+        }
+    }
+}
+
 $ErrorActionPreference = "Stop"
 
 # --- Dependency Check ---
@@ -52,7 +84,98 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-# --- Project Directory Resolution ---
+$SpecifiedLangs = @()
+if ($Python) { $SpecifiedLangs += "python" }
+if ($Php)    { $SpecifiedLangs += "php" }
+if ($Ruby)   { $SpecifiedLangs += "ruby" }
+if ($Java)   { $SpecifiedLangs += "java" }
+if ($Dotnet) { $SpecifiedLangs += "dotnet" }
+
+# --- Plugin Update Branch ---
+if ($Type.ToLower() -eq "plugin") {
+    $GeminiPluginsDir = if ($env:USERPROFILE) {
+        Join-Path $env:USERPROFILE ".gemini\config\plugins"
+    } else {
+        Join-Path $HOME ".gemini\config\plugins"
+    }
+    $TargetPluginDir = Join-Path $GeminiPluginsDir "google_ads_assistant_plugin"
+
+    if (-not (Test-Path -LiteralPath $TargetPluginDir)) {
+        Write-Error "ERROR: Plugin directory '$TargetPluginDir' does not exist. Please run install.ps1 -Type plugin first."
+        exit 1
+    }
+
+    $PluginClientLibs = Join-Path $TargetPluginDir "client_libs"
+    if (-not (Test-Path -LiteralPath $PluginClientLibs)) {
+        New-Item -ItemType Directory -Force -LiteralPath $PluginClientLibs | Out-Null
+    }
+
+    if ($SpecifiedLangs.Count -gt 0) {
+        foreach ($Lang in $SpecifiedLangs) {
+            $RepoUrl = Get-RepoUrl $Lang
+            $RepoName = Get-RepoName $Lang
+            $LibPath = Join-Path $PluginClientLibs $RepoName
+
+            if (-not (Test-Path -LiteralPath $LibPath)) {
+                Write-Host "Library $RepoName not found in plugin. Cloning into $LibPath..."
+                git clone $RepoUrl $LibPath
+                if ($LASTEXITCODE -ne 0) { throw "Failed to clone $RepoUrl" }
+            }
+        }
+    }
+
+    Write-Host "Locating client libraries in $PluginClientLibs..."
+    $IncludeDirs = @()
+    if (Test-Path -LiteralPath $PluginClientLibs) {
+        foreach ($Dir in Get-ChildItem -LiteralPath $PluginClientLibs -Directory) {
+            if (Test-Path -LiteralPath (Join-Path $Dir.FullName ".git")) {
+                $IncludeDirs += $Dir.FullName
+            }
+        }
+    }
+
+    if ($IncludeDirs.Count -eq 0) {
+        Write-Host "No client libraries found to update in $PluginClientLibs."
+    } else {
+        Write-Host "Found $($IncludeDirs.Count) client libraries to update."
+        foreach ($LibPath in $IncludeDirs) {
+            if ([string]::IsNullOrWhiteSpace($LibPath)) { continue }
+            if (-not (Test-Path -LiteralPath $LibPath)) {
+                Write-Warning "Directory not found: $LibPath. Skipping."
+                continue
+            }
+            $AbsLibPath = (Get-Item -LiteralPath $LibPath).FullName
+            if (-not (Test-Path -LiteralPath (Join-Path $AbsLibPath ".git"))) {
+                Write-Warning "Skipping non-git directory: $AbsLibPath"
+                continue
+            }
+
+            Write-Host "Updating repository at: $AbsLibPath..."
+            Push-Location $AbsLibPath
+            try {
+                git pull
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "Successfully updated $AbsLibPath."
+                } else {
+                    Write-Error "ERROR: Failed to update $AbsLibPath"
+                    exit 1
+                }
+            }
+            finally {
+                Pop-Location
+            }
+        }
+    }
+
+    $PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
+    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
+
+    Write-Host "Plugin update complete."
+    exit 0
+}
+
+# --- Project Update Branch ---
+# Determine project root
 try {
     $ProjectDirAbs = git rev-parse --show-toplevel 2>$null
     if (-not $ProjectDirAbs) { throw "Not in a git repo" }
@@ -72,12 +195,9 @@ $CustomerIdFile = Join-Path $ProjectDirAbs "customer_id.txt"
 $TempCustomerIdFile = [System.IO.Path]::GetTempFileName()
 
 try {
-    # Backup customer_id.txt if it exists
     if (Test-Path -LiteralPath $CustomerIdFile) {
         Write-Host "Backing up $CustomerIdFile..."
         Copy-Item -LiteralPath $CustomerIdFile -Destination $TempCustomerIdFile -Force
-
-        # Reset local changes
         $GitStatus = git ls-files --error-unmatch $CustomerIdFile 2>$null
         if ($LASTEXITCODE -eq 0) {
              Write-Host "Resetting $CustomerIdFile to avoid merge conflicts..."
@@ -85,14 +205,12 @@ try {
         }
     }
 
-    # Update Repo
     git pull
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to update google-ads-api-developer-assistant."
     }
     Write-Host "Successfully updated google-ads-api-developer-assistant."
 
-    # Restore customer_id.txt
     if ((Test-Path -LiteralPath $TempCustomerIdFile) -and (Get-Item $TempCustomerIdFile).Length -gt 0) {
         Write-Host "Restoring preserved $CustomerIdFile..."
         Move-Item -LiteralPath $TempCustomerIdFile -Destination $CustomerIdFile -Force
@@ -117,13 +235,6 @@ finally {
 
 # --- Handle Specific Library Additions ---
 $InvalidContextDirs = @()
-$SpecifiedLangs = @()
-if ($Python) { $SpecifiedLangs += "python" }
-if ($Php)    { $SpecifiedLangs += "php" }
-if ($Ruby)   { $SpecifiedLangs += "ruby" }
-if ($Java)   { $SpecifiedLangs += "java" }
-if ($Dotnet) { $SpecifiedLangs += "dotnet" }
-
 $DefaultParentDir = Join-Path $ProjectDirAbs "client_libs"
 
 if ($SpecifiedLangs.Count -gt 0) {
@@ -163,7 +274,6 @@ if ($null -ne $ContextPath -and $ContextPath.Count -gt 0) {
         $AbsDir = (Get-Item -LiteralPath $Dir).FullName
         Write-Host "Registering context path: $AbsDir..."
         
-        # Resolve Python interpreter path
         $PythonExe = Join-Path $ProjectDirAbs ".venv\bin\python3"
         if (-not (Test-Path -LiteralPath $PythonExe)) {
             $PythonExe = Join-Path $ProjectDirAbs ".venv\Scripts\python.exe"
@@ -210,21 +320,16 @@ Write-Host "Found $($IncludeDirs.Count) client libraries to update."
 
 foreach ($LibPath in $IncludeDirs) {
     if ([string]::IsNullOrWhiteSpace($LibPath)) { continue }
-    
-    # Check if path exists
     if (-not (Test-Path -LiteralPath $LibPath)) {
         Write-Warning "Directory not found: $LibPath. Skipping."
         continue
     }
 
     $AbsLibPath = (Get-Item -LiteralPath $LibPath).FullName
-
-    # Skip the main assistant workspace since we already updated it
     if ($AbsLibPath -eq $ProjectDirAbs) {
         continue
     }
 
-    # Check if it is a git repository
     if (-not (Test-Path -LiteralPath (Join-Path $AbsLibPath ".git"))) {
         Write-Warning "Skipping non-git directory: $AbsLibPath"
         continue
@@ -251,5 +356,9 @@ if ($InvalidContextDirs.Count -gt 0) {
         [Console]::Error.WriteLine("ERROR: $Err")
     }
 }
+
+# Pre-seed latest API version in project config
+$ProjectPythonDir = Join-Path $DefaultParentDir "google-ads-python\google\ads\googleads"
+Set-LatestApiVersion -SearchDir $ProjectPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
 
 Write-Host "Update complete."

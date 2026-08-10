@@ -85,10 +85,10 @@ try {
     # Move current location to FakeProject to run update.ps1
     Push-Location $FakeProject
 
-    # --- Test Case 1: Default update.ps1 ---
-    Write-Host "--- Test Case 1: Default Update ---"
-    & .\update.ps1
-    if ($LASTEXITCODE -ne 0) { throw "update.ps1 failed" }
+    # --- Test Case 1: Default update.ps1 with -Type project ---
+    Write-Host "--- Test Case 1: Default Project Update ---"
+    & .\update.ps1 -Type project
+    if ($LASTEXITCODE -ne 0) { throw "update.ps1 -Type project failed" }
     Write-Host "PASS: Default run successful"
 
     # --- Test Case 2: Run update.ps1 with valid ContextPath ---
@@ -96,7 +96,7 @@ try {
     $ValidDir = Join-Path $TestTmpDir "valid_dir"
     New-Item -ItemType Directory -Force -Path $ValidDir | Out-Null
     
-    & .\update.ps1 -ContextPath $ValidDir
+    & .\update.ps1 -Type project -ContextPath $ValidDir
     if ($LASTEXITCODE -ne 0) { throw "update.ps1 failed with ContextPath" }
 
     $Config = Get-Content -Raw $ProjectConfigFile | ConvertFrom-Json
@@ -113,7 +113,7 @@ try {
     $InvalidDir = Join-Path $TestTmpDir "non_existent_dir"
     
     try {
-        & .\update.ps1 -ContextPath $InvalidDir
+        & .\update.ps1 -Type project -ContextPath $InvalidDir
         throw "FAIL: update.ps1 should have failed with non-existent path"
     }
     catch {
@@ -127,12 +127,33 @@ try {
     $InvalidDir2 = Join-Path $TestTmpDir "non_existent_dir2"
 
     try {
-        & .\update.ps1 -ContextPath "$ValidDir2,$InvalidDir2"
+        & .\update.ps1 -Type project -ContextPath "$ValidDir2,$InvalidDir2"
         throw "FAIL: update.ps1 should have failed with mixed list"
     }
     catch {
         Write-Host "PASS: mixed list failed as expected"
     }
+
+    # --- Setup Fake Plugin for Plugin Tests ---
+    $FakePluginDir = Join-Path $FakeHome ".gemini\config\plugins\google_ads_assistant_plugin"
+    $FakePluginClientLibs = Join-Path $FakePluginDir "client_libs\google-ads-python"
+    New-Item -ItemType Directory -Force -Path (Join-Path $FakePluginClientLibs ".git") | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $FakePluginClientLibs "google\ads\googleads\v25") | Out-Null
+
+    # --- Test Case 5: Run update.ps1 -Type plugin ---
+    Write-Host "--- Test Case 5: Plugin Update ---"
+    & .\update.ps1 -Type plugin
+    if ($LASTEXITCODE -ne 0) { throw "update.ps1 -Type plugin failed" }
+    Write-Host "PASS: Plugin update successful"
+
+    # --- Test Case 6: Run update.ps1 -Type plugin -Java ---
+    Write-Host "--- Test Case 6: Plugin Add Java ---"
+    & .\update.ps1 -Type plugin -Java
+    if ($LASTEXITCODE -ne 0) { throw "update.ps1 -Type plugin -Java failed" }
+    if (-not (Test-Path (Join-Path $FakePluginDir "client_libs\google-ads-java\.git"))) {
+        throw "FAIL: google-ads-java was not cloned into plugin structure"
+    }
+    Write-Host "PASS: google-ads-java added to plugin structure"
 
     Pop-Location
     Write-Host "ALL TESTS PASSED"

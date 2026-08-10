@@ -98,13 +98,27 @@ cat > "${FAKE_HOME}/.gemini/config/projects/6039b1bb-7a20-43ad-b2b7-e64ce62a74ce
 }
 EOF
 
-# --- Test Case 1: Run update.sh (no flags) ---
-echo "--- Test Case 1: Default Update ---"
-(cd "${FAKE_PROJECT}" && bash update.sh)
+# --- Test Case 1: Run update.sh without --type (Should Fail) ---
+echo "--- Test Case 1: Missing --type (Expected Failure) ---"
+if (cd "${FAKE_PROJECT}" && bash update.sh 2>/dev/null); then
+    echo "FAIL: update.sh should have failed when missing --type"
+    exit 1
+fi
 
-# --- Test Case 2: Run update.sh --php (Add new library) ---
-echo "--- Test Case 2: Add PHP library ---"
-(cd "${FAKE_PROJECT}" && bash update.sh --php)
+# --- Test Case 2: Run update.sh with invalid --type (Should Fail) ---
+echo "--- Test Case 2: Invalid --type (Expected Failure) ---"
+if (cd "${FAKE_PROJECT}" && bash update.sh --type invalid 2>/dev/null); then
+    echo "FAIL: update.sh should have failed with invalid --type"
+    exit 1
+fi
+
+# --- Test Case 3: Run update.sh --type project (no extra flags) ---
+echo "--- Test Case 3: Project Default Update ---"
+(cd "${FAKE_PROJECT}" && bash update.sh --type project)
+
+# --- Test Case 4: Run update.sh --type project --php (Add new library) ---
+echo "--- Test Case 4: Project Add PHP library ---"
+(cd "${FAKE_PROJECT}" && bash update.sh --type project --php)
 
 # Check if php cloned
 if [[ ! -d "${FAKE_PROJECT}/client_libs/google-ads-php/.git" ]]; then
@@ -112,17 +126,16 @@ if [[ ! -d "${FAKE_PROJECT}/client_libs/google-ads-php/.git" ]]; then
     exit 1
 fi
 
-# --- Test Case 3: Run update.sh --php (Already exists) ---
-echo "--- Test Case 3: Update existing PHP library ---"
-# We just run it again, it should not clone but pull (mock handled)
-(cd "${FAKE_PROJECT}" && bash update.sh --php)
-echo "PASS: update.sh --php ran successfully with existing lib"
+# --- Test Case 5: Run update.sh --type project --php (Already exists) ---
+echo "--- Test Case 5: Project Update existing PHP library ---"
+(cd "${FAKE_PROJECT}" && bash update.sh --type project --php)
+echo "PASS: update.sh --type project --php ran successfully with existing lib"
 
-# --- Test Case 4: Run update.sh with valid context path ---
-echo "--- Test Case 4: Add valid context path ---"
+# --- Test Case 6: Run update.sh --type project with valid context path ---
+echo "--- Test Case 6: Add valid context path ---"
 VALID_DIR="${TEST_DIR}/valid_dir"
 mkdir -p "${VALID_DIR}"
-(cd "${FAKE_PROJECT}" && bash update.sh --context_path "${VALID_DIR}")
+(cd "${FAKE_PROJECT}" && bash update.sh --type project --context_path "${VALID_DIR}")
 
 # Verify it was added to json
 if ! grep -q "valid_dir" "${FAKE_HOME}/.gemini/config/projects/6039b1bb-7a20-43ad-b2b7-e64ce62a74ce.json"; then
@@ -131,13 +144,34 @@ if ! grep -q "valid_dir" "${FAKE_HOME}/.gemini/config/projects/6039b1bb-7a20-43a
 fi
 echo "PASS: valid context path added"
 
-# --- Test Case 5: Run update.sh with invalid context path ---
-echo "--- Test Case 5: Add invalid context path ---"
+# --- Test Case 7: Run update.sh --type project with invalid context path ---
+echo "--- Test Case 7: Add invalid context path ---"
 INVALID_DIR="${TEST_DIR}/non_existent_dir"
-if (cd "${FAKE_PROJECT}" && bash update.sh --context_path "${INVALID_DIR}" 2>/dev/null); then
+if (cd "${FAKE_PROJECT}" && bash update.sh --type project --context_path "${INVALID_DIR}" 2>/dev/null); then
     echo "FAIL: update.sh succeeded with non-existent context path"
     exit 1
 fi
 echo "PASS: invalid context path rejected"
+
+# --- Setup Fake Plugin for Plugin Tests ---
+FAKE_PLUGIN_DIR="${FAKE_HOME}/.gemini/config/plugins/google_ads_assistant_plugin"
+mkdir -p "${FAKE_PLUGIN_DIR}/client_libs/google-ads-python/.git"
+mkdir -p "${FAKE_PLUGIN_DIR}/client_libs/google-ads-python/google/ads/googleads/v25"
+
+# --- Test Case 8: Run update.sh --type plugin ---
+echo "--- Test Case 8: Plugin Default Update ---"
+(cd "${FAKE_PROJECT}" && bash update.sh --type plugin)
+echo "PASS: update.sh --type plugin ran successfully"
+
+# --- Test Case 9: Run update.sh --type plugin --java (Add new library to plugin) ---
+echo "--- Test Case 9: Plugin Add Java library ---"
+(cd "${FAKE_PROJECT}" && bash update.sh --type plugin --java)
+
+# Check if java cloned into plugin
+if [[ ! -d "${FAKE_PLUGIN_DIR}/client_libs/google-ads-java/.git" ]]; then
+    echo "FAIL: google-ads-java was not cloned into plugin structure"
+    exit 1
+fi
+echo "PASS: google-ads-java added to plugin structure"
 
 echo "ALL TESTS PASSED"

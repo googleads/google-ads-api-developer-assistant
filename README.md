@@ -200,9 +200,28 @@ The Assistant is designed to generate code for mutate operations (e.g., creating
 ## Maintenance
 
 We will periodically release updates to the client libraries.
-To ensure you are using the latest versions, run `update.sh` (Linux/macOS) or `update.ps1` (Windows) when a new version of the API is published or a new version of a client library is released.
+To ensure you are using the latest versions, run the update script specifying the mandatory `--type` (`project` or `plugin`):
 
-Starting with release 2.3.0, you can use the `--context_path` argument (Linux/macOS) or `-ContextPath` parameter (Windows) with the update scripts to add additional directories to your context (e.g., your own codebase).
+*   **Linux/macOS:**
+    *   To update the standalone project and its client libraries:
+        ```bash
+        ./update.sh --type project
+        ```
+    *   To update all client libraries in the installed plugin structure:
+        ```bash
+        ./update.sh --type plugin
+        ```
+*   **Windows:**
+    *   To update the standalone project and its client libraries:
+        ```powershell
+        .\update.ps1 -Type project
+        ```
+    *   To update all client libraries in the installed plugin structure:
+        ```powershell
+        .\update.ps1 -Type plugin
+        ```
+
+Starting with release 2.3.0, you can use the `--context_path` argument (Linux/macOS) or `-ContextPath` parameter (Windows) with the update scripts in project mode to add additional directories to your context (e.g., your own codebase).
 
 ## Uninstallation
 
