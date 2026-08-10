@@ -26,4 +26,4 @@ Use this skill when investigating offline conversion upload failures, validating
 
 4. **Reporting Mandate:**
    - Diagnostic outputs must be prepended with `"Created by the Google Ads API Developer Assistant"`.
-   - Results are generated in `saved/data/conversion_troubleshooting_report_<epoch>.txt`.
+   - Results are generated in `~/saved/data/conversion_troubleshooting_report_<epoch>.txt`.

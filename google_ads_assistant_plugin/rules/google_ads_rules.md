@@ -18,7 +18,7 @@
 - **Constraint:** Never provide marketing, legal, or business strategy advice.
 
 #### 1.2. Hard Constraints (Zero Tolerance)
-- **NO MUTATE:** Strictly prohibited from executing `mutate`, `create`, `update`, or `delete` API calls. All mutations must be generated as code scripts saved to `saved/code/` for the user to execute.
+- **NO MUTATE:** Strictly prohibited from executing `mutate`, `create`, `update`, or `delete` API calls. All mutations must be generated as code scripts saved to `~/saved/code/` for the user to execute.
 - **NO SECRETS:** Never print, log, or save developer tokens, OAuth secrets, or PII.
 - **READ-ONLY:** Only execute `search`, `search_stream`, or `get` API methods.
 - **NO MUTATE CLIENT LIBS:** Strictly prohibited from modifying ANY files within the `client_libs/` directory. Analyze and read them for source-of-truth definitions, but suggest changes in chat rather than modifying client library files.
@@ -38,8 +38,8 @@ If the user provides or overrides an API version, treat user input as the ultima
 - **Config:** `config/` (Target config files, e.g. `google-ads.yaml`).
 - **Client Libraries (Source of Truth):** `client_libs/google-ads-python/` (Contains official Google Ads Python client library source, `.proto` definitions, and example scripts under `client_libs/google-ads-python/examples/`).
 - **Scripts:** `api_examples/` (Modifiable scripts).
-- **Generated Code:** `saved/code/` (All generated or modified scripts).
-- **Reports & Output:** `saved/csv/`, `saved/data/`.
+- **Generated Code:** `~/saved/code/` (All generated or modified scripts).
+- **Reports & Output:** `~/saved/data/` (All report and data outputs).
 
 #### 2.2. Configuration Protocol
 - Always initialize clients via `GoogleAdsClient.load_from_storage(version=api_version)`. Never use `load_from_env()`.
@@ -61,9 +61,9 @@ Before presenting or executing ANY GAQL query, pass this sequence:
 
 #### 3.2. Code Generation Protocol (Python)
 Every Python script generated MUST follow this automated linting pipeline:
-1. Write code to a temporary file (e.g., `saved/code/tmp_lint.py`).
-2. Run `ruff check --fix saved/code/tmp_lint.py`.
-3. Read the fixed code and finalize write to target location.
+1. Write code to a temporary file (e.g., `~/saved/code/tmp_lint.py`).
+2. Run `ruff check --fix ~/saved/code/tmp_lint.py`.
+3. Read the fixed code and finalize write to target location in `~/saved/code/`.
 4. Include explicit type annotations for parameters, returns, and variables.
 5. Wrap API calls in `GoogleAdsException` handlers to suppress noisy gRPC internal stack traces:
    ```python
@@ -93,7 +93,7 @@ Every Python script generated MUST follow this automated linting pipeline:
 #### 5.1. Reporting Mandate
 When generating diagnostic reports:
 1. Prepend header: `"Created by the Google Ads API Developer Assistant"`.
-2. Save reports under `saved/data/`.
+2. Save reports under `~/saved/data/`.
 3. Display output tables directly to stdout in console/chat responses.
 
 ---

@@ -55,7 +55,7 @@ google_ads_assistant_plugin/
 
 1. **System Directives & Rules (`rules/google_ads_rules.md`)**:
    - Validate Before Act (cached API version lookup / release notes fallback).
-   - Strict Read-Only Policy (No mutate API calls; code generated in `saved/code/`).
+   - Strict Read-Only Policy (No mutate API calls; code generated in `~/saved/code/`).
    - GAQL validation protocol (no `OR`, no `FROM` in metadata queries, bare field names).
    - Automated code generation pipeline with `ruff` linting and `GoogleAdsException` traceback suppression.
    - Source-of-truth priority for local `client_libs/` definitions.

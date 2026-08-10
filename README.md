@@ -206,19 +206,29 @@ Starting with release 2.3.0, you can use the `--context_path` argument (Linux/ma
 
 ## Uninstallation
 
-If you wish to remove the assistant and the project directory, you can use the uninstallation scripts:
+If you wish to remove the assistant, you can use the uninstallation scripts:
 
 *   **Linux/macOS:**
-    ```bash
-    ./uninstall.sh
-    ```
+    *   To uninstall the standalone project directory:
+        ```bash
+        ./uninstall.sh --type project
+        ```
+    *   To uninstall the installed Antigravity / agy plugin:
+        ```bash
+        ./uninstall.sh --type plugin
+        ```
 *   **Windows:**
-    ```powershell
-    .\uninstall.ps1
-    ```
+    *   To uninstall the standalone project directory:
+        ```powershell
+        .\uninstall.ps1 -Type project
+        ```
+    *   To uninstall the installed Antigravity / agy plugin:
+        ```powershell
+        .\uninstall.ps1 -Type plugin
+        ```
 
 > [!CAUTION]
-> These scripts will prompt for confirmation before deleting the entire project directory.
+> These scripts will prompt for confirmation before deleting the specified project or plugin directory (unless `--yes` / `-Force` is passed).
 
 ## Contributing
 

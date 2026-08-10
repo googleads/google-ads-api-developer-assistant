@@ -59,7 +59,7 @@ def merge_previous_findings(output_dir: str) -> List[str]:
 
 def main(client: GoogleAdsClient, customer_id: str) -> None:
     epoch = int(time.time())
-    output_dir = os.path.join(os.getcwd(), "saved", "data")
+    output_dir = os.path.expanduser(os.path.join("~", "saved", "data"))
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, f"conversion_troubleshooting_report_{epoch}.txt")
 

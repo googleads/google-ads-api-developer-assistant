@@ -22,7 +22,7 @@ When a user invokes `/assistant-tutorial` or requests this tutorial:
 ## Tutorial Content Reference
 
 ### Topic 1: Core Principles & Constraints
-- **The "NO MUTATE" Read-Only Policy:** The Assistant cannot execute mutate operations (such as create, update, or delete) directly. Instead, it provides the code for the mutate in the `saved/code/` directory, which the user can run themselves or incorporate into their codebase.
+- **The "NO MUTATE" Read-Only Policy:** The Assistant cannot execute mutate operations (such as create, update, or delete) directly. Instead, it provides the code for the mutate in the `~/saved/code/` directory, which the user can run themselves or incorporate into their codebase.
 - **API Versioning:** All code and GAQL queries target the confirmed version in `config/api_version.txt`.
 
 ### Topic 2: Campaign Creation (Code Generation Workflow)

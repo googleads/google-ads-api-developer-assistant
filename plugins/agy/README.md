@@ -42,7 +42,7 @@ The **Google Ads API Developer Assistant** plugin is engineered specifically for
 
 - **Programmatic GAQL Validation**: 4-step sequence (Schema Discovery, Compatibility Checking, Static Analysis, and Runtime Dry-Runs using `validate_only=True`). Enforces strict rules such as zero `OR` operator tolerance.
 - **Dynamic Protobuf Object Inspection**: Real-time inspection of API resources, messages, and Enums from the official Python client library descriptors without guessing schema structures.
-- **Strict Read-Only Safety Policy**: Hard constraints preventing accidental execution of destructive API mutations (`create`, `mutate`, `update`, `delete`). All mutations are generated as verified code in `saved/code/`.
+- **Strict Read-Only Safety Policy**: Hard constraints preventing accidental execution of destructive API mutations (`create`, `mutate`, `update`, `delete`). All mutations are generated as verified code in `~/saved/code/`.
 - **Conversion Upload Troubleshooting**: Diagnostic reporting against `offline_conversion_upload_client_summary`, click timestamp vs. conversion timestamp logic validation, GCLID sampling, and pre-upload CSV structure checks.
 - **MCC Account Hierarchy Exploration**: Recursive discovery of child Customer IDs (CIDs) and sub-manager structures with console trees or CSV exports.
 - **Performance Max Webpage Exclusions**: Scripting for asset group webpage listing filter trees (`vertical = WEBPAGE`).
@@ -123,7 +123,7 @@ The assistant strictly complies with [google_ads_rules.md](rules/google_ads_rule
 1. **Validate Before Act Protocol**:
    - Reads the target Google Ads API version from `config/api_version.txt`. If unset, identifies the latest stable release, presents it for user confirmation, and persists it.
 2. **Zero-Mutate / Read-Only Constraint**:
-   - The assistant **never** executes live mutations (`mutate`, `create`, `update`, `delete`). All mutation scripts are written to `saved/code/` for manual review and execution by the developer.
+   - The assistant **never** executes live mutations (`mutate`, `create`, `update`, `delete`). All mutation scripts are written to `~/saved/code/` for manual review and execution by the developer.
 3. **GAQL Syntax Strictness**:
    - **No `OR` operator**: The `OR` operator is strictly forbidden in GAQL. The assistant rewrites queries using `IN` or splits them into separate requests.
    - **No `FROM` clause in metadata**: Queries against `GoogleAdsFieldService` must not contain a `FROM` clause.
@@ -228,7 +228,7 @@ python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py \
   --api_version v25 \
   --print_cids
 
-# Export to CSV under saved/csv/
+# Export to CSV under ~/saved/data/
 python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py \
   --customer_id 1234567890 \
   --api_version v25 \
@@ -308,7 +308,7 @@ When running this plugin across different agent runtimes, keep the following pla
 
 - **Virtual Environments**: In custom IDE environments, ensure `google-ads` and `ruff` are installed in the active environment used by the host agent.
 - **Interactive UI Modals**: In Antigravity environments, interactive questions render as modal selections; in standard Claude Desktop / CLI sessions, questions are presented directly in conversation text.
-- **Directory Layouts**: Generated code and reports are saved to `saved/code/`, `saved/csv/`, and `saved/data/` relative to the working project directory.
+- **Directory Layouts**: Generated code and reports are saved to `~/saved/code/` and `~/saved/data/`.
 
 For comprehensive details on runtime adaptations, refer to [migration.md](migration.md).
 

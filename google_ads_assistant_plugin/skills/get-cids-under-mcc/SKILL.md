@@ -23,7 +23,7 @@ Use this skill to retrieve the hierarchy of child accounts under a Google Ads Ma
         python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py --customer_id <mcc_id> --api_version <api_version> --print_cids
         ```
 
-    * **To save the list to a CSV file (saved in `saved/csv/`):**
+    * **To save the list to a CSV file (saved in `~/saved/data/`):**
         ```bash
         python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py --customer_id <mcc_id> --api_version <api_version> --save_csv
         ```

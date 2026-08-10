@@ -108,7 +108,7 @@ def main() -> None:
         "--save_csv",
         action="store_true",
         default=False,
-        help="If set, saves the results to a CSV file in saved/csv/.",
+        help="If set, saves the results to a CSV file in ~/saved/data/.",
     )
     parser.add_argument(
         "--print_cids",
@@ -134,7 +134,7 @@ def main() -> None:
     cids = get_cids_under_mcc(customer_id, args.api_version)
 
     if args.save_csv:
-        csv_dir = os.path.join(os.getcwd(), "saved", "csv")
+        csv_dir = os.path.expanduser(os.path.join("~", "saved", "data"))
         os.makedirs(csv_dir, exist_ok=True)
         csv_path = os.path.join(csv_dir, f"cids_under_mcc_{clean_id}.csv")
 

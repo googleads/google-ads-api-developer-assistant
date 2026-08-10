@@ -38,26 +38,46 @@ try {
     # 2. Setup Fake Project
     Set-Content -Path (Join-Path $FakeProject "some_file.txt") -Value "test"
 
-    # --- Test Case 1: Run uninstall.ps1 with 'n' ---
-    Write-Host "--- Running uninstall.ps1 with 'n' (Cancellation) ---"
-    # We use a temporary input file to simulate Read-Host input
-    # Actually, we can use a string array and pipe it
-    $Result = "n" | pwsh -File $UninstallScriptPath
+    # --- Test Case 1: Run uninstall.ps1 -Type project with 'n' ---
+    Write-Host "--- Running uninstall.ps1 -Type project with 'n' (Cancellation) ---"
+    $Result = "n" | pwsh -File $UninstallScriptPath -Type project
     
     if (Test-Path $FakeProject) {
-        Write-Host "PASS: Cancellation respected"
+        Write-Host "PASS: Project cancellation respected"
     } else {
         throw "FAIL: project directory was deleted on cancellation"
     }
 
-    # --- Test Case 2: Run uninstall.ps1 with 'Y' ---
-    Write-Host "--- Running uninstall.ps1 with 'Y' (Success) ---"
-    $Result = "Y" | pwsh -File $UninstallScriptPath
+    # --- Test Case 2: Run uninstall.ps1 -Type plugin with 'n' ---
+    $FakePluginDir = Join-Path $FakeHome ".gemini/config/plugins/google_ads_assistant_plugin"
+    New-Item -ItemType Directory -Force -Path $FakePluginDir | Out-Null
+    Set-Content -Path (Join-Path $FakePluginDir "plugin.json") -Value '{"name": "google-ads-api-developer-assistant"}'
+
+    Write-Host "--- Running uninstall.ps1 -Type plugin with 'n' (Cancellation) ---"
+    $Result = "n" | pwsh -File $UninstallScriptPath -Type plugin
+    if (Test-Path $FakePluginDir) {
+        Write-Host "PASS: Plugin cancellation respected"
+    } else {
+        throw "FAIL: plugin directory was deleted on cancellation"
+    }
+
+    # --- Test Case 3: Run uninstall.ps1 -Type plugin -Force ---
+    Write-Host "--- Running uninstall.ps1 -Type plugin -Force (Success) ---"
+    & $UninstallScriptPath -Type plugin -Force
+    if (Test-Path $FakePluginDir) {
+        throw "FAIL: plugin directory still exists after -Force"
+    } else {
+        Write-Host "PASS: Plugin directory removed"
+    }
+
+    # --- Test Case 4: Run uninstall.ps1 -Type project -Force ---
+    Write-Host "--- Running uninstall.ps1 -Type project -Force (Success) ---"
+    & $UninstallScriptPath -Type project -Force
     
     if (Test-Path $FakeProject) {
-        throw "FAIL: project directory still exists"
+        throw "FAIL: project directory still exists after -Force"
     } else {
-        Write-Host "PASS: Directory removed"
+        Write-Host "PASS: Project directory removed"
     }
 
     Write-Host "ALL POWERSHELL UNINSTALL TESTS PASSED"
