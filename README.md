@@ -120,14 +120,22 @@ By default, Python is used for code generation.  As of v2.3.0 you can provide co
 3.  **Run install script**
     *   **Linux/macOS:**
         *   Ensure that [jq](https://github.com/jqlang/jq?tab=readme-ov-file#installation) is installed.
-        *   Run `./install.sh`.
-            *   By default (no arguments), this installs the **Python** client library to the `client_libs/` directory within this project.
-            *   To install additional languages, use flags: `./install.sh --php --ruby --dotnet`.
-            *   Execute `./install.sh --help` for more details.
+        *   To install as a standalone project:
+            *   Run `./install.sh --type project`.
+            *   By default (no extra language flags), this installs the **Python** client library to the `client_libs/` directory.
+            *   To install additional languages, use flags: `./install.sh --type project --php --ruby --dotnet`.
+        *   To install as an Antigravity / agy plugin:
+            *   Run `./install.sh --type plugin`.
+            *   To include additional client libraries in the plugin structure, add flags: `./install.sh --type plugin --php --ruby --dotnet`.
+        *   Execute `./install.sh --help` for more details.
     *   **Windows:**
-        *   Open PowerShell and run `.\install.ps1`.
-            *   By default, this installs the **Python** client library to the `client_libs\` directory within this project.
-            *   To install additional languages, use parameters: `.\install.ps1 -Php -Ruby -Dotnet`.
+        *   Open PowerShell.
+        *   To install as a standalone project:
+            *   Run `.\install.ps1 -Type project`.
+            *   To install additional languages, use parameters: `.\install.ps1 -Type project -Php -Ruby -Dotnet`.
+        *   To install as an Antigravity / agy plugin:
+            *   Run `.\install.ps1 -Type plugin`.
+            *   To include additional client libraries in the plugin structure: `.\install.ps1 -Type plugin -Php -Ruby -Dotnet`.
 4.  **Configure Credentials:** Make sure your API credentials configuration files are in your `$HOME` directory. Each language has its own configuration file naming convention and structure. 
 5.  **Optional: Default Customer ID:** To set a default customer ID, create a file named `customer_id.txt` in the `google-ads-api-developer-assistant` directory with the content `customer_id:YOUR_CUSTOMER_ID` (e.g., `customer_id: 1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.
 6.  **Google Ads API Version Validation:** On your first run in a session, the assistant will automatically identify the latest stable Google Ads API version and ask you to confirm it. Once confirmed, this version is cached in [api_version.txt](file:///usr/local/google/home/rwh/google-ads-api-developer-assistant/config/api_version.txt) and used for all subsequent prompts. If you need to force a version change or refresh the cache, simply delete or edit the `config/api_version.txt` file.

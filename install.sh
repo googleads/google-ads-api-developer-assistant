@@ -39,6 +39,7 @@ echo "Detected project root: ${PROJECT_DIR_ABS}"
 
 # --- Configuration ---
 readonly DEFAULT_PARENT_DIR="${PROJECT_DIR_ABS}/client_libs"
+readonly PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/agy"
 readonly ALL_LANGS="python php ruby java dotnet"
 
 # Helper functions for repo info (Replacing associative arrays for Bash 3.2 compatibility)
@@ -70,8 +71,190 @@ INSTALL_RUBY=false
 INSTALL_JAVA=false
 INSTALL_DOTNET=false
 ANY_SELECTED=false
+INSTALL_TYPE=""
 
-# --- Dependency Check ---
+# --- Help Function ---
+usage() {
+  echo "Usage: $0 --type <project|plugin> [OPTIONS]"
+  echo "  Installs the Google Ads API Developer Assistant as a project or plugin."
+  echo ""
+  echo "  Required Arguments:"
+  echo "    -t, --type TYPE            Installation type: 'project' or 'plugin'"
+  echo ""
+  echo "  Options (for 'project' type):"
+  echo "    -h, --help                 Show this help message and exit"
+  echo "    --php                      Include google-ads-php"
+  echo "    --ruby                     Include google-ads-ruby"
+  echo "    --java                     Include google-ads-java"
+  echo "    --dotnet                   Include google-ads-dotnet"
+  echo ""
+  echo "  If no language flags are provided with --type project, only the Python library will be installed."
+  echo ""
+  echo "  Examples:"
+  echo "    $0 --type project          (Installs project with Python client library)"
+  echo "    $0 --type project --java   (Installs project with Java and Python libraries)"
+  echo "    $0 --type plugin           (Installs agy plugin into ~/.gemini/config/plugins/)"
+  echo ""
+}
+
+# --- Argument Parsing ---
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -t|--type)
+      if [[ $# -lt 2 ]]; then
+        err "ERROR: --type requires an argument ('project' or 'plugin')."
+        usage
+        exit 1
+      fi
+      INSTALL_TYPE=$(echo "$2" | tr '[:upper:]' '[:lower:]')
+      shift 2
+      ;;
+    --type=*)
+      INSTALL_TYPE=$(echo "${1#*=}" | tr '[:upper:]' '[:lower:]')
+      shift
+      ;;
+    --php)
+      INSTALL_PHP=true
+      ANY_SELECTED=true
+      shift
+      ;;
+    --ruby)
+      INSTALL_RUBY=true
+      ANY_SELECTED=true
+      shift
+      ;;
+    --java)
+      INSTALL_JAVA=true
+      ANY_SELECTED=true
+      shift
+      ;;
+    --dotnet)
+      INSTALL_DOTNET=true
+      ANY_SELECTED=true
+      shift
+      ;;
+
+    *)
+      err "ERROR: Unknown argument: $1"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+# --- Validate Required Type Argument ---
+if [[ -z "${INSTALL_TYPE}" ]]; then
+  err "ERROR: Missing required argument: --type <project|plugin>"
+  usage
+  exit 1
+fi
+
+if [[ "${INSTALL_TYPE}" != "project" && "${INSTALL_TYPE}" != "plugin" ]]; then
+  err "ERROR: Invalid installation type '${INSTALL_TYPE}'. Must be 'project' or 'plugin'."
+  usage
+  exit 1
+fi
+
+# Helper to check if a language is enabled
+is_enabled() {
+  case "$1" in
+    python) [[ "${INSTALL_PYTHON}" == "true" ]] ;;
+    php)    [[ "${INSTALL_PHP}" == "true" ]] ;;
+    ruby)   [[ "${INSTALL_RUBY}" == "true" ]] ;;
+    java)   [[ "${INSTALL_JAVA}" == "true" ]] ;;
+    dotnet) [[ "${INSTALL_DOTNET}" == "true" ]] ;;
+    *)      return 1 ;;
+  esac
+}
+
+# --- Clone/Update Repositories ---
+clone_or_update() {
+  local repo_url="$1"
+  local clone_path="$2"
+  local log_file="$3"
+  local repo_name
+  
+  repo_name=$(basename "${clone_path}")
+
+  {
+    echo "Managing repository ${repo_name} in ${clone_path}"
+    if [[ -d "${clone_path}/.git" ]]; then
+      echo "Directory ${clone_path} already exists. Updating..."
+      if ! (cd "${clone_path}" && git pull); then
+        echo "WARN: Failed to update ${repo_name}. Continuing..."
+      else
+        echo "Successfully updated ${repo_name}."
+      fi
+    elif [[ -d "${clone_path}" ]]; then
+       echo "WARN: Directory ${clone_path} exists but is not a git repo. Skipping."
+    else
+      echo "Cloning ${repo_url} into ${clone_path}"
+      if ! git clone "${repo_url}" "${clone_path}"; then
+        err "ERROR: Failed to clone ${repo_url}"
+        exit 1
+      fi
+      echo "Successfully cloned ${repo_name}."
+    fi
+  } > "${log_file}" 2>&1
+}
+
+# --- Plugin Installation Branch ---
+if [[ "${INSTALL_TYPE}" == "plugin" ]]; then
+  if ! command -v git &> /dev/null; then
+    err "ERROR: git is not installed. Please install it to continue."
+    exit 1
+  fi
+
+  if [[ ! -d "${PLUGIN_SOURCE_DIR}" ]]; then
+    err "ERROR: Plugin directory '${PLUGIN_SOURCE_DIR}' does not exist."
+    exit 1
+  fi
+
+  PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google_ads_assistant_plugin"
+  echo "Installing agy plugin into: ${PLUGIN_TARGET_DIR}"
+  mkdir -p "${HOME}/.gemini/config/plugins"
+  rm -rf "${PLUGIN_TARGET_DIR}"
+  cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
+
+  # Ensure plugin client_libs directory exists
+  mkdir -p "${PLUGIN_TARGET_DIR}/client_libs"
+
+  # Add any additional selected client libraries to plugin structure
+  for lang in php ruby java dotnet; do
+    if is_enabled "$lang"; then
+      repo_name=$(get_repo_name "$lang")
+      target_lib_path="${PLUGIN_TARGET_DIR}/client_libs/${repo_name}"
+      source_lib_path="${PROJECT_DIR_ABS}/client_libs/${repo_name}"
+      url=$(get_repo_url "$lang")
+      log_file="${PROJECT_DIR_ABS}/install_${lang}_log_$$.tmp"
+
+      if [[ -d "${source_lib_path}" ]]; then
+        echo "Adding ${repo_name} to plugin client_libs from local repository..."
+        rm -rf "${target_lib_path}"
+        cp -r "${source_lib_path}" "${target_lib_path}"
+      else
+        echo "Cloning ${repo_name} into plugin client_libs..."
+        clone_or_update "$url" "${target_lib_path}" "${log_file}"
+        if [[ -f "${log_file}" ]]; then
+          cat "${log_file}"
+          rm -f "${log_file}"
+        fi
+      fi
+    fi
+  done
+
+  echo "Plugin installation complete."
+  echo ""
+  echo "Restart your Antigravity / agy host to activate the plugin."
+  exit 0
+fi
+
+# --- Project Installation Branch ---
+# Dependency Check
 if ! command -v jq &> /dev/null; then
   echo "jq is not installed. Attempting to install..."
   if command -v brew &> /dev/null; then
@@ -104,66 +287,7 @@ if ! command -v git &> /dev/null; then
   exit 1
 fi
 
-# --- Help Function ---
-usage() {
-  echo "Usage: $0 [OPTIONS]"
-  echo "  Clones/updates Google Ads client libraries."
-  echo ""
-  echo "  This script initializes the development environment for the Google Ads API Developer Assistant."
-  echo "  It clones the selected client libraries into '${DEFAULT_PARENT_DIR}'."
-  echo "  The google-ads-python library is always installed by default."
-  echo ""
-  echo "  Options:"
-  echo "    -h, --help                 Show this help message and exit"
-  echo "    --php                      Include google-ads-php"
-  echo "    --ruby                     Include google-ads-ruby"
-  echo "    --java                     Include google-ads-java"
-  echo "    --dotnet                   Include google-ads-dotnet"
-  echo ""
-  echo "  If no language flags are provided, only the Python library will be installed."
-  echo ""
-  echo "  Example:"
-  echo "    $0 --java                  (Installs Java and Python libraries)"
-  echo ""
-}
-
-# --- Argument Parsing ---
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    --php)
-      INSTALL_PHP=true
-      ANY_SELECTED=true
-      shift
-      ;;
-    --ruby)
-      INSTALL_RUBY=true
-      ANY_SELECTED=true
-      shift
-      ;;
-    --java)
-      INSTALL_JAVA=true
-      ANY_SELECTED=true
-      shift
-      ;;
-    --dotnet)
-      INSTALL_DOTNET=true
-      ANY_SELECTED=true
-      shift
-      ;;
-
-    *)
-      err "ERROR: Unknown argument: $1"
-      usage
-      exit 1
-      ;;
-  esac
-done
-
-# --- Language Selection Logic ---
+# Language Selection Logic
 # Python is always installed. Other languages are only installed if selected.
 if [[ "${ANY_SELECTED}" == "false" ]]; then
   echo "No additional languages selected. Defaulting to Python only."
@@ -173,18 +297,6 @@ fi
 # Ensure default directory exists
 echo "Ensuring default library directory exists: ${DEFAULT_PARENT_DIR}"
 mkdir -p "${DEFAULT_PARENT_DIR}" || { err "ERROR: Failed to create ${DEFAULT_PARENT_DIR}"; exit 1; }
-
-# Helper to check if a language is enabled
-is_enabled() {
-  case "$1" in
-    python) [[ "${INSTALL_PYTHON}" == "true" ]] ;;
-    php)    [[ "${INSTALL_PHP}" == "true" ]] ;;
-    ruby)   [[ "${INSTALL_RUBY}" == "true" ]] ;;
-    java)   [[ "${INSTALL_JAVA}" == "true" ]] ;;
-    dotnet) [[ "${INSTALL_DOTNET}" == "true" ]] ;;
-    *)      return 1 ;;
-  esac
-}
 
 # Resolve paths
 for lang in $ALL_LANGS; do
@@ -210,37 +322,6 @@ for lang in $ALL_LANGS; do
 
   fi
 done
-
-# --- Clone/Update Repositories ---
-clone_or_update() {
-  local repo_url="$1"
-  local clone_path="$2"
-  local log_file="$3"
-  local repo_name
-  
-  repo_name=$(basename "${clone_path}")
-
-  {
-    echo "Managing repository ${repo_name} in ${clone_path}"
-    if [[ -d "${clone_path}/.git" ]]; then
-      echo "Directory ${clone_path} already exists. Updating..."
-      if ! (cd "${clone_path}" && git pull); then
-        echo "WARN: Failed to update ${repo_name}. Continuing..."
-      else
-        echo "Successfully updated ${repo_name}."
-      fi
-    elif [[ -d "${clone_path}" ]]; then
-       echo "WARN: Directory ${clone_path} exists but is not a git repo. Skipping."
-    else
-      echo "Cloning ${repo_url} into ${clone_path}"
-      if ! git clone "${repo_url}" "${clone_path}"; then
-        err "ERROR: Failed to clone ${repo_url}"
-        exit 1
-      fi
-      echo "Successfully cloned ${repo_name}."
-    fi
-  } > "${log_file}" 2>&1
-}
 
 # Standard arrays to track background processes (supported in Bash 3.2)
 pids=()

@@ -1,7 +1,8 @@
 * 3.1.0
 - Optimized skills
 - Added rules to distinguish between concrete objects and their representation in Python files.
-- Added plugin
+- Added plugin for agy
+- Modified installation script to accommodate plugin.
 
 * 3.0.0
 - Fixed a breaking bug in install.ps1 and tests/test_install.ps1 where legacy settings.json references caused the Windows installation to crash.

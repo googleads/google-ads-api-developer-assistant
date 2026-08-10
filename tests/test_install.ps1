@@ -58,7 +58,9 @@ try {
 
     New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject "api_examples") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject "saved/code") | Out-Null
-    
+    New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject "plugins/agy") | Out-Null
+    Set-Content -Path (Join-Path $FakeProject "plugins/agy/plugin.json") -Value '{"name": "google-ads-api-developer-assistant"}'
+
     # Create dummy composer.json and Gemfile
     $PhpDir = Join-Path $FakeProject "client_libs/google-ads-php"
     New-Item -ItemType Directory -Force -Path $PhpDir | Out-Null
@@ -71,14 +73,14 @@ try {
 
 
 
-    # --- Test Case 3: Run install.ps1 Default (no flags) ---
-    Write-Host "--- Running install.ps1 (Default) ---"
+    # --- Test Case 1: Run install.ps1 with -Type project (Default languages) ---
+    Write-Host "--- Running install.ps1 -Type project ---"
     # Ensure client_libs is clean for this test case
     Remove-Item -Recurse -Force (Join-Path $FakeProject "client_libs") -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path (Join-Path $FakeProject "client_libs") | Out-Null
     
-    & $InstallScriptPath
-    if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed" }
+    & $InstallScriptPath -Type project
+    if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed with -Type project" }
     
     # Check Python exists (filesystem check)
     $ExpectedPython = Join-Path $FakeProject "client_libs/google-ads-python"
@@ -89,6 +91,30 @@ try {
     foreach ($L in $Langs) {
         $NotExpected = Join-Path $FakeProject "client_libs/google-ads-$L"
         if (Test-Path -LiteralPath $NotExpected) { throw "FAIL: google-ads-$L was cloned but should not have been" } else { Write-Host "PASS: google-ads-$L correctly missing" }
+    }
+
+    # --- Test Case 2: Run install.ps1 with -Type plugin ---
+    Write-Host "--- Running install.ps1 -Type plugin ---"
+    & $InstallScriptPath -Type plugin
+    if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed with -Type plugin" }
+
+    $ExpectedPluginDir = Join-Path $FakeHome ".gemini/config/plugins/google_ads_assistant_plugin"
+    if (Test-Path -LiteralPath (Join-Path $ExpectedPluginDir "plugin.json")) {
+        Write-Host "PASS: plugin was installed into $ExpectedPluginDir"
+    } else {
+        throw "FAIL: plugin was not installed into $ExpectedPluginDir"
+    }
+
+    # --- Test Case 3: Run install.ps1 with -Type plugin -Java ---
+    Write-Host "--- Running install.ps1 -Type plugin -Java ---"
+    & $InstallScriptPath -Type plugin -Java
+    if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed with -Type plugin -Java" }
+
+    $ExpectedJavaLib = Join-Path $ExpectedPluginDir "client_libs/google-ads-java"
+    if (Test-Path -LiteralPath $ExpectedJavaLib) {
+        Write-Host "PASS: google-ads-java was added to plugin client_libs"
+    } else {
+        throw "FAIL: google-ads-java was not added to plugin client_libs"
     }
 
     Write-Host "ALL TESTS PASSED"

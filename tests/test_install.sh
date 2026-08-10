@@ -66,11 +66,27 @@ fi
 # Create dummy directories that install.sh references
 mkdir -p "${FAKE_PROJECT}/api_examples"
 mkdir -p "${FAKE_PROJECT}/saved/code"
+mkdir -p "${FAKE_PROJECT}/plugins/agy"
+echo '{"name": "google-ads-api-developer-assistant"}' > "${FAKE_PROJECT}/plugins/agy/plugin.json"
 
-# --- Test Case 1: Run install.sh ---
-echo "--- Running install.sh ---"
-if ! bash "${SETUP_SCRIPT_PATH}"; then
-    echo "FAIL: install.sh failed"
+# --- Test Case 1: Run install.sh without --type (Should Fail) ---
+echo "--- Running install.sh without --type (Expected Failure) ---"
+if bash "${SETUP_SCRIPT_PATH}" 2>/dev/null; then
+    echo "FAIL: install.sh should have failed when missing --type"
+    exit 1
+fi
+
+# --- Test Case 2: Run install.sh with invalid --type (Should Fail) ---
+echo "--- Running install.sh with invalid --type (Expected Failure) ---"
+if bash "${SETUP_SCRIPT_PATH}" --type invalid 2>/dev/null; then
+    echo "FAIL: install.sh should have failed with invalid --type"
+    exit 1
+fi
+
+# --- Test Case 3: Run install.sh --type project ---
+echo "--- Running install.sh --type project ---"
+if ! bash "${SETUP_SCRIPT_PATH}" --type project; then
+    echo "FAIL: install.sh failed with --type project"
     exit 1
 fi
 
@@ -88,16 +104,48 @@ for lang in php ruby java dotnet; do
     fi
 done
 
-# --- Test Case 2: Run install.sh --java ---
-echo "--- Running install.sh --java ---"
-if ! bash "${SETUP_SCRIPT_PATH}" --java; then
-    echo "FAIL: install.sh failed with --java"
+# --- Test Case 4: Run install.sh --type project --java ---
+echo "--- Running install.sh --type project --java ---"
+if ! bash "${SETUP_SCRIPT_PATH}" --type project --java; then
+    echo "FAIL: install.sh failed with --type project --java"
     exit 1
 fi
 
 # Check if java directory created
 if [[ ! -d "${FAKE_PROJECT}/client_libs/google-ads-java/.git" ]]; then
     echo "FAIL: google-ads-java was not 'cloned'"
+    exit 1
+fi
+
+# --- Test Case 5: Run install.sh --type plugin ---
+echo "--- Running install.sh --type plugin ---"
+if ! bash "${SETUP_SCRIPT_PATH}" --type plugin; then
+    echo "FAIL: install.sh failed with --type plugin"
+    exit 1
+fi
+
+# Check if plugin was copied to ~/.gemini/config/plugins/google_ads_assistant_plugin
+if [[ ! -f "${FAKE_HOME}/.gemini/config/plugins/google_ads_assistant_plugin/plugin.json" ]]; then
+    echo "FAIL: plugin was not installed into ~/.gemini/config/plugins/google_ads_assistant_plugin"
+    exit 1
+fi
+
+# Check that non-selected client libraries are not in plugin client_libs
+if [[ -d "${FAKE_HOME}/.gemini/config/plugins/google_ads_assistant_plugin/client_libs/google-ads-java" ]]; then
+    echo "FAIL: google-ads-java exists in plugin client_libs but was not requested"
+    exit 1
+fi
+
+# --- Test Case 6: Run install.sh --type plugin --java ---
+echo "--- Running install.sh --type plugin --java ---"
+if ! bash "${SETUP_SCRIPT_PATH}" --type plugin --java; then
+    echo "FAIL: install.sh failed with --type plugin --java"
+    exit 1
+fi
+
+# Check if java library was added to plugin structure
+if [[ ! -d "${FAKE_HOME}/.gemini/config/plugins/google_ads_assistant_plugin/client_libs/google-ads-java" ]]; then
+    echo "FAIL: google-ads-java was not added to plugin client_libs"
     exit 1
 fi
 
@@ -136,3 +184,4 @@ touch "${FAKE_PROJECT}/client_libs/google-ads-ruby/Gemfile"
 
 
 echo "ALL TESTS PASSED"
+
