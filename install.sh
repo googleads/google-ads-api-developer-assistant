@@ -202,6 +202,22 @@ clone_or_update() {
   } > "${log_file}" 2>&1
 }
 
+# Helper to detect latest API version from client_libs and pre-seed config/api_version.txt
+detect_and_seed_api_version() {
+  local search_dir="$1"
+  local target_config_dir="$2"
+  
+  if [[ -d "${search_dir}" ]]; then
+    local latest_v=""
+    latest_v=$(find "${search_dir}" -mindepth 1 -maxdepth 1 -type d -name 'v*' 2>/dev/null | sed 's/.*\/v//' | grep -E '^[0-9]+$' | sort -n | tail -n 1)
+    if [[ -n "${latest_v}" ]]; then
+      mkdir -p "${target_config_dir}"
+      echo "v${latest_v}" > "${target_config_dir}/api_version.txt"
+      echo "Configured API version v${latest_v} in ${target_config_dir}/api_version.txt"
+    fi
+  fi
+}
+
 # --- Plugin Installation Branch ---
 if [[ "${INSTALL_TYPE}" == "plugin" ]]; then
   if ! command -v git &> /dev/null; then
@@ -246,6 +262,10 @@ if [[ "${INSTALL_TYPE}" == "plugin" ]]; then
       fi
     fi
   done
+
+  # Pre-seed latest API version in plugin and project config
+  detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
+  detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
 
   echo "Plugin installation complete."
   echo ""
@@ -383,7 +403,7 @@ if [[ "${failed}" == "true" ]]; then
 fi
 
 # --- Complete installation ---
-
+detect_and_seed_api_version "${DEFAULT_PARENT_DIR}/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
 
 echo "Installation complete."
 echo ""

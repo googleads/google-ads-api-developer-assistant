@@ -35,9 +35,9 @@
 
 #### 1.3. Workflow: API Versioning & Pre-Task Validation
 1.  **Check Cache First:** Check if `config/api_version.txt` exists and contains a valid version. If it does, load it and skip steps 2-6.
-2.  **Fetch (Primary):** If no cached version exists, ALWAYS check `https://developers.google.com/google-ads/api/docs/release-notes` FIRST using `web_fetch`.
-3.  **Search (Fallback):** IF `web_fetch` fails or the URL is unreachable, use `google_web_search` with query `google ads api release notes`.
-4.  **Identify:** Find the latest MAJOR stable version (e.g., `v17`).
+2.  **Local Discovery (Primary):** Inspect the version directories in `client_libs/google-ads-python/google/ads/googleads/v*` or run `.agents/skills/ext_version/scripts/get_latest_api_version.py` to identify the latest stable API version (e.g., `v25`).
+3.  **Fetch (Fallback):** If local discovery is unavailable, check `https://developers.google.com/google-ads/api/docs/release-notes` using `web_fetch`.
+4.  **Search (Secondary Fallback):** IF `web_fetch` fails or the URL is unreachable, use `google_web_search` with query `google ads api release notes`.
 5.  **Confirm:** Present the version to the user. "The API version is [vXX]. Proceed?"
 6.  **Lock & Cache:** Await explicit user confirmation or version override. Once confirmed, save/update the version in `config/api_version.txt`.
 7.  **Subsequent Turns:** Use the loaded or confirmed version automatically for all subsequent requests.

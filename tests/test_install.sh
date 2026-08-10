@@ -38,9 +38,10 @@ if [[ "\$1" == "rev-parse" ]]; then
     # Return the temp dir as the project root
     echo "${FAKE_PROJECT}"
 elif [[ "\$1" == "clone" ]]; then
-    # Mock clone: just create directory
+    # Mock clone: just create directory and mock v25 structure
     target="\$3"
     mkdir -p "\$target/.git"
+    mkdir -p "\$target/google/ads/googleads/v25"
     echo "Mock cloned into \$target"
 elif [[ "\$1" == "pull" ]]; then
     echo "Mock pull successful"
@@ -66,7 +67,7 @@ fi
 # Create dummy directories that install.sh references
 mkdir -p "${FAKE_PROJECT}/api_examples"
 mkdir -p "${FAKE_PROJECT}/saved/code"
-mkdir -p "${FAKE_PROJECT}/plugins/agy"
+mkdir -p "${FAKE_PROJECT}/plugins/agy/client_libs/google-ads-python/google/ads/googleads/v25"
 echo '{"name": "google-ads-api-developer-assistant"}' > "${FAKE_PROJECT}/plugins/agy/plugin.json"
 
 # --- Test Case 1: Run install.sh without --type (Should Fail) ---
@@ -93,6 +94,12 @@ fi
 # Check if directory created (mock clone)
 if [[ ! -d "${FAKE_PROJECT}/client_libs/google-ads-python/.git" ]]; then
     echo "FAIL: google-ads-python was not 'cloned' (mocked)"
+    exit 1
+fi
+
+# Check that config/api_version.txt was pre-seeded with v25
+if [[ ! -f "${FAKE_PROJECT}/config/api_version.txt" ]] || [[ "$(cat "${FAKE_PROJECT}/config/api_version.txt")" != "v25" ]]; then
+    echo "FAIL: config/api_version.txt was not pre-seeded with v25"
     exit 1
 fi
 
@@ -127,6 +134,12 @@ fi
 # Check if plugin was copied to ~/.gemini/config/plugins/google_ads_assistant_plugin
 if [[ ! -f "${FAKE_HOME}/.gemini/config/plugins/google_ads_assistant_plugin/plugin.json" ]]; then
     echo "FAIL: plugin was not installed into ~/.gemini/config/plugins/google_ads_assistant_plugin"
+    exit 1
+fi
+
+# Check that plugin config/api_version.txt was seeded
+if [[ ! -f "${FAKE_HOME}/.gemini/config/plugins/google_ads_assistant_plugin/config/api_version.txt" ]] || [[ "$(cat "${FAKE_HOME}/.gemini/config/plugins/google_ads_assistant_plugin/config/api_version.txt")" != "v25" ]]; then
+    echo "FAIL: plugin config/api_version.txt was not seeded with v25"
     exit 1
 fi
 

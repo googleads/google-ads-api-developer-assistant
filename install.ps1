@@ -87,6 +87,27 @@ function Test-Enabled {
     }
 }
 
+# Helper to detect latest API version from client_libs and pre-seed config/api_version.txt
+function Set-LatestApiVersion {
+    param(
+        [string]$SearchDir,
+        [string]$TargetConfigDir
+    )
+    if (Test-Path -LiteralPath $SearchDir) {
+        $VersionDirs = Get-ChildItem -Directory -Path $SearchDir -Filter "v*" |
+            Where-Object { $_.Name -match "^v\d+$" } |
+            Sort-Object { [int]($_.Name.Substring(1)) }
+        if ($VersionDirs) {
+            $Latest = $VersionDirs[-1].Name
+            if (-not (Test-Path -LiteralPath $TargetConfigDir)) {
+                New-Item -ItemType Directory -Force -LiteralPath $TargetConfigDir | Out-Null
+            }
+            Set-Content -Path (Join-Path $TargetConfigDir "api_version.txt") -Value $Latest
+            Write-Host "Configured API version $Latest in $(Join-Path $TargetConfigDir 'api_version.txt')"
+        }
+    }
+}
+
 # --- Defaults ---
 $Python = $true
 $AnySelected = $false
@@ -158,6 +179,11 @@ if ($Type.ToLower() -eq "plugin") {
             }
         }
     }
+
+    # Pre-seed latest API version in plugin and project config
+    $PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
+    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
+    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
 
     Write-Host "Plugin installation complete."
     Write-Host ""
@@ -242,6 +268,10 @@ foreach ($Lang in $AllLangs) {
 
 
 
+
+# Pre-seed latest API version in project config
+$ProjectPythonDir = Join-Path $DefaultParentDir "google-ads-python\google\ads\googleads"
+Set-LatestApiVersion -SearchDir $ProjectPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
 
 Write-Host "Installation complete."
 Write-Host ""

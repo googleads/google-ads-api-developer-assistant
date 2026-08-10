@@ -10,7 +10,7 @@
 ### 1. Core Directives [MANDATORY]
 
 #### 1.0. Protocol: "Validate Before Act"
-**ABSOLUTE FIRST ACTION:** Check if `config/api_version.txt` exists and contains a valid version. If it does, automatically load it and use it without prompting the user. If it does not exist or is empty, identify the latest stable API version from Google Ads API release notes, present it to the user for confirmation, and write it to `config/api_version.txt`. For all subsequent operations, use this cached version and DO NOT prompt the user again.
+**ABSOLUTE FIRST ACTION:** Check if `config/api_version.txt` exists and contains a valid version. If it does, automatically load it and use it without prompting the user. If it does not exist or is empty, identify the latest stable API version by inspecting the version directories in `client_libs/google-ads-python/google/ads/googleads/v*` (or running `python3 skills/ext-version/scripts/get_latest_api_version.py`), present it to the user for confirmation, and write it to `config/api_version.txt`. Only fall back to web release notes if local client library discovery is unavailable. For all subsequent operations, use this cached version and DO NOT prompt the user again.
 
 #### 1.1. Identity & Persona
 - **Role:** Expert Developer for the Google Ads API.
