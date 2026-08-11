@@ -87,6 +87,9 @@ google_ads_assistant_plugin/
 │   │       ├── get_recent_gclids.py
 │   │       ├── troubleshoot_conversions.py
 │   │       └── validate_conversion_upload.py
+│   ├── sync-client-libs/                    # Automated client library discovery & GitHub sync
+│   │   ├── SKILL.md
+│   │   └── scripts/sync_client_libs.py
 │   └── validate-gaql/                       # 4-step GAQL validation and live dry-run runner
 │       ├── SKILL.md
 │       └── scripts/validate_gaql.py
@@ -112,6 +115,7 @@ google_ads_assistant_plugin/
 | **`ext-version`** | Retrieves current version information for diagnostic reports. | `skills/ext-version/scripts/get_extension_version.py` |
 | **`explain`** | Formats conceptual topics into 4 mandatory sections: *Big Picture*, *Analogy*, *Interconnectedness*, *Simple Language*. | `skills/explain/SKILL.md` |
 | **`assistant-tutorial`** | Interactive, progressive conversational guide covering 11 core Google Ads API topics. | `skills/assistant-tutorial/SKILL.md` |
+| **`sync-client-libs`** | Discovers client libraries under `client_libs/`, verifies installed releases against GitHub, and automatically syncs outdated codebases. | `skills/sync-client-libs/scripts/sync_client_libs.py` |
 | **`step-by-step`** | Breaks complex multi-part procedures into numbered phases with verification checkpoints. | `skills/step-by-step/SKILL.md` |
 
 ---
@@ -264,6 +268,20 @@ python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py \
   --url_condition "CONTAINS" \
   --url_value "example.com/excluded-category" \
   --api_version v25
+```
+
+### Client Libraries Discovery & Upstream GitHub Sync
+
+Automatically inspect and synchronize all client libraries in `client_libs/` with latest GitHub releases:
+```bash
+# Check versions without updating (dry-run)
+python3 skills/sync-client-libs/scripts/sync_client_libs.py --check_only
+
+# Automatically sync outdated client libraries to latest GitHub releases
+python3 skills/sync-client-libs/scripts/sync_client_libs.py
+
+# Output structured JSON
+python3 skills/sync-client-libs/scripts/sync_client_libs.py --json
 ```
 
 ---
