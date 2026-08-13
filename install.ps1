@@ -116,6 +116,109 @@ if ($Php -or $Ruby -or $Java -or $Dotnet) {
     $AnySelected = $true
 }
 
+# --- Environment Verification ---
+function Test-PythonEnvironment {
+    $Candidates = @("python3", "python", "py")
+    $FoundVersion = $null
+    $FoundPath = $null
+
+    foreach ($Cmd in $Candidates) {
+        $CmdInfo = Get-Command $Cmd -ErrorAction SilentlyContinue
+        if ($CmdInfo) {
+            try {
+                $VerOutput = & $Cmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'); sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "Found Python $VerOutput ($($CmdInfo.Source))"
+                    return $true
+                }
+                elseif ($VerOutput) {
+                    $FoundVersion = $VerOutput
+                    $FoundPath = $CmdInfo.Source
+                }
+            }
+            catch {}
+        }
+    }
+
+    Write-Error "ERROR: Python 3.10 or higher is required."
+    if ($FoundVersion) {
+        Write-Error "Incompatible Python version detected: $FoundVersion ($FoundPath)."
+    }
+    else {
+        Write-Error "No Python interpreter was found on PATH."
+    }
+    Write-Error "Please install Python 3.10 or later and ensure it is available in your PATH."
+    Write-Error "Visit https://www.python.org/downloads/ for installation instructions."
+    return $false
+}
+
+function Test-AntigravityEnvironment {
+    # Check CLI: agy or antigravity
+    if (Get-Command agy -ErrorAction SilentlyContinue) {
+        Write-Host "Found Antigravity CLI (agy)"
+        return $true
+    }
+    if (Get-Command antigravity -ErrorAction SilentlyContinue) {
+        Write-Host "Found Antigravity CLI (antigravity)"
+        return $true
+    }
+
+    # Check Environment Variables
+    if ($env:ANTIGRAVITY_APP_DIR -or $env:ANTIGRAVITY_LS_ADDRESS -or $env:ANTIGRAVITY_PORT -or $env:JETSKI_HOME -or $env:GEMINI_HOME) {
+        Write-Host "Antigravity environment detected via environment variables"
+        return $true
+    }
+
+    # Check Home Directories
+    $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+    $GeminiDir = Join-Path $UserHome ".gemini"
+    $AntigravityDir = Join-Path $UserHome ".antigravity"
+    if ((Test-Path -LiteralPath $GeminiDir) -or (Test-Path -LiteralPath $AntigravityDir)) {
+        Write-Host "Antigravity configuration/installation found in home directory ($GeminiDir or $AntigravityDir)"
+        return $true
+    }
+
+    # Check Program Files
+    $ProgramDirs = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Antigravity"),
+        (Join-Path $env:PROGRAMFILES "Antigravity"),
+        (Join-Path ${env:ProgramFiles(x86)} "Antigravity")
+    )
+    foreach ($Dir in $ProgramDirs) {
+        if ($Dir -and (Test-Path -LiteralPath $Dir)) {
+            Write-Host "Antigravity Desktop installation found at $Dir"
+            return $true
+        }
+    }
+
+    Write-Error "ERROR: Antigravity CLI or Antigravity Desktop/Web is not installed."
+    Write-Error "The Google Ads API Developer Assistant requires an active Antigravity environment."
+    Write-Error "Please install Antigravity CLI ('agy' or 'antigravity') or Antigravity Desktop/Web to continue."
+    return $false
+}
+
+function check_environment {
+    Write-Host "Checking environment..."
+    $EnvOk = $true
+
+    if (-not (Test-PythonEnvironment)) {
+        $EnvOk = $false
+    }
+
+    if (-not (Test-AntigravityEnvironment)) {
+        $EnvOk = $false
+    }
+
+    if (-not $EnvOk) {
+        Write-Error "ERROR: Environment check failed. Aborting installation."
+        exit 1
+    }
+    Write-Host "Environment check passed."
+}
+
+# Run environment verification before proceeding with installation
+check_environment
+
 # --- Plugin Installation Branch ---
 if ($Type.ToLower() -eq "plugin") {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {

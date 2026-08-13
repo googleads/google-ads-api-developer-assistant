@@ -84,7 +84,49 @@ if bash "${SETUP_SCRIPT_PATH}" --type invalid 2>/dev/null; then
     exit 1
 fi
 
-# --- Test Case 3: Run install.sh --type project ---
+# --- Test Case 3: Environment Check - Incompatible Python Version (Should Fail) ---
+echo "--- Running install.sh with incompatible Python version (Expected Failure) ---"
+cat > "${FAKE_HOME}/bin/python3" <<'EOF'
+#!/bin/bash
+if [[ "$*" == *"-c"* ]]; then
+    echo "3.9.5"
+    exit 1
+fi
+exit 0
+EOF
+chmod +x "${FAKE_HOME}/bin/python3"
+
+cat > "${FAKE_HOME}/bin/python" <<'EOF'
+#!/bin/bash
+if [[ "$*" == *"-c"* ]]; then
+    echo "3.9.5"
+    exit 1
+fi
+exit 0
+EOF
+chmod +x "${FAKE_HOME}/bin/python"
+
+if bash "${SETUP_SCRIPT_PATH}" --type project 2>/dev/null; then
+    echo "FAIL: install.sh should have failed when Python < 3.10"
+    exit 1
+fi
+
+# Restore mock python
+rm -f "${FAKE_HOME}/bin/python3" "${FAKE_HOME}/bin/python"
+
+# --- Test Case 4: Environment Check - Missing Antigravity (Should Fail) ---
+echo "--- Running install.sh with missing Antigravity (Expected Failure) ---"
+EMPTY_MOCK_HOME=$(mktemp -d)
+CLEAN_PATH="${FAKE_HOME}/bin:/usr/bin:/bin"
+if env -i PATH="${CLEAN_PATH}" HOME="${EMPTY_MOCK_HOME}" \
+   bash "${SETUP_SCRIPT_PATH}" --type project 2>/dev/null; then
+    echo "FAIL: install.sh should have failed when Antigravity is missing"
+    rm -rf "${EMPTY_MOCK_HOME}"
+    exit 1
+fi
+rm -rf "${EMPTY_MOCK_HOME}"
+
+# --- Test Case 5: Run install.sh --type project ---
 echo "--- Running install.sh --type project ---"
 if ! bash "${SETUP_SCRIPT_PATH}" --type project; then
     echo "FAIL: install.sh failed with --type project"

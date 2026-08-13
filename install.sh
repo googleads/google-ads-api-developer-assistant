@@ -159,6 +159,111 @@ if [[ "${INSTALL_TYPE}" != "project" && "${INSTALL_TYPE}" != "plugin" ]]; then
   exit 1
 fi
 
+# --- Environment Verification ---
+check_python() {
+  local py_cmd=""
+  for cmd in python3 python; do
+    if command -v "${cmd}" &>/dev/null; then
+      if "${cmd}" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' &>/dev/null; then
+        py_cmd="${cmd}"
+        break
+      fi
+    fi
+  done
+
+  if [[ -n "${py_cmd}" ]]; then
+    local py_ver
+    py_ver=$("${py_cmd}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")' 2>/dev/null || true)
+    echo "Found Python ${py_ver} (${py_cmd})"
+    return 0
+  fi
+
+  # Check if Python is installed but version is lower than 3.10
+  local found_ver=""
+  for cmd in python3 python; do
+    if command -v "${cmd}" &>/dev/null; then
+      found_ver=$("${cmd}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")' 2>/dev/null || true)
+      if [[ -n "${found_ver}" ]]; then
+        found_ver="${cmd} (${found_ver})"
+        break
+      fi
+    fi
+  done
+
+  err "ERROR: Python 3.10 or higher is required."
+  if [[ -n "${found_ver}" ]]; then
+    err "Incompatible Python version detected: ${found_ver}."
+  else
+    err "No Python interpreter was found on PATH."
+  fi
+  err "Please install Python 3.10 or later and ensure it is available in your PATH."
+  err "See: https://www.python.org/downloads/"
+  return 1
+}
+
+check_antigravity() {
+  local found_antigravity=false
+  local antigravity_detail=""
+
+  # Check CLI: 'agy' or 'antigravity'
+  if command -v agy &>/dev/null; then
+    found_antigravity=true
+    antigravity_detail="Antigravity CLI (agy) found at $(command -v agy)"
+  elif command -v antigravity &>/dev/null; then
+    found_antigravity=true
+    antigravity_detail="Antigravity CLI (antigravity) found at $(command -v antigravity)"
+  fi
+
+  # Check Antigravity Desktop / Web host environment
+  if [[ "${found_antigravity}" == "false" ]]; then
+    if [[ -n "${ANTIGRAVITY_APP_DIR:-}" || -n "${ANTIGRAVITY_LS_ADDRESS:-}" || -n "${ANTIGRAVITY_PORT:-}" || -n "${JETSKI_HOME:-}" || -n "${GEMINI_HOME:-}" ]]; then
+      found_antigravity=true
+      antigravity_detail="Antigravity environment detected via environment variables"
+    elif [[ -d "${HOME}/.gemini" || -d "${HOME}/.antigravity" ]]; then
+      found_antigravity=true
+      antigravity_detail="Antigravity configuration/installation found in home directory (~/.gemini or ~/.antigravity)"
+    elif [[ -d "/Applications/Antigravity.app" || -d "${HOME}/Applications/Antigravity.app" || -d "/Applications/Google Antigravity.app" ]]; then
+      found_antigravity=true
+      antigravity_detail="Antigravity Desktop application found on macOS"
+    elif [[ -d "/opt/Antigravity" || -d "/usr/share/antigravity" || -d "/usr/local/share/antigravity" ]]; then
+      found_antigravity=true
+      antigravity_detail="Antigravity Desktop installation found on Linux"
+    fi
+  fi
+
+  if [[ "${found_antigravity}" == "true" ]]; then
+    echo "Found Antigravity: ${antigravity_detail}"
+    return 0
+  fi
+
+  err "ERROR: Antigravity CLI or Antigravity Desktop/Web is not installed."
+  err "The Google Ads API Developer Assistant requires an active Antigravity environment."
+  err "Please install Antigravity CLI ('agy' or 'antigravity') or Antigravity Desktop/Web to continue."
+  return 1
+}
+
+check_environment() {
+  echo "Checking environment..."
+  local env_ok=true
+
+  if ! check_python; then
+    env_ok=false
+  fi
+
+  if ! check_antigravity; then
+    env_ok=false
+  fi
+
+  if [[ "${env_ok}" != "true" ]]; then
+    err "ERROR: Environment check failed. Aborting installation."
+    exit 1
+  fi
+  echo "Environment check passed."
+}
+
+# Run environment verification before proceeding with installation
+check_environment
+
 # Helper to check if a language is enabled
 is_enabled() {
   case "$1" in
