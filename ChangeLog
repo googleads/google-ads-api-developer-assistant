@@ -8,6 +8,7 @@
 - Added rules to distinguish between concrete objects and their representation in Python files.
 - Added plugin for agy
 - Modified installation script to accommodate plugin.
+- If default API version cannot be dtermined, prompt user for a value.
 
 * 3.0.0
 - Fixed a breaking bug in install.ps1 and tests/test_install.ps1 where legacy settings.json references caused the Windows installation to crash.
