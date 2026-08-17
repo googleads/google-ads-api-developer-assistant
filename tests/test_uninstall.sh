@@ -94,7 +94,51 @@ if [[ ! -d "${FAKE_PROJECT}/client_libs/google-ads-python" ]]; then
 fi
 echo "PASS: Project library partial removal successful"
 
-# --- Test Case 5: Run uninstall.sh --type plugin with cancellation and partial removal ---
+# --- Test Case 5: Run uninstall.sh --type project --all (Remove All Client Libs) ---
+mkdir -p "${FAKE_PROJECT}/client_libs/google-ads-java"
+mkdir -p "${FAKE_PROJECT}/client_libs/google-ads-python"
+mkdir -p "${FAKE_PROJECT}/client_libs/google-ads-php"
+
+echo "--- Running uninstall.sh --type project --all (Remove All Client Libs) ---"
+if ! bash "${UNINSTALL_SCRIPT_PATH}" --type project --all; then
+    echo "FAIL: uninstall.sh failed with --type project --all"
+    exit 1
+fi
+
+for l in java python php; do
+    if [[ -d "${FAKE_PROJECT}/client_libs/google-ads-${l}" ]]; then
+        echo "FAIL: google-ads-${l} was not removed by --all"
+        exit 1
+    fi
+done
+echo "PASS: Project --all library removal successful"
+
+# --- Test Case 6: Run uninstall.sh --type project --clean (Clean Environment) ---
+mkdir -p "${FAKE_PROJECT}/.venv"
+mkdir -p "${FAKE_PROJECT}/config"
+echo "v25" > "${FAKE_PROJECT}/config/api_version.txt"
+
+echo "--- Running uninstall.sh --type project --clean ---"
+if ! bash "${UNINSTALL_SCRIPT_PATH}" --type project --clean; then
+    echo "FAIL: uninstall.sh failed with --type project --clean"
+    exit 1
+fi
+
+if [[ -d "${FAKE_PROJECT}/.venv" ]]; then
+    echo "FAIL: .venv directory still exists after --clean"
+    exit 1
+fi
+if [[ -f "${FAKE_PROJECT}/config/api_version.txt" ]]; then
+    echo "FAIL: config/api_version.txt still exists after --clean"
+    exit 1
+fi
+if [[ ! -d "${FAKE_PROJECT}" ]]; then
+    echo "FAIL: project directory was deleted during --clean"
+    exit 1
+fi
+echo "PASS: Project --clean successful"
+
+# --- Test Case 7: Run uninstall.sh --type plugin with cancellation and partial removal ---
 FAKE_PLUGIN_DIR="${FAKE_HOME}/.gemini/config/plugins/google_ads_assistant_plugin"
 mkdir -p "${FAKE_PLUGIN_DIR}/client_libs/google-ads-java"
 mkdir -p "${FAKE_PLUGIN_DIR}/client_libs/google-ads-python"
@@ -129,7 +173,7 @@ if [[ ! -d "${FAKE_PLUGIN_DIR}/client_libs/google-ads-python" ]]; then
 fi
 echo "PASS: Plugin library partial removal successful"
 
-# --- Test Case 6: Run uninstall.sh --type plugin --yes (Full Removal) ---
+# --- Test Case 8: Run uninstall.sh --type plugin --yes (Full Removal) ---
 echo "--- Running uninstall.sh --type plugin with --yes (Success) ---"
 if ! bash "${UNINSTALL_SCRIPT_PATH}" --type plugin --yes; then
     echo "FAIL: uninstall.sh failed with --type plugin --yes"
@@ -142,7 +186,10 @@ if [[ -d "${FAKE_PLUGIN_DIR}" ]]; then
 fi
 echo "PASS: Plugin directory removed"
 
-# --- Test Case 7: Run uninstall.sh --type project with 'Y' (Full Removal) ---
+# --- Test Case 9: Run uninstall.sh --type project with 'Y' (Full Removal & Project Config Cleanup) ---
+mkdir -p "${FAKE_HOME}/.gemini/config/projects"
+echo "{\"name\": \"${FAKE_PROJECT}\"}" > "${FAKE_HOME}/.gemini/config/projects/test_proj.json"
+
 echo "--- Running uninstall.sh --type project with 'Y' (Success) ---"
 if ! echo "Y" | bash "${UNINSTALL_SCRIPT_PATH}" --type project; then
     echo "FAIL: uninstall.sh failed"
@@ -154,6 +201,12 @@ if [[ -d "${FAKE_PROJECT}" ]]; then
     echo "FAIL: project directory still exists"
     exit 1
 fi
-echo "PASS: Project directory removed"
+
+# Check if project config was cleaned up
+if [[ -f "${FAKE_HOME}/.gemini/config/projects/test_proj.json" ]]; then
+    echo "FAIL: project configuration was not cleaned up from ~/.gemini/config/projects/"
+    exit 1
+fi
+echo "PASS: Project directory and project config removed"
 
 echo "ALL BASH UNINSTALL TESTS PASSED"

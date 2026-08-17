@@ -33,6 +33,8 @@ UNINSTALL_PHP=false
 UNINSTALL_RUBY=false
 UNINSTALL_JAVA=false
 UNINSTALL_DOTNET=false
+UNINSTALL_ALL_LIBS=false
+UNINSTALL_CLEAN=false
 ANY_SELECTED=false
 AUTO_CONFIRM=false
 
@@ -46,7 +48,9 @@ usage() {
   echo ""
   echo "  Options:"
   echo "    -h, --help                 Show this help message and exit"
-  echo "    -y, --yes                  Skip confirmation prompt"
+  echo "    -y, --yes, -f, --force     Skip confirmation prompt"
+  echo "    --all                      Remove all client libraries from client_libs/"
+  echo "    --clean                    Clean virtual environment (.venv) and caches without deleting project"
   echo "    --python                   Remove only google-ads-python client library"
   echo "    --php                      Remove only google-ads-php client library"
   echo "    --ruby                     Remove only google-ads-ruby client library"
@@ -55,6 +59,8 @@ usage() {
   echo ""
   echo "  Examples:"
   echo "    $0 --type project          (Uninstalls and deletes the entire project directory)"
+  echo "    $0 --type project --clean  (Cleans .venv and generated cache files without deleting project)"
+  echo "    $0 --type project --all    (Removes all client libraries from the project)"
   echo "    $0 --type project --java   (Removes only the Java library from the project)"
   echo "    $0 --type plugin           (Uninstalls and deletes the entire plugin directory)"
   echo "    $0 --type plugin --java    (Removes only the Java library from the plugin)"
@@ -100,6 +106,20 @@ while [[ $# -gt 0 ]]; do
       ;;
     --type=*)
       UNINSTALL_TYPE=$(echo "${1#*=}" | tr '[:upper:]' '[:lower:]')
+      shift
+      ;;
+    --all)
+      UNINSTALL_ALL_LIBS=true
+      UNINSTALL_PYTHON=true
+      UNINSTALL_PHP=true
+      UNINSTALL_RUBY=true
+      UNINSTALL_JAVA=true
+      UNINSTALL_DOTNET=true
+      ANY_SELECTED=true
+      shift
+      ;;
+    --clean)
+      UNINSTALL_CLEAN=true
       shift
       ;;
     --python)
@@ -205,6 +225,16 @@ if ! PROJECT_DIR_ABS=$(git rev-parse --show-toplevel 2>/dev/null); then
   exit 1
 fi
 
+# Clean mode (cleans .venv, cache, and logs without deleting project)
+if [[ "${UNINSTALL_CLEAN}" == "true" ]]; then
+  echo "Cleaning environment and cache files in: ${PROJECT_DIR_ABS}..."
+  rm -rf "${PROJECT_DIR_ABS}/.venv"
+  rm -f "${PROJECT_DIR_ABS}/config/api_version.txt"
+  rm -f "${PROJECT_DIR_ABS}/saved/code/tmp_lint.py"
+  echo "Successfully cleaned .venv and cached files."
+  exit 0
+fi
+
 # If specific client libraries were requested to be removed
 if [[ "${ANY_SELECTED}" == "true" ]]; then
   for lang in python php ruby java dotnet; do
@@ -233,6 +263,18 @@ if [[ "${AUTO_CONFIRM}" != "true" ]]; then
     echo "Uninstallation cancelled."
     exit 0
   fi
+fi
+
+# Remove registered project config from ~/.gemini/config/projects/ if present
+PROJECTS_DIR="${HOME}/.gemini/config/projects"
+if [[ -d "${PROJECTS_DIR}" ]]; then
+  for pfile in "${PROJECTS_DIR}"/*.json; do
+    [[ -f "${pfile}" ]] || continue
+    if grep -q "${PROJECT_DIR_ABS}" "${pfile}" 2>/dev/null; then
+      echo "Removing project configuration: ${pfile}..."
+      rm -f "${pfile}"
+    fi
+  done
 fi
 
 echo "Removing project directory: ${PROJECT_DIR_ABS}..."

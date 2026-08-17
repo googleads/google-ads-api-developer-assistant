@@ -9,6 +9,12 @@
 .PARAMETER Type
     Required. Uninstallation type: 'project' or 'plugin'.
 
+.PARAMETER All
+    Remove all client libraries from client_libs/.
+
+.PARAMETER Clean
+    Clean the virtual environment (.venv) and cached files without deleting the project repository.
+
 .PARAMETER Python
     Remove only the google-ads-python client library.
 
@@ -35,6 +41,14 @@
     Uninstalls and deletes the entire project directory.
 
 .EXAMPLE
+    .\uninstall.ps1 -Type project -Clean
+    Cleans .venv and cached files without deleting the project repository.
+
+.EXAMPLE
+    .\uninstall.ps1 -Type project -All
+    Removes all client libraries from the project.
+
+.EXAMPLE
     .\uninstall.ps1 -Type project -Java
     Removes only the Java library from the project.
 
@@ -52,6 +66,8 @@ param(
     [ValidateSet("project", "plugin", IgnoreCase=$true)]
     [string]$Type,
 
+    [switch]$All,
+    [switch]$Clean,
     [switch]$Python,
     [switch]$Php,
     [switch]$Ruby,
@@ -77,19 +93,21 @@ $ErrorActionPreference = "Stop"
 $AutoConfirm = $Force -or $Yes
 
 $SpecifiedLangs = @()
-if ($Python) { $SpecifiedLangs += "python" }
-if ($Php)    { $SpecifiedLangs += "php" }
-if ($Ruby)   { $SpecifiedLangs += "ruby" }
-if ($Java)   { $SpecifiedLangs += "java" }
-if ($Dotnet) { $SpecifiedLangs += "dotnet" }
+if ($All) {
+    $SpecifiedLangs = @("python", "php", "ruby", "java", "dotnet")
+} else {
+    if ($Python) { $SpecifiedLangs += "python" }
+    if ($Php)    { $SpecifiedLangs += "php" }
+    if ($Ruby)   { $SpecifiedLangs += "ruby" }
+    if ($Java)   { $SpecifiedLangs += "java" }
+    if ($Dotnet) { $SpecifiedLangs += "dotnet" }
+}
+
+$UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
 
 # --- Plugin Uninstallation Branch ---
 if ($Type.ToLower() -eq "plugin") {
-    $GeminiPluginsDir = if ($env:USERPROFILE) {
-        Join-Path $env:USERPROFILE ".gemini\config\plugins"
-    } else {
-        Join-Path $HOME ".gemini\config\plugins"
-    }
+    $GeminiPluginsDir = Join-Path $UserHome ".gemini\config\plugins"
     $TargetPluginDir = Join-Path $GeminiPluginsDir "google_ads_assistant_plugin"
 
     if (-not (Test-Path -LiteralPath $TargetPluginDir)) {
@@ -112,6 +130,8 @@ if ($Type.ToLower() -eq "plugin") {
             }
         }
         Write-Host "Plugin client library removal complete."
+        Write-Host ""
+        Write-Host "Restart your Antigravity / agy host to apply changes."
         exit 0
     }
 
@@ -129,6 +149,8 @@ if ($Type.ToLower() -eq "plugin") {
     Write-Host "Removing plugin directory: $TargetPluginDir..."
     Remove-Item -Recurse -Force -LiteralPath $TargetPluginDir
     Write-Host "Plugin uninstallation complete."
+    Write-Host ""
+    Write-Host "Restart your Antigravity / agy host to complete plugin uninstallation."
     exit 0
 }
 
@@ -141,6 +163,21 @@ try {
 catch {
     Write-Error "ERROR: This script must be run from within the google-ads-api-developer-assistant git repository."
     exit 1
+}
+
+# Clean mode (cleans .venv, cache, and logs without deleting project)
+if ($Clean) {
+    Write-Host "Cleaning environment and cache files in: $ProjectDirAbs..."
+    $VenvDir = Join-Path $ProjectDirAbs ".venv"
+    if (Test-Path -LiteralPath $VenvDir) {
+        Remove-Item -Recurse -Force -LiteralPath $VenvDir
+    }
+    $ApiVersionFile = Join-Path $ProjectDirAbs "config\api_version.txt"
+    if (Test-Path -LiteralPath $ApiVersionFile) {
+        Remove-Item -Force -LiteralPath $ApiVersionFile
+    }
+    Write-Host "Successfully cleaned .venv and cached files."
+    exit 0
 }
 
 # If specific client libraries are selected
@@ -169,6 +206,22 @@ if (-not $AutoConfirm) {
     if ($Confirm -notmatch "^[Yy]$") {
         Write-Host "Uninstallation cancelled."
         exit 0
+    }
+}
+
+# Remove registered project config from ~/.gemini/config/projects/ if present
+$ProjectsDir = Join-Path $UserHome ".gemini\config\projects"
+if (Test-Path -LiteralPath $ProjectsDir) {
+    $ProjectFiles = Get-ChildItem -Path $ProjectsDir -Filter "*.json" -File -ErrorAction SilentlyContinue
+    foreach ($PFile in $ProjectFiles) {
+        try {
+            $Content = Get-Content -LiteralPath $PFile.FullName -Raw -ErrorAction SilentlyContinue
+            if ($Content -and $Content.Contains($ProjectDirAbs)) {
+                Write-Host "Removing project configuration: $($PFile.FullName)..."
+                Remove-Item -Force -LiteralPath $PFile.FullName
+            }
+        }
+        catch {}
     }
 }
 

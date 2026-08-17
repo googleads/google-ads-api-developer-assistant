@@ -78,7 +78,7 @@ google_ads_assistant_plugin/
 
 While all domain rules, prompt context, Python diagnostic scripts, and skills are fully preserved in this plugin, certain native host platform features cannot be automatically migrated to standard Claude / agy plugin runtimes:
 
-### 1. PreInvocation Host Lifecycle Hooks (`.agents/hooks.json` & `hooks/configure_environment.py`)
+### 1. PreInvocation Host Lifecycle Hooks for Projects (`.agents/hooks.json` & `hooks/configure_environment.py`)
 - **Limitation**: Standard Claude Desktop, Claude Code, or agy plugin specifications do NOT support native `PreInvocation` shell execution hooks that run arbitrary Python scripts on the host before every model turn.
 - **Impact**: Automatic background actions (such as copying `~/google-ads.yaml` into `config/google-ads.yaml`, dynamically creating/updating a local Python virtual environment `.venv`, deleting stale `api_version.txt` files older than 19 hours, or injecting ephemeral environment context into the context window) cannot be run automatically on every turn by the host plugin engine.
 - **Adaptation**: Users must set up their local Python environment (`pip install google-ads ruff pytest`) and provide `GOOGLE_ADS_CONFIGURATION_FILE_PATH=config/google-ads.yaml` manually or via an initial setup script (`install.sh`).
