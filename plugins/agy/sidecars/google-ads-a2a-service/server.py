@@ -96,8 +96,30 @@ def get_effective_api_version(payload: dict = None) -> str:
     except Exception:
         pass
 
-    # 5. Fallback default
-    return "v25"
+    # 5. Ask the user to supply a version
+    if sys.stdin.isatty():
+        try:
+            user_input = input(
+                "Google Ads API version could not be automatically determined. Please enter the API version to use (e.g., v25): "
+            ).strip()
+            if user_input:
+                if not user_input.startswith("v") and user_input.isdigit():
+                    user_input = f"v{user_input}"
+                # Save confirmed version to config/api_version.txt
+                try:
+                    target_config_file = candidate_config_files[0]
+                    os.makedirs(os.path.dirname(target_config_file), exist_ok=True)
+                    with open(target_config_file, "w", encoding="utf-8") as f:
+                        f.write(f"{user_input}\n")
+                except OSError:
+                    pass
+                return user_input
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+    raise ValueError(
+        "Google Ads API version could not be automatically determined. Please supply an 'api_version' (e.g., 'v25') in the request payload or configure config/api_version.txt."
+    )
 
 
 class A2AHandler(BaseHTTPRequestHandler):
@@ -134,19 +156,26 @@ class A2AHandler(BaseHTTPRequestHandler):
             intent = request_data.get("intent", "UNKNOWN")
             payload = request_data.get("payload", {})
 
-            if intent == "GAQL_VALIDATE":
-                response = self.handle_gaql_validate(task_id, payload)
-            elif intent == "INSPECT_OBJECT":
-                response = self.handle_inspect_object(task_id, payload)
-            elif intent == "GENERATE_CODE":
-                response = self.handle_generate_code(task_id, payload)
-            elif intent == "TROUBLESHOOT_CONVERSIONS":
-                response = self.handle_troubleshoot_conversions(task_id, payload)
-            else:
+            try:
+                if intent == "GAQL_VALIDATE":
+                    response = self.handle_gaql_validate(task_id, payload)
+                elif intent == "INSPECT_OBJECT":
+                    response = self.handle_inspect_object(task_id, payload)
+                elif intent == "GENERATE_CODE":
+                    response = self.handle_generate_code(task_id, payload)
+                elif intent == "TROUBLESHOOT_CONVERSIONS":
+                    response = self.handle_troubleshoot_conversions(task_id, payload)
+                else:
+                    response = {
+                        "task_id": task_id,
+                        "status": "FAILED",
+                        "error": f"Unsupported intent '{intent}'"
+                    }
+            except ValueError as e:
                 response = {
                     "task_id": task_id,
                     "status": "FAILED",
-                    "error": f"Unsupported intent '{intent}'"
+                    "error": str(e)
                 }
 
             self._send_json(200, response)

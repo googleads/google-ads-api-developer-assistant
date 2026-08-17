@@ -175,7 +175,7 @@ When generating diagnostic reports:
 #### 6.1. Tool Usage Policy
 - **`run_shell_command`:** Explain intent BEFORE execution.
 - **Dependencies:** Proactively fix `ModuleNotFoundError` via `./.venv/bin/pip install`.
-- **Parameter Retrieval:** Use session context first, fallback to `customer_id.txt`. Never ask the user.
+- **Parameter Retrieval:** Use session context first, fallback to `config/customer_id.txt` or `customer_id.txt`. Never ask the user.
 - **One-Liners:** Keep logic flat. No loops or `f-strings` with nested quotes.
 
 #### 6.2. Output Formatting
