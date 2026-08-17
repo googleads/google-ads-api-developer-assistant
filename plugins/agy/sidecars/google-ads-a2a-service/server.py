@@ -6,11 +6,99 @@ Handles direct Agent-to-Agent (A2A) tasks sent from Claude.
 
 import json
 import os
+import re
 import sys
 import subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 PORT = int(os.environ.get("ANTIGRAVITY_SIDECAR_WEB_PORT", os.environ.get("A2A_PORT", "8900")))
+
+
+def get_effective_api_version(payload: dict = None) -> str:
+    """
+    Resolves the effective Google Ads API version using the standard hierarchy:
+    1. Caller/user override from payload ('api_version') or GOOGLE_ADS_API_VERSION env var.
+    2. Cached version from config/api_version.txt.
+    3. Dynamic discovery from local client_libs/ directory.
+    4. Installed google.ads.googleads package attribute inspection.
+    5. Fallback default ('v25').
+    """
+    # 1. Check payload override or environment variable
+    if payload and payload.get("api_version"):
+        ver = str(payload.get("api_version")).strip()
+        if not ver.startswith("v") and ver.isdigit():
+            ver = f"v{ver}"
+        return ver
+
+    env_version = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip()
+    if env_version:
+        if not env_version.startswith("v") and env_version.isdigit():
+            env_version = f"v{env_version}"
+        return env_version
+
+    # 2. Check config/api_version.txt in candidate configuration directories
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate_config_files = [
+        # Relative to sidecar directory (in plugin or project)
+        os.path.join(base_dir, "../../config/api_version.txt"),
+        os.path.join(base_dir, "../../../../config/api_version.txt"),
+        # Current working directory
+        os.path.abspath("config/api_version.txt"),
+        # Standard plugin and project locations in user home
+        os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/config/api_version.txt"),
+        os.path.expanduser("~/.gemini/config/plugins/google_ads_assistant_plugin/config/api_version.txt"),
+    ]
+
+    for config_file in candidate_config_files:
+        if os.path.isfile(config_file):
+            try:
+                with open(config_file, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        if not content.startswith("v") and content.isdigit():
+                            content = f"v{content}"
+                        return content
+            except OSError:
+                continue
+
+    # 3. Dynamic discovery from local client_libs/ directory
+    candidate_lib_paths = [
+        os.path.join(base_dir, "../../client_libs/google-ads-python/google/ads/googleads"),
+        os.path.join(base_dir, "../../../../client_libs/google-ads-python/google/ads/googleads"),
+        os.path.abspath("client_libs/google-ads-python/google/ads/googleads"),
+    ]
+
+    for lib_path in candidate_lib_paths:
+        if os.path.isdir(lib_path):
+            try:
+                version_dirs = [
+                    d
+                    for d in os.listdir(lib_path)
+                    if os.path.isdir(os.path.join(lib_path, d))
+                    and re.match(r"^v\d+$", d)
+                ]
+                if version_dirs:
+                    version_dirs.sort(key=lambda x: int(x[1:]))
+                    return version_dirs[-1]
+            except OSError:
+                continue
+
+    # 4. Inspect installed python package if available
+    try:
+        import google.ads.googleads  # type: ignore
+
+        installed_versions = [
+            attr for attr in dir(google.ads.googleads) if re.match(r"^v\d+$", attr)
+        ]
+        if installed_versions:
+            installed_versions.sort(key=lambda x: int(x[1:]))
+            return installed_versions[-1]
+    except Exception:
+        pass
+
+    # 5. Fallback default
+    return "v25"
+
 
 class A2AHandler(BaseHTTPRequestHandler):
     def _send_json(self, status_code, data):
@@ -68,6 +156,7 @@ class A2AHandler(BaseHTTPRequestHandler):
     def handle_gaql_validate(self, task_id, payload):
         query = payload.get("query", "")
         customer_id = payload.get("customer_id", "1234567890")
+        api_version = get_effective_api_version(payload)
         
         static_errors = []
         if " OR " in query.upper() or query.strip().startswith("OR "):
@@ -93,7 +182,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "gaql_validation": {
                     "status": "PASSED",
                     "static_checks": "PASSED",
-                    "api_version": "v19"
+                    "api_version": api_version
                 },
                 "explanation": "GAQL query passed all structural and static analysis checks."
             }
@@ -101,6 +190,7 @@ class A2AHandler(BaseHTTPRequestHandler):
 
     def handle_inspect_object(self, task_id, payload):
         resource_name = payload.get("resource_name", "Campaign")
+        api_version = get_effective_api_version(payload)
         return {
             "task_id": task_id,
             "status": "COMPLETED",
@@ -109,13 +199,14 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "resource": resource_name,
                 "type": "Google Ads API Resource",
                 "selectable_fields": [f"{resource_name.lower()}.id", f"{resource_name.lower()}.name", f"{resource_name.lower()}.status"],
-                "api_version": "v19"
+                "api_version": api_version
             }
         }
 
     def handle_generate_code(self, task_id, payload):
         user_prompt = payload.get("user_prompt", "")
         customer_id = payload.get("customer_id", "1234567890")
+        api_version = get_effective_api_version(payload)
         
         code_template = f'''"""
 Generated by Google Ads API Developer Assistant Plugin Sidecar
@@ -146,7 +237,7 @@ def fetch_campaign_data(client: GoogleAdsClient, customer_id: str) -> None:
             print(f"Google Ads API Error: {{error.message}}")
 
 if __name__ == "__main__":
-    client = GoogleAdsClient.load_from_storage()
+    client = GoogleAdsClient.load_from_storage(version="{api_version}")
     fetch_campaign_data(client, "{customer_id}")
 '''
 
@@ -157,7 +248,7 @@ if __name__ == "__main__":
             "result": {
                 "generated_code": code_template,
                 "lint_status": "PASSED (Ruff verified)",
-                "api_version": "v19"
+                "api_version": api_version
             }
         }
 
