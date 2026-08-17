@@ -335,7 +335,7 @@ if [[ "${INSTALL_TYPE}" == "plugin" ]]; then
     exit 1
   fi
 
-  PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google_ads_assistant_plugin"
+  PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
   echo "Installing agy plugin into: ${PLUGIN_TARGET_DIR}"
   mkdir -p "${HOME}/.gemini/config/plugins"
   rm -rf "${PLUGIN_TARGET_DIR}"
