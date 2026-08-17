@@ -31,32 +31,33 @@ get_plugin_target_dir() {
   local target="$1"
   local os_type
   os_type=$(uname -s 2>/dev/null || echo "Linux")
+  echo "Detected OS: ${os_type}"
 
   case "${target}" in
     agy)
-      echo "${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+      PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
       ;;
     claudecode)
       case "${os_type}" in
         Darwin*)
-          echo "${HOME}/Library/Application Support/Claude/plugins/google-ads-api-developer-assistant"
+          PLUGIN_TARGET_DIR="${HOME}/Library/Application Support/Claude/plugins/google-ads-api-developer-assistant"
           ;;
         Linux*)
           if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
-            echo "${XDG_CONFIG_HOME}/claude/plugins/google-ads-api-developer-assistant"
+            PLUGIN_TARGET_DIR="${XDG_CONFIG_HOME}/claude/plugins/google-ads-api-developer-assistant"
           else
-            echo "${HOME}/.config/claude/plugins/google-ads-api-developer-assistant"
+            PLUGIN_TARGET_DIR="${HOME}/.config/claude/plugins/google-ads-api-developer-assistant"
           fi
           ;;
         CYGWIN*|MINGW*|MSYS*)
           if [[ -n "${APPDATA:-}" ]]; then
-            echo "${APPDATA}/Claude/plugins/google-ads-api-developer-assistant"
+            PLUGIN_TARGET_DIR="${APPDATA}/Claude/plugins/google-ads-api-developer-assistant"
           else
-            echo "${HOME}/.claude/plugins/google-ads-api-developer-assistant"
+            PLUGIN_TARGET_DIR="${HOME}/.claude/plugins/google-ads-api-developer-assistant"
           fi
           ;;
         *)
-          echo "${HOME}/.claude/plugins/google-ads-api-developer-assistant"
+          PLUGIN_TARGET_DIR="${HOME}/.claude/plugins/google-ads-api-developer-assistant"
           ;;
       esac
       ;;
@@ -270,7 +271,7 @@ fi
 echo "Successfully updated repository."
 
 # --- Update Plugin Installation ---
-PLUGIN_TARGET_DIR=$(get_plugin_target_dir "${TARGET}")
+get_plugin_target_dir "${TARGET}"
 PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/agy"
 
 if [[ ! -d "${PLUGIN_TARGET_DIR}" ]]; then
