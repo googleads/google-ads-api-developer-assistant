@@ -38,7 +38,6 @@ readonly PROJECT_DIR_ABS
 echo "Detected project root: ${PROJECT_DIR_ABS}"
 
 # --- Configuration ---
-readonly DEFAULT_PARENT_DIR="${PROJECT_DIR_ABS}/client_libs"
 readonly PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/agy"
 readonly ALL_LANGS="python php ruby java dotnet"
 
@@ -64,36 +63,31 @@ get_repo_name() {
 }
 
 # --- Defaults ---
-# Simple variables to track selection (associative arrays not supported in Bash 3.2)
 INSTALL_PYTHON=true
 INSTALL_PHP=false
 INSTALL_RUBY=false
 INSTALL_JAVA=false
 INSTALL_DOTNET=false
 ANY_SELECTED=false
-INSTALL_TYPE=""
 
 # --- Help Function ---
 usage() {
-  echo "Usage: $0 --type <project|plugin> [OPTIONS]"
-  echo "  Installs the Google Ads API Developer Assistant as a project or plugin."
+  echo "Usage: $0 [OPTIONS]"
+  echo "  Installs the Google Ads API Developer Assistant as an Antigravity (agy) plugin."
   echo ""
-  echo "  Required Arguments:"
-  echo "    -t, --type TYPE            Installation type: 'project' or 'plugin'"
-  echo ""
-  echo "  Options (for 'project' type):"
+  echo "  Options:"
   echo "    -h, --help                 Show this help message and exit"
-  echo "    --php                      Include google-ads-php"
-  echo "    --ruby                     Include google-ads-ruby"
-  echo "    --java                     Include google-ads-java"
-  echo "    --dotnet                   Include google-ads-dotnet"
+  echo "    --php                      Include google-ads-php client library"
+  echo "    --ruby                     Include google-ads-ruby client library"
+  echo "    --java                     Include google-ads-java client library"
+  echo "    --dotnet                   Include google-ads-dotnet client library"
   echo ""
-  echo "  If no language flags are provided with --type project, only the Python library will be installed."
+  echo "  By default, the Python client library is included in the plugin."
   echo ""
   echo "  Examples:"
-  echo "    $0 --type project          (Installs project with Python client library)"
-  echo "    $0 --type project --java   (Installs project with Java and Python libraries)"
-  echo "    $0 --type plugin           (Installs agy plugin into ~/.gemini/config/plugins/)"
+  echo "    $0                         (Installs plugin with Python client library)"
+  echo "    $0 --java                  (Installs plugin with Java and Python client libraries)"
+  echo "    $0 --php --ruby --dotnet   (Installs plugin with PHP, Ruby, .NET, and Python libraries)"
   echo ""
 }
 
@@ -103,19 +97,6 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       usage
       exit 0
-      ;;
-    -t|--type)
-      if [[ $# -lt 2 ]]; then
-        err "ERROR: --type requires an argument ('project' or 'plugin')."
-        usage
-        exit 1
-      fi
-      INSTALL_TYPE=$(echo "$2" | tr '[:upper:]' '[:lower:]')
-      shift 2
-      ;;
-    --type=*)
-      INSTALL_TYPE=$(echo "${1#*=}" | tr '[:upper:]' '[:lower:]')
-      shift
       ;;
     --php)
       INSTALL_PHP=true
@@ -137,7 +118,6 @@ while [[ $# -gt 0 ]]; do
       ANY_SELECTED=true
       shift
       ;;
-
     *)
       err "ERROR: Unknown argument: $1"
       usage
@@ -145,19 +125,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-# --- Validate Required Type Argument ---
-if [[ -z "${INSTALL_TYPE}" ]]; then
-  err "ERROR: Missing required argument: --type <project|plugin>"
-  usage
-  exit 1
-fi
-
-if [[ "${INSTALL_TYPE}" != "project" && "${INSTALL_TYPE}" != "plugin" ]]; then
-  err "ERROR: Invalid installation type '${INSTALL_TYPE}'. Must be 'project' or 'plugin'."
-  usage
-  exit 1
-fi
 
 # --- Environment Verification ---
 check_python() {
@@ -323,193 +290,54 @@ detect_and_seed_api_version() {
   fi
 }
 
-# --- Plugin Installation Branch ---
-if [[ "${INSTALL_TYPE}" == "plugin" ]]; then
-  if ! command -v git &> /dev/null; then
-    err "ERROR: git is not installed. Please install it to continue."
-    exit 1
-  fi
-
-  if [[ ! -d "${PLUGIN_SOURCE_DIR}" ]]; then
-    err "ERROR: Plugin directory '${PLUGIN_SOURCE_DIR}' does not exist."
-    exit 1
-  fi
-
-  PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
-  echo "Installing agy plugin into: ${PLUGIN_TARGET_DIR}"
-  mkdir -p "${HOME}/.gemini/config/plugins"
-  rm -rf "${PLUGIN_TARGET_DIR}"
-  cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
-
-  # Ensure plugin client_libs directory exists
-  mkdir -p "${PLUGIN_TARGET_DIR}/client_libs"
-
-  # Add any additional selected client libraries to plugin structure
-  for lang in php ruby java dotnet; do
-    if is_enabled "$lang"; then
-      repo_name=$(get_repo_name "$lang")
-      target_lib_path="${PLUGIN_TARGET_DIR}/client_libs/${repo_name}"
-      source_lib_path="${PROJECT_DIR_ABS}/client_libs/${repo_name}"
-      url=$(get_repo_url "$lang")
-      log_file="${PROJECT_DIR_ABS}/install_${lang}_log_$$.tmp"
-
-      if [[ -d "${source_lib_path}" ]]; then
-        echo "Adding ${repo_name} to plugin client_libs from local repository..."
-        rm -rf "${target_lib_path}"
-        cp -r "${source_lib_path}" "${target_lib_path}"
-      else
-        echo "Cloning ${repo_name} into plugin client_libs..."
-        clone_or_update "$url" "${target_lib_path}" "${log_file}"
-        if [[ -f "${log_file}" ]]; then
-          cat "${log_file}"
-          rm -f "${log_file}"
-        fi
-      fi
-    fi
-  done
-
-  # Pre-seed latest API version in plugin and project config
-  detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
-  detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
-
-  echo "Plugin installation complete."
-  echo ""
-  echo "Restart your Antigravity / agy host to activate the plugin."
-  exit 0
-fi
-
-# --- Project Installation Branch ---
-# Dependency Check
-if ! command -v jq &> /dev/null; then
-  echo "jq is not installed. Attempting to install..."
-  if command -v brew &> /dev/null; then
-      echo "Homebrew detected. Installing jq..."
-      if brew install jq; then
-          echo "Successfully installed jq."
-      else
-          err "ERROR: Failed to install jq via Homebrew."
-          exit 1
-      fi
-  elif command -v apt-get &> /dev/null; then
-      if sudo apt-get update && sudo apt-get install -y jq; then
-          echo "Successfully installed jq."
-      else
-          err "ERROR: Failed to install jq automatically."
-          err "Please install jq manually to continue."
-          err "See: https://jqlang.github.io/jq/download/"
-          exit 1
-      fi
-  else
-      err "ERROR: jq is not installed and no supported package manager (brew/apt-get) found."
-      err "Please install jq manually to continue."
-      err "See: https://jqlang.github.io/jq/download/"
-      exit 1
-  fi
-fi
-
+# --- Plugin Installation ---
 if ! command -v git &> /dev/null; then
   err "ERROR: git is not installed. Please install it to continue."
   exit 1
 fi
 
-# Language Selection Logic
-# Python is always installed. Other languages are only installed if selected.
-if [[ "${ANY_SELECTED}" == "false" ]]; then
-  echo "No additional languages selected. Defaulting to Python only."
-fi
-
-# --- Path Resolution and Validation ---
-# Ensure default directory exists
-echo "Ensuring default library directory exists: ${DEFAULT_PARENT_DIR}"
-mkdir -p "${DEFAULT_PARENT_DIR}" || { err "ERROR: Failed to create ${DEFAULT_PARENT_DIR}"; exit 1; }
-
-# Resolve paths
-for lang in $ALL_LANGS; do
-  if is_enabled "$lang"; then
-    repo_name=$(get_repo_name "$lang")
-    path="${DEFAULT_PARENT_DIR}/${repo_name}"
-    
-    # Resolve to absolute path
-    if command -v realpath &> /dev/null; then
-        # Try using -m if available (doesn't require existence), otherwise just path
-        # On macOS, realpath might not support -m or might not exist (coreutils).
-        # We handle missing realpath below.
-        ABS_PATH=$(realpath -m "$path" 2>/dev/null || realpath "$path" 2>/dev/null || echo "$path")
-    else
-        # Fallback - parent (DEFAULT_PARENT_DIR) exists now
-        ABS_PATH="$(cd "${DEFAULT_PARENT_DIR}" && pwd)/$(basename "$path")"
-    fi
-    
-    # Store path in dynamic variable for later use (jq args)
-    # Bash 3.2 compatible way to set variable by name
-    eval "LIB_PATH_${lang}='${ABS_PATH}'"
-    
-
-  fi
-done
-
-# Standard arrays to track background processes (supported in Bash 3.2)
-pids=()
-log_files=()
-langs_running=()
-
-# Cleanup function for background jobs and logs on interruption
-cleanup_bg() {
-  echo "Installation interrupted. Cleaning up background processes..." >&2
-  for pid in "${pids[@]}"; do
-    if kill -0 "${pid}" 2>/dev/null; then
-      kill "${pid}" 2>/dev/null
-    fi
-  done
-  for log_file in "${log_files[@]}"; do
-    rm -f "${log_file}" 2>/dev/null
-  done
-}
-trap cleanup_bg INT TERM
-
-for lang in $ALL_LANGS; do
-  if is_enabled "$lang"; then
-    eval "path=\"\$LIB_PATH_${lang}\""
-    url=$(get_repo_url "$lang")
-    log_file="${PROJECT_DIR_ABS}/install_${lang}_log_$$.tmp"
-    
-    clone_or_update "$url" "$path" "${log_file}" &
-    pids+=($!)
-    log_files+=("${log_file}")
-    langs_running+=("${lang}")
-  fi
-done
-
-# Wait for all background processes and report output
-failed=false
-set +e # Temporarily disable exit on error to check individual job status
-for i in "${!pids[@]}"; do
-  pid="${pids[$i]}"
-  lang="${langs_running[$i]}"
-  log_file="${log_files[$i]}"
-  
-  if ! wait "${pid}"; then
-    err "ERROR: Installation failed for ${lang}."
-    failed=true
-  fi
-  
-  if [[ -f "${log_file}" ]]; then
-    cat "${log_file}"
-    rm -f "${log_file}"
-  fi
-done
-set -e # Re-enable exit on error
-
-trap - INT TERM # Clear interruption traps
-
-if [[ "${failed}" == "true" ]]; then
-  err "ERROR: One or more library installations failed."
+if [[ ! -d "${PLUGIN_SOURCE_DIR}" ]]; then
+  err "ERROR: Plugin directory '${PLUGIN_SOURCE_DIR}' does not exist."
   exit 1
 fi
 
-# --- Complete installation ---
-detect_and_seed_api_version "${DEFAULT_PARENT_DIR}/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
+PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+echo "Installing agy plugin into: ${PLUGIN_TARGET_DIR}"
+mkdir -p "${HOME}/.gemini/config/plugins"
+rm -rf "${PLUGIN_TARGET_DIR}"
+cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
 
-echo "Installation complete."
+# Ensure plugin client_libs directory exists
+mkdir -p "${PLUGIN_TARGET_DIR}/client_libs"
+
+# Add any additional selected client libraries to plugin structure
+for lang in php ruby java dotnet; do
+  if is_enabled "$lang"; then
+    repo_name=$(get_repo_name "$lang")
+    target_lib_path="${PLUGIN_TARGET_DIR}/client_libs/${repo_name}"
+    source_lib_path="${PROJECT_DIR_ABS}/client_libs/${repo_name}"
+    url=$(get_repo_url "$lang")
+    log_file="${PROJECT_DIR_ABS}/install_${lang}_log_$$.tmp"
+
+    if [[ -d "${source_lib_path}" ]]; then
+      echo "Adding ${repo_name} to plugin client_libs from local repository..."
+      rm -rf "${target_lib_path}"
+      cp -r "${source_lib_path}" "${target_lib_path}"
+    else
+      echo "Cloning ${repo_name} into plugin client_libs..."
+      clone_or_update "$url" "${target_lib_path}" "${log_file}"
+      if [[ -f "${log_file}" ]]; then
+        cat "${log_file}"
+        rm -f "${log_file}"
+      fi
+    fi
+  fi
+done
+
+# Pre-seed latest API version in plugin and project config
+detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
+detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
+
+echo "Plugin installation complete."
 echo ""
-echo "IMPORTANT: You must configure and verify the development environment for each language you wish to use."
+echo "Restart your Antigravity / agy host to activate the plugin."

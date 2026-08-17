@@ -7,7 +7,5 @@ If you are upgrading from a previous version (v2.x):
 1. **Backup custom data:** Copy any custom code or data from `saved/code/` and `saved/csv/` to a secure location.
 2. **Remove legacy configuration:** Delete the legacy `.agents/settings.json` file if it exists, as configuration is now managed globally by `antigravity`.
 3. **Update the repository:** Pull the latest changes or re-clone the repository. As a best practice, we suggest re-cloning.
-4. **Run the installation script:** Run `install.sh --type project` (Linux/macOS) or `install.ps1 -Type project` (Windows) to set up the new virtual environment and client libraries, or use `--type plugin` / `-Type plugin` to install as an agy plugin.
-5. **Manage contexts:** If you previously had custom codebase directories registered in `settings.json`, use the new update command parameter:
-   - **Linux/macOS:** `./update.sh --context_path /path/to/your/codebase`
-   - **Windows:** `.\update.ps1 -ContextPath "C:\path\to\your\codebase"`
+4. **Run the installation script:** Run `./install.sh` (Linux/macOS) or `.\install.ps1` (Windows) to install the assistant plugin for Antigravity (`agy`).
+5. **Update and add languages:** Use `./update.sh` or `.\update.ps1` to update the plugin and client libraries (e.g. `./update.sh --java --dotnet`).

@@ -1,44 +1,36 @@
 <#
 .SYNOPSIS
-    Initializes the development environment for the Google Ads API Developer Assistant on Windows.
+    Initializes the development environment for the Google Ads API Developer Assistant plugin on Windows.
 
 .DESCRIPTION
-    This script installs the Google Ads API Developer Assistant as a standalone project
-    or as a plugin for Antigravity (agy).
-
-.PARAMETER Type
-    Required. Installation type: 'project' or 'plugin'.
+    This script installs the Google Ads API Developer Assistant as a plugin for Antigravity (agy).
 
 .PARAMETER Php
-    Include google-ads-php (for 'project' type).
+    Include google-ads-php client library.
 
 .PARAMETER Ruby
-    Include google-ads-ruby (for 'project' type).
+    Include google-ads-ruby client library.
 
 .PARAMETER Java
-    Include google-ads-java (for 'project' type).
+    Include google-ads-java client library.
 
 .PARAMETER Dotnet
-    Include google-ads-dotnet (for 'project' type).
+    Include google-ads-dotnet client library.
 
 .EXAMPLE
-    .\install.ps1 -Type project
-    Installs the project with the Python library.
+    .\install.ps1
+    Installs the plugin with the Python client library.
 
 .EXAMPLE
-    .\install.ps1 -Type project -Java
-    Installs the project with Java and Python libraries.
+    .\install.ps1 -Java
+    Installs the plugin with Java and Python client libraries.
 
 .EXAMPLE
-    .\install.ps1 -Type plugin
-    Installs the agy plugin into ~/.gemini/config/plugins.
+    .\install.ps1 -Php -Ruby -Dotnet
+    Installs the plugin with PHP, Ruby, .NET, and Python client libraries.
 #>
 
 param(
-    [Parameter(Mandatory=$true, Position=0, HelpMessage="Installation type: 'project' or 'plugin'")]
-    [ValidateSet("project", "plugin", IgnoreCase=$true)]
-    [string]$Type,
-
     [switch]$Php,
     [switch]$Ruby,
     [switch]$Java,
@@ -219,165 +211,75 @@ function check_environment {
 # Run environment verification before proceeding with installation
 check_environment
 
-# --- Plugin Installation Branch ---
-if ($Type.ToLower() -eq "plugin") {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Write-Error "ERROR: git is not installed. Please install it to continue."
-        exit 1
-    }
-
-    $PluginSource = Join-Path $ProjectDirAbs "plugins\agy"
-    if (-not (Test-Path -LiteralPath $PluginSource)) {
-        Write-Error "ERROR: Plugin directory not found at $PluginSource"
-        exit 1
-    }
-
-    $GeminiPluginsDir = if ($env:USERPROFILE) {
-        Join-Path $env:USERPROFILE ".gemini\config\plugins"
-    } else {
-        Join-Path $HOME ".gemini\config\plugins"
-    }
-    $TargetPluginDir = Join-Path $GeminiPluginsDir "google_ads_assistant_plugin"
-
-    Write-Host "Installing agy plugin into: $TargetPluginDir"
-    if (-not (Test-Path -LiteralPath $GeminiPluginsDir)) {
-        New-Item -ItemType Directory -Force -LiteralPath $GeminiPluginsDir | Out-Null
-    }
-
-    if (Test-Path -LiteralPath $TargetPluginDir) {
-        Remove-Item -Recurse -Force -LiteralPath $TargetPluginDir
-    }
-
-    Copy-Item -Recurse -Force -LiteralPath $PluginSource -Destination $TargetPluginDir
-
-    # Add any additional selected client libraries to plugin structure
-    $PluginClientLibsDir = Join-Path $TargetPluginDir "client_libs"
-    if (-not (Test-Path -LiteralPath $PluginClientLibsDir)) {
-        New-Item -ItemType Directory -Force -LiteralPath $PluginClientLibsDir | Out-Null
-    }
-
-    $OtherLangs = @("php", "ruby", "java", "dotnet")
-    foreach ($Lang in $OtherLangs) {
-        if (Test-Enabled -Lang $Lang) {
-            $Config = Get-RepoConfig -Lang $Lang
-            $TargetRepoPath = Join-Path $PluginClientLibsDir $Config.Name
-            $SourceRepoPath = Join-Path $ProjectDirAbs (Join-Path "client_libs" $Config.Name)
-            $RepoUrl = $Config.Url
-
-            if (Test-Path -LiteralPath $SourceRepoPath) {
-                Write-Host "Adding $($Config.Name) to plugin client_libs from $SourceRepoPath..."
-                if (Test-Path -LiteralPath $TargetRepoPath) {
-                    Remove-Item -Recurse -Force -LiteralPath $TargetRepoPath
-                }
-                Copy-Item -Recurse -Force -LiteralPath $SourceRepoPath -Destination $TargetRepoPath
-            }
-            else {
-                Write-Host "Cloning $RepoUrl into $TargetRepoPath..."
-                git clone $RepoUrl $TargetRepoPath
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Error "ERROR: Failed to clone $RepoUrl"
-                    exit 1
-                }
-                Write-Host "Successfully cloned $($Config.Name)."
-            }
-        }
-    }
-
-    # Pre-seed latest API version in plugin and project config
-    $PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
-    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
-    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
-
-    Write-Host "Plugin installation complete."
-    Write-Host ""
-    Write-Host "Restart your Antigravity / agy host to activate the plugin."
-    exit 0
-}
-
-# --- Project Installation Branch ---
-# --- Configuration ---
-$DefaultParentDir = Join-Path $ProjectDirAbs "client_libs"
-$AllLangs = @("python", "php", "ruby", "java", "dotnet")
-
-# If no specific languages selected, default to Python only
-if (-not $AnySelected) {
-    Write-Host "No additional languages selected. Defaulting to Python only."
-}
-
-# --- Dependency Check ---
+# --- Plugin Installation ---
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Error "ERROR: git is not installed. Please install it to continue."
     exit 1
 }
 
-# --- Path Resolution and Validation ---
-Write-Host "Ensuring default library directory exists: $DefaultParentDir"
-if (-not (Test-Path -LiteralPath $DefaultParentDir)) {
-    New-Item -ItemType Directory -Force -LiteralPath $DefaultParentDir | Out-Null
+$PluginSource = Join-Path $ProjectDirAbs "plugins\agy"
+if (-not (Test-Path -LiteralPath $PluginSource)) {
+    Write-Error "ERROR: Plugin directory not found at $PluginSource"
+    exit 1
 }
 
-$LibPaths = @{}
+$GeminiPluginsDir = if ($env:USERPROFILE) {
+    Join-Path $env:USERPROFILE ".gemini\config\plugins"
+} else {
+    Join-Path $HOME ".gemini\config\plugins"
+}
+$TargetPluginDir = Join-Path $GeminiPluginsDir "google-ads-api-developer-assistant"
 
-foreach ($Lang in $AllLangs) {
-    if (Test-Enabled -Lang $Lang) {
-        $Config = Get-RepoConfig -Lang $Lang
-        $RepoPath = Join-Path $DefaultParentDir $Config.Name
-        $LibPaths[$Lang] = $RepoPath
-    }
+Write-Host "Installing agy plugin into: $TargetPluginDir"
+if (-not (Test-Path -LiteralPath $GeminiPluginsDir)) {
+    New-Item -ItemType Directory -Force -LiteralPath $GeminiPluginsDir | Out-Null
 }
 
-# --- Clone/Update Repositories ---
-foreach ($Lang in $AllLangs) {
+if (Test-Path -LiteralPath $TargetPluginDir) {
+    Remove-Item -Recurse -Force -LiteralPath $TargetPluginDir
+}
+
+Copy-Item -Recurse -Force -LiteralPath $PluginSource -Destination $TargetPluginDir
+
+# Add any additional selected client libraries to plugin structure
+$PluginClientLibsDir = Join-Path $TargetPluginDir "client_libs"
+if (-not (Test-Path -LiteralPath $PluginClientLibsDir)) {
+    New-Item -ItemType Directory -Force -LiteralPath $PluginClientLibsDir | Out-Null
+}
+
+$OtherLangs = @("php", "ruby", "java", "dotnet")
+foreach ($Lang in $OtherLangs) {
     if (Test-Enabled -Lang $Lang) {
         $Config = Get-RepoConfig -Lang $Lang
-        $RepoPath = $LibPaths[$Lang]
+        $TargetRepoPath = Join-Path $PluginClientLibsDir $Config.Name
+        $SourceRepoPath = Join-Path $ProjectDirAbs (Join-Path "client_libs" $Config.Name)
         $RepoUrl = $Config.Url
 
-        Write-Host "Managing repository $($Config.Name) in $RepoPath"
-        
-        if (Test-Path -LiteralPath (Join-Path $RepoPath ".git")) {
-            Write-Host "Directory $RepoPath already exists. Updating..."
-            Push-Location $RepoPath
-            try {
-                git pull
-                if ($LASTEXITCODE -eq 0) {
-                     Write-Host "Successfully updated $($Config.Name)."
-                } else {
-                     Write-Warning "Failed to update $($Config.Name). Continuing..."
-                }
+        if (Test-Path -LiteralPath $SourceRepoPath) {
+            Write-Host "Adding $($Config.Name) to plugin client_libs from $SourceRepoPath..."
+            if (Test-Path -LiteralPath $TargetRepoPath) {
+                Remove-Item -Recurse -Force -LiteralPath $TargetRepoPath
             }
-            finally {
-                Pop-Location
-            }
-        }
-        elseif (Test-Path -LiteralPath $RepoPath) {
-             Write-Warning "Directory $RepoPath exists but is not a git repo. Skipping."
+            Copy-Item -Recurse -Force -LiteralPath $SourceRepoPath -Destination $TargetRepoPath
         }
         else {
-             Write-Host "Cloning $RepoUrl into $RepoPath"
-             git clone $RepoUrl $RepoPath
-             if ($LASTEXITCODE -ne 0) {
-                 Write-Error "ERROR: Failed to clone $RepoUrl"
-                 exit 1
-             }
-             Write-Host "Successfully cloned $($Config.Name)."
+            Write-Host "Cloning $RepoUrl into $TargetRepoPath..."
+            git clone $RepoUrl $TargetRepoPath
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "ERROR: Failed to clone $RepoUrl"
+                exit 1
+            }
+            Write-Host "Successfully cloned $($Config.Name)."
         }
     }
 }
 
+# Pre-seed latest API version in plugin and project config
+$PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
+Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
+Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
 
-
-
-
-
-
-
-# Pre-seed latest API version in project config
-$ProjectPythonDir = Join-Path $DefaultParentDir "google-ads-python\google\ads\googleads"
-Set-LatestApiVersion -SearchDir $ProjectPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
-
-Write-Host "Installation complete."
+Write-Host "Plugin installation complete."
 Write-Host ""
-Write-Host "IMPORTANT: You must manually configure a development environment for each language you wish to use."
-Write-Host "           (e.g.,  run 'pip install google-ads' for Python, run 'composer install' for PHP, etc.)"
+Write-Host "Restart your Antigravity / agy host to activate the plugin."
 

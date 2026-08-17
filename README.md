@@ -119,50 +119,21 @@ By default, Python is used for code generation.  As of v2.3.0 you can provide co
 
 3.  **Run install script**
     *   **Linux/macOS:**
-        *   Ensure that [jq](https://github.com/jqlang/jq?tab=readme-ov-file#installation) is installed.
-        *   To install as a standalone project:
-            *   Run `./install.sh --type project`.
-            *   By default (no extra language flags), this installs the **Python** client library to the `client_libs/` directory.
-            *   To install additional languages, use flags: `./install.sh --type project --php --ruby --dotnet`.
-        *   To install as an Antigravity / agy plugin:
-            *   Run `./install.sh --type plugin`.
-            *   To include additional client libraries in the plugin structure, add flags: `./install.sh --type plugin --php --ruby --dotnet`.
+        *   Run `./install.sh`.
+        *   By default, this installs the assistant as an Antigravity (`agy`) plugin with the **Python** client library into `~/.gemini/config/plugins/google-ads-api-developer-assistant`.
+        *   To include additional client libraries in the plugin structure, add flags: `./install.sh --php --ruby --dotnet`.
         *   Execute `./install.sh --help` for more details.
     *   **Windows:**
         *   Open PowerShell.
-        *   To install as a standalone project:
-            *   Run `.\install.ps1 -Type project`.
-            *   To install additional languages, use parameters: `.\install.ps1 -Type project -Php -Ruby -Dotnet`.
-        *   To install as an Antigravity / agy plugin:
-            *   Run `.\install.ps1 -Type plugin`.
-            *   To include additional client libraries in the plugin structure: `.\install.ps1 -Type plugin -Php -Ruby -Dotnet`.
+        *   Run `.\install.ps1`.
+        *   To include additional client libraries in the plugin structure: `.\install.ps1 -Php -Ruby -Dotnet`.
 4.  **Configure Credentials:** Make sure your API credentials configuration files are in your `$HOME` directory. Each language has its own configuration file naming convention and structure. 
-5.  **Optional: Default Customer ID:** To set a default customer ID, create a file named `customer_id.txt` in the `google-ads-api-developer-assistant` directory with the content `customer_id:YOUR_CUSTOMER_ID` (e.g., `customer_id: 1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.
+5.  **Optional: Default Customer ID:** To set a default customer ID, enter your customer ID in `config/customer_id.txt` or `config/customer_id` (e.g., `1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.
 6.  **Google Ads API Version Validation:** On your first run in a session, the assistant will automatically identify the latest stable Google Ads API version and ask you to confirm it. Once confirmed, this version is cached in [api_version.txt](file:///usr/local/google/home/rwh/google-ads-api-developer-assistant/config/api_version.txt) and used for all subsequent prompts. If you need to force a version change or refresh the cache, simply delete or edit the `config/api_version.txt` file.
 
-### Adding Custom Codebases for Context
-
-To provide the assistant with additional context (such as your own codebase or custom client library paths), use the `update.sh` (Linux/macOS) or `update.ps1` (Windows) script with the context path argument.
-
-*   **Linux/macOS:**
-    ```bash
-    ./update.sh --context_path /path/to/your/custom/codebase
-    ```
-*   **Windows:**
-    ```powershell
-    .\update.ps1 -ContextPath C:\path\to\your\custom\codebase
-    ```
-
-This registers the specified directory under the global project configuration in `~/.gemini/config/projects/` to ensure it is loaded as context on each invocation of the assistant.
-
-    **By default, Python is used for code generation.  As of v2.3.0 you can provide context from your project files using the `context_dir` flag: `./update.sh --context_dir /path/to/your/codebase`. This allows Gemini to include your application logic in its reasoning when creating responses.  This feature enables the Assistant to produce saved code examples in your chosen language, providing support even when an official client library is unavailable.
-   * Before requesting code output, tell the Assistant: `write saved code examples in <language of your choice>`
 ## Usage
 
 1.  **Start Antigravity Session:**
-    ```bash
-    cd /path/to/google-ads-api-developer-assistant
-    ```
     Ask questions, generate code, and validate queries within your Antigravity terminal session.
 
 2.  **Ask a question:**
@@ -179,13 +150,12 @@ This registers the specified directory under the global project configuration in
 
 ## Directory Structure
 
-*   `google-ads-api-developer-assistant/`: Root directory.
-*   `.agents/`: Contains hooks, skills, and configuration files for the agent.
-*   `api_examples/`: Contains example API request/response files.
-*   `saved/code/`: Stores Python code generated by the assistant.
-*   `saved/csv/`: Stores CSV files exported from API results.
-*   `saved/data/`: Stores diagnostic and troubleshooting reports.
-*   `customer_id.txt`: (Optional) Stores the default customer ID.
+*   `plugins/agy/`: Source directory for the Antigravity plugin.
+*   `plugins/agy/rules/`: Agent behavioral rules and protocols.
+*   `plugins/agy/skills/`: Assistant skills (GAQL analyzer, proto inspect, etc.).
+*   `plugins/agy/sidecars/`: Background sidecar microservices.
+*   `plugins/agy/client_libs/`: Cloned client libraries.
+*   `config/`: Configuration files (e.g. `api_version.txt`, `customer_id.txt`).
 
 ## Mutate Operations
 
@@ -195,59 +165,51 @@ The Assistant is designed to generate code for mutate operations (e.g., creating
 
 *   The underlying model may have been trained on an older API version. It may occasionally generate code with deprecated fields. Execution errors often provide feedback that allows the assistant to self-correct on the next attempt, using the context from the client libraries. To avoid these errors, we always search for the latest version of the API when initializing the session and ask you to verify the version.
 
-
-
 ## Maintenance
 
-We will periodically release updates to the client libraries.
-To ensure you are using the latest versions, run the update script specifying the mandatory `--type` (`project` or `plugin`):
+We will periodically release updates to the assistant and client libraries.
+To update your repository, plugin installation, and client libraries:
 
 *   **Linux/macOS:**
-    *   To update the standalone project and its client libraries:
-        ```bash
-        ./update.sh --type project
-        ```
-    *   To update all client libraries in the installed plugin structure:
-        ```bash
-        ./update.sh --type plugin
-        ```
+    ```bash
+    ./update.sh
+    ```
+    To add or update specific client libraries:
+    ```bash
+    ./update.sh --java --dotnet
+    ```
 *   **Windows:**
-    *   To update the standalone project and its client libraries:
-        ```powershell
-        .\update.ps1 -Type project
-        ```
-    *   To update all client libraries in the installed plugin structure:
-        ```powershell
-        .\update.ps1 -Type plugin
-        ```
-
-Starting with release 2.3.0, you can use the `--context_path` argument (Linux/macOS) or `-ContextPath` parameter (Windows) with the update scripts in project mode to add additional directories to your context (e.g., your own codebase).
+    ```powershell
+    .\update.ps1
+    ```
+    To add or update specific client libraries:
+    ```powershell
+    .\update.ps1 -Java -Dotnet
+    ```
 
 ## Uninstallation
 
-If you wish to remove the assistant, you can use the uninstallation scripts:
+If you wish to remove the assistant plugin, you can use the uninstallation scripts:
 
 *   **Linux/macOS:**
-    *   To uninstall the standalone project directory:
-        ```bash
-        ./uninstall.sh --type project
-        ```
-    *   To uninstall the installed Antigravity / agy plugin:
-        ```bash
-        ./uninstall.sh --type plugin
-        ```
+    ```bash
+    ./uninstall.sh
+    ```
+    To remove specific client libraries only:
+    ```bash
+    ./uninstall.sh --java
+    ```
 *   **Windows:**
-    *   To uninstall the standalone project directory:
-        ```powershell
-        .\uninstall.ps1 -Type project
-        ```
-    *   To uninstall the installed Antigravity / agy plugin:
-        ```powershell
-        .\uninstall.ps1 -Type plugin
-        ```
+    ```powershell
+    .\uninstall.ps1
+    ```
+    To remove specific client libraries only:
+    ```powershell
+    .\uninstall.ps1 -Java
+    ```
 
 > [!CAUTION]
-> These scripts will prompt for confirmation before deleting the specified project or plugin directory (unless `--yes` / `-Force` is passed).
+> These scripts will prompt for confirmation before deleting the installed plugin directory (unless `-y` / `--yes` / `-Force` is passed).
 
 ## Contributing
 

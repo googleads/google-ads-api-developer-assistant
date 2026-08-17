@@ -27,30 +27,24 @@ err() {
 }
 
 # --- Defaults ---
-UNINSTALL_TYPE=""
 UNINSTALL_PYTHON=false
 UNINSTALL_PHP=false
 UNINSTALL_RUBY=false
 UNINSTALL_JAVA=false
 UNINSTALL_DOTNET=false
 UNINSTALL_ALL_LIBS=false
-UNINSTALL_CLEAN=false
 ANY_SELECTED=false
 AUTO_CONFIRM=false
 
 # --- Help Function ---
 usage() {
-  echo "Usage: $0 --type <project|plugin> [OPTIONS]"
-  echo "  Uninstalls the Google Ads API Developer Assistant project or plugin."
-  echo ""
-  echo "  Required Arguments:"
-  echo "    -t, --type TYPE            Uninstallation type: 'project' or 'plugin'"
+  echo "Usage: $0 [OPTIONS]"
+  echo "  Uninstalls the Google Ads API Developer Assistant plugin from ~/.gemini/config/plugins/."
   echo ""
   echo "  Options:"
   echo "    -h, --help                 Show this help message and exit"
   echo "    -y, --yes, -f, --force     Skip confirmation prompt"
-  echo "    --all                      Remove all client libraries from client_libs/"
-  echo "    --clean                    Clean virtual environment (.venv) and caches without deleting project"
+  echo "    --all                      Remove all client libraries from plugin client_libs/"
   echo "    --python                   Remove only google-ads-python client library"
   echo "    --php                      Remove only google-ads-php client library"
   echo "    --ruby                     Remove only google-ads-ruby client library"
@@ -58,12 +52,10 @@ usage() {
   echo "    --dotnet                   Remove only google-ads-dotnet client library"
   echo ""
   echo "  Examples:"
-  echo "    $0 --type project          (Uninstalls and deletes the entire project directory)"
-  echo "    $0 --type project --clean  (Cleans .venv and generated cache files without deleting project)"
-  echo "    $0 --type project --all    (Removes all client libraries from the project)"
-  echo "    $0 --type project --java   (Removes only the Java library from the project)"
-  echo "    $0 --type plugin           (Uninstalls and deletes the entire plugin directory)"
-  echo "    $0 --type plugin --java    (Removes only the Java library from the plugin)"
+  echo "    $0                         (Uninstalls and deletes the entire plugin directory)"
+  echo "    $0 --yes                   (Uninstalls plugin without confirmation prompt)"
+  echo "    $0 --all                   (Removes all client libraries from the plugin)"
+  echo "    $0 --java                  (Removes only the Java library from the plugin)"
   echo ""
 }
 
@@ -95,19 +87,6 @@ while [[ $# -gt 0 ]]; do
       usage
       exit 0
       ;;
-    -t|--type)
-      if [[ $# -lt 2 ]]; then
-        err "ERROR: --type requires an argument ('project' or 'plugin')."
-        usage
-        exit 1
-      fi
-      UNINSTALL_TYPE=$(echo "$2" | tr '[:upper:]' '[:lower:]')
-      shift 2
-      ;;
-    --type=*)
-      UNINSTALL_TYPE=$(echo "${1#*=}" | tr '[:upper:]' '[:lower:]')
-      shift
-      ;;
     --all)
       UNINSTALL_ALL_LIBS=true
       UNINSTALL_PYTHON=true
@@ -116,10 +95,6 @@ while [[ $# -gt 0 ]]; do
       UNINSTALL_JAVA=true
       UNINSTALL_DOTNET=true
       ANY_SELECTED=true
-      shift
-      ;;
-    --clean)
-      UNINSTALL_CLEAN=true
       shift
       ;;
     --python)
@@ -159,103 +134,41 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# --- Validate Required Type Argument ---
-if [[ -z "${UNINSTALL_TYPE}" ]]; then
-  err "ERROR: Missing required argument: --type <project|plugin>"
-  usage
-  exit 1
-fi
+PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+LEGACY_PLUGIN_DIR="${HOME}/.gemini/config/plugins/google_ads_assistant_plugin"
 
-if [[ "${UNINSTALL_TYPE}" != "project" && "${UNINSTALL_TYPE}" != "plugin" ]]; then
-  err "ERROR: Invalid uninstallation type '${UNINSTALL_TYPE}'. Must be 'project' or 'plugin'."
-  usage
-  exit 1
-fi
-
-# --- Plugin Uninstallation Branch ---
-if [[ "${UNINSTALL_TYPE}" == "plugin" ]]; then
-  PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google_ads_assistant_plugin"
-
-  if [[ ! -d "${PLUGIN_TARGET_DIR}" ]]; then
-    echo "Plugin directory '${PLUGIN_TARGET_DIR}' does not exist. Nothing to uninstall."
-    exit 0
-  fi
-
-  # If specific client libraries were requested to be removed
-  if [[ "${ANY_SELECTED}" == "true" ]]; then
-    for lang in python php ruby java dotnet; do
-      if is_enabled "$lang"; then
-        repo_name=$(get_repo_name "$lang")
-        lib_path="${PLUGIN_TARGET_DIR}/client_libs/${repo_name}"
-        if [[ -d "${lib_path}" ]]; then
-          echo "Removing ${repo_name} from ${PLUGIN_TARGET_DIR}/client_libs/..."
-          rm -rf "${lib_path}"
-          echo "Successfully removed ${repo_name}."
-        else
-          echo "Library ${repo_name} not found in ${PLUGIN_TARGET_DIR}/client_libs/."
-        fi
-      fi
-    done
-    echo "Plugin client library removal complete."
-    exit 0
-  fi
-
-  echo "This will uninstall the Google Ads API Developer Assistant plugin"
-  echo "and DELETE the directory: ${PLUGIN_TARGET_DIR}"
-
-  if [[ "${AUTO_CONFIRM}" != "true" ]]; then
-    read -p "Are you sure you want to proceed? (Y/n): " confirm
-    if [[ ! "${confirm}" =~ ^[Yy]$ ]]; then
-      echo "Uninstallation cancelled."
-      exit 0
-    fi
-  fi
-
-  echo "Removing plugin directory: ${PLUGIN_TARGET_DIR}..."
-  rm -rf "${PLUGIN_TARGET_DIR}"
-
-  echo "Plugin uninstallation complete."
-  exit 0
-fi
-
-# --- Project Uninstallation Branch ---
-# Determine project root
-if ! PROJECT_DIR_ABS=$(git rev-parse --show-toplevel 2>/dev/null); then
-  err "ERROR: This script must be run from within the google-ads-api-developer-assistant git repository."
-  exit 1
-fi
-
-# Clean mode (cleans .venv, cache, and logs without deleting project)
-if [[ "${UNINSTALL_CLEAN}" == "true" ]]; then
-  echo "Cleaning environment and cache files in: ${PROJECT_DIR_ABS}..."
-  rm -rf "${PROJECT_DIR_ABS}/.venv"
-  rm -f "${PROJECT_DIR_ABS}/config/api_version.txt"
-  rm -f "${PROJECT_DIR_ABS}/saved/code/tmp_lint.py"
-  echo "Successfully cleaned .venv and cached files."
+if [[ ! -d "${PLUGIN_TARGET_DIR}" && ! -d "${LEGACY_PLUGIN_DIR}" ]]; then
+  echo "Plugin directory '${PLUGIN_TARGET_DIR}' does not exist. Nothing to uninstall."
   exit 0
 fi
 
 # If specific client libraries were requested to be removed
 if [[ "${ANY_SELECTED}" == "true" ]]; then
-  for lang in python php ruby java dotnet; do
-    if is_enabled "$lang"; then
-      repo_name=$(get_repo_name "$lang")
-      lib_path="${PROJECT_DIR_ABS}/client_libs/${repo_name}"
-      if [[ -d "${lib_path}" ]]; then
-        echo "Removing ${repo_name} from ${PROJECT_DIR_ABS}/client_libs/..."
-        rm -rf "${lib_path}"
-        echo "Successfully removed ${repo_name}."
-      else
-        echo "Library ${repo_name} not found in ${PROJECT_DIR_ABS}/client_libs/."
-      fi
+  for dir in "${PLUGIN_TARGET_DIR}" "${LEGACY_PLUGIN_DIR}"; do
+    if [[ -d "${dir}/client_libs" ]]; then
+      for lang in python php ruby java dotnet; do
+        if is_enabled "$lang"; then
+          repo_name=$(get_repo_name "$lang")
+          lib_path="${dir}/client_libs/${repo_name}"
+          if [[ -d "${lib_path}" ]]; then
+            echo "Removing ${repo_name} from ${dir}/client_libs/..."
+            rm -rf "${lib_path}"
+            echo "Successfully removed ${repo_name}."
+          else
+            echo "Library ${repo_name} not found in ${dir}/client_libs/."
+          fi
+        fi
+      done
     fi
   done
-  echo "Project client library removal complete."
+  echo "Plugin client library removal complete."
+  echo ""
+  echo "Restart your Antigravity / agy host to apply changes."
   exit 0
 fi
 
-echo "This will uninstall the Google Ads API Developer Assistant project"
-echo "and DELETE the entire directory: ${PROJECT_DIR_ABS}"
+echo "This will uninstall the Google Ads API Developer Assistant plugin"
+echo "and DELETE the directory: ${PLUGIN_TARGET_DIR}"
 
 if [[ "${AUTO_CONFIRM}" != "true" ]]; then
   read -p "Are you sure you want to proceed? (Y/n): " confirm
@@ -265,23 +178,12 @@ if [[ "${AUTO_CONFIRM}" != "true" ]]; then
   fi
 fi
 
-# Remove registered project config from ~/.gemini/config/projects/ if present
-PROJECTS_DIR="${HOME}/.gemini/config/projects"
-if [[ -d "${PROJECTS_DIR}" ]]; then
-  for pfile in "${PROJECTS_DIR}"/*.json; do
-    [[ -f "${pfile}" ]] || continue
-    if grep -q "${PROJECT_DIR_ABS}" "${pfile}" 2>/dev/null; then
-      echo "Removing project configuration: ${pfile}..."
-      rm -f "${pfile}"
-    fi
-  done
+echo "Removing plugin directory: ${PLUGIN_TARGET_DIR}..."
+rm -rf "${PLUGIN_TARGET_DIR}"
+if [[ -d "${LEGACY_PLUGIN_DIR}" ]]; then
+  rm -rf "${LEGACY_PLUGIN_DIR}"
 fi
 
-echo "Removing project directory: ${PROJECT_DIR_ABS}..."
-parent_dir=$(dirname "${PROJECT_DIR_ABS}")
-project_name=$(basename "${PROJECT_DIR_ABS}")
-
-cd "${parent_dir}"
-rm -rf "${project_name}"
-
-echo "Project uninstallation complete."
+echo "Plugin uninstallation complete."
+echo ""
+echo "Restart your Antigravity / agy host to complete plugin uninstallation."

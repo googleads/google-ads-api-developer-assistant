@@ -1,14 +1,8 @@
 * 3.1.0
-- Enhanced uninstallation scripts (uninstall.sh and uninstall.ps1) with mandatory --type support, --all for batch client library removal, --clean mode for environment/cache reset, and automatic Antigravity/Gemini project registration cleanup.
-- Added test suite for uninstallation script options and cleanup behavior in tests/test_uninstall.sh.
+- Refactored install, uninstall, and update scripts (install.sh, install.ps1, uninstall.sh, uninstall.ps1, update.sh, update.ps1) to exclusively operate on the Antigravity plugin, removing the concept of installation type and standalone project mode across all scripts.
 - Added check_environment section to install.sh and install.ps1 to verify Python >= 3.10 and Antigravity (CLI or web/desktop) are installed and available prior to installation.
-- Added test coverage for environment verification checks and failure conditions in tests/test_install.sh.
-- Updated documentation in google_ads_assistant_plugin/README.md regarding plugin host lifecycle hook limitations.
-- Optimized skills
-- Added rules to distinguish between concrete objects and their representation in Python files.
-- Added plugin for agy
-- Modified installation script to accommodate plugin.
-- If default API version cannot be dtermined, prompt user for a value.
+- Optimized skills and added rules to distinguish between concrete objects and their representation in Python files.
+- Added plugin for agy and configured dynamic API version discovery with interactive prompt fallback.
 
 * 3.0.0
 - Fixed a breaking bug in install.ps1 and tests/test_install.ps1 where legacy settings.json references caused the Windows installation to crash.
