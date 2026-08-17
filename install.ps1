@@ -3,7 +3,11 @@
     Initializes the development environment for the Google Ads API Developer Assistant plugin on Windows.
 
 .DESCRIPTION
-    This script installs the Google Ads API Developer Assistant as a plugin for Antigravity (agy).
+    This script installs the Google Ads API Developer Assistant as a plugin for Antigravity (agy)
+    or Claude Code (claudecode).
+
+.PARAMETER Target
+    Required. Target platform: 'agy' (Antigravity) or 'claudecode' (Claude Code).
 
 .PARAMETER Php
     Include google-ads-php client library.
@@ -18,19 +22,27 @@
     Include google-ads-dotnet client library.
 
 .EXAMPLE
-    .\install.ps1
-    Installs the plugin with the Python client library.
+    .\install.ps1 -Target agy
+    Installs the plugin for Antigravity with the Python client library.
 
 .EXAMPLE
-    .\install.ps1 -Java
-    Installs the plugin with Java and Python client libraries.
+    .\install.ps1 -Target claudecode
+    Installs the plugin for Claude Code into the OS-specific directory (%APPDATA%\Claude\plugins).
 
 .EXAMPLE
-    .\install.ps1 -Php -Ruby -Dotnet
-    Installs the plugin with PHP, Ruby, .NET, and Python client libraries.
+    .\install.ps1 -Target agy -Java
+    Installs the plugin for Antigravity with Java and Python client libraries.
+
+.EXAMPLE
+    .\install.ps1 -Target claudecode -Php -Ruby -Dotnet
+    Installs the plugin for Claude Code with PHP, Ruby, .NET, and Python client libraries.
 #>
 
 param(
+    [Parameter(Mandatory=$true, Position=0, HelpMessage="Target platform: 'agy' or 'claudecode'")]
+    [ValidateSet("agy", "claudecode", IgnoreCase=$true)]
+    [string]$Target,
+
     [switch]$Php,
     [switch]$Ruby,
     [switch]$Java,
@@ -76,6 +88,37 @@ function Test-Enabled {
         "java"   { return $Java }
         "dotnet" { return $Dotnet }
         default  { return $false }
+    }
+}
+
+# Helper to resolve OS-specific target plugin directory
+function Get-PluginTargetDir {
+    param([string]$TargetPlatform)
+
+    $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+
+    switch ($TargetPlatform.ToLower()) {
+        "agy" {
+            return (Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant")
+        }
+        "claudecode" {
+            if ($env:APPDATA) {
+                return (Join-Path $env:APPDATA "Claude\plugins\google-ads-api-developer-assistant")
+            }
+            elseif ($IsMacOS -or ($PSVersionTable.OS -and $PSVersionTable.OS -match "Darwin")) {
+                return (Join-Path $UserHome "Library/Application Support/Claude/plugins/google-ads-api-developer-assistant")
+            }
+            elseif ($IsLinux -or ($PSVersionTable.OS -and $PSVersionTable.OS -match "Linux")) {
+                $ConfigBase = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $UserHome ".config" }
+                return (Join-Path $ConfigBase "claude/plugins/google-ads-api-developer-assistant")
+            }
+            else {
+                return (Join-Path $UserHome ".claude\plugins\google-ads-api-developer-assistant")
+            }
+        }
+        default {
+            throw "Invalid target '$TargetPlatform'. Must be 'agy' or 'claudecode'."
+        }
     }
 }
 
@@ -145,7 +188,6 @@ function Test-PythonEnvironment {
 }
 
 function Test-AntigravityEnvironment {
-    # Check CLI: agy or antigravity
     if (Get-Command agy -ErrorAction SilentlyContinue) {
         Write-Host "Found Antigravity CLI (agy)"
         return $true
@@ -155,13 +197,11 @@ function Test-AntigravityEnvironment {
         return $true
     }
 
-    # Check Environment Variables
     if ($env:ANTIGRAVITY_APP_DIR -or $env:ANTIGRAVITY_LS_ADDRESS -or $env:ANTIGRAVITY_PORT -or $env:JETSKI_HOME -or $env:GEMINI_HOME) {
         Write-Host "Antigravity environment detected via environment variables"
         return $true
     }
 
-    # Check Home Directories
     $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
     $GeminiDir = Join-Path $UserHome ".gemini"
     $AntigravityDir = Join-Path $UserHome ".antigravity"
@@ -170,7 +210,6 @@ function Test-AntigravityEnvironment {
         return $true
     }
 
-    # Check Program Files
     $ProgramDirs = @(
         (Join-Path $env:LOCALAPPDATA "Programs\Antigravity"),
         (Join-Path $env:PROGRAMFILES "Antigravity"),
@@ -189,16 +228,44 @@ function Test-AntigravityEnvironment {
     return $false
 }
 
+function Test-ClaudeCodeEnvironment {
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        Write-Host "Found Claude Code CLI (claude)"
+        return $true
+    }
+    if (Get-Command claude-code -ErrorAction SilentlyContinue) {
+        Write-Host "Found Claude Code CLI (claude-code)"
+        return $true
+    }
+
+    $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+    $ClaudeConfigDir = if ($env:APPDATA) { Join-Path $env:APPDATA "Claude" } else { Join-Path $UserHome ".claude" }
+    if (Test-Path -LiteralPath $ClaudeConfigDir) {
+        Write-Host "Claude configuration found at $ClaudeConfigDir"
+        return $true
+    }
+
+    Write-Host "Note: Claude Code CLI ('claude') not found on PATH. Proceeding with installation to target plugin directory."
+    return $true
+}
+
 function check_environment {
-    Write-Host "Checking environment..."
+    Write-Host "Checking environment for $Target..."
     $EnvOk = $true
 
     if (-not (Test-PythonEnvironment)) {
         $EnvOk = $false
     }
 
-    if (-not (Test-AntigravityEnvironment)) {
-        $EnvOk = $false
+    if ($Target.ToLower() -eq "agy") {
+        if (-not (Test-AntigravityEnvironment)) {
+            $EnvOk = $false
+        }
+    }
+    elseif ($Target.ToLower() -eq "claudecode") {
+        if (-not (Test-ClaudeCodeEnvironment)) {
+            $EnvOk = $false
+        }
     }
 
     if (-not $EnvOk) {
@@ -223,16 +290,12 @@ if (-not (Test-Path -LiteralPath $PluginSource)) {
     exit 1
 }
 
-$GeminiPluginsDir = if ($env:USERPROFILE) {
-    Join-Path $env:USERPROFILE ".gemini\config\plugins"
-} else {
-    Join-Path $HOME ".gemini\config\plugins"
-}
-$TargetPluginDir = Join-Path $GeminiPluginsDir "google-ads-api-developer-assistant"
+$TargetPluginDir = Get-PluginTargetDir -TargetPlatform $Target
+$ParentPluginDir = Split-Path $TargetPluginDir
 
-Write-Host "Installing agy plugin into: $TargetPluginDir"
-if (-not (Test-Path -LiteralPath $GeminiPluginsDir)) {
-    New-Item -ItemType Directory -Force -LiteralPath $GeminiPluginsDir | Out-Null
+Write-Host "Installing plugin for $Target into: $TargetPluginDir"
+if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
+    New-Item -ItemType Directory -Force -LiteralPath $ParentPluginDir | Out-Null
 }
 
 if (Test-Path -LiteralPath $TargetPluginDir) {
@@ -279,7 +342,11 @@ $PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\goo
 Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
 Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
 
-Write-Host "Plugin installation complete."
+Write-Host "Plugin installation for $Target complete."
 Write-Host ""
-Write-Host "Restart your Antigravity / agy host to activate the plugin."
+if ($Target.ToLower() -eq "agy") {
+    Write-Host "Restart your Antigravity / agy host to activate the plugin."
+} else {
+    Write-Host "Restart your Claude Code environment to activate the plugin."
+}
 

@@ -5,8 +5,11 @@
 .DESCRIPTION
     This script updates the Google Ads API Developer Assistant repository and installed plugin:
     1. Updates the git repository (git pull).
-    2. Syncs updated plugin assets to ~/.gemini/config/plugins/google-ads-api-developer-assistant.
+    2. Syncs updated plugin assets to the platform-specific plugin directory (Antigravity or Claude Code).
     3. Clones or updates configured client libraries in the plugin's 'client_libs/' directory.
+
+.PARAMETER Target
+    Required. Target platform: 'agy' (Antigravity) or 'claudecode' (Claude Code).
 
 .PARAMETER Python
     Ensure google-ads-python is present and updated.
@@ -24,15 +27,23 @@
     Ensure google-ads-dotnet is present and updated.
 
 .EXAMPLE
-    .\update.ps1
-    Updates repository, plugin, and all configured client libraries.
+    .\update.ps1 -Target agy
+    Updates repository, Antigravity plugin, and all configured client libraries.
 
 .EXAMPLE
-    .\update.ps1 -Java
-    Ensures Java library is present and updated in plugin.
+    .\update.ps1 -Target claudecode
+    Updates repository, Claude Code plugin, and all configured client libraries.
+
+.EXAMPLE
+    .\update.ps1 -Target agy -Java
+    Ensures Java library is present and updated in Antigravity plugin.
 #>
 
 param(
+    [Parameter(Mandatory=$true, Position=0, HelpMessage="Target platform: 'agy' or 'claudecode'")]
+    [ValidateSet("agy", "claudecode", IgnoreCase=$true)]
+    [string]$Target,
+
     [switch]$Python,
     [switch]$Php,
     [switch]$Ruby,
@@ -59,6 +70,36 @@ function Get-RepoName {
         "ruby"   { return "google-ads-ruby" }
         "java"   { return "google-ads-java" }
         "dotnet" { return "google-ads-dotnet" }
+    }
+}
+
+function Get-PluginTargetDir {
+    param([string]$TargetPlatform)
+
+    $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+
+    switch ($TargetPlatform.ToLower()) {
+        "agy" {
+            return (Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant")
+        }
+        "claudecode" {
+            if ($env:APPDATA) {
+                return (Join-Path $env:APPDATA "Claude\plugins\google-ads-api-developer-assistant")
+            }
+            elseif ($IsMacOS -or ($PSVersionTable.OS -and $PSVersionTable.OS -match "Darwin")) {
+                return (Join-Path $UserHome "Library/Application Support/Claude/plugins/google-ads-api-developer-assistant")
+            }
+            elseif ($IsLinux -or ($PSVersionTable.OS -and $PSVersionTable.OS -match "Linux")) {
+                $ConfigBase = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $UserHome ".config" }
+                return (Join-Path $ConfigBase "claude/plugins/google-ads-api-developer-assistant")
+            }
+            else {
+                return (Join-Path $UserHome ".claude\plugins\google-ads-api-developer-assistant")
+            }
+        }
+        default {
+            throw "Invalid target '$TargetPlatform'. Must be 'agy' or 'claudecode'."
+        }
     }
 }
 
@@ -147,21 +188,20 @@ if ($Java)   { $SpecifiedLangs += "java" }
 if ($Dotnet) { $SpecifiedLangs += "dotnet" }
 
 # --- Plugin Update ---
-$UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-$GeminiPluginsDir = Join-Path $UserHome ".gemini\config\plugins"
-$TargetPluginDir = Join-Path $GeminiPluginsDir "google-ads-api-developer-assistant"
+$TargetPluginDir = Get-PluginTargetDir -TargetPlatform $Target
+$ParentPluginDir = Split-Path $TargetPluginDir
 $PluginSourceDir = Join-Path $ProjectDirAbs "plugins\agy"
 
 if (-not (Test-Path -LiteralPath $TargetPluginDir)) {
-    Write-Host "Plugin not yet installed at $TargetPluginDir. Installing..."
-    if (-not (Test-Path -LiteralPath $GeminiPluginsDir)) {
-        New-Item -ItemType Directory -Force -LiteralPath $GeminiPluginsDir | Out-Null
+    Write-Host "Plugin not yet installed at $TargetPluginDir. Installing for $Target..."
+    if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
+        New-Item -ItemType Directory -Force -LiteralPath $ParentPluginDir | Out-Null
     }
     Copy-Item -Recurse -Force -LiteralPath $PluginSourceDir -Destination $TargetPluginDir
 }
 else {
     Write-Host "Syncing plugin files to $TargetPluginDir..."
-    $ItemsToSync = @("rules", "sidecars", "skills", "config", "plugin.json", "README.md")
+    $ItemsToSync = @("rules", "sidecars", "skills", "config", "client_libs", "plugin.json", "README.md")
     foreach ($Item in $ItemsToSync) {
         $SourceItem = Join-Path $PluginSourceDir $Item
         if (Test-Path -LiteralPath $SourceItem) {
@@ -236,6 +276,10 @@ $PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\goo
 Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
 Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
 
-Write-Host "Plugin update complete."
+Write-Host "Plugin update for $Target complete."
 Write-Host ""
-Write-Host "Restart your Antigravity / agy host to apply changes."
+if ($Target.ToLower() -eq "agy") {
+    Write-Host "Restart your Antigravity / agy host to apply changes."
+} else {
+    Write-Host "Restart your Claude Code environment to apply changes."
+}

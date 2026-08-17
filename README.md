@@ -119,22 +119,23 @@ By default, Python is used for code generation.  As of v2.3.0 you can provide co
 
 3.  **Run install script**
     *   **Linux/macOS:**
-        *   Run `./install.sh`.
-        *   By default, this installs the assistant as an Antigravity (`agy`) plugin with the **Python** client library into `~/.gemini/config/plugins/google-ads-api-developer-assistant`.
-        *   To include additional client libraries in the plugin structure, add flags: `./install.sh --php --ruby --dotnet`.
+        *   Run `./install.sh <agy|claudecode>`.
+        *   For Antigravity: `./install.sh agy` (installs to `~/.gemini/config/plugins/google-ads-api-developer-assistant`).
+        *   For Claude Code: `./install.sh claudecode` (installs to OS-specific plugin directory, e.g. `~/.config/claude/plugins/google-ads-api-developer-assistant` on Linux or `~/Library/Application Support/Claude/plugins/google-ads-api-developer-assistant` on macOS).
+        *   To include additional client libraries, add flags: `./install.sh agy --php --ruby --dotnet`.
         *   Execute `./install.sh --help` for more details.
     *   **Windows:**
         *   Open PowerShell.
-        *   Run `.\install.ps1`.
-        *   To include additional client libraries in the plugin structure: `.\install.ps1 -Php -Ruby -Dotnet`.
+        *   Run `.\install.ps1 -Target agy` or `.\install.ps1 -Target claudecode`.
+        *   To include additional client libraries: `.\install.ps1 -Target agy -Php -Ruby -Dotnet`.
 4.  **Configure Credentials:** Make sure your API credentials configuration files are in your `$HOME` directory. Each language has its own configuration file naming convention and structure. 
 5.  **Optional: Default Customer ID:** To set a default customer ID, enter your customer ID in `config/customer_id.txt` or `config/customer_id` (e.g., `1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.
 6.  **Google Ads API Version Validation:** On your first run in a session, the assistant will automatically identify the latest stable Google Ads API version and ask you to confirm it. Once confirmed, this version is cached in [api_version.txt](file:///usr/local/google/home/rwh/google-ads-api-developer-assistant/config/api_version.txt) and used for all subsequent prompts. If you need to force a version change or refresh the cache, simply delete or edit the `config/api_version.txt` file.
 
 ## Usage
 
-1.  **Start Antigravity Session:**
-    Ask questions, generate code, and validate queries within your Antigravity terminal session.
+1.  **Start Assistant Session:**
+    Ask questions, generate code, and validate queries within your Antigravity terminal session or Claude Code.
 
 2.  **Ask a question:**
     > "What are the resource names for my enabled campaigns sorted by campaign id"
@@ -150,7 +151,7 @@ By default, Python is used for code generation.  As of v2.3.0 you can provide co
 
 ## Directory Structure
 
-*   `plugins/agy/`: Source directory for the Antigravity plugin.
+*   `plugins/agy/`: Source directory for the assistant plugin.
 *   `plugins/agy/rules/`: Agent behavioral rules and protocols.
 *   `plugins/agy/skills/`: Assistant skills (GAQL analyzer, proto inspect, etc.).
 *   `plugins/agy/sidecars/`: Background sidecar microservices.
@@ -172,19 +173,21 @@ To update your repository, plugin installation, and client libraries:
 
 *   **Linux/macOS:**
     ```bash
-    ./update.sh
+    ./update.sh agy          # Update Antigravity plugin
+    ./update.sh claudecode   # Update Claude Code plugin
     ```
     To add or update specific client libraries:
     ```bash
-    ./update.sh --java --dotnet
+    ./update.sh agy --java --dotnet
     ```
 *   **Windows:**
     ```powershell
-    .\update.ps1
+    .\update.ps1 -Target agy
+    .\update.ps1 -Target claudecode
     ```
     To add or update specific client libraries:
     ```powershell
-    .\update.ps1 -Java -Dotnet
+    .\update.ps1 -Target agy -Java -Dotnet
     ```
 
 ## Uninstallation
@@ -193,19 +196,21 @@ If you wish to remove the assistant plugin, you can use the uninstallation scrip
 
 *   **Linux/macOS:**
     ```bash
-    ./uninstall.sh
+    ./uninstall.sh agy          # Uninstall Antigravity plugin
+    ./uninstall.sh claudecode   # Uninstall Claude Code plugin
     ```
     To remove specific client libraries only:
     ```bash
-    ./uninstall.sh --java
+    ./uninstall.sh agy --java
     ```
 *   **Windows:**
     ```powershell
-    .\uninstall.ps1
+    .\uninstall.ps1 -Target agy
+    .\uninstall.ps1 -Target claudecode
     ```
     To remove specific client libraries only:
     ```powershell
-    .\uninstall.ps1 -Java
+    .\uninstall.ps1 -Target agy -Java
     ```
 
 > [!CAUTION]

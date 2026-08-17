@@ -62,7 +62,49 @@ get_repo_name() {
   esac
 }
 
+# Helper to resolve OS-specific target plugin directory
+get_plugin_target_dir() {
+  local target="$1"
+  local os_type
+  os_type=$(uname -s 2>/dev/null || echo "Linux")
+
+  case "${target}" in
+    agy)
+      echo "${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+      ;;
+    claudecode)
+      case "${os_type}" in
+        Darwin*)
+          echo "${HOME}/Library/Application Support/Claude/plugins/google-ads-api-developer-assistant"
+          ;;
+        Linux*)
+          if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
+            echo "${XDG_CONFIG_HOME}/claude/plugins/google-ads-api-developer-assistant"
+          else
+            echo "${HOME}/.config/claude/plugins/google-ads-api-developer-assistant"
+          fi
+          ;;
+        CYGWIN*|MINGW*|MSYS*)
+          if [[ -n "${APPDATA:-}" ]]; then
+            echo "${APPDATA}/Claude/plugins/google-ads-api-developer-assistant"
+          else
+            echo "${HOME}/.claude/plugins/google-ads-api-developer-assistant"
+          fi
+          ;;
+        *)
+          echo "${HOME}/.claude/plugins/google-ads-api-developer-assistant"
+          ;;
+      esac
+      ;;
+    *)
+      err "ERROR: Invalid target '${target}'. Must be 'agy' or 'claudecode'."
+      exit 1
+      ;;
+  esac
+}
+
 # --- Defaults ---
+TARGET=""
 INSTALL_PYTHON=true
 INSTALL_PHP=false
 INSTALL_RUBY=false
@@ -72,11 +114,18 @@ ANY_SELECTED=false
 
 # --- Help Function ---
 usage() {
-  echo "Usage: $0 [OPTIONS]"
-  echo "  Installs the Google Ads API Developer Assistant as an Antigravity (agy) plugin."
+  echo "Usage: $0 <agy|claudecode> [OPTIONS]"
+  echo "       $0 --target <agy|claudecode> [OPTIONS]"
+  echo "  Installs the Google Ads API Developer Assistant as a plugin for Antigravity or Claude Code."
+  echo ""
+  echo "  Required Argument:"
+  echo "    <agy|claudecode>           Target platform: 'agy' (Antigravity) or 'claudecode' (Claude Code)"
   echo ""
   echo "  Options:"
   echo "    -h, --help                 Show this help message and exit"
+  echo "    --target TARGET            Target platform ('agy' or 'claudecode')"
+  echo "    --agy                      Install for Antigravity (shorthand for --target agy)"
+  echo "    --claudecode               Install for Claude Code (shorthand for --target claudecode)"
   echo "    --php                      Include google-ads-php client library"
   echo "    --ruby                     Include google-ads-ruby client library"
   echo "    --java                     Include google-ads-java client library"
@@ -85,9 +134,10 @@ usage() {
   echo "  By default, the Python client library is included in the plugin."
   echo ""
   echo "  Examples:"
-  echo "    $0                         (Installs plugin with Python client library)"
-  echo "    $0 --java                  (Installs plugin with Java and Python client libraries)"
-  echo "    $0 --php --ruby --dotnet   (Installs plugin with PHP, Ruby, .NET, and Python libraries)"
+  echo "    $0 agy                     (Installs plugin for Antigravity)"
+  echo "    $0 claudecode              (Installs plugin for Claude Code into OS-specific directory)"
+  echo "    $0 agy --java              (Installs for Antigravity with Java and Python client libraries)"
+  echo "    $0 claudecode --php        (Installs for Claude Code with PHP and Python client libraries)"
   echo ""
 }
 
@@ -97,6 +147,31 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       usage
       exit 0
+      ;;
+    agy|claudecode)
+      TARGET="$1"
+      shift
+      ;;
+    --target)
+      if [[ $# -lt 2 ]]; then
+        err "ERROR: --target requires an argument ('agy' or 'claudecode')."
+        usage
+        exit 1
+      fi
+      TARGET=$(echo "$2" | tr '[:upper:]' '[:lower:]')
+      shift 2
+      ;;
+    --target=*)
+      TARGET=$(echo "${1#*=}" | tr '[:upper:]' '[:lower:]')
+      shift
+      ;;
+    --agy)
+      TARGET="agy"
+      shift
+      ;;
+    --claudecode)
+      TARGET="claudecode"
+      shift
       ;;
     --php)
       INSTALL_PHP=true
@@ -126,6 +201,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# --- Validate Required Target ---
+if [[ -z "${TARGET}" ]]; then
+  err "ERROR: Missing required target argument: 'agy' or 'claudecode'."
+  usage
+  exit 1
+fi
+
+if [[ "${TARGET}" != "agy" && "${TARGET}" != "claudecode" ]]; then
+  err "ERROR: Invalid target '${TARGET}'. Must be 'agy' or 'claudecode'."
+  usage
+  exit 1
+fi
+
 # --- Environment Verification ---
 check_python() {
   local py_cmd=""
@@ -145,7 +233,6 @@ check_python() {
     return 0
   fi
 
-  # Check if Python is installed but version is lower than 3.10
   local found_ver=""
   for cmd in python3 python; do
     if command -v "${cmd}" &>/dev/null; then
@@ -172,7 +259,6 @@ check_antigravity() {
   local found_antigravity=false
   local antigravity_detail=""
 
-  # Check CLI: 'agy' or 'antigravity'
   if command -v agy &>/dev/null; then
     found_antigravity=true
     antigravity_detail="Antigravity CLI (agy) found at $(command -v agy)"
@@ -181,7 +267,6 @@ check_antigravity() {
     antigravity_detail="Antigravity CLI (antigravity) found at $(command -v antigravity)"
   fi
 
-  # Check Antigravity Desktop / Web host environment
   if [[ "${found_antigravity}" == "false" ]]; then
     if [[ -n "${ANTIGRAVITY_APP_DIR:-}" || -n "${ANTIGRAVITY_LS_ADDRESS:-}" || -n "${ANTIGRAVITY_PORT:-}" || -n "${JETSKI_HOME:-}" || -n "${GEMINI_HOME:-}" ]]; then
       found_antigravity=true
@@ -209,16 +294,50 @@ check_antigravity() {
   return 1
 }
 
+check_claudecode() {
+  local found_claude=false
+  local claude_detail=""
+
+  if command -v claude &>/dev/null; then
+    found_claude=true
+    claude_detail="Claude Code CLI (claude) found at $(command -v claude)"
+  elif command -v claude-code &>/dev/null; then
+    found_claude=true
+    claude_detail="Claude Code CLI found at $(command -v claude-code)"
+  fi
+
+  if [[ "${found_claude}" == "false" ]]; then
+    if [[ -d "${HOME}/Library/Application Support/Claude" || -d "${HOME}/.config/claude" || -d "${HOME}/.claude" || -n "${CLAUDE_CODE_HOME:-}" ]]; then
+      found_claude=true
+      claude_detail="Claude environment detected in configuration directory or environment variables"
+    fi
+  fi
+
+  if [[ "${found_claude}" == "true" ]]; then
+    echo "Found Claude Code: ${claude_detail}"
+    return 0
+  fi
+
+  echo "Note: Claude Code CLI ('claude') not found on PATH. Proceeding with installation to target plugin directory."
+  return 0
+}
+
 check_environment() {
-  echo "Checking environment..."
+  echo "Checking environment for ${TARGET}..."
   local env_ok=true
 
   if ! check_python; then
     env_ok=false
   fi
 
-  if ! check_antigravity; then
-    env_ok=false
+  if [[ "${TARGET}" == "agy" ]]; then
+    if ! check_antigravity; then
+      env_ok=false
+    fi
+  elif [[ "${TARGET}" == "claudecode" ]]; then
+    if ! check_claudecode; then
+      env_ok=false
+    fi
   fi
 
   if [[ "${env_ok}" != "true" ]]; then
@@ -301,9 +420,9 @@ if [[ ! -d "${PLUGIN_SOURCE_DIR}" ]]; then
   exit 1
 fi
 
-PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
-echo "Installing agy plugin into: ${PLUGIN_TARGET_DIR}"
-mkdir -p "${HOME}/.gemini/config/plugins"
+PLUGIN_TARGET_DIR=$(get_plugin_target_dir "${TARGET}")
+echo "Installing plugin for ${TARGET} into: ${PLUGIN_TARGET_DIR}"
+mkdir -p "$(dirname "${PLUGIN_TARGET_DIR}")"
 rm -rf "${PLUGIN_TARGET_DIR}"
 cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
 
@@ -338,6 +457,10 @@ done
 detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
 detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
 
-echo "Plugin installation complete."
+echo "Plugin installation for ${TARGET} complete."
 echo ""
-echo "Restart your Antigravity / agy host to activate the plugin."
+if [[ "${TARGET}" == "agy" ]]; then
+  echo "Restart your Antigravity / agy host to activate the plugin."
+else
+  echo "Restart your Claude Code environment to activate the plugin."
+fi

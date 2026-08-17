@@ -1,6 +1,8 @@
 * 3.1.0
-- Refactored install, uninstall, and update scripts (install.sh, install.ps1, uninstall.sh, uninstall.ps1, update.sh, update.ps1) to exclusively operate on the Antigravity plugin, removing the concept of installation type and standalone project mode across all scripts.
-- Added check_environment section to install.sh and install.ps1 to verify Python >= 3.10 and Antigravity (CLI or web/desktop) are installed and available prior to installation.
+- Added required command line target argument ('agy' or 'claudecode') across install, uninstall, and update scripts (install.sh, install.ps1, uninstall.sh, uninstall.ps1, update.sh, update.ps1) to support installing and managing the assistant as a plugin for Antigravity or Claude Code across operating systems.
+- Configured OS-specific target directories for Claude Code (macOS: ~/Library/Application Support/Claude/plugins, Linux: ~/.config/claude/plugins, Windows: %APPDATA%\Claude\plugins).
+- Refactored install, uninstall, and update scripts to operate purely on plugins, removing the standalone project mode.
+- Added check_environment section to install.sh and install.ps1 to verify Python >= 3.10 and host platform availability prior to installation.
 - Optimized skills and added rules to distinguish between concrete objects and their representation in Python files.
 - Added plugin for agy and configured dynamic API version discovery with interactive prompt fallback.
 

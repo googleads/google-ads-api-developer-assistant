@@ -26,26 +26,49 @@ err() {
   echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*" >&2
 }
 
-# --- Help Function ---
-usage() {
-  echo "Usage: $0 [OPTIONS]"
-  echo "  Updates the Google Ads API Developer Assistant plugin and configured client libraries."
-  echo ""
-  echo "  Options:"
-  echo "    -h, --help                 Show this help message and exit"
-  echo "    --python                   Ensure google-ads-python is present and updated in plugin"
-  echo "    --php                      Ensure google-ads-php is present and updated in plugin"
-  echo "    --ruby                     Ensure google-ads-ruby is present and updated in plugin"
-  echo "    --java                     Ensure google-ads-java is present and updated in plugin"
-  echo "    --dotnet                   Ensure google-ads-dotnet is present and updated in plugin"
-  echo ""
-  echo "  Examples:"
-  echo "    $0                         (Updates repository, plugin, and all configured client libraries)"
-  echo "    $0 --java                  (Ensures Java library is added/updated in the plugin)"
-  echo ""
+# Helper to resolve OS-specific target plugin directory
+get_plugin_target_dir() {
+  local target="$1"
+  local os_type
+  os_type=$(uname -s 2>/dev/null || echo "Linux")
+
+  case "${target}" in
+    agy)
+      echo "${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+      ;;
+    claudecode)
+      case "${os_type}" in
+        Darwin*)
+          echo "${HOME}/Library/Application Support/Claude/plugins/google-ads-api-developer-assistant"
+          ;;
+        Linux*)
+          if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
+            echo "${XDG_CONFIG_HOME}/claude/plugins/google-ads-api-developer-assistant"
+          else
+            echo "${HOME}/.config/claude/plugins/google-ads-api-developer-assistant"
+          fi
+          ;;
+        CYGWIN*|MINGW*|MSYS*)
+          if [[ -n "${APPDATA:-}" ]]; then
+            echo "${APPDATA}/Claude/plugins/google-ads-api-developer-assistant"
+          else
+            echo "${HOME}/.claude/plugins/google-ads-api-developer-assistant"
+          fi
+          ;;
+        *)
+          echo "${HOME}/.claude/plugins/google-ads-api-developer-assistant"
+          ;;
+      esac
+      ;;
+    *)
+      err "ERROR: Invalid target '${target}'. Must be 'agy' or 'claudecode'."
+      exit 1
+      ;;
+  esac
 }
 
 # --- Defaults ---
+TARGET=""
 INSTALL_PYTHON=false
 INSTALL_PHP=false
 INSTALL_RUBY=false
@@ -53,12 +76,64 @@ INSTALL_JAVA=false
 INSTALL_DOTNET=false
 ANY_SELECTED=false
 
+# --- Help Function ---
+usage() {
+  echo "Usage: $0 <agy|claudecode> [OPTIONS]"
+  echo "       $0 --target <agy|claudecode> [OPTIONS]"
+  echo "  Updates the Google Ads API Developer Assistant plugin and configured client libraries."
+  echo ""
+  echo "  Required Argument:"
+  echo "    <agy|claudecode>           Target platform: 'agy' (Antigravity) or 'claudecode' (Claude Code)"
+  echo ""
+  echo "  Options:"
+  echo "    -h, --help                 Show this help message and exit"
+  echo "    --target TARGET            Target platform ('agy' or 'claudecode')"
+  echo "    --agy                      Update Antigravity plugin (shorthand for --target agy)"
+  echo "    --claudecode               Update Claude Code plugin (shorthand for --target claudecode)"
+  echo "    --python                   Ensure google-ads-python is present and updated in plugin"
+  echo "    --php                      Ensure google-ads-php is present and updated in plugin"
+  echo "    --ruby                     Ensure google-ads-ruby is present and updated in plugin"
+  echo "    --java                     Ensure google-ads-java is present and updated in plugin"
+  echo "    --dotnet                   Ensure google-ads-dotnet is present and updated in plugin"
+  echo ""
+  echo "  Examples:"
+  echo "    $0 agy                     (Updates repository, Antigravity plugin, and client libraries)"
+  echo "    $0 claudecode              (Updates repository, Claude Code plugin, and client libraries)"
+  echo "    $0 agy --java              (Ensures Java library is added/updated in Antigravity plugin)"
+  echo ""
+}
+
 # --- Argument Parsing ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
       usage
       exit 0
+      ;;
+    agy|claudecode)
+      TARGET="$1"
+      shift
+      ;;
+    --target)
+      if [[ $# -lt 2 ]]; then
+        err "ERROR: --target requires an argument ('agy' or 'claudecode')."
+        usage
+        exit 1
+      fi
+      TARGET=$(echo "$2" | tr '[:upper:]' '[:lower:]')
+      shift 2
+      ;;
+    --target=*)
+      TARGET=$(echo "${1#*=}" | tr '[:upper:]' '[:lower:]')
+      shift
+      ;;
+    --agy)
+      TARGET="agy"
+      shift
+      ;;
+    --claudecode)
+      TARGET="claudecode"
+      shift
       ;;
     --python)
       INSTALL_PYTHON=true
@@ -92,6 +167,19 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# --- Validate Required Target ---
+if [[ -z "${TARGET}" ]]; then
+  err "ERROR: Missing required target argument: 'agy' or 'claudecode'."
+  usage
+  exit 1
+fi
+
+if [[ "${TARGET}" != "agy" && "${TARGET}" != "claudecode" ]]; then
+  err "ERROR: Invalid target '${TARGET}'. Must be 'agy' or 'claudecode'."
+  usage
+  exit 1
+fi
 
 # Helper functions for repo info
 get_repo_url() {
@@ -182,16 +270,16 @@ fi
 echo "Successfully updated repository."
 
 # --- Update Plugin Installation ---
-PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+PLUGIN_TARGET_DIR=$(get_plugin_target_dir "${TARGET}")
 PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/agy"
 
 if [[ ! -d "${PLUGIN_TARGET_DIR}" ]]; then
-  echo "Plugin not yet installed at ${PLUGIN_TARGET_DIR}. Installing..."
-  mkdir -p "${HOME}/.gemini/config/plugins"
+  echo "Plugin not yet installed at ${PLUGIN_TARGET_DIR}. Installing for ${TARGET}..."
+  mkdir -p "$(dirname "${PLUGIN_TARGET_DIR}")"
   cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
 else
   echo "Syncing plugin files to ${PLUGIN_TARGET_DIR}..."
-  for item in rules sidecars skills config plugin.json README.md; do
+  for item in rules sidecars skills config client_libs plugin.json README.md; do
     if [[ -e "${PLUGIN_SOURCE_DIR}/${item}" ]]; then
       cp -r "${PLUGIN_SOURCE_DIR}/${item}" "${PLUGIN_TARGET_DIR}/"
     fi
@@ -253,6 +341,10 @@ fi
 detect_and_seed_api_version "${PLUGIN_CLIENT_LIBS}/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
 detect_and_seed_api_version "${PLUGIN_CLIENT_LIBS}/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
 
-echo "Plugin update complete."
+echo "Plugin update for ${TARGET} complete."
 echo ""
-echo "Restart your Antigravity / agy host to apply changes."
+if [[ "${TARGET}" == "agy" ]]; then
+  echo "Restart your Antigravity / agy host to apply changes."
+else
+  echo "Restart your Claude Code environment to apply changes."
+fi

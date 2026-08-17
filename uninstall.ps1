@@ -3,8 +3,11 @@
     Uninstalls the Google Ads API Developer Assistant plugin.
 
 .DESCRIPTION
-    This script uninstalls the Google Ads API Developer Assistant plugin from ~/.gemini/config/plugins/
-    or removes specific client libraries from it.
+    This script uninstalls the Google Ads API Developer Assistant plugin from Antigravity (agy)
+    or Claude Code (claudecode), or removes specific client libraries from it.
+
+.PARAMETER Target
+    Required. Target platform: 'agy' (Antigravity) or 'claudecode' (Claude Code).
 
 .PARAMETER All
     Remove all client libraries from plugin client_libs/.
@@ -31,23 +34,27 @@
     Skip confirmation prompts (synonym for Force).
 
 .EXAMPLE
-    .\uninstall.ps1
-    Uninstalls and deletes the entire plugin directory.
+    .\uninstall.ps1 -Target agy
+    Uninstalls and deletes the entire Antigravity plugin directory.
 
 .EXAMPLE
-    .\uninstall.ps1 -Force
-    Uninstalls the plugin without confirmation prompts.
+    .\uninstall.ps1 -Target claudecode -Force
+    Uninstalls the Claude Code plugin without confirmation prompts.
 
 .EXAMPLE
-    .\uninstall.ps1 -All
-    Removes all client libraries from the plugin.
+    .\uninstall.ps1 -Target agy -All
+    Removes all client libraries from the Antigravity plugin.
 
 .EXAMPLE
-    .\uninstall.ps1 -Java
-    Removes only the Java library from the plugin.
+    .\uninstall.ps1 -Target claudecode -Java
+    Removes only the Java library from the Claude Code plugin.
 #>
 
 param(
+    [Parameter(Mandatory=$true, Position=0, HelpMessage="Target platform: 'agy' or 'claudecode'")]
+    [ValidateSet("agy", "claudecode", IgnoreCase=$true)]
+    [string]$Target,
+
     [switch]$All,
     [switch]$Python,
     [switch]$Php,
@@ -69,6 +76,36 @@ function Get-RepoName {
     }
 }
 
+function Get-PluginTargetDir {
+    param([string]$TargetPlatform)
+
+    $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+
+    switch ($TargetPlatform.ToLower()) {
+        "agy" {
+            return (Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant")
+        }
+        "claudecode" {
+            if ($env:APPDATA) {
+                return (Join-Path $env:APPDATA "Claude\plugins\google-ads-api-developer-assistant")
+            }
+            elseif ($IsMacOS -or ($PSVersionTable.OS -and $PSVersionTable.OS -match "Darwin")) {
+                return (Join-Path $UserHome "Library/Application Support/Claude/plugins/google-ads-api-developer-assistant")
+            }
+            elseif ($IsLinux -or ($PSVersionTable.OS -and $PSVersionTable.OS -match "Linux")) {
+                $ConfigBase = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $UserHome ".config" }
+                return (Join-Path $ConfigBase "claude/plugins/google-ads-api-developer-assistant")
+            }
+            else {
+                return (Join-Path $UserHome ".claude\plugins\google-ads-api-developer-assistant")
+            }
+        }
+        default {
+            throw "Invalid target '$TargetPlatform'. Must be 'agy' or 'claudecode'."
+        }
+    }
+}
+
 $ErrorActionPreference = "Stop"
 
 $AutoConfirm = $Force -or $Yes
@@ -85,18 +122,24 @@ if ($All) {
 }
 
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-$GeminiPluginsDir = Join-Path $UserHome ".gemini\config\plugins"
-$TargetPluginDir = Join-Path $GeminiPluginsDir "google-ads-api-developer-assistant"
-$LegacyPluginDir = Join-Path $GeminiPluginsDir "google_ads_assistant_plugin"
+$TargetPluginDir = Get-PluginTargetDir -TargetPlatform $Target
+$LegacyPluginDir = ""
+if ($Target.ToLower() -eq "agy") {
+    $LegacyPluginDir = Join-Path $UserHome ".gemini\config\plugins\google_ads_assistant_plugin"
+}
 
-if ((-not (Test-Path -LiteralPath $TargetPluginDir)) -and (-not (Test-Path -LiteralPath $LegacyPluginDir))) {
+if ((-not (Test-Path -LiteralPath $TargetPluginDir)) -and ([string]::IsNullOrEmpty($LegacyPluginDir) -or (-not (Test-Path -LiteralPath $LegacyPluginDir)))) {
     Write-Host "Plugin directory '$TargetPluginDir' does not exist. Nothing to uninstall."
     exit 0
 }
 
 # If specific client libraries are selected
 if ($SpecifiedLangs.Count -gt 0) {
-    $PluginDirs = @($TargetPluginDir, $LegacyPluginDir)
+    $PluginDirs = @($TargetPluginDir)
+    if ($LegacyPluginDir -and (Test-Path -LiteralPath $LegacyPluginDir)) {
+        $PluginDirs += $LegacyPluginDir
+    }
+
     foreach ($PDir in $PluginDirs) {
         $PluginClientLibs = Join-Path $PDir "client_libs"
         if (Test-Path -LiteralPath $PluginClientLibs) {
@@ -113,13 +156,17 @@ if ($SpecifiedLangs.Count -gt 0) {
             }
         }
     }
-    Write-Host "Plugin client library removal complete."
+    Write-Host "Plugin client library removal for $Target complete."
     Write-Host ""
-    Write-Host "Restart your Antigravity / agy host to apply changes."
+    if ($Target.ToLower() -eq "agy") {
+        Write-Host "Restart your Antigravity / agy host to apply changes."
+    } else {
+        Write-Host "Restart your Claude Code environment to apply changes."
+    }
     exit 0
 }
 
-Write-Host "This will uninstall the Google Ads API Developer Assistant plugin"
+Write-Host "This will uninstall the Google Ads API Developer Assistant plugin for $Target"
 Write-Host "and DELETE the directory: $TargetPluginDir"
 
 if (-not $AutoConfirm) {
@@ -135,10 +182,14 @@ if (Test-Path -LiteralPath $TargetPluginDir) {
     Remove-Item -Recurse -Force -LiteralPath $TargetPluginDir
 }
 
-if (Test-Path -LiteralPath $LegacyPluginDir) {
+if ($LegacyPluginDir -and (Test-Path -LiteralPath $LegacyPluginDir)) {
     Remove-Item -Recurse -Force -LiteralPath $LegacyPluginDir
 }
 
-Write-Host "Plugin uninstallation complete."
+Write-Host "Plugin uninstallation for $Target complete."
 Write-Host ""
-Write-Host "Restart your Antigravity / agy host to complete plugin uninstallation."
+if ($Target.ToLower() -eq "agy") {
+    Write-Host "Restart your Antigravity / agy host to complete plugin uninstallation."
+} else {
+    Write-Host "Restart your Claude Code environment to complete plugin uninstallation."
+}

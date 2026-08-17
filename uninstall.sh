@@ -26,7 +26,49 @@ err() {
   echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*" >&2
 }
 
+# Helper to resolve OS-specific target plugin directory
+get_plugin_target_dir() {
+  local target="$1"
+  local os_type
+  os_type=$(uname -s 2>/dev/null || echo "Linux")
+
+  case "${target}" in
+    agy)
+      echo "${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+      ;;
+    claudecode)
+      case "${os_type}" in
+        Darwin*)
+          echo "${HOME}/Library/Application Support/Claude/plugins/google-ads-api-developer-assistant"
+          ;;
+        Linux*)
+          if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
+            echo "${XDG_CONFIG_HOME}/claude/plugins/google-ads-api-developer-assistant"
+          else
+            echo "${HOME}/.config/claude/plugins/google-ads-api-developer-assistant"
+          fi
+          ;;
+        CYGWIN*|MINGW*|MSYS*)
+          if [[ -n "${APPDATA:-}" ]]; then
+            echo "${APPDATA}/Claude/plugins/google-ads-api-developer-assistant"
+          else
+            echo "${HOME}/.claude/plugins/google-ads-api-developer-assistant"
+          fi
+          ;;
+        *)
+          echo "${HOME}/.claude/plugins/google-ads-api-developer-assistant"
+          ;;
+      esac
+      ;;
+    *)
+      err "ERROR: Invalid target '${target}'. Must be 'agy' or 'claudecode'."
+      exit 1
+      ;;
+  esac
+}
+
 # --- Defaults ---
+TARGET=""
 UNINSTALL_PYTHON=false
 UNINSTALL_PHP=false
 UNINSTALL_RUBY=false
@@ -38,11 +80,18 @@ AUTO_CONFIRM=false
 
 # --- Help Function ---
 usage() {
-  echo "Usage: $0 [OPTIONS]"
-  echo "  Uninstalls the Google Ads API Developer Assistant plugin from ~/.gemini/config/plugins/."
+  echo "Usage: $0 <agy|claudecode> [OPTIONS]"
+  echo "       $0 --target <agy|claudecode> [OPTIONS]"
+  echo "  Uninstalls the Google Ads API Developer Assistant plugin from Antigravity or Claude Code."
+  echo ""
+  echo "  Required Argument:"
+  echo "    <agy|claudecode>           Target platform: 'agy' (Antigravity) or 'claudecode' (Claude Code)"
   echo ""
   echo "  Options:"
   echo "    -h, --help                 Show this help message and exit"
+  echo "    --target TARGET            Target platform ('agy' or 'claudecode')"
+  echo "    --agy                      Uninstall from Antigravity (shorthand for --target agy)"
+  echo "    --claudecode               Uninstall from Claude Code (shorthand for --target claudecode)"
   echo "    -y, --yes, -f, --force     Skip confirmation prompt"
   echo "    --all                      Remove all client libraries from plugin client_libs/"
   echo "    --python                   Remove only google-ads-python client library"
@@ -52,10 +101,10 @@ usage() {
   echo "    --dotnet                   Remove only google-ads-dotnet client library"
   echo ""
   echo "  Examples:"
-  echo "    $0                         (Uninstalls and deletes the entire plugin directory)"
-  echo "    $0 --yes                   (Uninstalls plugin without confirmation prompt)"
-  echo "    $0 --all                   (Removes all client libraries from the plugin)"
-  echo "    $0 --java                  (Removes only the Java library from the plugin)"
+  echo "    $0 agy                     (Uninstalls and deletes the entire Antigravity plugin directory)"
+  echo "    $0 claudecode -y           (Uninstalls Claude Code plugin without confirmation prompt)"
+  echo "    $0 agy --all               (Removes all client libraries from the Antigravity plugin)"
+  echo "    $0 claudecode --java       (Removes only the Java library from the Claude Code plugin)"
   echo ""
 }
 
@@ -86,6 +135,31 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       usage
       exit 0
+      ;;
+    agy|claudecode)
+      TARGET="$1"
+      shift
+      ;;
+    --target)
+      if [[ $# -lt 2 ]]; then
+        err "ERROR: --target requires an argument ('agy' or 'claudecode')."
+        usage
+        exit 1
+      fi
+      TARGET=$(echo "$2" | tr '[:upper:]' '[:lower:]')
+      shift 2
+      ;;
+    --target=*)
+      TARGET=$(echo "${1#*=}" | tr '[:upper:]' '[:lower:]')
+      shift
+      ;;
+    --agy)
+      TARGET="agy"
+      shift
+      ;;
+    --claudecode)
+      TARGET="claudecode"
+      shift
       ;;
     --all)
       UNINSTALL_ALL_LIBS=true
@@ -134,17 +208,38 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
-LEGACY_PLUGIN_DIR="${HOME}/.gemini/config/plugins/google_ads_assistant_plugin"
+# --- Validate Required Target ---
+if [[ -z "${TARGET}" ]]; then
+  err "ERROR: Missing required target argument: 'agy' or 'claudecode'."
+  usage
+  exit 1
+fi
 
-if [[ ! -d "${PLUGIN_TARGET_DIR}" && ! -d "${LEGACY_PLUGIN_DIR}" ]]; then
+if [[ "${TARGET}" != "agy" && "${TARGET}" != "claudecode" ]]; then
+  err "ERROR: Invalid target '${TARGET}'. Must be 'agy' or 'claudecode'."
+  usage
+  exit 1
+fi
+
+PLUGIN_TARGET_DIR=$(get_plugin_target_dir "${TARGET}")
+LEGACY_PLUGIN_DIR=""
+if [[ "${TARGET}" == "agy" ]]; then
+  LEGACY_PLUGIN_DIR="${HOME}/.gemini/config/plugins/google_ads_assistant_plugin"
+fi
+
+if [[ ! -d "${PLUGIN_TARGET_DIR}" && ( -z "${LEGACY_PLUGIN_DIR}" || ! -d "${LEGACY_PLUGIN_DIR}" ) ]]; then
   echo "Plugin directory '${PLUGIN_TARGET_DIR}' does not exist. Nothing to uninstall."
   exit 0
 fi
 
 # If specific client libraries were requested to be removed
 if [[ "${ANY_SELECTED}" == "true" ]]; then
-  for dir in "${PLUGIN_TARGET_DIR}" "${LEGACY_PLUGIN_DIR}"; do
+  search_dirs=("${PLUGIN_TARGET_DIR}")
+  if [[ -n "${LEGACY_PLUGIN_DIR}" && -d "${LEGACY_PLUGIN_DIR}" ]]; then
+    search_dirs+=("${LEGACY_PLUGIN_DIR}")
+  fi
+
+  for dir in "${search_dirs[@]}"; do
     if [[ -d "${dir}/client_libs" ]]; then
       for lang in python php ruby java dotnet; do
         if is_enabled "$lang"; then
@@ -161,13 +256,17 @@ if [[ "${ANY_SELECTED}" == "true" ]]; then
       done
     fi
   done
-  echo "Plugin client library removal complete."
+  echo "Plugin client library removal for ${TARGET} complete."
   echo ""
-  echo "Restart your Antigravity / agy host to apply changes."
+  if [[ "${TARGET}" == "agy" ]]; then
+    echo "Restart your Antigravity / agy host to apply changes."
+  else
+    echo "Restart your Claude Code environment to apply changes."
+  fi
   exit 0
 fi
 
-echo "This will uninstall the Google Ads API Developer Assistant plugin"
+echo "This will uninstall the Google Ads API Developer Assistant plugin for ${TARGET}"
 echo "and DELETE the directory: ${PLUGIN_TARGET_DIR}"
 
 if [[ "${AUTO_CONFIRM}" != "true" ]]; then
@@ -180,10 +279,14 @@ fi
 
 echo "Removing plugin directory: ${PLUGIN_TARGET_DIR}..."
 rm -rf "${PLUGIN_TARGET_DIR}"
-if [[ -d "${LEGACY_PLUGIN_DIR}" ]]; then
+if [[ -n "${LEGACY_PLUGIN_DIR}" && -d "${LEGACY_PLUGIN_DIR}" ]]; then
   rm -rf "${LEGACY_PLUGIN_DIR}"
 fi
 
-echo "Plugin uninstallation complete."
+echo "Plugin uninstallation for ${TARGET} complete."
 echo ""
-echo "Restart your Antigravity / agy host to complete plugin uninstallation."
+if [[ "${TARGET}" == "agy" ]]; then
+  echo "Restart your Antigravity / agy host to complete plugin uninstallation."
+else
+  echo "Restart your Claude Code environment to complete plugin uninstallation."
+fi
