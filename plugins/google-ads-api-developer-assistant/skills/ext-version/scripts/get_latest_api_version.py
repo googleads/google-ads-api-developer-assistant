@@ -29,7 +29,7 @@ def detect_latest_api_version() -> str:
                 "../../../../client_libs/google-ads-python/google/ads/googleads",
             )
         ),
-        # Relative to plugins/agy/skills/ext-version/scripts/
+        # Relative to plugins/google-ads-api-developer-assistant/skills/ext-version/scripts/
         os.path.abspath(
             os.path.join(
                 script_dir,

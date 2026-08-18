@@ -102,19 +102,7 @@ function Get-PluginTargetDir {
             return (Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant")
         }
         "claudecode" {
-            if ($env:APPDATA) {
-                return (Join-Path $env:APPDATA "Claude\plugins\google-ads-api-developer-assistant")
-            }
-            elseif ($IsMacOS -or ($PSVersionTable.OS -and $PSVersionTable.OS -match "Darwin")) {
-                return (Join-Path $UserHome "Library/Application Support/Claude/plugins/google-ads-api-developer-assistant")
-            }
-            elseif ($IsLinux -or ($PSVersionTable.OS -and $PSVersionTable.OS -match "Linux")) {
-                $ConfigBase = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $UserHome ".config" }
-                return (Join-Path $ConfigBase "claude/plugins/google-ads-api-developer-assistant")
-            }
-            else {
-                return (Join-Path $UserHome ".claude\plugins\google-ads-api-developer-assistant")
-            }
+            return (Join-Path $UserHome ".claude\plugins\google-ads-api-developer-assistant")
         }
         default {
             throw "Invalid target '$TargetPlatform'. Must be 'agy' or 'claudecode'."
@@ -284,7 +272,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-$PluginSource = Join-Path $ProjectDirAbs "plugins\agy"
+$PluginSource = Join-Path $ProjectDirAbs "plugins\google-ads-api-developer-assistant"
 if (-not (Test-Path -LiteralPath $PluginSource)) {
     Write-Error "ERROR: Plugin directory not found at $PluginSource"
     exit 1

@@ -121,12 +121,12 @@ By default, Python is used for code generation.  As of v2.3.0 you can provide co
     *   **Linux/macOS:**
         *   Run `./install.sh <agy|claudecode>`.
         *   For Antigravity: `./install.sh agy` (installs to `~/.gemini/config/plugins/google-ads-api-developer-assistant`).
-        *   For Claude Code: `./install.sh claudecode` (installs to OS-specific plugin directory, e.g. `~/.config/claude/plugins/google-ads-api-developer-assistant` on Linux or `~/Library/Application Support/Claude/plugins/google-ads-api-developer-assistant` on macOS).
+        *   For Claude Code: `./install.sh claudecode` (installs to `~/.claude/plugins/google-ads-api-developer-assistant`).
         *   To include additional client libraries, add flags: `./install.sh agy --php --ruby --dotnet`.
         *   Execute `./install.sh --help` for more details.
     *   **Windows:**
         *   Open PowerShell.
-        *   Run `.\install.ps1 -Target agy` or `.\install.ps1 -Target claudecode`.
+        *   Run `.\install.ps1 -Target agy` (installs to `%USERPROFILE%\.gemini\config\plugins\google-ads-api-developer-assistant`) or `.\install.ps1 -Target claudecode` (installs to `%USERPROFILE%\.claude\plugins\google-ads-api-developer-assistant`).
         *   To include additional client libraries: `.\install.ps1 -Target agy -Php -Ruby -Dotnet`.
 4.  **Configure Credentials:** Make sure your API credentials configuration files are in your `$HOME` directory. Each language has its own configuration file naming convention and structure. 
 5.  **Optional: Default Customer ID:** To set a default customer ID, enter your customer ID in `config/customer_id.txt` or `config/customer_id` (e.g., `1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.
@@ -151,11 +151,11 @@ By default, Python is used for code generation.  As of v2.3.0 you can provide co
 
 ## Directory Structure
 
-*   `plugins/agy/`: Source directory for the assistant plugin.
-*   `plugins/agy/rules/`: Agent behavioral rules and protocols.
-*   `plugins/agy/skills/`: Assistant skills (GAQL analyzer, proto inspect, etc.).
-*   `plugins/agy/sidecars/`: Background sidecar microservices.
-*   `plugins/agy/client_libs/`: Cloned client libraries.
+*   `plugins/google-ads-api-developer-assistant/`: Source directory for the assistant plugin.
+*   `plugins/google-ads-api-developer-assistant/rules/`: Agent behavioral rules and protocols.
+*   `plugins/google-ads-api-developer-assistant/skills/`: Assistant skills (GAQL analyzer, proto inspect, etc.).
+*   `plugins/google-ads-api-developer-assistant/sidecars/`: Background sidecar microservices.
+*   `plugins/google-ads-api-developer-assistant/client_libs/`: Cloned client libraries.
 *   `config/`: Configuration files (e.g. `api_version.txt`, `customer_id.txt`).
 
 ## Mutate Operations

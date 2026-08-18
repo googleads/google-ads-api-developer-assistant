@@ -38,7 +38,7 @@ readonly PROJECT_DIR_ABS
 echo "Detected project root: ${PROJECT_DIR_ABS}"
 
 # --- Configuration ---
-readonly PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/agy"
+readonly PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant"
 readonly ALL_LANGS="python php ruby java dotnet"
 
 # Helper functions for repo info (Replacing associative arrays for Bash 3.2 compatibility)
@@ -74,28 +74,7 @@ get_plugin_target_dir() {
       PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
       ;;
     claudecode)
-      case "${os_type}" in
-        Darwin*)
-          PLUGIN_TARGET_DIR="${HOME}/Library/Application Support/Claude/plugins/google-ads-api-developer-assistant"
-          ;;
-        Linux*)
-          if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
-            PLUGIN_TARGET_DIR="${XDG_CONFIG_HOME}/claude/plugins/google-ads-api-developer-assistant"
-          else
-            PLUGIN_TARGET_DIR="${HOME}/.config/claude/plugins/google-ads-api-developer-assistant"
-          fi
-          ;;
-        CYGWIN*|MINGW*|MSYS*)
-          if [[ -n "${APPDATA:-}" ]]; then
-            PLUGIN_TARGET_DIR="${APPDATA}/Claude/plugins/google-ads-api-developer-assistant"
-          else
-            PLUGIN_TARGET_DIR="${HOME}/.claude/plugins/google-ads-api-developer-assistant"
-          fi
-          ;;
-        *)
-          PLUGIN_TARGET_DIR="${HOME}/.claude/plugins/google-ads-api-developer-assistant"
-          ;;
-      esac
+      PLUGIN_TARGET_DIR="${HOME}/.claude/plugins/google-ads-api-developer-assistant"
       ;;
     *)
       err "ERROR: Invalid target '${target}'. Must be 'agy' or 'claudecode'."

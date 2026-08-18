@@ -17,7 +17,7 @@ cleanup() {
 trap cleanup EXIT
 
 AGY_PLUGIN_DIR="${TEST_HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
-CLAUDE_PLUGIN_DIR="${TEST_HOME}/.config/claude/plugins/google-ads-api-developer-assistant"
+CLAUDE_PLUGIN_DIR="${TEST_HOME}/.claude/plugins/google-ads-api-developer-assistant"
 
 echo "Test 1: install.sh requires target argument ('agy' or 'claudecode')"
 if "${PROJECT_ROOT}/install.sh" 2>/dev/null; then

@@ -93,12 +93,12 @@ def discover_client_libs_dir(explicit_path: Optional[str] = None) -> str:
 
     # Candidates relative to script and workspace
     candidates: list[str] = [
-        # Relative to plugins/agy/skills/sync-client-libs/scripts/
+        # Relative to plugins/google-ads-api-developer-assistant/skills/sync-client-libs/scripts/
         os.path.abspath(os.path.join(script_dir, "../../../client_libs")),
         # Relative to .agents/skills/...
         os.path.abspath(os.path.join(script_dir, "../../../../client_libs")),
         # Relative to project root
-        os.path.abspath("plugins/agy/client_libs"),
+        os.path.abspath("plugins/google-ads-api-developer-assistant/client_libs"),
         os.path.abspath("client_libs"),
     ]
 

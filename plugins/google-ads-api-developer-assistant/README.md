@@ -156,13 +156,13 @@ Copy or symlink the plugin into your target agent environment:
 #### For Antigravity / agy:
 ```bash
 mkdir -p ~/.gemini/config/plugins
-cp -r google_ads_assistant_plugin ~/.gemini/config/plugins/
+cp -r google-ads-api-developer-assistant ~/.gemini/config/plugins/
 ```
 
 #### For Claude Desktop / Claude Code:
 ```bash
-mkdir -p ~/.config/claude/plugins
-cp -r google_ads_assistant_plugin ~/.config/claude/plugins/
+mkdir -p ~/.claude/plugins
+cp -r google-ads-api-developer-assistant ~/.claude/plugins/
 ```
 
 ### 3. Credentials Configuration
