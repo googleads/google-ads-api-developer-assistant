@@ -39,7 +39,7 @@ def get_extension_version() -> None:
             current_dir = os.path.dirname(current_dir)
 
         if not found:
-            print("3.0.0")
+            print("Unknown")
 
     except Exception as e:
         print(f"An unexpected error occurred: {e}", file=sys.stderr)

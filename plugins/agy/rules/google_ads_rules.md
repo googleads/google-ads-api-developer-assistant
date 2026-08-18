@@ -1,7 +1,7 @@
 # Google Ads API Developer Assistant Rules & Directives
 
 ## Metadata
-- **Version:** 3.0.0
+- **Version:** 4.0.0
 - **Optimized for:** Machine Comprehension & Agentic Execution
 - **Runtime:** Python 3.x
 

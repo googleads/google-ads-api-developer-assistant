@@ -1,6 +1,6 @@
 # Google Ads API Developer Assistant Plugin
 
-[![Plugin Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](plugin.json)
+[![Plugin Version](https://img.shields.io/badge/version-4.0.0-blue.svg)](plugin.json)
 [![Target Runtimes](https://img.shields.io/badge/runtimes-Antigravity%20%7C%20Claude%20Desktop%20%7C%20Claude%20Code-brightgreen.svg)](plugin.json)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](rules/google_ads_rules.md)
 

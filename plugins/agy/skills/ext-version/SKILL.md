@@ -1,6 +1,6 @@
 ---
 name: ext-version
-description: Retrieves the current version of the Google Ads API Developer Assistant from agent.json.
+description: Retrieves the current version of the Google Ads API Developer Assistant from plugin.json.
 ---
 
 # Get Extension Version
@@ -16,8 +16,8 @@ Use this skill to retrieve the version of the Google Ads API Developer Assistant
     ```
 
 2. **Output Handling:**
-    * The script will print the version string (e.g., `3.0.0`) to `stdout`.
-    * If `agent.json` is missing or invalid, it will print an error to `stderr` and exit with code `1`.
+    * The script will print the version string (e.g., `4.0.0`) to `stdout`.
+    * If `plugin.json` is missing or invalid, it will print an error to `stderr` and exit with code `1`.
 
 ## When to Use
 

@@ -11,7 +11,7 @@ The Google Ads API Developer Assistant streamlines workflows for developers work
 *   Generate executable code in several languages using our client libraries for context.
 *   Retrieve and display data from the API.
 
-This assistant is powered by the **antigravity** agent framework (v3.0.0) and leverages `AGENTS.md` files and custom **Skills** to deliver persistent context, robust safety constraints, and automated execution pipelines.
+This assistant is powered by the **antigravity** agent framework (v4.0.0) and leverages `AGENTS.md` files and custom **Skills** to deliver persistent context, robust safety constraints, and automated execution pipelines.
 
 ## Agentic Design & Approach
 

@@ -1,6 +1,6 @@
-# Google Ads API Developer Assistant v3.0.0
+# Google Ads API Developer Assistant v4.0.0
 
-v3.0.0 is a major release of the Google Ads API Developer Assistant transitioning to the **antigravity** agent framework.
+v4.0.0 is a major release of the Google Ads API Developer Assistant transitioning to multi-platform plugin support (Antigravity and Claude Code).
 
 If you are upgrading from a previous version (v2.x):
 

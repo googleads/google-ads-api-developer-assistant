@@ -1,4 +1,5 @@
 {
   "name": "google-ads-api-developer-assistant",
+  "version": "4.0.0",
   "description": "Exposes expert Google Ads API capabilities: GAQL static analysis & live dry-runs, Protobuf object inspection, conversion diagnostics, PMax webpage filters, MCC account hierarchy retrieval, client library version discovery & sync, interactive tutorial, and Ruff-linted Python code generation."
 }

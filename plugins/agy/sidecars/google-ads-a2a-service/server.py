@@ -122,6 +122,23 @@ def get_effective_api_version(payload: dict = None) -> str:
     )
 
 
+def get_plugin_version() -> str:
+    """Dynamically resolves the assistant/plugin version from plugin.json."""
+    try:
+        cur = os.path.dirname(os.path.abspath(__file__))
+        while cur and cur != os.path.dirname(cur):
+            candidate = os.path.join(cur, "plugin.json")
+            if os.path.isfile(candidate):
+                with open(candidate, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if "version" in data:
+                        return str(data["version"])
+            cur = os.path.dirname(cur)
+    except Exception:
+        pass
+    return "4.0.0"
+
+
 class A2AHandler(BaseHTTPRequestHandler):
     def _send_json(self, status_code, data):
         response_bytes = json.dumps(data, indent=2).encode("utf-8")
@@ -136,7 +153,7 @@ class A2AHandler(BaseHTTPRequestHandler):
             self._send_json(200, {
                 "status": "healthy",
                 "service": "Google Ads API Developer Assistant A2A Sidecar",
-                "version": "3.0.0",
+                "version": get_plugin_version(),
                 "port": PORT
             })
         else:
