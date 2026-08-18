@@ -418,10 +418,10 @@ if [[ "${TYPE}" == "claude" ]]; then
   detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
 
   echo "Registering marketplace in Claude Code..."
-  claude -p "/plugin marketplace add ${PROJECT_DIR_ABS}"
+  claude plugin marketplace add ${PROJECT_DIR_ABS}
 
   echo "Installing plugin in Claude Code..."
-  claude -p "/plugin install google-ads-api-developer-assistant@google-ads-assistant-local"
+  claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
 
   echo "Plugin installation for claude complete."
   echo ""

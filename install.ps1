@@ -278,10 +278,10 @@ if ($Type.ToLower() -eq "claude" -or $Type.ToLower() -eq "claudecode") {
     Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
 
     Write-Host "Registering marketplace in Claude Code..."
-    claude -p "/plugin marketplace add $ProjectDirAbs"
+    claude plugin marketplace add $ProjectDirAbs
 
     Write-Host "Installing plugin in Claude Code..."
-    claude -p "/plugin install google-ads-api-developer-assistant@google-ads-assistant-local"
+    claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
 
     Write-Host "Plugin installation for claude complete."
     Write-Host ""
