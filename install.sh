@@ -65,6 +65,7 @@ get_repo_name() {
 readonly PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
 
 # --- Defaults ---
+TYPE=""
 INSTALL_PYTHON=true
 INSTALL_PHP=false
 INSTALL_RUBY=false
@@ -74,11 +75,19 @@ ANY_SELECTED=false
 
 # --- Help Function ---
 usage() {
-  echo "Usage: $0 [OPTIONS]"
-  echo "  Installs the Google Ads API Developer Assistant as a plugin for Antigravity."
+  echo "Usage: $0 <agy|claude> [OPTIONS]"
+  echo "       $0 --type <agy|claude> [OPTIONS]"
+  echo "  Installs the Google Ads API Developer Assistant as a plugin for Antigravity or Claude Code."
+  echo ""
+  echo "  Required Argument:"
+  echo "    <agy|claude>               Target platform: 'agy' (Antigravity) or 'claude' (Claude Code)"
   echo ""
   echo "  Options:"
   echo "    -h, --help                 Show this help message and exit"
+  echo "    --type TYPE                Target platform ('agy' or 'claude')"
+  echo "    --agy                      Install for Antigravity (shorthand for --type agy)"
+  echo "    --claude                   Install for Claude Code (shorthand for --type claude)"
+  echo "    --all                      Include all client libraries (Python, PHP, Ruby, Java, .NET)"
   echo "    --php                      Include google-ads-php client library"
   echo "    --ruby                     Include google-ads-ruby client library"
   echo "    --java                     Include google-ads-java client library"
@@ -87,9 +96,10 @@ usage() {
   echo "  By default, the Python client library is included in the plugin."
   echo ""
   echo "  Examples:"
-  echo "    $0                         (Installs plugin with Python client library)"
-  echo "    $0 --java                  (Installs plugin with Java and Python client libraries)"
-  echo "    $0 --php --ruby --dotnet   (Installs plugin with PHP, Ruby, .NET, and Python client libraries)"
+  echo "    $0 agy                     (Installs Antigravity plugin with Python client library)"
+  echo "    $0 claude                  (Installs Claude Code plugin via claude CLI)"
+  echo "    $0 agy --java              (Installs Antigravity plugin with Java and Python client libraries)"
+  echo "    $0 claude --php --dotnet   (Installs Claude Code plugin with PHP, .NET, and Python client libraries)"
   echo ""
 }
 
@@ -99,6 +109,48 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       usage
       exit 0
+      ;;
+    agy|claude|claudecode)
+      TYPE="$1"
+      if [[ "${TYPE}" == "claudecode" ]]; then
+        TYPE="claude"
+      fi
+      shift
+      ;;
+    --type)
+      if [[ $# -lt 2 ]]; then
+        err "ERROR: --type requires an argument ('agy' or 'claude')."
+        usage
+        exit 1
+      fi
+      TYPE=$(echo "$2" | tr '[:upper:]' '[:lower:]')
+      if [[ "${TYPE}" == "claudecode" ]]; then
+        TYPE="claude"
+      fi
+      shift 2
+      ;;
+    --type=*)
+      TYPE=$(echo "${1#*=}" | tr '[:upper:]' '[:lower:]')
+      if [[ "${TYPE}" == "claudecode" ]]; then
+        TYPE="claude"
+      fi
+      shift
+      ;;
+    --agy)
+      TYPE="agy"
+      shift
+      ;;
+    --claude|--claudecode)
+      TYPE="claude"
+      shift
+      ;;
+    --all)
+      INSTALL_PHP=true
+      INSTALL_RUBY=true
+      INSTALL_JAVA=true
+      INSTALL_DOTNET=true
+      ANY_SELECTED=true
+      shift
       ;;
     --php)
       INSTALL_PHP=true
@@ -127,6 +179,19 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# --- Validate Required Type ---
+if [[ -z "${TYPE}" ]]; then
+  err "ERROR: Missing required type argument: 'agy' or 'claude'."
+  usage
+  exit 1
+fi
+
+if [[ "${TYPE}" != "agy" && "${TYPE}" != "claude" ]]; then
+  err "ERROR: Invalid type '${TYPE}'. Must be 'agy' or 'claude'."
+  usage
+  exit 1
+fi
 
 # --- Environment Verification ---
 check_python() {
@@ -208,16 +273,41 @@ check_antigravity() {
   return 1
 }
 
+check_claudecode() {
+  local found_claude=false
+  local claude_detail=""
+
+  if command -v claude &>/dev/null; then
+    found_claude=true
+    claude_detail="Claude Code CLI (claude) found at $(command -v claude)"
+  fi
+
+  if [[ "${found_claude}" == "true" ]]; then
+    echo "Found Claude Code: ${claude_detail}"
+    return 0
+  fi
+
+  err "ERROR: Claude Code CLI ('claude') is not installed or not in PATH."
+  err "Please install Claude Code CLI to continue."
+  return 1
+}
+
 check_environment() {
-  echo "Checking environment for Antigravity..."
+  echo "Checking environment for ${TYPE}..."
   local env_ok=true
 
   if ! check_python; then
     env_ok=false
   fi
 
-  if ! check_antigravity; then
-    env_ok=false
+  if [[ "${TYPE}" == "agy" ]]; then
+    if ! check_antigravity; then
+      env_ok=false
+    fi
+  elif [[ "${TYPE}" == "claude" ]]; then
+    if ! check_claudecode; then
+      env_ok=false
+    fi
   fi
 
   if [[ "${env_ok}" != "true" ]]; then
@@ -300,7 +390,47 @@ if [[ ! -d "${PLUGIN_SOURCE_DIR}" ]]; then
   exit 1
 fi
 
-echo "Installing plugin into: ${PLUGIN_TARGET_DIR}"
+if [[ "${TYPE}" == "claude" ]]; then
+  echo "Preparing Claude Code plugin files at ${PLUGIN_SOURCE_DIR}..."
+  mkdir -p "${PLUGIN_SOURCE_DIR}/client_libs"
+
+  # Add any additional selected client libraries to plugin source structure
+  for lang in php ruby java dotnet; do
+    if is_enabled "$lang"; then
+      repo_name=$(get_repo_name "$lang")
+      target_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
+      url=$(get_repo_url "$lang")
+      log_file="${PROJECT_DIR_ABS}/install_${lang}_log_$$.tmp"
+
+      if [[ ! -d "${target_lib_path}" ]]; then
+        echo "Cloning ${repo_name} into plugin client_libs..."
+        clone_or_update "$url" "${target_lib_path}" "${log_file}"
+        if [[ -f "${log_file}" ]]; then
+          cat "${log_file}"
+          rm -f "${log_file}"
+        fi
+      fi
+    fi
+  done
+
+  # Pre-seed latest API version
+  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_SOURCE_DIR}/config"
+  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
+
+  echo "Registering marketplace in Claude Code..."
+  claude -p "/plugin marketplace add ${PROJECT_DIR_ABS}"
+
+  echo "Installing plugin in Claude Code..."
+  claude -p "/plugin install google-ads-api-developer-assistant@google-ads-assistant-local"
+
+  echo "Plugin installation for claude complete."
+  echo ""
+  echo "In your Claude Code session, run /reload-plugins to activate the plugin."
+  exit 0
+fi
+
+# Antigravity installation
+echo "Installing plugin for agy into: ${PLUGIN_TARGET_DIR}"
 mkdir -p "$(dirname "${PLUGIN_TARGET_DIR}")"
 rm -rf "${PLUGIN_TARGET_DIR}"
 cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
@@ -313,7 +443,7 @@ for lang in php ruby java dotnet; do
   if is_enabled "$lang"; then
     repo_name=$(get_repo_name "$lang")
     target_lib_path="${PLUGIN_TARGET_DIR}/client_libs/${repo_name}"
-    source_lib_path="${PROJECT_DIR_ABS}/client_libs/${repo_name}"
+    source_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
     url=$(get_repo_url "$lang")
     log_file="${PROJECT_DIR_ABS}/install_${lang}_log_$$.tmp"
 
@@ -336,6 +466,6 @@ done
 detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
 detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
 
-echo "Plugin installation complete."
+echo "Plugin installation for agy complete."
 echo ""
 echo "Restart your Antigravity / agy host to activate the plugin."

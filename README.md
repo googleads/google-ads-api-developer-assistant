@@ -107,50 +107,86 @@ By default, Python is used for code generation.  As of v2.3.0 you can provide co
 1.  Familiarity with Google Ads API concepts and authentication.
 2.  A Google Ads API developer token.
 3.  A configured credentials file in your home directory if using Python (`google-ads.yaml`), PHP (`google_ads_php.ini`), or Ruby (`google_ads_config.rb`).
-4.  Antigravity environment configured.
+4.  Antigravity or Claude Code environment configured.
 5.  A local clone of each client library for the languages you want to use. `install.sh` (Linux/macOS) or `install.ps1` (Windows) can set this up for you.
 6.  Python >= 3.10 installed and available on your system PATH. This is required for executing the default generated Python code directly.
 
 ## Setup
 
-1.  **Install Antigravity CLI:** Download and install `antigravity-cli` from [https://antigravity.google/](https://antigravity.google/).
+### 1. Install Host Platform
 
-2.  **Clone the Assistant:** `git clone https://github.com/googleads/google-ads-api-developer-assistant`. This becomes your project directory.
+Choose and set up your assistant environment:
 
-3.  **Run install script**
-    *   **Antigravity (Linux/macOS):**
-        *   Run `./install.sh`.
-        *   Installs plugin to `~/.gemini/config/plugins/google-ads-api-developer-assistant`.
-        *   To include additional client libraries, add flags: `./install.sh --php --ruby --dotnet`.
-        *   Execute `./install.sh --help` for more details.
-    *   **Antigravity (Windows):**
-        *   Open PowerShell.
-        *   Run `.\install.ps1` (installs to `%USERPROFILE%\.gemini\config\plugins\google-ads-api-developer-assistant`).
-        *   To include additional client libraries: `.\install.ps1 -Php -Ruby -Dotnet`.
+#### Antigravity CLI
+* Download and install `antigravity-cli` from [https://antigravity.google/](https://antigravity.google/).
+* Verify your installation:
+  ```bash
+  agy --version
+  ```
 
-### Install the plugin with Claude Code
+#### Claude Code
+1. **Prerequisites:** Ensure [Node.js](https://nodejs.org/) (version 18 or higher) is installed on your system:
+   ```bash
+   node --version
+   ```
+2. **Install Claude Code CLI:** Install Claude Code globally using npm:
+   ```bash
+   npm install -g @anthropic-ai/claude-code
+   ```
+   *(Alternatively on macOS via Homebrew: `brew install claude-code`)*
+3. **Authenticate:** Run `claude` in your terminal to authenticate with your Anthropic account or configure your API key:
+   ```bash
+   claude
+   ```
+4. **Verify Installation:** Check that the CLI is accessible:
+   ```bash
+   claude --version
+   ```
 
-Add the Local Marketplace in your Claude Code terminal/session:
+---
 
+### 2. Clone the Assistant
+Clone the repository to your local machine:
 ```bash
-/plugin marketplace add ~/google-ads-api-developer-assistant
+git clone https://github.com/googleads/google-ads-api-developer-assistant
+cd google-ads-api-developer-assistant
 ```
 
-Claude Code registers the local repository into `~/.claude/plugins/marketplaces/google-ads-assistant-local`.
+---
 
-Install the Plugin from the Marketplace:
+### 3. Run Install Script
+Run the installation script matching your platform:
 
-```bash
-/plugin install google-ads-api-developer-assistant@google-ads-assistant-local
-```
+*   **Antigravity (Linux/macOS):**
+    ```bash
+    ./install.sh agy
+    ```
+    *Installs plugin to `~/.gemini/config/plugins/google-ads-api-developer-assistant`.*
+    *To include additional client libraries: `./install.sh agy --php --ruby --dotnet`.*
 
-(Alternatively, run `/plugin` and select the plugin from the Discover tab).
+*   **Claude Code (Linux/macOS):**
+    ```bash
+    ./install.sh claude
+    ```
+    *Registers the repository as a local marketplace and installs the plugin into Claude Code via the `claude` CLI.*
+    *To include additional client libraries: `./install.sh claude --php --ruby --dotnet`.*
 
-Reload Plugins:
+*   **Antigravity (Windows - PowerShell):**
+    ```powershell
+    .\install.ps1 -Type agy
+    ```
+    *Installs plugin to `%USERPROFILE%\.gemini\config\plugins\google-ads-api-developer-assistant`.*
+    *To include additional client libraries: `.\install.ps1 -Type agy -Php -Ruby -Dotnet`.*
 
-```bash
-/reload-plugins
-```
+*   **Claude Code (Windows - PowerShell):**
+    ```powershell
+    .\install.ps1 -Type claude
+    ```
+    *Registers the local marketplace and installs the plugin into Claude Code via Claude CLI.*
+    *To include additional client libraries: `.\install.ps1 -Type claude -Php -Ruby -Dotnet`.*
+
+---
+
 4.  **Configure Credentials:** Make sure your API credentials configuration files are in your `$HOME` directory. Each language has its own configuration file naming convention and structure. 
 5.  **Optional: Default Customer ID:** To set a default customer ID, enter your customer ID in `config/customer_id.txt` or `config/customer_id` (e.g., `1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.
 6.  **Google Ads API Version Validation:** On your first run in a session, the assistant will automatically identify the latest stable Google Ads API version and ask you to confirm it. Once confirmed, this version is cached in [api_version.txt](file:///usr/local/google/home/rwh/google-ads-api-developer-assistant/config/api_version.txt) and used for all subsequent prompts. If you need to force a version change or refresh the cache, simply delete or edit the `config/api_version.txt` file.

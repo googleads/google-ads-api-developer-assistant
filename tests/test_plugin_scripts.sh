@@ -19,16 +19,33 @@ trap cleanup EXIT
 AGY_PLUGIN_DIR="${TEST_HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
 CLAUDE_PLUGIN_DIR="${TEST_HOME}/.claude/plugins/marketplaces/google-ads-api-developer-assistant"
 
-echo "Test 1: install.sh --help displays options"
+# Create mock claude CLI in TEST_HOME/bin
+mkdir -p "${TEST_HOME}/bin"
+export PATH="${TEST_HOME}/bin:${PATH}"
+cat << 'EOF' > "${TEST_HOME}/bin/claude"
+#!/bin/bash
+echo "[MOCK CLAUDE] Called with: $*"
+exit 0
+EOF
+chmod +x "${TEST_HOME}/bin/claude"
+
+echo "Test 1: install.sh requires type argument ('agy' or 'claude')"
+if "${PROJECT_ROOT}/install.sh" 2>/dev/null; then
+  echo "FAIL: install.sh without type argument should fail"
+  exit 1
+fi
+echo "PASS: install.sh enforces required type argument."
+
+echo "Test 2: install.sh --help displays options"
 output=$("${PROJECT_ROOT}/install.sh" --help)
-if ! echo "$output" | grep -qi "Antigravity"; then
-  echo "FAIL: install.sh --help should mention Antigravity"
+if ! echo "$output" | grep -qi "claude"; then
+  echo "FAIL: install.sh --help should mention claude"
   exit 1
 fi
 echo "PASS: install.sh --help is valid."
 
-echo "Test 2: install.sh installs plugin into ~/.gemini/config/plugins/google-ads-api-developer-assistant"
-"${PROJECT_ROOT}/install.sh"
+echo "Test 3: install.sh agy installs plugin into ~/.gemini/config/plugins/google-ads-api-developer-assistant"
+"${PROJECT_ROOT}/install.sh" agy
 if [[ ! -d "${AGY_PLUGIN_DIR}" ]]; then
   echo "FAIL: Antigravity plugin directory was not created at ${AGY_PLUGIN_DIR}"
   exit 1
@@ -43,14 +60,26 @@ if [[ ! -f "${AGY_PLUGIN_DIR}/config/api_version.txt" ]]; then
 fi
 echo "PASS: Antigravity plugin successfully installed."
 
-echo "Test 3: update.sh requires type argument ('agy' or 'claude')"
+echo "Test 4: install.sh claude executes claude CLI marketplace add and install commands"
+output=$("${PROJECT_ROOT}/install.sh" claude)
+if ! echo "$output" | grep -q "/plugin marketplace add"; then
+  echo "FAIL: install.sh claude did not execute marketplace add"
+  exit 1
+fi
+if ! echo "$output" | grep -q "/plugin install google-ads-api-developer-assistant@google-ads-assistant-local"; then
+  echo "FAIL: install.sh claude did not execute plugin install"
+  exit 1
+fi
+echo "PASS: install.sh claude executed Claude Code marketplace commands."
+
+echo "Test 5: update.sh requires type argument ('agy' or 'claude')"
 if "${PROJECT_ROOT}/update.sh" 2>/dev/null; then
   echo "FAIL: update.sh without type argument should fail"
   exit 1
 fi
 echo "PASS: update.sh enforces required type argument."
 
-echo "Test 4: update.sh --help displays agy and claude options"
+echo "Test 6: update.sh --help displays agy and claude options"
 output=$("${PROJECT_ROOT}/update.sh" --help)
 if ! echo "$output" | grep -qi "claude"; then
   echo "FAIL: update.sh --help should mention claude"
@@ -58,7 +87,7 @@ if ! echo "$output" | grep -qi "claude"; then
 fi
 echo "PASS: update.sh --help is valid."
 
-echo "Test 5: update.sh agy updates Antigravity plugin"
+echo "Test 7: update.sh agy updates Antigravity plugin"
 "${PROJECT_ROOT}/update.sh" agy
 if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
   echo "FAIL: plugin.json missing after update in agy"
@@ -66,7 +95,7 @@ if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
 fi
 echo "PASS: update.sh agy executed successfully."
 
-echo "Test 6: update.sh claude updates Claude Code plugin"
+echo "Test 8: update.sh claude updates Claude Code plugin"
 "${PROJECT_ROOT}/update.sh" claude
 if [[ ! -f "${CLAUDE_PLUGIN_DIR}/plugin.json" ]]; then
   echo "FAIL: plugin.json missing in Claude Code plugin after update"
@@ -74,7 +103,7 @@ if [[ ! -f "${CLAUDE_PLUGIN_DIR}/plugin.json" ]]; then
 fi
 echo "PASS: update.sh claude executed successfully."
 
-echo "Test 7: update.sh claude --php adds google-ads-php to Claude Code plugin client_libs"
+echo "Test 9: update.sh claude --php adds google-ads-php to Claude Code plugin client_libs"
 "${PROJECT_ROOT}/update.sh" claude --php
 if [[ ! -d "${CLAUDE_PLUGIN_DIR}/client_libs/google-ads-php" ]]; then
   echo "FAIL: google-ads-php missing from Claude Code plugin client_libs"
@@ -82,7 +111,7 @@ if [[ ! -d "${CLAUDE_PLUGIN_DIR}/client_libs/google-ads-php" ]]; then
 fi
 echo "PASS: update.sh claude --php added client library successfully."
 
-echo "Test 8: uninstall.sh --python removes google-ads-python from plugin client_libs"
+echo "Test 10: uninstall.sh --python removes google-ads-python from plugin client_libs"
 mkdir -p "${AGY_PLUGIN_DIR}/client_libs/google-ads-python"
 "${PROJECT_ROOT}/uninstall.sh" --python -y
 if [[ -d "${AGY_PLUGIN_DIR}/client_libs/google-ads-python" ]]; then
@@ -95,7 +124,7 @@ if [[ ! -d "${AGY_PLUGIN_DIR}" ]]; then
 fi
 echo "PASS: Client library removal succeeded for agy."
 
-echo "Test 9: uninstall.sh -y deletes the Antigravity plugin directory"
+echo "Test 11: uninstall.sh -y deletes the Antigravity plugin directory"
 "${PROJECT_ROOT}/uninstall.sh" -y
 if [[ -d "${AGY_PLUGIN_DIR}" ]]; then
   echo "FAIL: agy plugin directory still exists after uninstallation"

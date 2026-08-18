@@ -3,7 +3,11 @@
     Initializes the development environment for the Google Ads API Developer Assistant plugin on Windows.
 
 .DESCRIPTION
-    This script installs the Google Ads API Developer Assistant as a plugin for Antigravity (agy).
+    This script installs the Google Ads API Developer Assistant as a plugin for Antigravity (agy)
+    or Claude Code (claude).
+
+.PARAMETER Type
+    Required. Target platform: 'agy' (Antigravity) or 'claude' (Claude Code).
 
 .PARAMETER Php
     Include google-ads-php client library.
@@ -17,24 +21,36 @@
 .PARAMETER Dotnet
     Include google-ads-dotnet client library.
 
+.PARAMETER All
+    Include all client libraries.
+
 .EXAMPLE
-    .\install.ps1
+    .\install.ps1 -Type agy
     Installs the plugin for Antigravity with the Python client library.
 
 .EXAMPLE
-    .\install.ps1 -Java
+    .\install.ps1 -Type claude
+    Installs the plugin for Claude Code using Claude CLI.
+
+.EXAMPLE
+    .\install.ps1 -Type agy -Java
     Installs the plugin for Antigravity with Java and Python client libraries.
 
 .EXAMPLE
-    .\install.ps1 -Php -Ruby -Dotnet
-    Installs the plugin for Antigravity with PHP, Ruby, .NET, and Python client libraries.
+    .\install.ps1 -Type claude -Php -Ruby -Dotnet
+    Installs the plugin for Claude Code with PHP, Ruby, .NET, and Python client libraries.
 #>
 
 param(
+    [Parameter(Mandatory=$true, Position=0, HelpMessage="Target platform: 'agy' or 'claude'")]
+    [ValidateSet("agy", "claude", "claudecode", IgnoreCase=$true)]
+    [string]$Type,
+
     [switch]$Php,
     [switch]$Ruby,
     [switch]$Java,
-    [switch]$Dotnet
+    [switch]$Dotnet,
+    [switch]$All
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,10 +87,10 @@ function Test-Enabled {
     param([string]$Lang)
     switch ($Lang) {
         "python" { return $Python }
-        "php"    { return $Php }
-        "ruby"   { return $Ruby }
-        "java"   { return $Java }
-        "dotnet" { return $Dotnet }
+        "php"    { return ($Php -or $All) }
+        "ruby"   { return ($Ruby -or $All) }
+        "java"   { return ($Java -or $All) }
+        "dotnet" { return ($Dotnet -or $All) }
         default  { return $false }
     }
 }
@@ -102,11 +118,6 @@ function Set-LatestApiVersion {
 
 # --- Defaults ---
 $Python = $true
-$AnySelected = $false
-
-if ($Php -or $Ruby -or $Java -or $Dotnet) {
-    $AnySelected = $true
-}
 
 # --- Environment Verification ---
 function Test-PythonEnvironment {
@@ -187,16 +198,31 @@ function Test-AntigravityEnvironment {
 
 function Test-ClaudeCodeEnvironment {
     if (Get-Command claude -ErrorAction SilentlyContinue) {
+        Write-Host "Found Claude Code CLI (claude)"
+        return $true
+    }
+    Write-Error "ERROR: Claude Code CLI ('claude') is not installed or not in PATH."
+    Write-Error "Please install Claude Code CLI to continue."
+    return $false
+}
+
 function check_environment {
-    Write-Host "Checking environment for Antigravity..."
+    Write-Host "Checking environment for $Type..."
     $EnvOk = $true
 
     if (-not (Test-PythonEnvironment)) {
         $EnvOk = $false
     }
 
-    if (-not (Test-AntigravityEnvironment)) {
-        $EnvOk = $false
+    if ($Type.ToLower() -eq "agy") {
+        if (-not (Test-AntigravityEnvironment)) {
+            $EnvOk = $false
+        }
+    }
+    elseif ($Type.ToLower() -eq "claude" -or $Type.ToLower() -eq "claudecode") {
+        if (-not (Test-ClaudeCodeEnvironment)) {
+            $EnvOk = $false
+        }
     }
 
     if (-not $EnvOk) {
@@ -221,11 +247,54 @@ if (-not (Test-Path -LiteralPath $PluginSource)) {
     exit 1
 }
 
+if ($Type.ToLower() -eq "claude" -or $Type.ToLower() -eq "claudecode") {
+    Write-Host "Preparing Claude Code plugin files at $PluginSource..."
+    $PluginSourceClientLibs = Join-Path $PluginSource "client_libs"
+    if (-not (Test-Path -LiteralPath $PluginSourceClientLibs)) {
+        New-Item -ItemType Directory -Force -LiteralPath $PluginSourceClientLibs | Out-Null
+    }
+
+    $OtherLangs = @("php", "ruby", "java", "dotnet")
+    foreach ($Lang in $OtherLangs) {
+        if (Test-Enabled -Lang $Lang) {
+            $Config = Get-RepoConfig -Lang $Lang
+            $TargetRepoPath = Join-Path $PluginSourceClientLibs $Config.Name
+            $RepoUrl = $Config.Url
+
+            if (-not (Test-Path -LiteralPath $TargetRepoPath)) {
+                Write-Host "Cloning $RepoUrl into $TargetRepoPath..."
+                git clone $RepoUrl $TargetRepoPath
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "ERROR: Failed to clone $RepoUrl"
+                    exit 1
+                }
+                Write-Host "Successfully cloned $($Config.Name)."
+            }
+        }
+    }
+
+    $PluginPythonDir = Join-Path $PluginSource "client_libs\google-ads-python\google\ads\googleads"
+    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $PluginSource "config")
+    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
+
+    Write-Host "Registering marketplace in Claude Code..."
+    claude -p "/plugin marketplace add $ProjectDirAbs"
+
+    Write-Host "Installing plugin in Claude Code..."
+    claude -p "/plugin install google-ads-api-developer-assistant@google-ads-assistant-local"
+
+    Write-Host "Plugin installation for claude complete."
+    Write-Host ""
+    Write-Host "In your Claude Code session, run /reload-plugins to activate the plugin."
+    exit 0
+}
+
+# Antigravity installation
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
 $TargetPluginDir = Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant"
 $ParentPluginDir = Split-Path $TargetPluginDir
 
-Write-Host "Installing plugin into: $TargetPluginDir"
+Write-Host "Installing plugin for agy into: $TargetPluginDir"
 if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
     New-Item -ItemType Directory -Force -LiteralPath $ParentPluginDir | Out-Null
 }
@@ -247,7 +316,7 @@ foreach ($Lang in $OtherLangs) {
     if (Test-Enabled -Lang $Lang) {
         $Config = Get-RepoConfig -Lang $Lang
         $TargetRepoPath = Join-Path $PluginClientLibsDir $Config.Name
-        $SourceRepoPath = Join-Path $ProjectDirAbs (Join-Path "client_libs" $Config.Name)
+        $SourceRepoPath = Join-Path $PluginSource (Join-Path "client_libs" $Config.Name)
         $RepoUrl = $Config.Url
 
         if (Test-Path -LiteralPath $SourceRepoPath) {
@@ -274,7 +343,7 @@ $PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\goo
 Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
 Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
 
-Write-Host "Plugin installation complete."
+Write-Host "Plugin installation for agy complete."
 Write-Host ""
 Write-Host "Restart your Antigravity / agy host to activate the plugin."
 
