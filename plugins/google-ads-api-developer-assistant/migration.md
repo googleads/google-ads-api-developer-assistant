@@ -102,7 +102,7 @@ While all domain rules, prompt context, Python diagnostic scripts, and skills ar
 ### Step 1: Copy Plugin Directory
 Copy `google_ads_assistant_plugin` to your agent configuration directory:
 - **Antigravity / agy**: `~/.gemini/config/plugins/google-ads-api-developer-assistant`
-- **Claude Desktop / Claude Code**: `~/.claude/plugins/marketplace/google-ads-api-developer-assistant`
+- **Claude Desktop / Claude Code**: `~/.claude/plugins/marketplaces/google-ads-api-developer-assistant`
 
 ### Step 2: Configure Credentials
 Ensure your `google-ads.yaml` config file exists at `config/google-ads.yaml` or `~/google-ads.yaml`:

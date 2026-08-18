@@ -121,12 +121,12 @@ By default, Python is used for code generation.  As of v2.3.0 you can provide co
     *   **Linux/macOS:**
         *   Run `./install.sh <agy|claudecode>`.
         *   For Antigravity: `./install.sh agy` (installs to `~/.gemini/config/plugins/google-ads-api-developer-assistant`).
-        *   For Claude Code: `./install.sh claudecode` (installs to `~/.claude/plugins/marketplace/google-ads-api-developer-assistant`).
+        *   For Claude Code: `./install.sh claudecode` (installs to `~/.claude/plugins/marketplaces/google-ads-api-developer-assistant`).
         *   To include additional client libraries, add flags: `./install.sh agy --php --ruby --dotnet`.
         *   Execute `./install.sh --help` for more details.
     *   **Windows:**
         *   Open PowerShell.
-        *   Run `.\install.ps1 -Target agy` (installs to `%USERPROFILE%\.gemini\config\plugins\google-ads-api-developer-assistant`) or `.\install.ps1 -Target claudecode` (installs to `%USERPROFILE%\.claude\plugins\marketplace\google-ads-api-developer-assistant`).
+        *   Run `.\install.ps1 -Target agy` (installs to `%USERPROFILE%\.gemini\config\plugins\google-ads-api-developer-assistant`) or `.\install.ps1 -Target claudecode` (installs to `%USERPROFILE%\.claude\plugins\marketplaces\google-ads-api-developer-assistant`).
         *   To include additional client libraries: `.\install.ps1 -Target agy -Php -Ruby -Dotnet`.
 4.  **Configure Credentials:** Make sure your API credentials configuration files are in your `$HOME` directory. Each language has its own configuration file naming convention and structure. 
 5.  **Optional: Default Customer ID:** To set a default customer ID, enter your customer ID in `config/customer_id.txt` or `config/customer_id` (e.g., `1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.

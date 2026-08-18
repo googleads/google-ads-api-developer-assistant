@@ -83,7 +83,7 @@ function Get-PluginTargetDir {
             return (Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant")
         }
         "claudecode" {
-            return (Join-Path $UserHome ".claude\plugins\marketplace\google-ads-api-developer-assistant")
+            return (Join-Path $UserHome ".claude\plugins\marketplaces\google-ads-api-developer-assistant")
         }
         default {
             throw "Invalid target '$TargetPlatform'. Must be 'agy' or 'claudecode'."

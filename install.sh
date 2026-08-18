@@ -74,7 +74,7 @@ get_plugin_target_dir() {
       PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
       ;;
     claudecode)
-      PLUGIN_TARGET_DIR="${HOME}/.claude/plugins/marketplace/google-ads-api-developer-assistant"
+      PLUGIN_TARGET_DIR="${HOME}/.claude/plugins/marketplaces/google-ads-api-developer-assistant"
       ;;
     *)
       err "ERROR: Invalid target '${target}'. Must be 'agy' or 'claudecode'."
