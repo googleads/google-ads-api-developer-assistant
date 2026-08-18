@@ -299,7 +299,7 @@ if [[ "${PLUGIN_TARGET_DIR}" != "${PLUGIN_SOURCE_DIR}" ]]; then
     cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
   else
     echo "Syncing plugin files to ${PLUGIN_TARGET_DIR}..."
-    for item in rules sidecars skills config client_libs plugin.json README.md customer_id.txt; do
+    for item in rules sidecars skills config plugin.json README.md customer_id.txt; do
       if [[ -e "${PLUGIN_SOURCE_DIR}/${item}" ]]; then
         cp -r "${PLUGIN_SOURCE_DIR}/${item}" "${PLUGIN_TARGET_DIR}/"
       fi
@@ -309,18 +309,18 @@ if [[ "${PLUGIN_TARGET_DIR}" != "${PLUGIN_SOURCE_DIR}" ]]; then
   PLUGIN_CLIENT_LIBS="${PLUGIN_TARGET_DIR}/client_libs"
   mkdir -p "${PLUGIN_CLIENT_LIBS}"
 
-  for lang in python php ruby java dotnet; do
-    if is_enabled "$lang"; then
-      repo_name=$(get_repo_name "$lang")
-      target_lib_path="${PLUGIN_CLIENT_LIBS}/${repo_name}"
-      source_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
-
-      if [[ -d "${source_lib_path}" && ! -d "${target_lib_path}" ]]; then
-        echo "Copying ${repo_name} to ${target_lib_path}..."
-        cp -r "${source_lib_path}" "${target_lib_path}"
+  if [[ -d "${PLUGIN_SOURCE_DIR}/client_libs" ]]; then
+    for lib_dir in "${PLUGIN_SOURCE_DIR}/client_libs"/*; do
+      if [[ -d "${lib_dir}" ]]; then
+        lib_name=$(basename "${lib_dir}")
+        target_lib_path="${PLUGIN_CLIENT_LIBS}/${lib_name}"
+        if [[ ! -d "${target_lib_path}" ]]; then
+          echo "Copying ${lib_name} to ${target_lib_path}..."
+          cp -r "${lib_dir}" "${target_lib_path}"
+        fi
       fi
-    fi
-  done
+    done
+  fi
 fi
 
 # Locate and update all client libraries across source and target directories

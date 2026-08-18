@@ -222,7 +222,7 @@ if ($TargetPluginDir -ne $PluginSourceDir) {
     }
     else {
         Write-Host "Syncing plugin files to $TargetPluginDir..."
-        $ItemsToSync = @("rules", "sidecars", "skills", "config", "client_libs", "plugin.json", "README.md", "customer_id.txt")
+        $ItemsToSync = @("rules", "sidecars", "skills", "config", "plugin.json", "README.md", "customer_id.txt")
         foreach ($Item in $ItemsToSync) {
             $SourceItem = Join-Path $PluginSourceDir $Item
             if (Test-Path -LiteralPath $SourceItem) {
@@ -236,15 +236,12 @@ if ($TargetPluginDir -ne $PluginSourceDir) {
         New-Item -ItemType Directory -Force -LiteralPath $TargetClientLibs | Out-Null
     }
 
-    if ($SpecifiedLangs.Count -gt 0) {
-        foreach ($Lang in $SpecifiedLangs) {
-            $RepoName = Get-RepoName $Lang
-            $SourceLibPath = Join-Path $PluginSourceClientLibs $RepoName
-            $TargetLibPath = Join-Path $TargetClientLibs $RepoName
-
-            if ((Test-Path -LiteralPath $SourceLibPath) -and (-not (Test-Path -LiteralPath $TargetLibPath))) {
-                Write-Host "Copying $RepoName to $TargetLibPath..."
-                Copy-Item -Recurse -Force -LiteralPath $SourceLibPath -Destination $TargetLibPath
+    if (Test-Path -LiteralPath $PluginSourceClientLibs) {
+        foreach ($LibDir in Get-ChildItem -LiteralPath $PluginSourceClientLibs -Directory) {
+            $TargetLibPath = Join-Path $TargetClientLibs $LibDir.Name
+            if (-not (Test-Path -LiteralPath $TargetLibPath)) {
+                Write-Host "Copying $($LibDir.Name) to $TargetLibPath..."
+                Copy-Item -Recurse -Force -LiteralPath $LibDir.FullName -Destination $TargetLibPath
             }
         }
     }
