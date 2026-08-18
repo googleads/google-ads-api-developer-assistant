@@ -17,6 +17,7 @@ cleanup() {
 trap cleanup EXIT
 
 AGY_PLUGIN_DIR="${TEST_HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+CLAUDE_PLUGIN_DIR="${TEST_HOME}/.claude/plugins/marketplaces/google-ads-api-developer-assistant"
 
 echo "Test 1: install.sh --help displays options"
 output=$("${PROJECT_ROOT}/install.sh" --help)
@@ -42,15 +43,46 @@ if [[ ! -f "${AGY_PLUGIN_DIR}/config/api_version.txt" ]]; then
 fi
 echo "PASS: Antigravity plugin successfully installed."
 
-echo "Test 3: update.sh updates Antigravity plugin"
-"${PROJECT_ROOT}/update.sh"
+echo "Test 3: update.sh requires type argument ('agy' or 'claude')"
+if "${PROJECT_ROOT}/update.sh" 2>/dev/null; then
+  echo "FAIL: update.sh without type argument should fail"
+  exit 1
+fi
+echo "PASS: update.sh enforces required type argument."
+
+echo "Test 4: update.sh --help displays agy and claude options"
+output=$("${PROJECT_ROOT}/update.sh" --help)
+if ! echo "$output" | grep -qi "claude"; then
+  echo "FAIL: update.sh --help should mention claude"
+  exit 1
+fi
+echo "PASS: update.sh --help is valid."
+
+echo "Test 5: update.sh agy updates Antigravity plugin"
+"${PROJECT_ROOT}/update.sh" agy
 if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
   echo "FAIL: plugin.json missing after update in agy"
   exit 1
 fi
-echo "PASS: update.sh executed successfully."
+echo "PASS: update.sh agy executed successfully."
 
-echo "Test 4: uninstall.sh --python removes google-ads-python from plugin client_libs"
+echo "Test 6: update.sh claude updates Claude Code plugin"
+"${PROJECT_ROOT}/update.sh" claude
+if [[ ! -f "${CLAUDE_PLUGIN_DIR}/plugin.json" ]]; then
+  echo "FAIL: plugin.json missing in Claude Code plugin after update"
+  exit 1
+fi
+echo "PASS: update.sh claude executed successfully."
+
+echo "Test 7: update.sh claude --php adds google-ads-php to Claude Code plugin client_libs"
+"${PROJECT_ROOT}/update.sh" claude --php
+if [[ ! -d "${CLAUDE_PLUGIN_DIR}/client_libs/google-ads-php" ]]; then
+  echo "FAIL: google-ads-php missing from Claude Code plugin client_libs"
+  exit 1
+fi
+echo "PASS: update.sh claude --php added client library successfully."
+
+echo "Test 8: uninstall.sh --python removes google-ads-python from plugin client_libs"
 mkdir -p "${AGY_PLUGIN_DIR}/client_libs/google-ads-python"
 "${PROJECT_ROOT}/uninstall.sh" --python -y
 if [[ -d "${AGY_PLUGIN_DIR}/client_libs/google-ads-python" ]]; then
@@ -63,7 +95,7 @@ if [[ ! -d "${AGY_PLUGIN_DIR}" ]]; then
 fi
 echo "PASS: Client library removal succeeded for agy."
 
-echo "Test 5: uninstall.sh -y deletes the Antigravity plugin directory"
+echo "Test 9: uninstall.sh -y deletes the Antigravity plugin directory"
 "${PROJECT_ROOT}/uninstall.sh" -y
 if [[ -d "${AGY_PLUGIN_DIR}" ]]; then
   echo "FAIL: agy plugin directory still exists after uninstallation"

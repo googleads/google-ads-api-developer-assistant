@@ -26,9 +26,29 @@ err() {
   echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*" >&2
 }
 
-readonly PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+# Helper to resolve OS-specific target plugin directory
+get_plugin_target_dir() {
+  local target="$1"
+  local os_type
+  os_type=$(uname -s 2>/dev/null || echo "Linux")
+  echo "Detected OS: ${os_type}"
+
+  case "${target}" in
+    agy)
+      PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+      ;;
+    claude|claudecode)
+      PLUGIN_TARGET_DIR="${HOME}/.claude/plugins/marketplaces/google-ads-api-developer-assistant"
+      ;;
+    *)
+      err "ERROR: Invalid type '${target}'. Must be 'agy' or 'claude'."
+      exit 1
+      ;;
+  esac
+}
 
 # --- Defaults ---
+TYPE=""
 INSTALL_PYTHON=false
 INSTALL_PHP=false
 INSTALL_RUBY=false
@@ -38,11 +58,19 @@ ANY_SELECTED=false
 
 # --- Help Function ---
 usage() {
-  echo "Usage: $0 [OPTIONS]"
-  echo "  Updates the Google Ads API Developer Assistant plugin and configured client libraries."
+  echo "Usage: $0 <agy|claude> [OPTIONS]"
+  echo "       $0 --type <agy|claude> [OPTIONS]"
+  echo "  Updates the Google Ads API Developer Assistant plugin and configured client libraries for Antigravity or Claude Code."
+  echo ""
+  echo "  Required Argument:"
+  echo "    <agy|claude>               Target platform: 'agy' (Antigravity) or 'claude' (Claude Code)"
   echo ""
   echo "  Options:"
   echo "    -h, --help                 Show this help message and exit"
+  echo "    --type TYPE                Target platform ('agy' or 'claude')"
+  echo "    --agy                      Update Antigravity plugin (shorthand for --type agy)"
+  echo "    --claude                   Update Claude Code plugin (shorthand for --type claude)"
+  echo "    --all                      Ensure all client libraries are present and updated in plugin"
   echo "    --python                   Ensure google-ads-python is present and updated in plugin"
   echo "    --php                      Ensure google-ads-php is present and updated in plugin"
   echo "    --ruby                     Ensure google-ads-ruby is present and updated in plugin"
@@ -50,8 +78,10 @@ usage() {
   echo "    --dotnet                   Ensure google-ads-dotnet is present and updated in plugin"
   echo ""
   echo "  Examples:"
-  echo "    $0                         (Updates repository, plugin, and client libraries)"
-  echo "    $0 --java                  (Ensures Java library is added/updated in plugin)"
+  echo "    $0 agy                     (Updates repository, Antigravity plugin, and client libraries)"
+  echo "    $0 claude                  (Updates repository, Claude Code plugin, and client libraries)"
+  echo "    $0 agy --java              (Ensures Java library is added/updated in Antigravity plugin)"
+  echo "    $0 claude --php --dotnet   (Ensures PHP and .NET libraries are added/updated in Claude Code plugin)"
   echo ""
 }
 
@@ -61,6 +91,49 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       usage
       exit 0
+      ;;
+    agy|claude|claudecode)
+      TYPE="$1"
+      if [[ "${TYPE}" == "claudecode" ]]; then
+        TYPE="claude"
+      fi
+      shift
+      ;;
+    --type)
+      if [[ $# -lt 2 ]]; then
+        err "ERROR: --type requires an argument ('agy' or 'claude')."
+        usage
+        exit 1
+      fi
+      TYPE=$(echo "$2" | tr '[:upper:]' '[:lower:]')
+      if [[ "${TYPE}" == "claudecode" ]]; then
+        TYPE="claude"
+      fi
+      shift 2
+      ;;
+    --type=*)
+      TYPE=$(echo "${1#*=}" | tr '[:upper:]' '[:lower:]')
+      if [[ "${TYPE}" == "claudecode" ]]; then
+        TYPE="claude"
+      fi
+      shift
+      ;;
+    --agy)
+      TYPE="agy"
+      shift
+      ;;
+    --claude|--claudecode)
+      TYPE="claude"
+      shift
+      ;;
+    --all)
+      INSTALL_PYTHON=true
+      INSTALL_PHP=true
+      INSTALL_RUBY=true
+      INSTALL_JAVA=true
+      INSTALL_DOTNET=true
+      ANY_SELECTED=true
+      shift
       ;;
     --python)
       INSTALL_PYTHON=true
@@ -94,6 +167,19 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# --- Validate Required Type ---
+if [[ -z "${TYPE}" ]]; then
+  err "ERROR: Missing required type argument: 'agy' or 'claude'."
+  usage
+  exit 1
+fi
+
+if [[ "${TYPE}" != "agy" && "${TYPE}" != "claude" ]]; then
+  err "ERROR: Invalid type '${TYPE}'. Must be 'agy' or 'claude'."
+  usage
+  exit 1
+fi
 
 # Helper functions for repo info
 get_repo_url() {
@@ -184,34 +270,20 @@ fi
 echo "Successfully updated repository."
 
 # --- Update Plugin Installation ---
+get_plugin_target_dir "${TYPE}"
 PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant"
+mkdir -p "${PLUGIN_SOURCE_DIR}/client_libs"
 
-if [[ ! -d "${PLUGIN_TARGET_DIR}" ]]; then
-  echo "Plugin not yet installed at ${PLUGIN_TARGET_DIR}. Installing..."
-  mkdir -p "$(dirname "${PLUGIN_TARGET_DIR}")"
-  cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
-else
-  echo "Syncing plugin files to ${PLUGIN_TARGET_DIR}..."
-  for item in rules sidecars skills config client_libs plugin.json README.md; do
-    if [[ -e "${PLUGIN_SOURCE_DIR}/${item}" ]]; then
-      cp -r "${PLUGIN_SOURCE_DIR}/${item}" "${PLUGIN_TARGET_DIR}/"
-    fi
-  done
-fi
-
-PLUGIN_CLIENT_LIBS="${PLUGIN_TARGET_DIR}/client_libs"
-mkdir -p "${PLUGIN_CLIENT_LIBS}"
-
-# Handle specific library additions if requested
+# Handle specific library additions in source directory
 for lang in python php ruby java dotnet; do
   if is_enabled "$lang"; then
     repo_url=$(get_repo_url "$lang")
     repo_name=$(get_repo_name "$lang")
-    lib_path="${PLUGIN_CLIENT_LIBS}/${repo_name}"
+    source_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
 
-    if [[ ! -d "${lib_path}" ]]; then
-      echo "Library ${repo_name} not found in plugin. Cloning into ${lib_path}..."
-      if ! git clone "${repo_url}" "${lib_path}"; then
+    if [[ ! -d "${source_lib_path}" ]]; then
+      echo "Library ${repo_name} not found in plugin source. Cloning into ${source_lib_path}..."
+      if ! git clone "${repo_url}" "${source_lib_path}"; then
         err "ERROR: Failed to clone ${repo_url}"
         exit 1
       fi
@@ -219,41 +291,82 @@ for lang in python php ruby java dotnet; do
   fi
 done
 
-# Locate and update all client libraries in the plugin structure
-echo "Locating client libraries in ${PLUGIN_CLIENT_LIBS}..."
-INCLUDE_DIRS=()
-if [[ -d "${PLUGIN_CLIENT_LIBS}" ]]; then
-  for dir in "${PLUGIN_CLIENT_LIBS}"/*; do
-    if [[ -d "${dir}/.git" ]]; then
-      INCLUDE_DIRS+=("${dir}")
+# If target directory is different from source, sync to target
+if [[ "${PLUGIN_TARGET_DIR}" != "${PLUGIN_SOURCE_DIR}" ]]; then
+  if [[ ! -d "${PLUGIN_TARGET_DIR}" ]]; then
+    echo "Plugin not yet installed at ${PLUGIN_TARGET_DIR}. Installing for ${TYPE}..."
+    mkdir -p "$(dirname "${PLUGIN_TARGET_DIR}")"
+    cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
+  else
+    echo "Syncing plugin files to ${PLUGIN_TARGET_DIR}..."
+    for item in rules sidecars skills config client_libs plugin.json README.md customer_id.txt; do
+      if [[ -e "${PLUGIN_SOURCE_DIR}/${item}" ]]; then
+        cp -r "${PLUGIN_SOURCE_DIR}/${item}" "${PLUGIN_TARGET_DIR}/"
+      fi
+    done
+  fi
+
+  PLUGIN_CLIENT_LIBS="${PLUGIN_TARGET_DIR}/client_libs"
+  mkdir -p "${PLUGIN_CLIENT_LIBS}"
+
+  for lang in python php ruby java dotnet; do
+    if is_enabled "$lang"; then
+      repo_name=$(get_repo_name "$lang")
+      target_lib_path="${PLUGIN_CLIENT_LIBS}/${repo_name}"
+      source_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
+
+      if [[ -d "${source_lib_path}" && ! -d "${target_lib_path}" ]]; then
+        echo "Copying ${repo_name} to ${target_lib_path}..."
+        cp -r "${source_lib_path}" "${target_lib_path}"
+      fi
     fi
   done
 fi
 
-if [[ ${#INCLUDE_DIRS[@]} -eq 0 ]]; then
-  echo "No git client libraries found to update in ${PLUGIN_CLIENT_LIBS}."
-else
-  echo "Found ${#INCLUDE_DIRS[@]} client libraries to update."
-  for lib_path in "${INCLUDE_DIRS[@]}"; do
-    [[ -z "${lib_path}" ]] && continue
-    if [[ ! -d "${lib_path}" ]]; then
-      echo "WARN: Directory not found: ${lib_path}. Skipping."
-      continue
-    fi
-
-    echo "Updating repository at: ${lib_path}..."
-    if ! (cd "${lib_path}" && git pull); then
-      err "ERROR: Failed to update ${lib_path}"
-      exit 1
-    fi
-    echo "Successfully updated ${lib_path}."
-  done
+# Locate and update all client libraries across source and target directories
+echo "Locating client libraries to update..."
+CHECK_DIRS=("${PLUGIN_SOURCE_DIR}/client_libs")
+if [[ "${PLUGIN_TARGET_DIR}" != "${PLUGIN_SOURCE_DIR}" && -d "${PLUGIN_TARGET_DIR}/client_libs" ]]; then
+  CHECK_DIRS+=("${PLUGIN_TARGET_DIR}/client_libs")
 fi
+
+UPDATED_PATHS=()
+for base_dir in "${CHECK_DIRS[@]}"; do
+  if [[ -d "${base_dir}" ]]; then
+    for dir in "${base_dir}"/*; do
+      if [[ -d "${dir}/.git" ]]; then
+        already_processed=false
+        for p in "${UPDATED_PATHS[@]:-}"; do
+          if [[ "${p}" == "${dir}" ]]; then
+            already_processed=true
+            break
+          fi
+        done
+        if [[ "${already_processed}" == "false" ]]; then
+          UPDATED_PATHS+=("${dir}")
+          echo "Updating repository at: ${dir}..."
+          if ! (cd "${dir}" && git pull); then
+            err "ERROR: Failed to update ${dir}"
+            exit 1
+          fi
+          echo "Successfully updated $(basename "${dir}")."
+        fi
+      fi
+    done
+  fi
+done
 
 # Pre-seed latest API version in plugin and project config
-detect_and_seed_api_version "${PLUGIN_CLIENT_LIBS}/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
-detect_and_seed_api_version "${PLUGIN_CLIENT_LIBS}/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
+detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_SOURCE_DIR}/config"
+detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
+if [[ "${PLUGIN_TARGET_DIR}" != "${PLUGIN_SOURCE_DIR}" ]]; then
+  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
+fi
 
-echo "Plugin update complete."
+echo "Plugin update for ${TYPE} complete."
 echo ""
-echo "Restart your Antigravity / agy host to apply changes."
+if [[ "${TYPE}" == "agy" ]]; then
+  echo "Restart your Antigravity / agy host to apply changes."
+else
+  echo "In your Claude Code session, run /reload-plugins to apply changes."
+fi

@@ -5,8 +5,11 @@
 .DESCRIPTION
     This script updates the Google Ads API Developer Assistant repository and installed plugin:
     1. Updates the git repository (git pull).
-    2. Syncs updated plugin assets to the Antigravity plugin directory.
+    2. Syncs updated plugin assets to the platform-specific plugin directory (Antigravity or Claude Code).
     3. Clones or updates configured client libraries in the plugin's 'client_libs/' directory.
+
+.PARAMETER Type
+    Required. Target platform: 'agy' (Antigravity) or 'claude' (Claude Code).
 
 .PARAMETER Python
     Ensure google-ads-python is present and updated.
@@ -23,21 +26,33 @@
 .PARAMETER Dotnet
     Ensure google-ads-dotnet is present and updated.
 
+.PARAMETER All
+    Ensure all client libraries are present and updated.
+
 .EXAMPLE
-    .\update.ps1
+    .\update.ps1 -Type agy
     Updates repository, Antigravity plugin, and all configured client libraries.
 
 .EXAMPLE
-    .\update.ps1 -Java
+    .\update.ps1 -Type claude
+    Updates repository, Claude Code plugin, and all configured client libraries.
+
+.EXAMPLE
+    .\update.ps1 -Type agy -Java
     Ensures Java library is present and updated in Antigravity plugin.
 #>
 
 param(
+    [Parameter(Mandatory=$true, Position=0, HelpMessage="Target platform: 'agy' or 'claude'")]
+    [ValidateSet("agy", "claude", "claudecode", IgnoreCase=$true)]
+    [string]$Type,
+
     [switch]$Python,
     [switch]$Php,
     [switch]$Ruby,
     [switch]$Java,
-    [switch]$Dotnet
+    [switch]$Dotnet,
+    [switch]$All
 )
 
 function Get-RepoUrl {
@@ -59,6 +74,27 @@ function Get-RepoName {
         "ruby"   { return "google-ads-ruby" }
         "java"   { return "google-ads-java" }
         "dotnet" { return "google-ads-dotnet" }
+    }
+}
+
+function Get-PluginTargetDir {
+    param([string]$TargetPlatform)
+
+    $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+
+    switch ($TargetPlatform.ToLower()) {
+        "agy" {
+            return (Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant")
+        }
+        "claude" {
+            return (Join-Path $UserHome ".claude\plugins\marketplaces\google-ads-api-developer-assistant")
+        }
+        "claudecode" {
+            return (Join-Path $UserHome ".claude\plugins\marketplaces\google-ads-api-developer-assistant")
+        }
+        default {
+            throw "Invalid type '$TargetPlatform'. Must be 'agy' or 'claude'."
+        }
     }
 }
 
@@ -140,67 +176,102 @@ finally {
 }
 
 $SpecifiedLangs = @()
-if ($Python) { $SpecifiedLangs += "python" }
-if ($Php)    { $SpecifiedLangs += "php" }
-if ($Ruby)   { $SpecifiedLangs += "ruby" }
-if ($Java)   { $SpecifiedLangs += "java" }
-if ($Dotnet) { $SpecifiedLangs += "dotnet" }
+if ($All) {
+    $SpecifiedLangs = @("python", "php", "ruby", "java", "dotnet")
+} else {
+    if ($Python) { $SpecifiedLangs += "python" }
+    if ($Php)    { $SpecifiedLangs += "php" }
+    if ($Ruby)   { $SpecifiedLangs += "ruby" }
+    if ($Java)   { $SpecifiedLangs += "java" }
+    if ($Dotnet) { $SpecifiedLangs += "dotnet" }
+}
 
 # --- Plugin Update ---
-$UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-$TargetPluginDir = Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant"
+$TargetPluginDir = Get-PluginTargetDir -TargetPlatform $Type
 $ParentPluginDir = Split-Path $TargetPluginDir
 $PluginSourceDir = Join-Path $ProjectDirAbs "plugins\google-ads-api-developer-assistant"
+$PluginSourceClientLibs = Join-Path $PluginSourceDir "client_libs"
 
-if (-not (Test-Path -LiteralPath $TargetPluginDir)) {
-    Write-Host "Plugin not yet installed at $TargetPluginDir. Installing..."
-    if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
-        New-Item -ItemType Directory -Force -LiteralPath $ParentPluginDir | Out-Null
-    }
-    Copy-Item -Recurse -Force -LiteralPath $PluginSourceDir -Destination $TargetPluginDir
-}
-else {
-    Write-Host "Syncing plugin files to $TargetPluginDir..."
-    $ItemsToSync = @("rules", "sidecars", "skills", "config", "client_libs", "plugin.json", "README.md")
-    foreach ($Item in $ItemsToSync) {
-        $SourceItem = Join-Path $PluginSourceDir $Item
-        if (Test-Path -LiteralPath $SourceItem) {
-            Copy-Item -Recurse -Force -LiteralPath $SourceItem -Destination (Join-Path $TargetPluginDir $Item)
-        }
-    }
+if (-not (Test-Path -LiteralPath $PluginSourceClientLibs)) {
+    New-Item -ItemType Directory -Force -LiteralPath $PluginSourceClientLibs | Out-Null
 }
 
-$PluginClientLibs = Join-Path $TargetPluginDir "client_libs"
-if (-not (Test-Path -LiteralPath $PluginClientLibs)) {
-    New-Item -ItemType Directory -Force -LiteralPath $PluginClientLibs | Out-Null
-}
-
+# Handle specific library additions in source directory
 if ($SpecifiedLangs.Count -gt 0) {
     foreach ($Lang in $SpecifiedLangs) {
         $RepoUrl = Get-RepoUrl $Lang
         $RepoName = Get-RepoName $Lang
-        $LibPath = Join-Path $PluginClientLibs $RepoName
+        $SourceLibPath = Join-Path $PluginSourceClientLibs $RepoName
 
-        if (-not (Test-Path -LiteralPath $LibPath)) {
-            Write-Host "Library $RepoName not found in plugin. Cloning into $LibPath..."
-            git clone $RepoUrl $LibPath
+        if (-not (Test-Path -LiteralPath $SourceLibPath)) {
+            Write-Host "Library $RepoName not found in plugin source. Cloning into $SourceLibPath..."
+            git clone $RepoUrl $SourceLibPath
             if ($LASTEXITCODE -ne 0) { throw "Failed to clone $RepoUrl" }
         }
     }
 }
 
-Write-Host "Locating client libraries in $PluginClientLibs..."
+# If target directory is different from source, sync to target
+if ($TargetPluginDir -ne $PluginSourceDir) {
+    if (-not (Test-Path -LiteralPath $TargetPluginDir)) {
+        Write-Host "Plugin not yet installed at $TargetPluginDir. Installing for $Type..."
+        if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
+            New-Item -ItemType Directory -Force -LiteralPath $ParentPluginDir | Out-Null
+        }
+        Copy-Item -Recurse -Force -LiteralPath $PluginSourceDir -Destination $TargetPluginDir
+    }
+    else {
+        Write-Host "Syncing plugin files to $TargetPluginDir..."
+        $ItemsToSync = @("rules", "sidecars", "skills", "config", "client_libs", "plugin.json", "README.md", "customer_id.txt")
+        foreach ($Item in $ItemsToSync) {
+            $SourceItem = Join-Path $PluginSourceDir $Item
+            if (Test-Path -LiteralPath $SourceItem) {
+                Copy-Item -Recurse -Force -LiteralPath $SourceItem -Destination (Join-Path $TargetPluginDir $Item)
+            }
+        }
+    }
+
+    $TargetClientLibs = Join-Path $TargetPluginDir "client_libs"
+    if (-not (Test-Path -LiteralPath $TargetClientLibs)) {
+        New-Item -ItemType Directory -Force -LiteralPath $TargetClientLibs | Out-Null
+    }
+
+    if ($SpecifiedLangs.Count -gt 0) {
+        foreach ($Lang in $SpecifiedLangs) {
+            $RepoName = Get-RepoName $Lang
+            $SourceLibPath = Join-Path $PluginSourceClientLibs $RepoName
+            $TargetLibPath = Join-Path $TargetClientLibs $RepoName
+
+            if ((Test-Path -LiteralPath $SourceLibPath) -and (-not (Test-Path -LiteralPath $TargetLibPath))) {
+                Write-Host "Copying $RepoName to $TargetLibPath..."
+                Copy-Item -Recurse -Force -LiteralPath $SourceLibPath -Destination $TargetLibPath
+            }
+        }
+    }
+}
+
+# Locate and update all client libraries
+Write-Host "Locating client libraries to update..."
+$BaseDirs = @($PluginSourceClientLibs)
+if (($TargetPluginDir -ne $PluginSourceDir) -and (Test-Path -LiteralPath (Join-Path $TargetPluginDir "client_libs"))) {
+    $BaseDirs += (Join-Path $TargetPluginDir "client_libs")
+}
+
 $IncludeDirs = @()
-if (Test-Path -LiteralPath $PluginClientLibs) {
-    foreach ($Dir in Get-ChildItem -LiteralPath $PluginClientLibs -Directory) {
-        if (Test-Path -LiteralPath (Join-Path $Dir.FullName ".git")) {
-            $IncludeDirs += $Dir.FullName
+foreach ($Base in $BaseDirs) {
+    if (Test-Path -LiteralPath $Base) {
+        foreach ($Dir in Get-ChildItem -LiteralPath $Base -Directory) {
+            if (Test-Path -LiteralPath (Join-Path $Dir.FullName ".git")) {
+                if (-not ($IncludeDirs -contains $Dir.FullName)) {
+                    $IncludeDirs += $Dir.FullName
+                }
+            }
         }
     }
 }
 
 if ($IncludeDirs.Count -eq 0) {
-    Write-Host "No client libraries found to update in $PluginClientLibs."
+    Write-Host "No client libraries found to update."
 } else {
     Write-Host "Found $($IncludeDirs.Count) client libraries to update."
     foreach ($LibPath in $IncludeDirs) {
@@ -220,7 +291,7 @@ if ($IncludeDirs.Count -eq 0) {
         try {
             git pull
             if ($LASTEXITCODE -eq 0) {
-                Write-Host "Successfully updated $AbsLibPath."
+                Write-Host "Successfully updated $(Split-Path $AbsLibPath -Leaf)."
             } else {
                 Write-Error "ERROR: Failed to update $AbsLibPath"
                 exit 1
@@ -232,10 +303,17 @@ if ($IncludeDirs.Count -eq 0) {
     }
 }
 
-$PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
-Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
+$PluginPythonDir = Join-Path $PluginSourceDir "client_libs\google-ads-python\google\ads\googleads"
+Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $PluginSourceDir "config")
 Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
+if ($TargetPluginDir -ne $PluginSourceDir) {
+    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
+}
 
-Write-Host "Plugin update complete."
+Write-Host "Plugin update for $Type complete."
 Write-Host ""
-Write-Host "Restart your Antigravity / agy host to apply changes."
+if ($Type.ToLower() -eq "agy") {
+    Write-Host "Restart your Antigravity / agy host to apply changes."
+} else {
+    Write-Host "In your Claude Code session, run /reload-plugins to apply changes."
+}
