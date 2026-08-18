@@ -161,8 +161,8 @@ cp -r google-ads-api-developer-assistant ~/.gemini/config/plugins/
 
 #### For Claude Desktop / Claude Code:
 ```bash
-mkdir -p ~/.claude/plugins
-cp -r google-ads-api-developer-assistant ~/.claude/plugins/
+mkdir -p ~/.claude/plugins/marketplace
+cp -r google-ads-api-developer-assistant ~/.claude/plugins/marketplace/
 ```
 
 ### 3. Credentials Configuration
