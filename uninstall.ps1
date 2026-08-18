@@ -3,11 +3,8 @@
     Uninstalls the Google Ads API Developer Assistant plugin.
 
 .DESCRIPTION
-    This script uninstalls the Google Ads API Developer Assistant plugin from Antigravity (agy)
-    or Claude Code (claudecode), or removes specific client libraries from it.
-
-.PARAMETER Target
-    Required. Target platform: 'agy' (Antigravity) or 'claudecode' (Claude Code).
+    This script uninstalls the Google Ads API Developer Assistant plugin from Antigravity (agy),
+    or removes specific client libraries from it.
 
 .PARAMETER All
     Remove all client libraries from plugin client_libs/.
@@ -34,27 +31,23 @@
     Skip confirmation prompts (synonym for Force).
 
 .EXAMPLE
-    .\uninstall.ps1 -Target agy
+    .\uninstall.ps1
     Uninstalls and deletes the entire Antigravity plugin directory.
 
 .EXAMPLE
-    .\uninstall.ps1 -Target claudecode -Force
-    Uninstalls the Claude Code plugin without confirmation prompts.
+    .\uninstall.ps1 -Force
+    Uninstalls the plugin without confirmation prompts.
 
 .EXAMPLE
-    .\uninstall.ps1 -Target agy -All
+    .\uninstall.ps1 -All
     Removes all client libraries from the Antigravity plugin.
 
 .EXAMPLE
-    .\uninstall.ps1 -Target claudecode -Java
-    Removes only the Java library from the Claude Code plugin.
+    .\uninstall.ps1 -Java
+    Removes only the Java library from the Antigravity plugin.
 #>
 
 param(
-    [Parameter(Mandatory=$true, Position=0, HelpMessage="Target platform: 'agy' or 'claudecode'")]
-    [ValidateSet("agy", "claudecode", IgnoreCase=$true)]
-    [string]$Target,
-
     [switch]$All,
     [switch]$Python,
     [switch]$Php,
@@ -76,24 +69,6 @@ function Get-RepoName {
     }
 }
 
-function Get-PluginTargetDir {
-    param([string]$TargetPlatform)
-
-    $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-
-    switch ($TargetPlatform.ToLower()) {
-        "agy" {
-            return (Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant")
-        }
-        "claudecode" {
-            return (Join-Path $UserHome ".claude\plugins\marketplaces\google-ads-api-developer-assistant")
-        }
-        default {
-            throw "Invalid target '$TargetPlatform'. Must be 'agy' or 'claudecode'."
-        }
-    }
-}
-
 $ErrorActionPreference = "Stop"
 
 $AutoConfirm = $Force -or $Yes
@@ -110,11 +85,8 @@ if ($All) {
 }
 
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-$TargetPluginDir = Get-PluginTargetDir -TargetPlatform $Target
-$LegacyPluginDir = ""
-if ($Target.ToLower() -eq "agy") {
-    $LegacyPluginDir = Join-Path $UserHome ".gemini\config\plugins\google_ads_assistant_plugin"
-}
+$TargetPluginDir = Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant"
+$LegacyPluginDir = Join-Path $UserHome ".gemini\config\plugins\google_ads_assistant_plugin"
 
 if ((-not (Test-Path -LiteralPath $TargetPluginDir)) -and ([string]::IsNullOrEmpty($LegacyPluginDir) -or (-not (Test-Path -LiteralPath $LegacyPluginDir)))) {
     Write-Host "Plugin directory '$TargetPluginDir' does not exist. Nothing to uninstall."
@@ -144,17 +116,13 @@ if ($SpecifiedLangs.Count -gt 0) {
             }
         }
     }
-    Write-Host "Plugin client library removal for $Target complete."
+    Write-Host "Plugin client library removal complete."
     Write-Host ""
-    if ($Target.ToLower() -eq "agy") {
-        Write-Host "Restart your Antigravity / agy host to apply changes."
-    } else {
-        Write-Host "Restart your Claude Code environment to apply changes."
-    }
+    Write-Host "Restart your Antigravity / agy host to apply changes."
     exit 0
 }
 
-Write-Host "This will uninstall the Google Ads API Developer Assistant plugin for $Target"
+Write-Host "This will uninstall the Google Ads API Developer Assistant plugin"
 Write-Host "and DELETE the directory: $TargetPluginDir"
 
 if (-not $AutoConfirm) {
@@ -174,10 +142,6 @@ if ($LegacyPluginDir -and (Test-Path -LiteralPath $LegacyPluginDir)) {
     Remove-Item -Recurse -Force -LiteralPath $LegacyPluginDir
 }
 
-Write-Host "Plugin uninstallation for $Target complete."
+Write-Host "Plugin uninstallation complete."
 Write-Host ""
-if ($Target.ToLower() -eq "agy") {
-    Write-Host "Restart your Antigravity / agy host to complete plugin uninstallation."
-} else {
-    Write-Host "Restart your Claude Code environment to complete plugin uninstallation."
-}
+Write-Host "Restart your Antigravity / agy host to complete plugin uninstallation."

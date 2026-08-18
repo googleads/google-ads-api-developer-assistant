@@ -5,11 +5,8 @@
 .DESCRIPTION
     This script updates the Google Ads API Developer Assistant repository and installed plugin:
     1. Updates the git repository (git pull).
-    2. Syncs updated plugin assets to the platform-specific plugin directory (Antigravity or Claude Code).
+    2. Syncs updated plugin assets to the Antigravity plugin directory.
     3. Clones or updates configured client libraries in the plugin's 'client_libs/' directory.
-
-.PARAMETER Target
-    Required. Target platform: 'agy' (Antigravity) or 'claudecode' (Claude Code).
 
 .PARAMETER Python
     Ensure google-ads-python is present and updated.
@@ -27,23 +24,15 @@
     Ensure google-ads-dotnet is present and updated.
 
 .EXAMPLE
-    .\update.ps1 -Target agy
+    .\update.ps1
     Updates repository, Antigravity plugin, and all configured client libraries.
 
 .EXAMPLE
-    .\update.ps1 -Target claudecode
-    Updates repository, Claude Code plugin, and all configured client libraries.
-
-.EXAMPLE
-    .\update.ps1 -Target agy -Java
+    .\update.ps1 -Java
     Ensures Java library is present and updated in Antigravity plugin.
 #>
 
 param(
-    [Parameter(Mandatory=$true, Position=0, HelpMessage="Target platform: 'agy' or 'claudecode'")]
-    [ValidateSet("agy", "claudecode", IgnoreCase=$true)]
-    [string]$Target,
-
     [switch]$Python,
     [switch]$Php,
     [switch]$Ruby,
@@ -70,24 +59,6 @@ function Get-RepoName {
         "ruby"   { return "google-ads-ruby" }
         "java"   { return "google-ads-java" }
         "dotnet" { return "google-ads-dotnet" }
-    }
-}
-
-function Get-PluginTargetDir {
-    param([string]$TargetPlatform)
-
-    $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-
-    switch ($TargetPlatform.ToLower()) {
-        "agy" {
-            return (Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant")
-        }
-        "claudecode" {
-            return (Join-Path $UserHome ".claude\plugins\marketplaces\google-ads-api-developer-assistant")
-        }
-        default {
-            throw "Invalid target '$TargetPlatform'. Must be 'agy' or 'claudecode'."
-        }
     }
 }
 
@@ -176,12 +147,13 @@ if ($Java)   { $SpecifiedLangs += "java" }
 if ($Dotnet) { $SpecifiedLangs += "dotnet" }
 
 # --- Plugin Update ---
-$TargetPluginDir = Get-PluginTargetDir -TargetPlatform $Target
+$UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+$TargetPluginDir = Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant"
 $ParentPluginDir = Split-Path $TargetPluginDir
 $PluginSourceDir = Join-Path $ProjectDirAbs "plugins\google-ads-api-developer-assistant"
 
 if (-not (Test-Path -LiteralPath $TargetPluginDir)) {
-    Write-Host "Plugin not yet installed at $TargetPluginDir. Installing for $Target..."
+    Write-Host "Plugin not yet installed at $TargetPluginDir. Installing..."
     if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
         New-Item -ItemType Directory -Force -LiteralPath $ParentPluginDir | Out-Null
     }
@@ -264,10 +236,6 @@ $PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\goo
 Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
 Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
 
-Write-Host "Plugin update for $Target complete."
+Write-Host "Plugin update complete."
 Write-Host ""
-if ($Target.ToLower() -eq "agy") {
-    Write-Host "Restart your Antigravity / agy host to apply changes."
-} else {
-    Write-Host "Restart your Claude Code environment to apply changes."
-}
+Write-Host "Restart your Antigravity / agy host to apply changes."

@@ -26,29 +26,9 @@ err() {
   echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*" >&2
 }
 
-# Helper to resolve OS-specific target plugin directory
-get_plugin_target_dir() {
-  local target="$1"
-  local os_type
-  os_type=$(uname -s 2>/dev/null || echo "Linux")
-  echo "Detected OS: ${os_type}"
-
-  case "${target}" in
-    agy)
-      PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
-      ;;
-    claudecode)
-      PLUGIN_TARGET_DIR="${HOME}/.claude/plugins/marketplaces/google-ads-api-developer-assistant"
-      ;;
-    *)
-      err "ERROR: Invalid target '${target}'. Must be 'agy' or 'claudecode'."
-      exit 1
-      ;;
-  esac
-}
+readonly PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
 
 # --- Defaults ---
-TARGET=""
 INSTALL_PYTHON=false
 INSTALL_PHP=false
 INSTALL_RUBY=false
@@ -58,18 +38,11 @@ ANY_SELECTED=false
 
 # --- Help Function ---
 usage() {
-  echo "Usage: $0 <agy|claudecode> [OPTIONS]"
-  echo "       $0 --target <agy|claudecode> [OPTIONS]"
+  echo "Usage: $0 [OPTIONS]"
   echo "  Updates the Google Ads API Developer Assistant plugin and configured client libraries."
-  echo ""
-  echo "  Required Argument:"
-  echo "    <agy|claudecode>           Target platform: 'agy' (Antigravity) or 'claudecode' (Claude Code)"
   echo ""
   echo "  Options:"
   echo "    -h, --help                 Show this help message and exit"
-  echo "    --target TARGET            Target platform ('agy' or 'claudecode')"
-  echo "    --agy                      Update Antigravity plugin (shorthand for --target agy)"
-  echo "    --claudecode               Update Claude Code plugin (shorthand for --target claudecode)"
   echo "    --python                   Ensure google-ads-python is present and updated in plugin"
   echo "    --php                      Ensure google-ads-php is present and updated in plugin"
   echo "    --ruby                     Ensure google-ads-ruby is present and updated in plugin"
@@ -77,9 +50,8 @@ usage() {
   echo "    --dotnet                   Ensure google-ads-dotnet is present and updated in plugin"
   echo ""
   echo "  Examples:"
-  echo "    $0 agy                     (Updates repository, Antigravity plugin, and client libraries)"
-  echo "    $0 claudecode              (Updates repository, Claude Code plugin, and client libraries)"
-  echo "    $0 agy --java              (Ensures Java library is added/updated in Antigravity plugin)"
+  echo "    $0                         (Updates repository, plugin, and client libraries)"
+  echo "    $0 --java                  (Ensures Java library is added/updated in plugin)"
   echo ""
 }
 
@@ -89,31 +61,6 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       usage
       exit 0
-      ;;
-    agy|claudecode)
-      TARGET="$1"
-      shift
-      ;;
-    --target)
-      if [[ $# -lt 2 ]]; then
-        err "ERROR: --target requires an argument ('agy' or 'claudecode')."
-        usage
-        exit 1
-      fi
-      TARGET=$(echo "$2" | tr '[:upper:]' '[:lower:]')
-      shift 2
-      ;;
-    --target=*)
-      TARGET=$(echo "${1#*=}" | tr '[:upper:]' '[:lower:]')
-      shift
-      ;;
-    --agy)
-      TARGET="agy"
-      shift
-      ;;
-    --claudecode)
-      TARGET="claudecode"
-      shift
       ;;
     --python)
       INSTALL_PYTHON=true
@@ -147,19 +94,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-# --- Validate Required Target ---
-if [[ -z "${TARGET}" ]]; then
-  err "ERROR: Missing required target argument: 'agy' or 'claudecode'."
-  usage
-  exit 1
-fi
-
-if [[ "${TARGET}" != "agy" && "${TARGET}" != "claudecode" ]]; then
-  err "ERROR: Invalid target '${TARGET}'. Must be 'agy' or 'claudecode'."
-  usage
-  exit 1
-fi
 
 # Helper functions for repo info
 get_repo_url() {
@@ -250,11 +184,10 @@ fi
 echo "Successfully updated repository."
 
 # --- Update Plugin Installation ---
-get_plugin_target_dir "${TARGET}"
 PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant"
 
 if [[ ! -d "${PLUGIN_TARGET_DIR}" ]]; then
-  echo "Plugin not yet installed at ${PLUGIN_TARGET_DIR}. Installing for ${TARGET}..."
+  echo "Plugin not yet installed at ${PLUGIN_TARGET_DIR}. Installing..."
   mkdir -p "$(dirname "${PLUGIN_TARGET_DIR}")"
   cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
 else
@@ -321,10 +254,6 @@ fi
 detect_and_seed_api_version "${PLUGIN_CLIENT_LIBS}/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
 detect_and_seed_api_version "${PLUGIN_CLIENT_LIBS}/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
 
-echo "Plugin update for ${TARGET} complete."
+echo "Plugin update complete."
 echo ""
-if [[ "${TARGET}" == "agy" ]]; then
-  echo "Restart your Antigravity / agy host to apply changes."
-else
-  echo "Restart your Claude Code environment to apply changes."
-fi
+echo "Restart your Antigravity / agy host to apply changes."
