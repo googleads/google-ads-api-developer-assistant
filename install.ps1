@@ -273,7 +273,7 @@ if ($Type.ToLower() -eq "claude" -or $Type.ToLower() -eq "claudecode") {
 
             if (-not (Test-Path -LiteralPath $TargetRepoPath)) {
                 Write-Host "Cloning $RepoUrl into $TargetRepoPath..."
-                git clone $RepoUrl $TargetRepoPath
+                git -c core.longpaths=true clone --depth 1 $RepoUrl $TargetRepoPath
                 if ($LASTEXITCODE -ne 0) {
                     Write-Error "ERROR: Failed to clone $RepoUrl"
                     exit 1
@@ -338,7 +338,7 @@ foreach ($Lang in $OtherLangs) {
         }
         else {
             Write-Host "Cloning $RepoUrl into $TargetRepoPath..."
-            git clone $RepoUrl $TargetRepoPath
+            git -c core.longpaths=true clone --depth 1 $RepoUrl $TargetRepoPath
             if ($LASTEXITCODE -ne 0) {
                 Write-Error "ERROR: Failed to clone $RepoUrl"
                 exit 1

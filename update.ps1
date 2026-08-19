@@ -197,8 +197,11 @@ if ($SpecifiedLangs.Count -gt 0) {
 
         if (-not (Test-Path -LiteralPath $SourceLibPath)) {
             Write-Host "Library $RepoName not found in repository client_libs. Cloning into $SourceLibPath..."
-            git clone $RepoUrl $SourceLibPath
-            if ($LASTEXITCODE -ne 0) { throw "Failed to clone $RepoUrl" }
+            git -c core.longpaths=true clone --depth 1 $RepoUrl $SourceLibPath
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "ERROR: Failed to clone $RepoUrl"
+                exit 1
+            }
         }
     }
 }
