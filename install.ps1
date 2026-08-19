@@ -139,7 +139,7 @@ function Test-PythonEnvironment {
         $CmdInfo = Get-Command $Cmd -ErrorAction SilentlyContinue
         if ($CmdInfo) {
             try {
-                $VerOutput = & $Cmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'); sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>$null
+                $VerOutput = & $Cmd -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"); sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
                 if ($LASTEXITCODE -eq 0) {
                     Write-Host "Found Python $VerOutput ($($CmdInfo.Source))"
                     return $true
