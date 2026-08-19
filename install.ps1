@@ -118,7 +118,7 @@ function Set-LatestApiVersion {
         if ($VersionDirs) {
             $Latest = $VersionDirs[-1].Name
             if (-not (Test-Path -LiteralPath $TargetConfigDir)) {
-                New-Item -ItemType Directory -Force -LiteralPath $TargetConfigDir | Out-Null
+                New-Item -ItemType Directory -Force -Path $TargetConfigDir | Out-Null
             }
             Set-Content -Path (Join-Path $TargetConfigDir "api_version.txt") -Value $Latest
             Write-Host "Configured API version $Latest in $(Join-Path $TargetConfigDir 'api_version.txt')"
@@ -261,7 +261,7 @@ if ($Type.ToLower() -eq "claude" -or $Type.ToLower() -eq "claudecode") {
     Write-Host "Preparing Claude Code plugin files at $PluginSource..."
     $PluginSourceClientLibs = Join-Path $PluginSource "client_libs"
     if (-not (Test-Path -LiteralPath $PluginSourceClientLibs)) {
-        New-Item -ItemType Directory -Force -LiteralPath $PluginSourceClientLibs | Out-Null
+        New-Item -ItemType Directory -Force -Path $PluginSourceClientLibs | Out-Null
     }
 
     $OtherLangs = @("php", "ruby", "java", "dotnet")
@@ -306,7 +306,7 @@ $ParentPluginDir = Split-Path $TargetPluginDir
 
 Write-Host "Installing plugin for agy into: $TargetPluginDir"
 if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
-    New-Item -ItemType Directory -Force -LiteralPath $ParentPluginDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $ParentPluginDir | Out-Null
 }
 
 if (Test-Path -LiteralPath $TargetPluginDir) {
@@ -318,7 +318,7 @@ Copy-Item -Recurse -Force -LiteralPath $PluginSource -Destination $TargetPluginD
 # Add any additional selected client libraries to plugin structure
 $PluginClientLibsDir = Join-Path $TargetPluginDir "client_libs"
 if (-not (Test-Path -LiteralPath $PluginClientLibsDir)) {
-    New-Item -ItemType Directory -Force -LiteralPath $PluginClientLibsDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $PluginClientLibsDir | Out-Null
 }
 
 $OtherLangs = @("php", "ruby", "java", "dotnet")

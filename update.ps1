@@ -102,7 +102,7 @@ function Set-LatestApiVersion {
         if ($VersionDirs) {
             $Latest = $VersionDirs[-1].Name
             if (-not (Test-Path -LiteralPath $TargetConfigDir)) {
-                New-Item -ItemType Directory -Force -LiteralPath $TargetConfigDir | Out-Null
+                New-Item -ItemType Directory -Force -Path $TargetConfigDir | Out-Null
             }
             Set-Content -Path (Join-Path $TargetConfigDir "api_version.txt") -Value $Latest
             Write-Host "Configured API version $Latest in $(Join-Path $TargetConfigDir 'api_version.txt')"
@@ -185,7 +185,7 @@ $PluginSourceDir = Join-Path $ProjectDirAbs "plugins\google-ads-api-developer-as
 $PluginSourceClientLibs = Join-Path $PluginSourceDir "client_libs"
 
 if (-not (Test-Path -LiteralPath $PluginSourceClientLibs)) {
-    New-Item -ItemType Directory -Force -LiteralPath $PluginSourceClientLibs | Out-Null
+    New-Item -ItemType Directory -Force -Path $PluginSourceClientLibs | Out-Null
 }
 
 # Handle specific library additions in repository plugin source
@@ -251,7 +251,7 @@ if ($Type.ToLower() -eq "agy") {
     if (-not (Test-Path -LiteralPath $AgyPluginTargetDir)) {
         Write-Host "Plugin not yet installed at $AgyPluginTargetDir. Installing for agy..."
         if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
-            New-Item -ItemType Directory -Force -LiteralPath $ParentPluginDir | Out-Null
+            New-Item -ItemType Directory -Force -Path $ParentPluginDir | Out-Null
         }
         Copy-Item -Recurse -Force -LiteralPath $PluginSourceDir -Destination $AgyPluginTargetDir
     }
@@ -268,7 +268,7 @@ if ($Type.ToLower() -eq "agy") {
 
     $TargetClientLibs = Join-Path $AgyPluginTargetDir "client_libs"
     if (-not (Test-Path -LiteralPath $TargetClientLibs)) {
-        New-Item -ItemType Directory -Force -LiteralPath $TargetClientLibs | Out-Null
+        New-Item -ItemType Directory -Force -Path $TargetClientLibs | Out-Null
     }
 
     if (Test-Path -LiteralPath $PluginSourceClientLibs) {
