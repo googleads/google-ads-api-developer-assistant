@@ -1,8 +1,13 @@
 * 4.0.0
+- Migrated from project structure to plugin architecture.
 - Renamed plugin source directory from plugins/agy to plugins/google-ads-api-developer-assistant.
 - Configured repository with .claude-plugin/marketplace.json for native Claude Code plugin discovery and installation.
-- Refactored install, uninstall, and update scripts (install.sh, install.ps1, uninstall.sh, uninstall.ps1, update.sh, update.ps1) to manage the assistant as an Antigravity plugin.
-- Added check_environment section to install.sh and install.ps1 to verify Python >= 3.10 and Antigravity environment availability prior to installation.
+- Updated install scripts (install.sh, install.ps1) and update scripts (update.sh, update.ps1) to require a target platform argument ('agy' or 'claude').
+- Removed uninstall.sh and uninstall.ps1 in favor of native platform uninstallation mechanisms.
+- Integrated automated marketplace registration ('claude plugin marketplace add') and plugin installation ('claude plugin install') into install scripts for Claude Code.
+- Updated update scripts (update.sh, update.ps1) to sync updates and manage client libraries for Antigravity and Claude Code.
+- Added environment verification to install scripts for Python >= 3.10 and host platform CLI availability (Antigravity CLI or Claude Code CLI).
+- Added comprehensive Claude Code prerequisites, installation, and setup instructions in README.md.
 - Optimized skills and added rules to distinguish between concrete objects and their representation in Python files.
 - Configured dynamic API version discovery with interactive prompt fallback.
 

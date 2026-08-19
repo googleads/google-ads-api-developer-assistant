@@ -251,29 +251,37 @@ To update your repository, plugin installation, and client libraries:
 
 ## Uninstallation
 
-If you wish to remove the assistant plugin, you can use the uninstallation scripts:
+To remove the Google Ads API Developer Assistant plugin, use the native uninstallation mechanism for your platform:
+
+### Antigravity
+
+Delete the installed plugin directory:
 
 *   **Linux/macOS:**
     ```bash
-    ./uninstall.sh agy          # Uninstall Antigravity plugin
-    ./uninstall.sh claudecode   # Uninstall Claude Code plugin
+    rm -rf ~/.gemini/config/plugins/google-ads-api-developer-assistant
     ```
-    To remove specific client libraries only:
-    ```bash
-    ./uninstall.sh agy --java
-    ```
-*   **Windows:**
+*   **Windows (PowerShell):**
     ```powershell
-    .\uninstall.ps1 -Target agy
-    .\uninstall.ps1 -Target claudecode
-    ```
-    To remove specific client libraries only:
-    ```powershell
-    .\uninstall.ps1 -Target agy -Java
+    Remove-Item -Recurse -Force "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant"
     ```
 
-> [!CAUTION]
-> These scripts will prompt for confirmation before deleting the installed plugin directory (unless `-y` / `--yes` / `-Force` is passed).
+Restart your Antigravity / agy host session to complete the uninstallation.
+
+### Claude Code
+
+*   **Within an active Claude Code session:**
+    ```text
+    /plugin uninstall google-ads-api-developer-assistant@google-ads-assistant-local
+    ```
+*   **Or from your terminal:**
+    ```bash
+    claude plugin uninstall google-ads-api-developer-assistant@google-ads-assistant-local
+    ```
+
+*(Optional)* To remove the local marketplace registration as well:
+*   **Within Claude Code:** `/plugin marketplace remove google-ads-assistant-local`
+*   **From terminal:** `claude plugin marketplace remove google-ads-assistant-local`
 
 ## Contributing
 

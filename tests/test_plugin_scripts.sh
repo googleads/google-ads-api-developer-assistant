@@ -62,11 +62,11 @@ echo "PASS: Antigravity plugin successfully installed."
 
 echo "Test 4: install.sh claude executes claude CLI marketplace add and install commands"
 output=$("${PROJECT_ROOT}/install.sh" claude)
-if ! echo "$output" | grep -q "/plugin marketplace add"; then
+if ! echo "$output" | grep -q "plugin marketplace add"; then
   echo "FAIL: install.sh claude did not execute marketplace add"
   exit 1
 fi
-if ! echo "$output" | grep -q "/plugin install google-ads-api-developer-assistant@google-ads-assistant-local"; then
+if ! echo "$output" | grep -q "plugin install google-ads-api-developer-assistant@google-ads-assistant-local"; then
   echo "FAIL: install.sh claude did not execute plugin install"
   exit 1
 fi
@@ -110,26 +110,5 @@ if [[ ! -d "${CLAUDE_PLUGIN_DIR}/client_libs/google-ads-php" ]]; then
   exit 1
 fi
 echo "PASS: update.sh claude --php added client library successfully."
-
-echo "Test 10: uninstall.sh --python removes google-ads-python from plugin client_libs"
-mkdir -p "${AGY_PLUGIN_DIR}/client_libs/google-ads-python"
-"${PROJECT_ROOT}/uninstall.sh" --python -y
-if [[ -d "${AGY_PLUGIN_DIR}/client_libs/google-ads-python" ]]; then
-  echo "FAIL: google-ads-python client library was not removed from agy"
-  exit 1
-fi
-if [[ ! -d "${AGY_PLUGIN_DIR}" ]]; then
-  echo "FAIL: agy plugin directory should still exist after removing a single client library"
-  exit 1
-fi
-echo "PASS: Client library removal succeeded for agy."
-
-echo "Test 11: uninstall.sh -y deletes the Antigravity plugin directory"
-"${PROJECT_ROOT}/uninstall.sh" -y
-if [[ -d "${AGY_PLUGIN_DIR}" ]]; then
-  echo "FAIL: agy plugin directory still exists after uninstallation"
-  exit 1
-fi
-echo "PASS: Antigravity plugin uninstallation succeeded."
 
 echo "=== All Tests Passed Successfully! ==="
