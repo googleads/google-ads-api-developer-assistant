@@ -2,10 +2,14 @@
   "mcpServers": {
     "google-ads-api-assistant": {
       "command": "python3",
-      "args": ["-m", "google_ads_assistant_mcp"],
+      "args": [
+        "sidecars/google-ads-a2a-service/server.py"
+      ],
       "env": {
+        "A2A_PORT": "8900",
         "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "~/google-ads.yaml"
-      }
+      },
+      "url": "http://127.0.0.1:8900"
     }
   }
 }

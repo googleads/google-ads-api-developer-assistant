@@ -57,6 +57,7 @@ Before presenting or executing ANY GAQL query, pass this sequence:
    - `WHERE` fields MUST be in `SELECT` (unless core date segments).
    - `OR` operator is forbidden.
    - Metadata queries MUST NOT contain `FROM`.
+   - In v23+, `segments.hour` was renamed to `segments.hour_of_day`.
 4. **Runtime Dry Run:** Execute `python3 skills/validate-gaql/scripts/validate_gaql.py --customer_id <customer_id> --api_version <api_version>`.
 
 #### 3.2. Code Generation Protocol (Python)

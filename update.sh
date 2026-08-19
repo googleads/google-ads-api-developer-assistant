@@ -26,26 +26,7 @@ err() {
   echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*" >&2
 }
 
-# Helper to resolve OS-specific target plugin directory
-get_plugin_target_dir() {
-  local target="$1"
-  local os_type
-  os_type=$(uname -s 2>/dev/null || echo "Linux")
-  echo "Detected OS: ${os_type}"
-
-  case "${target}" in
-    agy)
-      PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
-      ;;
-    claude|claudecode)
-      PLUGIN_TARGET_DIR="${HOME}/.claude/plugins/marketplaces/google-ads-api-developer-assistant"
-      ;;
-    *)
-      err "ERROR: Invalid type '${target}'. Must be 'agy' or 'claude'."
-      exit 1
-      ;;
-  esac
-}
+readonly AGY_PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
 
 # --- Defaults ---
 TYPE=""
@@ -269,12 +250,11 @@ fi
 
 echo "Successfully updated repository."
 
-# --- Update Plugin Installation ---
-get_plugin_target_dir "${TYPE}"
+# --- Update Plugin Installation & Client Libraries ---
 PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant"
 mkdir -p "${PLUGIN_SOURCE_DIR}/client_libs"
 
-# Handle specific library additions in source directory
+# Handle specific library additions in repository plugin source
 for lang in python php ruby java dotnet; do
   if is_enabled "$lang"; then
     repo_url=$(get_repo_url "$lang")
@@ -282,7 +262,7 @@ for lang in python php ruby java dotnet; do
     source_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
 
     if [[ ! -d "${source_lib_path}" ]]; then
-      echo "Library ${repo_name} not found in plugin source. Cloning into ${source_lib_path}..."
+      echo "Library ${repo_name} not found in repository client_libs. Cloning into ${source_lib_path}..."
       if ! git clone "${repo_url}" "${source_lib_path}"; then
         err "ERROR: Failed to clone ${repo_url}"
         exit 1
@@ -291,29 +271,48 @@ for lang in python php ruby java dotnet; do
   fi
 done
 
-# If target directory is different from source, sync to target
-if [[ "${PLUGIN_TARGET_DIR}" != "${PLUGIN_SOURCE_DIR}" ]]; then
-  if [[ ! -d "${PLUGIN_TARGET_DIR}" ]]; then
-    echo "Plugin not yet installed at ${PLUGIN_TARGET_DIR}. Installing for ${TYPE}..."
-    mkdir -p "$(dirname "${PLUGIN_TARGET_DIR}")"
-    cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
+# Locate and update all client libraries in repository
+echo "Locating client libraries to update..."
+if [[ -d "${PLUGIN_SOURCE_DIR}/client_libs" ]]; then
+  for dir in "${PLUGIN_SOURCE_DIR}/client_libs"/*; do
+    if [[ -d "${dir}/.git" ]]; then
+      echo "Updating repository at: ${dir}..."
+      if ! (cd "${dir}" && git pull); then
+        err "ERROR: Failed to update ${dir}"
+        exit 1
+      fi
+      echo "Successfully updated $(basename "${dir}")."
+    fi
+  done
+fi
+
+# Pre-seed latest API version in repository plugin and project config
+detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_SOURCE_DIR}/config"
+detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
+
+# --- Antigravity Specific Sync ---
+if [[ "${TYPE}" == "agy" ]]; then
+  if [[ ! -d "${AGY_PLUGIN_TARGET_DIR}" ]]; then
+    echo "Plugin not yet installed at ${AGY_PLUGIN_TARGET_DIR}. Installing for agy..."
+    mkdir -p "$(dirname "${AGY_PLUGIN_TARGET_DIR}")"
+    cp -r "${PLUGIN_SOURCE_DIR}" "${AGY_PLUGIN_TARGET_DIR}"
   else
-    echo "Syncing plugin files to ${PLUGIN_TARGET_DIR}..."
-    for item in rules sidecars skills config plugin.json README.md customer_id.txt; do
+    echo "Syncing plugin files to ${AGY_PLUGIN_TARGET_DIR}..."
+    for item in rules sidecars skills commands config plugin.json mcp_config.json README.md customer_id.txt; do
       if [[ -e "${PLUGIN_SOURCE_DIR}/${item}" ]]; then
-        cp -r "${PLUGIN_SOURCE_DIR}/${item}" "${PLUGIN_TARGET_DIR}/"
+        cp -r "${PLUGIN_SOURCE_DIR}/${item}" "${AGY_PLUGIN_TARGET_DIR}/"
       fi
     done
   fi
 
-  PLUGIN_CLIENT_LIBS="${PLUGIN_TARGET_DIR}/client_libs"
-  mkdir -p "${PLUGIN_CLIENT_LIBS}"
+  AGY_CLIENT_LIBS="${AGY_PLUGIN_TARGET_DIR}/client_libs"
+  mkdir -p "${AGY_CLIENT_LIBS}"
 
   if [[ -d "${PLUGIN_SOURCE_DIR}/client_libs" ]]; then
     for lib_dir in "${PLUGIN_SOURCE_DIR}/client_libs"/*; do
       if [[ -d "${lib_dir}" ]]; then
         lib_name=$(basename "${lib_dir}")
-        target_lib_path="${PLUGIN_CLIENT_LIBS}/${lib_name}"
+        target_lib_path="${AGY_CLIENT_LIBS}/${lib_name}"
         if [[ ! -d "${target_lib_path}" ]]; then
           echo "Copying ${lib_name} to ${target_lib_path}..."
           cp -r "${lib_dir}" "${target_lib_path}"
@@ -321,29 +320,14 @@ if [[ "${PLUGIN_TARGET_DIR}" != "${PLUGIN_SOURCE_DIR}" ]]; then
       fi
     done
   fi
-fi
 
-# Locate and update all client libraries across source and target directories
-echo "Locating client libraries to update..."
-CHECK_DIRS=("${PLUGIN_SOURCE_DIR}/client_libs")
-if [[ "${PLUGIN_TARGET_DIR}" != "${PLUGIN_SOURCE_DIR}" && -d "${PLUGIN_TARGET_DIR}/client_libs" ]]; then
-  CHECK_DIRS+=("${PLUGIN_TARGET_DIR}/client_libs")
-fi
-
-UPDATED_PATHS=()
-for base_dir in "${CHECK_DIRS[@]}"; do
-  if [[ -d "${base_dir}" ]]; then
-    for dir in "${base_dir}"/*; do
+  # Also update any existing client libraries in Antigravity target directory if they are distinct git clones
+  if [[ -d "${AGY_CLIENT_LIBS}" ]]; then
+    for dir in "${AGY_CLIENT_LIBS}"/*; do
       if [[ -d "${dir}/.git" ]]; then
-        already_processed=false
-        for p in "${UPDATED_PATHS[@]:-}"; do
-          if [[ "${p}" == "${dir}" ]]; then
-            already_processed=true
-            break
-          fi
-        done
-        if [[ "${already_processed}" == "false" ]]; then
-          UPDATED_PATHS+=("${dir}")
+        repo_name=$(basename "${dir}")
+        source_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
+        if [[ ! -d "${source_path}" || "$(cd "${dir}" && pwd)" != "$(cd "${source_path}" 2>/dev/null && pwd)" ]]; then
           echo "Updating repository at: ${dir}..."
           if ! (cd "${dir}" && git pull); then
             err "ERROR: Failed to update ${dir}"
@@ -354,13 +338,8 @@ for base_dir in "${CHECK_DIRS[@]}"; do
       fi
     done
   fi
-done
 
-# Pre-seed latest API version in plugin and project config
-detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_SOURCE_DIR}/config"
-detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
-if [[ "${PLUGIN_TARGET_DIR}" != "${PLUGIN_SOURCE_DIR}" ]]; then
-  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
+  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${AGY_PLUGIN_TARGET_DIR}/config"
 fi
 
 echo "Plugin update for ${TYPE} complete."

@@ -13,4 +13,5 @@ Before presenting or running any GAQL query, pass this 4-step sequence:
    - `WHERE` fields MUST be in `SELECT` (unless date segments).
    - **NO `OR` operator:** Replace `OR` with `IN` or split into multiple queries.
    - **NO `FROM` in Metadata:** Queries to `GoogleAdsFieldService` MUST NOT contain a `FROM` clause.
+   - **Segment Renames:** In v23+, `segments.hour` was renamed to `segments.hour_of_day`.
 4. **Runtime Dry Run:** Execute API dry-run search request against target customer ID.

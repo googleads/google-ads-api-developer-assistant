@@ -8,7 +8,7 @@ This plugin packages all capabilities, skills, rules, diagnostic scripts, sideca
 ## Plugin Directory Structure
 
 ```
-google_ads_assistant_plugin/
+google-ads-api-developer-assistant/
 ├── plugin.json                              <-- Manifest registering rules, 9 skills, sidecars & MCP servers
 ├── README.md                                <-- Installation Guide & Migration Limitations
 ├── rules/

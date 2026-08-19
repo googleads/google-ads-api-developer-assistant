@@ -241,12 +241,12 @@ To update your repository, plugin installation, and client libraries:
     ```
 *   **Windows:**
     ```powershell
-    .\update.ps1 -Target agy
-    .\update.ps1 -Target claudecode
+    .\update.ps1 -Type agy
+    .\update.ps1 -Type claude
     ```
     To add or update specific client libraries:
     ```powershell
-    .\update.ps1 -Target agy -Java -Dotnet
+    .\update.ps1 -Type agy -Java -Dotnet
     ```
 
 ## Uninstallation

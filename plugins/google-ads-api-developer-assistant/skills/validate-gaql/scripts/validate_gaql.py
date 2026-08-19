@@ -15,8 +15,8 @@
 """GAQL Query Validator Skill.
 
 This script performs a dry-run validation of a GAQL query using the
-validate_only=True parameter. It reads the query from stdin to avoid
-shell-escaping issues with complex SQL strings.
+validate_only=True parameter. It accepts queries via the --query / -q flag
+or reads from stdin when input is piped or --query is omitted.
 """
 
 import argparse
@@ -25,8 +25,12 @@ import re
 import sys
 from typing import Optional
 
-from google.ads.googleads.client import GoogleAdsClient
-from google.ads.googleads.errors import GoogleAdsException
+try:
+    from google.ads.googleads.client import GoogleAdsClient
+    from google.ads.googleads.errors import GoogleAdsException
+except ImportError:
+    GoogleAdsClient = None  # type: ignore
+    GoogleAdsException = Exception  # type: ignore
 
 
 def handle_googleads_exception(exception: GoogleAdsException) -> None:
@@ -46,13 +50,6 @@ def validate_gaql(
     client: Optional[GoogleAdsClient] = None,
 ) -> None:
     """Validates a GAQL query by performing a dry run against the API."""
-    if client is None:
-        try:
-            client = GoogleAdsClient.load_from_storage(version=api_version)
-        except Exception as e:
-            print(f"CRITICAL ERROR: Failed to load Google Ads configuration: {e}")
-            sys.exit(1)
-
     if not query:
         print("Error: No query provided.")
         sys.exit(1)
@@ -104,8 +101,14 @@ def validate_gaql(
         ]
         has_date_segment = any(re.search(r"\b" + seg + r"\b", select_clause) for seg in date_segs)
         if has_date_segment:
-            if not where_match or not any(op in where_match.group(1) for op in [" DURING ", " BETWEEN ", " = ", " >= ", " <= "]):
-                print("FAILURE: GAQL query selects a date segment but does not specify a finite date filter (DURING or BETWEEN) in the WHERE clause.")
+            date_filter_match = where_match and re.search(
+                r"(\bSEGMENTS\.(DATE|WEEK|MONTH|QUARTER|YEAR|DAY_OF_WEEK)\s*(=|>=|<=|BETWEEN|DURING)\b|\bDURING\b|\bBETWEEN\b)",
+                where_match.group(1),
+            )
+            if not date_filter_match:
+                print(
+                    "FAILURE: GAQL query selects a date segment but does not specify a finite date filter (DURING or BETWEEN) in the WHERE clause."
+                )
                 sys.exit(1)
 
     # click_view check
@@ -147,27 +150,58 @@ def validate_gaql(
             print("FAILURE: Metadata queries MUST NOT use resource/segment prefixes (e.g., use 'name', not 'google_ads_field.name').")
             sys.exit(1)
 
+    # Segment rename check: segments.hour -> segments.hour_of_day in v23+
+    ver_match = re.search(r"v(\d+)", api_version.lower())
+    ver_num = int(ver_match.group(1)) if ver_match else None
+    if ver_num is None or ver_num >= 23:
+        if re.search(r"\bSEGMENTS\.HOUR\b", query_upper):
+            print("FAILURE: GAQL query references deprecated segment 'segments.hour'.")
+            print("  - In Google Ads API v23+, 'segments.hour' was renamed to 'segments.hour_of_day'.")
+            print("  - Please update your query to use 'segments.hour_of_day'.")
+            sys.exit(1)
+
+    search_request_type = None
     api_version_lower = api_version.lower()
     module_path = (
         f"google.ads.googleads.{api_version_lower}.services.types.google_ads_service"
     )
     try:
         module = importlib.import_module(module_path)
-        search_request_type = getattr(module, "SearchGoogleAdsRequest")
+        search_request_type = getattr(module, "SearchGoogleAdsRequest", None)
     except (ImportError, AttributeError):
-        print(
-            f"CRITICAL ERROR: Could not import SearchGoogleAdsRequest for {api_version}."
-        )
-        sys.exit(1)
+        pass
+
+    if client is None:
+        if GoogleAdsClient is None:
+            print("CRITICAL ERROR: google-ads package is not installed.")
+            sys.exit(1)
+        try:
+            client = GoogleAdsClient.load_from_storage(version=api_version)
+        except Exception as e:
+            print(f"CRITICAL ERROR: Failed to load Google Ads configuration: {e}")
+            sys.exit(1)
+
+    if search_request_type is None and client is not None:
+        try:
+            search_request_type = client.get_type("SearchGoogleAdsRequest")
+        except Exception:
+            pass
 
     ga_service = client.get_service("GoogleAdsService")
     clean_customer_id = "".join(re.findall(r"\d+", str(customer_id)))
 
     try:
         print(f"--- [DRY RUN] Validating Query for {clean_customer_id} ---")
-        request = search_request_type(
-            customer_id=clean_customer_id, query=query, validate_only=True
-        )
+        if search_request_type is not None:
+            request = search_request_type(
+                customer_id=clean_customer_id, query=query, validate_only=True
+            )
+        else:
+            request = {
+                "customer_id": clean_customer_id,
+                "query": query,
+                "validate_only": True,
+            }
         ga_service.search(request=request)
         print("SUCCESS: GAQL query is structurally valid.")
     except GoogleAdsException as ex:
@@ -187,9 +221,28 @@ def main() -> None:
         required=True,
         help="API Version (e.g., v24).",
     )
+    parser.add_argument(
+        "-q",
+        "--query",
+        required=False,
+        default=None,
+        help="The GAQL query to validate. If omitted, reads from stdin.",
+    )
     args = parser.parse_args()
 
-    query = sys.stdin.read().strip()
+    query = args.query
+    if query is None:
+        if not sys.stdin.isatty():
+            query = sys.stdin.read().strip()
+        else:
+            print(
+                "Error: No GAQL query provided. Pass via --query / -q or pipe via stdin.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        query = query.strip()
+
     validate_gaql(args.customer_id, args.api_version, query)
 
 

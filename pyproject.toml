@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "google-ads-api-developer-assistant"
+version = "4.0.0"
+description = "Antigravity and Claude Code developer assistant plugin for the Google Ads API"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "google-ads",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+norecursedirs = ["client_libs"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [
+    "plugins/google-ads-api-developer-assistant/client_libs",
+    "client_libs",
+]

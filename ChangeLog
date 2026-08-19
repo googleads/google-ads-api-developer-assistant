@@ -9,6 +9,10 @@
 - Added environment verification to install scripts for Python >= 3.10 and host platform CLI availability (Antigravity CLI or Claude Code CLI).
 - Added comprehensive Claude Code prerequisites, installation, and setup instructions in README.md.
 - Optimized skills and added rules to distinguish between concrete objects and their representation in Python files.
+- Added Claude Code custom slash commands directory (commands/) with markdown shortcuts for /validate-gaql, /inspect-object, /troubleshoot-conversions, /get-cids, /pmax-filter, /explain, /assistant-tutorial, /step-by-step, /sync-client-libs, and /ext-version.
+- Added static GAQL lint checks to validate_gaql.py and sidecar to flag deprecated segments.hour in favor of segments.hour_of_day for Google Ads API v23+.
+- Added case-insensitive, normalized, and fuzzy matching to inspect_object.py with close suggestions for missing types.
+- Added comprehensive pytest unit test suite under tests/ (tests/test_components.py) with mocked GoogleAdsClient and network calls for validate_gaql.py, inspect_object.py, get_cids_under_mcc.py, sync_client_libs.py, and A2A sidecar handlers.
 - Configured dynamic API version discovery with interactive prompt fallback.
 
 * 3.0.0

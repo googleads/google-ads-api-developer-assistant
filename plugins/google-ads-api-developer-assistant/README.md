@@ -54,13 +54,24 @@ The **Google Ads API Developer Assistant** plugin is engineered specifically for
 ## 📁 Plugin Architecture
 
 ```
-google_ads_assistant_plugin/
+google-ads-api-developer-assistant/
 ├── plugin.json                              # Plugin manifest registering metadata & capabilities
 ├── README.md                                # Documentation & usage guide
 ├── migration.md                             # Platform migration notes & runtime limitations
 ├── mcp_config.json                          # MCP server configuration
 ├── rules/
 │   └── google_ads_rules.md                  # Mandatory system directives & safety constraints
+├── commands/                               # Claude Code custom slash commands
+│   ├── validate-gaql.md                     # /validate-gaql [query]
+│   ├── inspect-object.md                    # /inspect-object <name>
+│   ├── troubleshoot-conversions.md          # /troubleshoot-conversions [cid] [csv]
+│   ├── get-cids.md                          # /get-cids <mcc_id>
+│   ├── pmax-filter.md                       # /pmax-filter [cid] [asset_group_id]
+│   ├── explain.md                           # /explain <concept>
+│   ├── assistant-tutorial.md                # /assistant-tutorial
+│   ├── step-by-step.md                      # /step-by-step <task>
+│   ├── sync-client-libs.md                  # /sync-client-libs [lang]
+│   └── ext-version.md                       # /ext-version
 ├── skills/                                  # Bundled skills and executable diagnostic scripts
 │   ├── assistant-tutorial/                  # Interactive guided walkthrough
 │   │   └── SKILL.md
@@ -100,6 +111,25 @@ google_ads_assistant_plugin/
 └── client_libs/                             # Source-of-truth Google Ads Python client library & protos
     └── google-ads-python/
 ```
+
+---
+
+## ⚡ Claude Code Custom Slash Commands
+
+When installed in Claude Code, the plugin provides custom slash commands with built-in parameter extraction:
+
+| Slash Command | Description | Example Usage |
+| :--- | :--- | :--- |
+| **`/validate-gaql`** | Validates GAQL queries via 4-step static analysis and API dry-runs. | `/validate-gaql SELECT campaign.id FROM campaign` |
+| **`/inspect-object`** | Inspects Protobuf fields, field types, labels, and Enum values. | `/inspect-object Campaign` or `/inspect-object CampaignStatusEnum` |
+| **`/troubleshoot-conversions`** | Diagnoses conversion upload failures, validates CSV format, samples GCLIDs. | `/troubleshoot-conversions 1234567890 uploads.csv` |
+| **`/get-cids`** | Retrieves child account hierarchy under an MCC account. | `/get-cids 1234567890` |
+| **`/pmax-filter`** | Generates Asset Group webpage exclusion filter trees for PMax. | `/pmax-filter 1234567890 987654321` |
+| **`/explain`** | Formats conceptual topics into 4 sections (*Big Picture*, *Analogy*, *Interconnectedness*, *Simple Language*). | `/explain click_view` |
+| **`/assistant-tutorial`** | Starts an interactive, progressive conversational guide. | `/assistant-tutorial` |
+| **`/step-by-step`** | Breaks complex Google Ads API tasks into structured sequential phases. | `/step-by-step Create an AI Max for Search campaign` |
+| **`/sync-client-libs`** | Synchronizes local client libraries in `client_libs/` with latest GitHub releases. | `/sync-client-libs python` |
+| **`/ext-version`** | Displays the assistant plugin version and active API version. | `/ext-version` |
 
 ---
 
@@ -199,8 +229,15 @@ All skill scripts can be invoked directly from the command line:
 
 ### GAQL Validation
 
-Pass a query via `stdin` or pipe to run static analysis and live API dry-run:
+Pass a query directly via `--query` / `-q` or pipe via `stdin`:
 ```bash
+# Pass query via CLI flag
+python3 skills/validate-gaql/scripts/validate_gaql.py \
+  --customer_id 1234567890 \
+  --api_version v25 \
+  --query "SELECT campaign.id, campaign.name, metrics.impressions FROM campaign WHERE segments.date DURING LAST_30_DAYS"
+
+# Or pipe query via stdin
 echo "SELECT campaign.id, campaign.name, metrics.impressions FROM campaign WHERE segments.date DURING LAST_30_DAYS" | \
   python3 skills/validate-gaql/scripts/validate_gaql.py \
     --customer_id 1234567890 \
@@ -309,10 +346,14 @@ The plugin exposes tools via MCP as defined in `mcp_config.json`:
   "mcpServers": {
     "google-ads-api-assistant": {
       "command": "python3",
-      "args": ["-m", "google_ads_assistant_mcp"],
+      "args": [
+        "sidecars/google-ads-a2a-service/server.py"
+      ],
       "env": {
-        "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "~/.config/google-ads/google-ads.yaml"
-      }
+        "A2A_PORT": "8900",
+        "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "~/google-ads.yaml"
+      },
+      "url": "http://127.0.0.1:8900"
     }
   }
 }

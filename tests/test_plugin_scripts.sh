@@ -17,7 +17,6 @@ cleanup() {
 trap cleanup EXIT
 
 AGY_PLUGIN_DIR="${TEST_HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
-CLAUDE_PLUGIN_DIR="${TEST_HOME}/.claude/plugins/marketplaces/google-ads-api-developer-assistant"
 
 # Create mock claude CLI in TEST_HOME/bin
 mkdir -p "${TEST_HOME}/bin"
@@ -95,18 +94,18 @@ if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
 fi
 echo "PASS: update.sh agy executed successfully."
 
-echo "Test 8: update.sh claude updates Claude Code plugin"
+echo "Test 8: update.sh claude updates Claude Code plugin in repository"
 "${PROJECT_ROOT}/update.sh" claude
-if [[ ! -f "${CLAUDE_PLUGIN_DIR}/plugin.json" ]]; then
-  echo "FAIL: plugin.json missing in Claude Code plugin after update"
+if [[ ! -f "${PROJECT_ROOT}/plugins/google-ads-api-developer-assistant/plugin.json" ]]; then
+  echo "FAIL: plugin.json missing in repository plugin after update"
   exit 1
 fi
 echo "PASS: update.sh claude executed successfully."
 
-echo "Test 9: update.sh claude --php adds google-ads-php to Claude Code plugin client_libs"
+echo "Test 9: update.sh claude --php adds google-ads-php to repository plugin client_libs"
 "${PROJECT_ROOT}/update.sh" claude --php
-if [[ ! -d "${CLAUDE_PLUGIN_DIR}/client_libs/google-ads-php" ]]; then
-  echo "FAIL: google-ads-php missing from Claude Code plugin client_libs"
+if [[ ! -d "${PROJECT_ROOT}/plugins/google-ads-api-developer-assistant/client_libs/google-ads-php" ]]; then
+  echo "FAIL: google-ads-php missing from repository plugin client_libs"
   exit 1
 fi
 echo "PASS: update.sh claude --php added client library successfully."

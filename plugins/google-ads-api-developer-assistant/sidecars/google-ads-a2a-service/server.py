@@ -8,7 +8,6 @@ import json
 import os
 import re
 import sys
-import subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 PORT = int(os.environ.get("ANTIGRAVITY_SIDECAR_WEB_PORT", os.environ.get("A2A_PORT", "8900")))
@@ -211,6 +210,12 @@ class A2AHandler(BaseHTTPRequestHandler):
         if "google_ads_field" in query and " FROM " in query.upper():
             static_errors.append("Metadata queries against GoogleAdsFieldService MUST NOT contain a 'FROM' clause.")
 
+        ver_match = re.search(r"v(\d+)", api_version.lower())
+        ver_num = int(ver_match.group(1)) if ver_match else None
+        if ver_num is None or ver_num >= 23:
+            if re.search(r"\bsegments\.hour\b", query, re.IGNORECASE):
+                static_errors.append("In Google Ads API v23+, 'segments.hour' was renamed to 'segments.hour_of_day'. Update your query to use 'segments.hour_of_day'.")
+
         if static_errors:
             return {
                 "task_id": task_id,
@@ -228,7 +233,8 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "gaql_validation": {
                     "status": "PASSED",
                     "static_checks": "PASSED",
-                    "api_version": api_version
+                    "api_version": api_version,
+                    "customer_id": customer_id
                 },
                 "explanation": "GAQL query passed all structural and static analysis checks."
             }

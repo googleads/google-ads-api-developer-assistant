@@ -21,8 +21,12 @@ import re
 import sys
 from typing import Optional
 
-from google.ads.googleads.client import GoogleAdsClient
-from google.ads.googleads.errors import GoogleAdsException
+try:
+    from google.ads.googleads.client import GoogleAdsClient
+    from google.ads.googleads.errors import GoogleAdsException
+except ImportError:
+    GoogleAdsClient = None  # type: ignore
+    GoogleAdsException = Exception  # type: ignore
 
 
 def handle_googleads_exception(exception: GoogleAdsException) -> None:
