@@ -57,7 +57,7 @@ try {
         $failed = $true
     }
     if (-not $failed) {
-        if ($out1 -and ($out1 -match "missing mandatory parameter" -or $out1 -match "Cannot process command")) {
+        if ($LASTEXITCODE -ne 0 -or ($out1 -and ($out1 -match "missing mandatory parameter" -or $out1 -match "Cannot process command" -or $out1 -match "Missing required -Type parameter"))) {
             $failed = $true
         }
     }
@@ -115,7 +115,7 @@ try {
         $updateFailed = $true
     }
     if (-not $updateFailed) {
-        if ($out5 -and ($out5 -match "missing mandatory parameter" -or $out5 -match "Cannot process command")) {
+        if ($LASTEXITCODE -ne 0 -or ($out5 -and ($out5 -match "missing mandatory parameter" -or $out5 -match "Cannot process command" -or $out5 -match "Missing required -Type parameter"))) {
             $updateFailed = $true
         }
     }

@@ -42,8 +42,7 @@
 #>
 
 param(
-    [Parameter(Mandatory=$true, Position=0, HelpMessage="Target platform: 'agy' or 'claude'")]
-    [ValidateSet("agy", "claude", "claudecode", IgnoreCase=$true)]
+    [Parameter(Position=0, HelpMessage="Target platform: 'agy' or 'claude'")]
     [string]$Type,
 
     [switch]$Php,
@@ -54,6 +53,17 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($Type)) {
+    Write-Error "ERROR: Missing required -Type parameter ('agy' or 'claude')."
+    exit 1
+}
+
+$TypeLower = $Type.ToLower()
+if ($TypeLower -notin @("agy", "claude", "claudecode")) {
+    Write-Error "ERROR: Invalid Type '$Type'. Must be 'agy' or 'claude'."
+    exit 1
+}
 
 # --- Project Directory Resolution ---
 # Determine the root directory of the current git repository.
