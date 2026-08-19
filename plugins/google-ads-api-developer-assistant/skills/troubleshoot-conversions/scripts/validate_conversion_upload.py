@@ -21,7 +21,10 @@ import sys
 from datetime import datetime
 from typing import Optional
 
-from google.ads.googleads.client import GoogleAdsClient
+try:
+    from google.ads.googleads.client import GoogleAdsClient
+except ImportError:
+    GoogleAdsClient = None  # type: ignore
 
 
 def validate_conversion_csv(

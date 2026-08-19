@@ -1,19 +1,19 @@
 * 4.0.0
-- Migrated from project structure to plugin architecture.
-- Renamed plugin source directory from plugins/agy to plugins/google-ads-api-developer-assistant.
-- Configured repository with .claude-plugin/marketplace.json for native Claude Code plugin discovery and installation.
+- Migrated from legacy project-based structure (.agents/skills, api_examples/, update_project_context.py, AGENTS.md) to a unified plugin architecture under plugins/google-ads-api-developer-assistant/.
+- Configured repository with .claude-plugin/marketplace.json for native Claude Code marketplace discovery and installation (claude plugin marketplace add / claude plugin install).
 - Updated install scripts (install.sh, install.ps1) and update scripts (update.sh, update.ps1) to require a target platform argument ('agy' or 'claude').
-- Removed uninstall.sh and uninstall.ps1 in favor of native platform uninstallation mechanisms.
-- Integrated automated marketplace registration ('claude plugin marketplace add') and plugin installation ('claude plugin install') into install scripts for Claude Code.
-- Updated update scripts (update.sh, update.ps1) to sync updates and manage client libraries for Antigravity and Claude Code.
-- Added environment verification to install scripts for Python >= 3.10 and host platform CLI availability (Antigravity CLI or Claude Code CLI).
-- Added comprehensive Claude Code prerequisites, installation, and setup instructions in README.md.
-- Optimized skills and added rules to distinguish between concrete objects and their representation in Python files.
-- Added Claude Code custom slash commands directory (commands/) with markdown shortcuts for /validate-gaql, /inspect-object, /troubleshoot-conversions, /get-cids, /pmax-filter, /explain, /assistant-tutorial, /step-by-step, /sync-client-libs, and /ext-version.
-- Added static GAQL lint checks to validate_gaql.py and sidecar to flag deprecated segments.hour in favor of segments.hour_of_day for Google Ads API v23+.
-- Added case-insensitive, normalized, and fuzzy matching to inspect_object.py with close suggestions for missing types.
-- Added comprehensive pytest unit test suite under tests/ (tests/test_components.py) with mocked GoogleAdsClient and network calls for validate_gaql.py, inspect_object.py, get_cids_under_mcc.py, sync_client_libs.py, and A2A sidecar handlers.
-- Configured dynamic API version discovery with interactive prompt fallback.
+- Removed standalone uninstall scripts (uninstall.sh, uninstall.ps1) in favor of native platform uninstallation mechanisms (/plugin uninstall in Claude Code, directory deletion in Antigravity).
+- Added host environment verification in install scripts for Python >= 3.10 and host CLI availability (Antigravity CLI or Claude Code CLI).
+- Added Claude Code custom slash commands directory (commands/) with 10 markdown shortcuts: /validate-gaql, /inspect-object, /troubleshoot-conversions, /get-cids, /pmax-filter, /explain, /assistant-tutorial, /step-by-step, /sync-client-libs, and /ext-version.
+- Added CLI parameter support (--query / -q) to validate_gaql.py with automatic stdin fallback, and prioritized static analysis before API client loading.
+- Added static GAQL lint check in validate_gaql.py and A2A sidecar (server.py) flagging deprecated segments.hour in favor of segments.hour_of_day for Google Ads API v23+.
+- Added case-insensitive matching, normalized lookups, fuzzy suggestions (difflib), and source definition parsing fallback (inspect_from_source) to inspect_object.py.
+- Configured mcp_config.json and A2A HTTP sidecar (server.py) on port 8900 with dynamic API version resolution hierarchy and interactive prompt fallback.
+- Added top-level requirements.txt and pyproject.toml specifying google-ads, ruff, and pytest for unified dependency and tool configuration.
+- Added GitHub Actions CI workflow (.github/workflows/ci.yml) with Linux (Ubuntu) and Windows (windows-latest) test matrices across Python 3.10, 3.11, and 3.12 executing ruff check ., pytest, and cross-platform lifecycle scripts (test_plugin_scripts.sh / test_plugin_scripts.ps1).
+- Added dedicated unit test suite in tests/test_components.py with mocked GoogleAdsClient and network calls for validate_gaql.py, inspect_object.py, get_cids_under_mcc.py, sync_client_libs.py, and A2A sidecar handlers.
+- Added structured --json output flags to troubleshoot_conversions.py and get_cids_under_mcc.py for programmatic downstream consumption.
+- Updated documentation across README.md, plugins/google-ads-api-developer-assistant/README.md, FAQ.md, README_BEFORE_INSTALLATION.md, and migration.md.
 
 * 3.0.0
 - Fixed a breaking bug in install.ps1 and tests/test_install.ps1 where legacy settings.json references caused the Windows installation to crash.

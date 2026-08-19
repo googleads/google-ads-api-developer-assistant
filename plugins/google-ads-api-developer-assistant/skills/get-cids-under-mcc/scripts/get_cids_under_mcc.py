@@ -16,6 +16,7 @@
 
 import argparse
 import csv
+import json
 import os
 import re
 import sys
@@ -120,6 +121,12 @@ def main() -> None:
         default=False,
         help="If set, prints the detailed table of child accounts to the console.",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="If set, outputs child accounts in structured JSON format.",
+    )
     args = parser.parse_args()
 
     customer_id = args.customer_id
@@ -136,6 +143,22 @@ def main() -> None:
 
     clean_id = "".join(re.findall(r"\d+", str(customer_id)))
     cids = get_cids_under_mcc(customer_id, args.api_version)
+
+    if args.json:
+        payload = {
+            "mcc_customer_id": clean_id,
+            "total_child_accounts": len(cids),
+            "child_accounts": [
+                {
+                    "customer_id": cid,
+                    "level": level,
+                    "is_mcc": is_mcc,
+                }
+                for cid, level, is_mcc in cids
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+        return
 
     if args.save_csv:
         csv_dir = os.path.expanduser(os.path.join("~", "saved", "data"))
