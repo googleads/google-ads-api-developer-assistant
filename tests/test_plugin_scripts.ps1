@@ -43,7 +43,7 @@ $MockClaudeBat = Join-Path $BinDir "claude.bat"
 Set-Content -Path $MockClaudeBat -Value "@echo [MOCK CLAUDE] Called with: %*`rexit /b 0" -Encoding ASCII
 
 $MockClaudePs1 = Join-Path $BinDir "claude.ps1"
-Set-Content -Path $MockClaudePs1 -Value "Write-Output ('[MOCK CLAUDE] Called with: ' + (`$args -join ' '))`nexit 0" -Encoding UTF8
+Set-Content -Path $MockClaudePs1 -Value "Write-Output ('[MOCK CLAUDE] Called with: ' + (`$args -join ' '))" -Encoding UTF8
 
 $AgyPluginDir = Join-Path $TestHome ".gemini\config\plugins\google-ads-api-developer-assistant"
 
@@ -52,17 +52,17 @@ try {
     Write-Host "Test 1: install.ps1 enforces required Type parameter"
     $failed = $false
     try {
-        $out1 = & "$ProjectRoot\install.ps1" -ErrorAction Stop *>&1
+        $out1 = & "$ProjectRoot\install.ps1" *>&1 | Out-String
     } catch {
         $failed = $true
     }
     if (-not $failed) {
-        if ($LASTEXITCODE -ne 0 -or ($out1 -and ($out1 -match "missing mandatory parameter" -or $out1 -match "Cannot process command" -or $out1 -match "Missing required -Type parameter"))) {
+        if ($out1 -and ($out1 -match "missing mandatory parameter" -or $out1 -match "Cannot process command" -or $out1 -match "Missing required -Type parameter" -or $out1 -match "ERROR:")) {
             $failed = $true
         }
     }
     if (-not $failed) {
-        Write-Error "FAIL: install.ps1 without Type parameter should fail"
+        Write-Error "FAIL: install.ps1 without Type parameter should fail. Output: $out1"
         exit 1
     }
     Write-Host "PASS: install.ps1 enforces required Type parameter."
@@ -110,17 +110,17 @@ try {
     Write-Host "Test 5: update.ps1 enforces required Type parameter"
     $updateFailed = $false
     try {
-        $out5 = & "$ProjectRoot\update.ps1" -ErrorAction Stop *>&1
+        $out5 = & "$ProjectRoot\update.ps1" *>&1 | Out-String
     } catch {
         $updateFailed = $true
     }
     if (-not $updateFailed) {
-        if ($LASTEXITCODE -ne 0 -or ($out5 -and ($out5 -match "missing mandatory parameter" -or $out5 -match "Cannot process command" -or $out5 -match "Missing required -Type parameter"))) {
+        if ($out5 -and ($out5 -match "missing mandatory parameter" -or $out5 -match "Cannot process command" -or $out5 -match "Missing required -Type parameter" -or $out5 -match "ERROR:")) {
             $updateFailed = $true
         }
     }
     if (-not $updateFailed) {
-        Write-Error "FAIL: update.ps1 without Type parameter should fail"
+        Write-Error "FAIL: update.ps1 without Type parameter should fail. Output: $out5"
         exit 1
     }
     Write-Host "PASS: update.ps1 enforces required Type parameter."
