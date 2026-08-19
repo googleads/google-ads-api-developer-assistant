@@ -29,3 +29,8 @@ extend-exclude = [
     "plugins/google-ads-api-developer-assistant/client_libs",
     "client_libs",
 ]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = []
+
