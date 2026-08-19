@@ -10,7 +10,7 @@ Investigates offline conversion upload failures, validates upload CSV formats, a
 ## Instructions:
 1. **Extract Parameters**:
    - Extract `customer_id` and/or `csv_path` from `$ARGUMENTS`.
-   - If `customer_id` is not provided, use `config/customer_id.txt` or prompt the user.
+   - If `customer_id` is not provided, use `config/customer_id` or prompt the user.
    - Resolve API version from `config/api_version.txt`.
 
 2. **Execute Diagnostics**:

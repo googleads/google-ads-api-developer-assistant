@@ -188,7 +188,7 @@ Run the installation script matching your platform:
 ---
 
 4.  **Configure Credentials:** Make sure your API credentials configuration files are in your `$HOME` directory. Each language has its own configuration file naming convention and structure. 
-5.  **Optional: Default Customer ID:** To set a default customer ID, enter your customer ID in `config/customer_id.txt` or `config/customer_id` (e.g., `1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.
+5.  **Optional: Default Customer ID:** To set a default customer ID, enter your customer ID in `config/customer_id` (e.g., `1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.
 6.  **Google Ads API Version Validation:** On your first run in a session, the assistant will automatically identify the latest stable Google Ads API version and ask you to confirm it. Once confirmed, this version is cached in [api_version.txt](file:///usr/local/google/home/rwh/google-ads-api-developer-assistant/config/api_version.txt) and used for all subsequent prompts. If you need to force a version change or refresh the cache, simply delete or edit the `config/api_version.txt` file.
 
 ## Usage
@@ -215,7 +215,7 @@ Run the installation script matching your platform:
 *   `plugins/google-ads-api-developer-assistant/skills/`: Assistant skills (GAQL analyzer, proto inspect, etc.).
 *   `plugins/google-ads-api-developer-assistant/sidecars/`: Background sidecar microservices.
 *   `plugins/google-ads-api-developer-assistant/client_libs/`: Cloned client libraries.
-*   `config/`: Configuration files (e.g. `api_version.txt`, `customer_id.txt`).
+*   `config/`: Configuration files (e.g. `api_version.txt`, `customer_id`).
 
 ## Mutate Operations
 

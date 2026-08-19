@@ -11,7 +11,7 @@ The Assistant looks for configuration files in your home directory (`$HOME`).
 Refer to the official Google Ads API documentation for the specific structure of each file.
 
 ## How do I set a default customer ID?
-Enter your customer ID number directly into `config/customer_id.txt` or `config/customer_id` (e.g., `1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will automatically use this CID for requests.
+Enter your customer ID number directly into `config/customer_id` (e.g., `1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will automatically use this CID for requests.
 
 ## How do I install the assistant plugin?
 The Assistant installs as a plugin for Antigravity or Claude Code:

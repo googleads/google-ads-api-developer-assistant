@@ -226,10 +226,10 @@ echo "Detected project root: ${PROJECT_DIR_ABS}"
 # --- Update Assistant Repo ---
 echo "Updating google-ads-api-developer-assistant..."
 
-CUSTOMER_ID_FILE="${PROJECT_DIR_ABS}/config/customer_id.txt"
+CUSTOMER_ID_FILE="${PROJECT_DIR_ABS}/config/customer_id"
 TEMP_CUSTOMER_ID=$(mktemp)
 
-# Backup config/customer_id.txt if it exists
+# Backup config/customer_id if it exists
 if [[ -f "${CUSTOMER_ID_FILE}" ]]; then
     cp "${CUSTOMER_ID_FILE}" "${TEMP_CUSTOMER_ID}"
 fi
@@ -242,7 +242,7 @@ if ! git pull; then
     exit 1
 fi
 
-# Restore config/customer_id.txt
+# Restore config/customer_id
 if [[ -f "${TEMP_CUSTOMER_ID}" ]] && [[ -s "${TEMP_CUSTOMER_ID}" ]]; then
     mv "${TEMP_CUSTOMER_ID}" "${CUSTOMER_ID_FILE}"
     rm -f "${TEMP_CUSTOMER_ID}"
@@ -298,7 +298,7 @@ if [[ "${TYPE}" == "agy" ]]; then
     cp -r "${PLUGIN_SOURCE_DIR}" "${AGY_PLUGIN_TARGET_DIR}"
   else
     echo "Syncing plugin files to ${AGY_PLUGIN_TARGET_DIR}..."
-    for item in rules sidecars skills commands config plugin.json mcp_config.json README.md customer_id.txt; do
+    for item in rules sidecars skills commands config plugin.json mcp_config.json README.md customer_id; do
       if [[ -e "${PLUGIN_SOURCE_DIR}/${item}" ]]; then
         cp -r "${PLUGIN_SOURCE_DIR}/${item}" "${AGY_PLUGIN_TARGET_DIR}/"
       fi

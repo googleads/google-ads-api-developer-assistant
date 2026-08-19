@@ -11,7 +11,7 @@ Validates Google Ads Query Language (GAQL) queries against Google Ads API schema
 1. **Extract Parameters**:
    - Extract the query from `$ARGUMENTS`. If not provided, prompt the user for the GAQL query to validate.
    - Resolve the target API version from `config/api_version.txt` or the latest discovered version in `client_libs/`.
-   - Resolve the customer ID from `$ARGUMENTS`, `config/customer_id.txt`, or session context.
+   - Resolve the customer ID from `$ARGUMENTS`, `config/customer_id`, or session context.
 
 2. **Execute Validation Protocol**:
    - **Step 1: Schema Discovery** - Verify that all selected and filtered fields exist in the resource schema using `client_libs/google-ads-python` proto definitions or `inspect_object.py`.

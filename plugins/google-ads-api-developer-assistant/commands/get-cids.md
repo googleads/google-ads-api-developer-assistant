@@ -10,7 +10,7 @@ Retrieves the complete account hierarchy and child CIDs under a Google Ads Manag
 ## Instructions:
 1. **Extract Parameters**:
    - Extract the Manager Account ID (MCC) from `$ARGUMENTS`.
-   - If not provided, check `config/customer_id.txt` or prompt the user.
+   - If not provided, check `config/customer_id` or prompt the user.
    - Resolve API version from `config/api_version.txt`.
 
 2. **Execute Retrieval**:

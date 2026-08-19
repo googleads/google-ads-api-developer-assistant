@@ -122,7 +122,7 @@ Write-Host "Detected project root: $ProjectDirAbs"
 # --- Update Assistant Repo ---
 Write-Host "Updating google-ads-api-developer-assistant repository..."
 
-$CustomerIdFile = Join-Path $ProjectDirAbs "config\customer_id.txt"
+$CustomerIdFile = Join-Path $ProjectDirAbs "config\customer_id"
 $TempCustomerIdFile = [System.IO.Path]::GetTempFileName()
 
 try {
@@ -245,7 +245,7 @@ if ($Type.ToLower() -eq "agy") {
     }
     else {
         Write-Host "Syncing plugin files to $AgyPluginTargetDir..."
-        $ItemsToSync = @("rules", "sidecars", "skills", "commands", "config", "plugin.json", "mcp_config.json", "README.md", "customer_id.txt")
+        $ItemsToSync = @("rules", "sidecars", "skills", "commands", "config", "plugin.json", "mcp_config.json", "README.md", "customer_id")
         foreach ($Item in $ItemsToSync) {
             $SourceItem = Join-Path $PluginSourceDir $Item
             if (Test-Path -LiteralPath $SourceItem) {

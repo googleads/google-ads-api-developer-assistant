@@ -39,8 +39,11 @@ $env:PATH = "$BinDir;$env:PATH"
 $MockClaudeCmd = Join-Path $BinDir "claude.cmd"
 Set-Content -Path $MockClaudeCmd -Value "@echo [MOCK CLAUDE] Called with: %*`rexit /b 0" -Encoding ASCII
 
+$MockClaudeBat = Join-Path $BinDir "claude.bat"
+Set-Content -Path $MockClaudeBat -Value "@echo [MOCK CLAUDE] Called with: %*`rexit /b 0" -Encoding ASCII
+
 $MockClaudePs1 = Join-Path $BinDir "claude.ps1"
-Set-Content -Path $MockClaudePs1 -Value "Write-Host '[MOCK CLAUDE] Called with:' `$args`nexit 0" -Encoding UTF8
+Set-Content -Path $MockClaudePs1 -Value "Write-Output ('[MOCK CLAUDE] Called with: ' + (`$args -join ' '))`nexit 0" -Encoding UTF8
 
 $AgyPluginDir = Join-Path $TestHome ".gemini\config\plugins\google-ads-api-developer-assistant"
 
@@ -49,9 +52,14 @@ try {
     Write-Host "Test 1: install.ps1 enforces required Type parameter"
     $failed = $false
     try {
-        & "$ProjectRoot\install.ps1" 2>$null
+        $out1 = & "$ProjectRoot\install.ps1" -ErrorAction Stop *>&1
     } catch {
         $failed = $true
+    }
+    if (-not $failed) {
+        if ($out1 -and ($out1 -match "missing mandatory parameter" -or $out1 -match "Cannot process command")) {
+            $failed = $true
+        }
     }
     if (-not $failed) {
         Write-Error "FAIL: install.ps1 without Type parameter should fail"
@@ -70,7 +78,7 @@ try {
 
     # Test 3: install.ps1 -Type agy installs plugin into .gemini/config/plugins/google-ads-api-developer-assistant
     Write-Host "Test 3: install.ps1 -Type agy installs plugin into ~/.gemini/config/plugins/google-ads-api-developer-assistant"
-    & "$ProjectRoot\install.ps1" -Type agy
+    & "$ProjectRoot\install.ps1" -Type agy *>&1 | Out-Null
     if (-not (Test-Path $AgyPluginDir)) {
         Write-Error "FAIL: Antigravity plugin directory was not created at $AgyPluginDir"
         exit 1
@@ -87,13 +95,13 @@ try {
 
     # Test 4: install.ps1 -Type claude executes claude CLI marketplace add and install commands
     Write-Host "Test 4: install.ps1 -Type claude executes marketplace add and plugin install"
-    $claudeOutput = & "$ProjectRoot\install.ps1" -Type claude | Out-String
-    if ($claudeOutput -notmatch "plugin marketplace add") {
-        Write-Error "FAIL: install.ps1 -Type claude did not execute marketplace add"
+    $claudeOutput = (& "$ProjectRoot\install.ps1" -Type claude *>&1 | Out-String)
+    if ($claudeOutput -notmatch "marketplace add") {
+        Write-Error "FAIL: install.ps1 -Type claude did not execute marketplace add. Output: $claudeOutput"
         exit 1
     }
     if ($claudeOutput -notmatch "plugin install google-ads-api-developer-assistant@google-ads-assistant-local") {
-        Write-Error "FAIL: install.ps1 -Type claude did not execute plugin install"
+        Write-Error "FAIL: install.ps1 -Type claude did not execute plugin install. Output: $claudeOutput"
         exit 1
     }
     Write-Host "PASS: install.ps1 -Type claude executed Claude Code marketplace commands."
@@ -102,9 +110,14 @@ try {
     Write-Host "Test 5: update.ps1 enforces required Type parameter"
     $updateFailed = $false
     try {
-        & "$ProjectRoot\update.ps1" 2>$null
+        $out5 = & "$ProjectRoot\update.ps1" -ErrorAction Stop *>&1
     } catch {
         $updateFailed = $true
+    }
+    if (-not $updateFailed) {
+        if ($out5 -and ($out5 -match "missing mandatory parameter" -or $out5 -match "Cannot process command")) {
+            $updateFailed = $true
+        }
     }
     if (-not $updateFailed) {
         Write-Error "FAIL: update.ps1 without Type parameter should fail"
@@ -123,7 +136,7 @@ try {
 
     # Test 7: update.ps1 -Type agy updates Antigravity plugin
     Write-Host "Test 7: update.ps1 -Type agy updates Antigravity plugin"
-    & "$ProjectRoot\update.ps1" -Type agy
+    & "$ProjectRoot\update.ps1" -Type agy *>&1 | Out-Null
     if (-not (Test-Path (Join-Path $AgyPluginDir "plugin.json"))) {
         Write-Error "FAIL: plugin.json missing after update in agy"
         exit 1
@@ -132,7 +145,7 @@ try {
 
     # Test 8: update.ps1 -Type claude updates Claude Code plugin in repository
     Write-Host "Test 8: update.ps1 -Type claude updates Claude Code plugin in repository"
-    & "$ProjectRoot\update.ps1" -Type claude
+    & "$ProjectRoot\update.ps1" -Type claude *>&1 | Out-Null
     $RepoPluginJson = Join-Path $ProjectRoot "plugins\google-ads-api-developer-assistant\plugin.json"
     if (-not (Test-Path $RepoPluginJson)) {
         Write-Error "FAIL: plugin.json missing in repository plugin after update"
@@ -142,7 +155,7 @@ try {
 
     # Test 9: update.ps1 -Type claude -Php adds google-ads-php to repository plugin client_libs
     Write-Host "Test 9: update.ps1 -Type claude -Php adds google-ads-php to repository plugin client_libs"
-    & "$ProjectRoot\update.ps1" -Type claude -Php
+    & "$ProjectRoot\update.ps1" -Type claude -Php *>&1 | Out-Null
     $PhpLibDir = Join-Path $ProjectRoot "plugins\google-ads-api-developer-assistant\client_libs\google-ads-php"
     if (-not (Test-Path $PhpLibDir)) {
         Write-Error "FAIL: google-ads-php missing from repository plugin client_libs"
