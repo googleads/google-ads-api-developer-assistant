@@ -128,8 +128,9 @@ def inspect_from_source(py_file: str, class_name: str) -> bool:
         stripped = line.strip()
         indent = len(line) - len(line.lstrip())
 
-        if stripped.startswith("class ") and "(" in stripped:
-            c_name = stripped.split("(")[0].replace("class ", "").strip()
+        if stripped.startswith("class "):
+            class_def = stripped[6:].strip()
+            c_name = class_def.split("(")[0].split(":")[0].strip()
             if c_name == class_name:
                 in_target_class = True
                 class_indent = indent
@@ -148,10 +149,21 @@ def inspect_from_source(py_file: str, class_name: str) -> bool:
                 f_kind = m.group(3)
                 label = "REPEATED" if f_kind == "RepeatedField" else "OPTIONAL"
                 fields.append((f_name, label, f_type))
-            elif "=" in stripped and not stripped.startswith("#") and not stripped.startswith("def ") and not stripped.startswith("class "):
-                m_enum = re.match(r"^\s*([A-Z0-9_]+)\s*=\s*(\d+)", line)
-                if m_enum:
-                    enum_values.append((m_enum.group(1), m_enum.group(2)))
+            else:
+                m_annot = re.match(r"^\s*([a-zA-Z0-9_]+)\s*:\s*([^=\n#]+)", line)
+                if (
+                    m_annot
+                    and not stripped.startswith("def ")
+                    and not stripped.startswith("class ")
+                    and not stripped.startswith("return ")
+                ):
+                    f_name = m_annot.group(1)
+                    f_type = m_annot.group(2).strip()
+                    fields.append((f_name, "OPTIONAL", f_type))
+                elif "=" in stripped and not stripped.startswith("#") and not stripped.startswith("def ") and not stripped.startswith("class "):
+                    m_enum = re.match(r"^\s*([A-Z0-9_]+)\s*=\s*(\d+)", line)
+                    if m_enum:
+                        enum_values.append((m_enum.group(1), m_enum.group(2)))
 
     if enum_values and not fields:
         print(f"=== Enum: {class_name} ===")
