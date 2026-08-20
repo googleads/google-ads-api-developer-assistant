@@ -20,6 +20,7 @@ The Assistant uses a structured hierarchy of instruction files, slash commands, 
 ### 1. Unified Context via `AGENTS.md` & `CLAUDE.md`
 The master configuration files act as the system contract for the assistant:
 *   **Version Cache Protocol**: Automatically discovers and locks the latest active API version (cached in `config/api_version.txt`).
+*   **Version Parity Enforcement**: Verifies parity between the runtime `google-ads` Python package and local `client_libs/google-ads-python` source-of-truth definitions, issuing warnings on discrepancies.
 *   **Code Generation Pipeline**: Passes all generated Python code through strict `ruff` linting before saving or displaying it.
 *   **Programmatic GAQL Validation**: Evaluates queries against field metadata and compatibility boundaries.
 *   **Safety Constraints**: Strictly prohibits running unreviewed mutate operations directly.
@@ -247,6 +248,20 @@ To update the repository, assistant plugin, and all configured client libraries 
   .\update.ps1 -Type agy -All
   .\update.ps1 -Type claude -All
   ```
+
+### 4. Client Library & Runtime Version Parity
+The Assistant relies on local client library sources (`client_libs/google-ads-python`) as the primary **source of truth** for Protobuf schemas, resource definitions, and enum descriptors, while executing queries and generated code through the installed `google-ads` Python package in your environment.
+
+To prevent silent schema discrepancies, missing fields, or descriptor errors:
+* **Automated Parity Checks:** Tool scripts (such as `inspect_object.py`) automatically compare the installed environment package version (`importlib.metadata.version('google-ads')`) against the local `client_libs/google-ads-python` version metadata (`pyproject.toml` / `ChangeLog`).
+* **Warning Directives:** If a version mismatch is detected, the Assistant and inspection tools output an explicit warning banner:
+  ```text
+  WARNING: Installed google-ads package version (<installed_version>) does not match client_libs/google-ads-python version (<client_libs_version>) used for protobuf inspection. Schema inspection or API calls may encounter field discrepancies.
+  ```
+* **Resolving Mismatches:**
+  * Synchronize client libraries to latest: `/sync-client-libs` (or prompt *"Sync client libraries"*).
+  * Upgrade the runtime Python package: `pip install --upgrade google-ads` (or within virtualenv: `source .venv/bin/activate && pip install --upgrade google-ads`).
+  * Perform a complete update: `./update.sh agy --all` or `./update.sh claude --all`.
 
 
 ## Directory Structure
