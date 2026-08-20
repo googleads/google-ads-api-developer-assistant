@@ -17,7 +17,7 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
@@ -31,10 +31,14 @@ sys.path.insert(0, os.path.join(PLUGIN_ROOT, "skills/get-cids-under-mcc/scripts"
 sys.path.insert(0, os.path.join(PLUGIN_ROOT, "skills/sync-client-libs/scripts"))
 sys.path.insert(0, os.path.join(PLUGIN_ROOT, "skills/pmax-listing-filter/scripts"))
 sys.path.insert(0, os.path.join(PLUGIN_ROOT, "skills/troubleshoot-conversions/scripts"))
+sys.path.insert(0, os.path.join(PLUGIN_ROOT, "skills/ext-version/scripts"))
 sys.path.insert(0, os.path.join(PLUGIN_ROOT, "sidecars/google-ads-a2a-service"))
 
 import create_pmax_webpage_filter  # noqa: E402
 import get_cids_under_mcc  # noqa: E402
+import get_extension_version  # noqa: E402
+import get_latest_api_version  # noqa: E402
+import get_recent_gclids  # noqa: E402
 import inspect_object  # noqa: E402
 import server  # noqa: E402
 import sync_client_libs  # noqa: E402
@@ -45,6 +49,17 @@ import validate_gaql  # noqa: E402
 
 class TestValidateGAQL:
     """Unit tests for validate_gaql.py static rules and mock dry-run."""
+
+    def test_empty_query(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            validate_gaql.validate_gaql(
+                customer_id="1234567890",
+                api_version="v25",
+                query="",
+            )
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error: No query provided" in captured.out
 
     def test_forbidden_or_operator(self, capsys):
         with pytest.raises(SystemExit) as exc_info:
@@ -233,6 +248,56 @@ class TestInspectObject:
         assert "=== Message: Campaign ===" in captured.out
         assert "test_field" in captured.out
 
+    def test_version_parity_match(self, capsys, monkeypatch):
+        monkeypatch.setattr(
+            inspect_object.importlib.metadata,
+            "version",
+            lambda pkg: "26.0.0" if pkg == "google-ads" else "0.0.0",
+        )
+        fake_content = 'version = "26.0.0"\n'
+        with patch("os.path.isfile", side_effect=lambda p: True if "pyproject.toml" in p else False), \
+             patch("builtins.open", mock_open(read_data=fake_content)):
+            inspect_object.check_version_parity()
+        captured = capsys.readouterr()
+        assert "WARNING" not in captured.err
+
+    def test_version_parity_mismatch(self, capsys, monkeypatch):
+        monkeypatch.setattr(
+            inspect_object.importlib.metadata,
+            "version",
+            lambda pkg: "25.0.0" if pkg == "google-ads" else "0.0.0",
+        )
+        fake_content = 'version = "26.0.0"\n'
+        with patch("os.path.isfile", side_effect=lambda p: True if "pyproject.toml" in p else False), \
+             patch("builtins.open", mock_open(read_data=fake_content)):
+            inspect_object.check_version_parity()
+        captured = capsys.readouterr()
+        assert "WARNING: Installed google-ads package version (25.0.0) does not match" in captured.err
+
+    def test_version_parity_changelog_detection(self, capsys, monkeypatch):
+        monkeypatch.setattr(
+            inspect_object.importlib.metadata,
+            "version",
+            lambda pkg: "24.0.0" if pkg == "google-ads" else "0.0.0",
+        )
+        fake_changelog = "* 25.0.0\n- Release notes\n"
+        with patch("os.path.isfile", side_effect=lambda p: True if "ChangeLog" in p else False), \
+             patch("builtins.open", mock_open(read_data=fake_changelog)):
+            inspect_object.check_version_parity()
+        captured = capsys.readouterr()
+        assert "WARNING: Installed google-ads package version (24.0.0) does not match" in captured.err
+
+    def test_version_parity_missing_libs_handled(self, capsys, monkeypatch):
+        monkeypatch.setattr(
+            inspect_object.importlib.metadata,
+            "version",
+            lambda pkg: "25.0.0" if pkg == "google-ads" else "0.0.0",
+        )
+        with patch("os.path.isfile", return_value=False):
+            inspect_object.check_version_parity()
+        captured = capsys.readouterr()
+        assert "WARNING" not in captured.err
+
 
 class TestGetCidsUnderMCC:
     """Unit tests for get_cids_under_mcc.py with mock responses and JSON formatting."""
@@ -303,6 +368,22 @@ class TestSyncClientLibs:
         tag_name, tarball_url = sync_client_libs.fetch_github_latest_release("googleads/google-ads-python")
         assert tag_name == "v26.0.0"
         assert tarball_url is not None
+
+    def test_sync_client_libs_check_only_json(self, capsys):
+        with patch.object(sync_client_libs, "discover_client_libs_dir", return_value="/dummy/client_libs"), \
+             patch.object(sync_client_libs, "process_client_libs", return_value=[{
+                 "codebase": "google-ads-python",
+                 "status": "UP_TO_DATE",
+                 "installed_version": "26.0.0",
+                 "github_version": "26.0.0",
+                 "updated": False,
+             }]), \
+             patch("sys.argv", ["sync_client_libs.py", "--check_only", "--json"]):
+            sync_client_libs.main()
+        captured = capsys.readouterr()
+        parsed = json.loads(captured.out)
+        assert parsed["client_libs_dir"] == "/dummy/client_libs"
+        assert parsed["results"][0]["status"] == "UP_TO_DATE"
 
 
 class TestCreatePMaxWebpageFilter:
@@ -445,6 +526,71 @@ class TestTroubleshootConversions:
         assert parsed["customer_info"]["name"] == "Test Account"
 
 
+class TestGetRecentGclids:
+    """Unit tests for get_recent_gclids.py."""
+
+    def test_get_recent_gclids_success(self, capsys):
+        mock_client = MagicMock()
+        mock_service = MagicMock()
+        mock_client.get_service.return_value = mock_service
+
+        row = MagicMock()
+        row.click_view.gclid = "Cj0KCQjw_test_gclid_12345"
+        row.segments.date = "2026-08-19"
+        mock_service.search.return_value = [row]
+
+        get_recent_gclids.get_recent_gclids(mock_client, "1234567890", "2026-08-19")
+        captured = capsys.readouterr()
+        assert "Cj0KCQjw_test_gclid_12345" in captured.out
+        assert "2026-08-19" in captured.out
+
+    def test_get_recent_gclids_empty(self, capsys):
+        mock_client = MagicMock()
+        mock_service = MagicMock()
+        mock_client.get_service.return_value = mock_service
+        mock_service.search.return_value = []
+
+        get_recent_gclids.get_recent_gclids(mock_client, "1234567890", "2026-08-19")
+        captured = capsys.readouterr()
+        assert "No GCLIDs found on date '2026-08-19'" in captured.out
+
+
+class TestExtVersion:
+    """Unit tests for get_latest_api_version.py and get_extension_version.py."""
+
+    def test_detect_latest_api_version_from_dir(self, tmp_path):
+        dummy_dir = tmp_path / "googleads"
+        (dummy_dir / "v23").mkdir(parents=True)
+        (dummy_dir / "v24").mkdir(parents=True)
+        (dummy_dir / "v26").mkdir(parents=True)
+        with patch("os.path.abspath", side_effect=lambda p: str(dummy_dir) if "googleads" in p else p):
+            ver = get_latest_api_version.detect_latest_api_version()
+            assert ver == "v26"
+
+    def test_detect_latest_api_version_fallback(self):
+        with patch("os.path.isdir", return_value=False), \
+             patch.dict("sys.modules", {"google.ads.googleads": None}):
+            ver = get_latest_api_version.detect_latest_api_version()
+            assert ver == "v25"
+
+    def test_get_extension_version_plugin_json(self, tmp_path, capsys):
+        plugin_file = tmp_path / "plugin.json"
+        plugin_file.write_text(json.dumps({"version": "4.0.0"}), encoding="utf-8")
+
+        fake_script = tmp_path / "skills/ext-version/scripts/get_extension_version.py"
+        with patch("os.path.abspath", return_value=str(fake_script)):
+            get_extension_version.get_extension_version()
+        captured = capsys.readouterr()
+        assert "4.0.0" in captured.out
+
+    def test_get_extension_version_unknown(self, capsys):
+        with patch("os.path.abspath", return_value="/nonexistent/root/script.py"), \
+             patch("os.path.exists", return_value=False):
+            get_extension_version.get_extension_version()
+        captured = capsys.readouterr()
+        assert "Unknown" in captured.out
+
+
 class TestSidecarA2A:
     """Unit tests for A2A sidecar task handlers."""
 
@@ -508,3 +654,41 @@ class TestSidecarA2A:
         )
         assert res["status"] == "COMPLETED"
         assert "GoogleAdsClient" in res["result"]["generated_code"]
+
+    def test_troubleshoot_conversions_task(self):
+        handler = server.A2AHandler.__new__(server.A2AHandler)
+        with patch("server.get_effective_api_version", return_value="v25"):
+            res = handler.handle_troubleshoot_conversions(
+                "task-6",
+                {"customer_id": "1234567890", "api_version": "v25"},
+            )
+        assert res["status"] == "COMPLETED"
+        assert res["result"]["summary"] == "Verified offline conversion upload summary."
+
+    def test_sidecar_health_check(self):
+        handler = server.A2AHandler.__new__(server.A2AHandler)
+        handler.path = "/health"
+        handler._send_json = MagicMock()
+        handler.do_GET()
+        handler._send_json.assert_called_once()
+        args = handler._send_json.call_args[0]
+        assert args[0] == 200
+        assert args[1]["status"] == "healthy"
+
+    def test_sidecar_unsupported_intent(self):
+        handler = server.A2AHandler.__new__(server.A2AHandler)
+        handler.headers = {"Content-Length": "50"}
+        handler.rfile = MagicMock()
+        handler.rfile.read.return_value = json.dumps({
+            "task_id": "task-7",
+            "intent": "INVALID_INTENT",
+            "payload": {},
+        }).encode("utf-8")
+        handler._send_json = MagicMock()
+        handler.path = "/v1/a2a/tasks"
+        handler.do_POST()
+        handler._send_json.assert_called_once()
+        args = handler._send_json.call_args[0]
+        assert args[0] == 200
+        assert args[1]["status"] == "FAILED"
+        assert "Unsupported intent" in args[1]["error"]

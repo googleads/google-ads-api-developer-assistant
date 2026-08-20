@@ -20,8 +20,13 @@ Retrieves a sample of recent GCLIDs from the click_view resource.
 import argparse
 import sys
 from datetime import datetime, timedelta
-from google.ads.googleads.client import GoogleAdsClient
-from google.ads.googleads.errors import GoogleAdsException
+
+try:
+    from google.ads.googleads.client import GoogleAdsClient
+    from google.ads.googleads.errors import GoogleAdsException
+except ImportError:
+    GoogleAdsClient = None  # type: ignore
+    GoogleAdsException = Exception  # type: ignore
 
 
 def get_recent_gclids(client: GoogleAdsClient, customer_id: str, date: str) -> None:
