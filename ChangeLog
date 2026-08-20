@@ -15,6 +15,11 @@
   - Added support for verifying and syncing the assistant repository itself (`google-ads-api-developer-assistant`) against upstream GitHub releases.
   - Added Protocol 1.0 "Validate Before Act & Interactive Sync" directive to agent rules: checks for upstream releases at startup in check-only mode and prompts the user before upgrading.
   - Implemented 5-tier dynamic API version resolution hierarchy in `get_latest_api_version.py` and A2A sidecar (`server.py`).
+- **Version Parity & Verification:**
+  - Added `check_version_parity()` in `inspect_object.py` across plugin locations to compare the installed environment package (`google-ads`) against local `client_libs/google-ads-python` source metadata (`pyproject.toml` / `ChangeLog`) and output an explicit warning banner on version discrepancies.
+  - Added mandatory `CLIENT LIBS & RUNTIME VERSION MISMATCH WARNING` hard constraint directive to `rules/google_ads_rules.md` requiring agents to explicitly warn users of potential schema or descriptor differences when installed packages differ from cloned client libraries.
+  - Mandated checking installed `google-ads` version against the latest upstream release in `rules/google_ads_rules.md`.
+  - Updated `inspect-object` skill documentation (`SKILL.md`) to document the version parity checking requirement and field discrepancy handling.
 - **Skills & Slash Commands:**
   - Added 10 native Claude Code slash commands under `commands/`: `/validate-gaql`, `/inspect-object`, `/troubleshoot-conversions`, `/get-cids`, `/pmax-filter`, `/explain`, `/assistant-tutorial`, `/step-by-step`, `/sync-client-libs`, and `/ext-version`.
   - Added CLI parameter support (`--query` / `-q`) to `validate_gaql.py` with automatic stdin fallback and prioritized static analysis before API client initialization.
