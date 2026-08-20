@@ -96,7 +96,7 @@ function Get-RepoConfig {
 function Test-Enabled {
     param([string]$Lang)
     switch ($Lang) {
-        "python" { return $Python }
+        "python" { return $true }
         "php"    { return ($Php -or $All) }
         "ruby"   { return ($Ruby -or $All) }
         "java"   { return ($Java -or $All) }
@@ -264,8 +264,8 @@ if ($Type.ToLower() -eq "claude" -or $Type.ToLower() -eq "claudecode") {
         New-Item -ItemType Directory -Force -Path $PluginSourceClientLibs | Out-Null
     }
 
-    $OtherLangs = @("php", "ruby", "java", "dotnet")
-    foreach ($Lang in $OtherLangs) {
+    $AllLangs = @("python", "php", "ruby", "java", "dotnet")
+    foreach ($Lang in $AllLangs) {
         if (Test-Enabled -Lang $Lang) {
             $Config = Get-RepoConfig -Lang $Lang
             $TargetRepoPath = Join-Path $PluginSourceClientLibs $Config.Name
@@ -321,8 +321,8 @@ if (-not (Test-Path -LiteralPath $PluginClientLibsDir)) {
     New-Item -ItemType Directory -Force -Path $PluginClientLibsDir | Out-Null
 }
 
-$OtherLangs = @("php", "ruby", "java", "dotnet")
-foreach ($Lang in $OtherLangs) {
+$AllLangs = @("python", "php", "ruby", "java", "dotnet")
+foreach ($Lang in $AllLangs) {
     if (Test-Enabled -Lang $Lang) {
         $Config = Get-RepoConfig -Lang $Lang
         $TargetRepoPath = Join-Path $PluginClientLibsDir $Config.Name

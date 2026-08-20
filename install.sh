@@ -390,24 +390,29 @@ if [[ ! -d "${PLUGIN_SOURCE_DIR}" ]]; then
   exit 1
 fi
 
+TEMP_LOG_DIR=$(mktemp -d)
+cleanup() {
+  rm -rf "${TEMP_LOG_DIR}"
+}
+trap cleanup EXIT
+
 if [[ "${TYPE}" == "claude" ]]; then
   echo "Preparing Claude Code plugin files at ${PLUGIN_SOURCE_DIR}..."
   mkdir -p "${PLUGIN_SOURCE_DIR}/client_libs"
 
-  # Add any additional selected client libraries to plugin source structure
-  for lang in php ruby java dotnet; do
+  # Add all enabled client libraries (including Python by default) to plugin source structure
+  for lang in python php ruby java dotnet; do
     if is_enabled "$lang"; then
       repo_name=$(get_repo_name "$lang")
       target_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
       url=$(get_repo_url "$lang")
-      log_file="${PROJECT_DIR_ABS}/install_${lang}_log_$$.tmp"
+      log_file="${TEMP_LOG_DIR}/install_${lang}.log"
 
       if [[ ! -d "${target_lib_path}" ]]; then
         echo "Cloning ${repo_name} into plugin client_libs..."
         clone_or_update "$url" "${target_lib_path}" "${log_file}"
         if [[ -f "${log_file}" ]]; then
           cat "${log_file}"
-          rm -f "${log_file}"
         fi
       fi
     fi
@@ -438,14 +443,14 @@ cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
 # Ensure plugin client_libs directory exists
 mkdir -p "${PLUGIN_TARGET_DIR}/client_libs"
 
-# Add any additional selected client libraries to plugin structure
-for lang in php ruby java dotnet; do
+# Add all enabled client libraries (including Python by default) to plugin structure
+for lang in python php ruby java dotnet; do
   if is_enabled "$lang"; then
     repo_name=$(get_repo_name "$lang")
     target_lib_path="${PLUGIN_TARGET_DIR}/client_libs/${repo_name}"
     source_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
     url=$(get_repo_url "$lang")
-    log_file="${PROJECT_DIR_ABS}/install_${lang}_log_$$.tmp"
+    log_file="${TEMP_LOG_DIR}/install_${lang}.log"
 
     if [[ -d "${source_lib_path}" ]]; then
       echo "Adding ${repo_name} to plugin client_libs from local repository..."
@@ -456,7 +461,6 @@ for lang in php ruby java dotnet; do
       clone_or_update "$url" "${target_lib_path}" "${log_file}"
       if [[ -f "${log_file}" ]]; then
         cat "${log_file}"
-        rm -f "${log_file}"
       fi
     fi
   fi
