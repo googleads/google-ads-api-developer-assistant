@@ -25,7 +25,7 @@
   - Configured `mcp_config.json` and background A2A HTTP sidecar (`server.py`) on port 8900 for Agent-to-Agent task delegation (`GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`).
 - **Testing & Tooling:**
   - Added top-level `requirements.txt` and `pyproject.toml` specifying `google-ads`, `ruff`, and `pytest`.
-  - Added GitHub Actions CI workflow (`.github/workflows/ci.yml`) with Linux (Ubuntu) and Windows test matrices across Python 3.10, 3.11, and 3.12 running linting, unit tests, and lifecycle validation scripts.
+  - Added GitHub Actions CI workflow (`.github/workflows/ci.yml`) with Linux (Ubuntu) and Windows test matrices across Python 3.10 through 3.14 running linting, unit tests, and lifecycle validation scripts.
   - Added dedicated unit test suite in `tests/test_components.py` with mocked `GoogleAdsClient` and network fixtures.
 - **Documentation:**
   - Updated documentation across `README.md` (including "Stay in sync" section), `plugins/google-ads-api-developer-assistant/README.md`, `FAQ.md`, `README_BEFORE_INSTALLATION.md`, and `migration.md`.
