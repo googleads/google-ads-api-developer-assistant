@@ -11,38 +11,36 @@ The Google Ads API Developer Assistant streamlines workflows for developers work
 *   Generate executable code in several languages using our client libraries for context.
 *   Retrieve and display data from the API.
 
-This assistant is powered by the **antigravity** agent framework (v4.0.0) and leverages `AGENTS.md` files and custom **Skills** to deliver persistent context, robust safety constraints, and automated execution pipelines.
+This assistant is powered by the **Antigravity** (v4.0.0) and **Claude Code** agent frameworks and leverages `AGENTS.md` / `CLAUDE.md` files, native slash commands, and custom **Skills** to deliver persistent context, robust safety constraints, and automated execution pipelines.
 
 ## Agentic Design & Approach
 
-The Assistant uses a structured hierarchy of instruction files and specialized domain tools to ensure safe, precise, and highly competent interactions with the Google Ads API.
+The Assistant uses a structured hierarchy of instruction files, slash commands, and specialized domain tools to ensure safe, precise, and highly competent interactions with the Google Ads API across supported agent environments.
 
-### 1. Unified Context via `AGENTS.md`
-The master configuration file [AGENTS.md](AGENTS.md) acts as the system contract for the assistant. It sets zero-tolerance policies (such as a read-only constraint on mutating API calls) and defines execution pipelines:
-*   **Version Cache Protocol**: Auto-loads API versions from `config/api_version.txt`.
+### 1. Unified Context via `AGENTS.md` & `CLAUDE.md`
+The master configuration files act as the system contract for the assistant:
+*   **Version Cache Protocol**: Automatically discovers and locks the latest active API version (cached in `config/api_version.txt`).
 *   **Code Generation Pipeline**: Passes all generated Python code through strict `ruff` linting before saving or displaying it.
 *   **Programmatic GAQL Validation**: Evaluates queries against field metadata and compatibility boundaries.
+*   **Safety Constraints**: Strictly prohibits running unreviewed mutate operations directly.
 
-### 2. Domain-Specific "Skills"
-Rather than relying on generic AI completions, the assistant is empowered with specialized, test-backed tool directories called **Skills** under `.agents/skills/`. Each skill defines:
-*   `SKILL.md`: Human-in-the-loop and model instructions.
-*   `scripts/`: Python modules that interface directly with the Google Ads API Client Libraries (e.g., validating queries, navigating account trees, filtering Performance Max URL expansions).
-*   `tests/`: Unit test suites validating skill operations.
+### 2. Domain-Specific "Skills" & Native Commands
+Rather than relying on generic AI completions, the assistant is empowered with specialized, test-backed tool directories under `plugins/google-ads-api-developer-assistant/skills/` and native slash commands under `plugins/google-ads-api-developer-assistant/commands/`.
 
-Key active skills include:
-*   **`validate_gaql`**: Dry-runs queries via the API `validate_only` parameter.
-*   **`inspect_object`**: Inspects API resources, nested messages, or enum definitions on the fly.
-*   **`get_cids_under_mcc`**: Maps client hierarchies under manager accounts.
-*   **`troubleshoot_conversions`**: Investigates upload summaries and pre-validates files.
-*   **`pmax_listing_filter`**: Standardizes listing group webpage exclusion tree modifications.
-*   **`explain`** & **`step_by_step`**: Enforces structured explanation layouts.
+Key capabilities support dual invocation (natural language prompts in Antigravity or dedicated slash commands in Claude Code):
+*   **GAQL Validation (`/validate-gaql`)**: Dry-runs queries via the API `validate_only` parameter.
+*   **Object Inspection (`/inspect-object`)**: Inspects API resources, nested messages, or enum definitions on the fly.
+*   **MCC Account Mapping (`/get-cids`)**: Maps client hierarchies and retrieves sub-account CIDs under manager accounts.
+*   **Conversion Troubleshooting (`/troubleshoot-conversions`)**: Investigates conversion upload summaries and pre-validates files.
+*   **PMax Listing Filters & URL Exclusions (`/pmax-filter`)**: Generates product partition trees and webpage URL exclusions.
+*   **Structured Explanations (`/explain`, `/step-by-step`, `/assistant-tutorial`)**: Delivers standardized multi-part explanations, step breakdowns, and interactive tutorials.
+*   **Environment & Library Sync (`/sync-client-libs`, `/ext-version`)**: Synchronizes client libraries and verifies active API version settings.
 
 ## Key Features
 
-*   **Natural Language Q&A:** Ask about Google Ads API concepts, fields, and usage in plain English.
-    *   *"What are the available campaign types?"*
-    *   *"Tell me about reporting for Performance Max campaigns."*
-    *   *"How do I filter by date in GAQL?"*
+*   **Natural Language Q&A & Conceptual Guidance:** Ask about Google Ads API concepts, fields, and usage in plain English, or use structured explanation commands.
+    *   *Natural Language:* "What are the available campaign types?", "Tell me about reporting for Performance Max campaigns."
+    *   *Claude Code:* `/explain`, `/step-by-step`, `/assistant-tutorial`
 
 *   **Natural Language to GAQL & Client Library Code:** Convert requests into executable code using the Google Ads Client Libraries.
     *   Code is saved to `saved/code/`.
@@ -50,18 +48,11 @@ Key active skills include:
     *   *"Get all ad groups for customer '123-456-7890'."*
     *   *"Find disapproved ads across all campaigns."*
 
-*   **Direct API Execution:** Run the generated Python code directly and view results, often formatted as tables. Execution takes place within a managed virtual environment that has the Google Ads API Client Libraries installed.
-
-*   **CSV Export:** Save tabular API results to a CSV file in the `saved/csv/` directory.
-    *   *"Save results to a csv file"*
-
-*   **Conversion Troubleshooting & Diagnostics:** Generate structured diagnostic reports to debug offline conversion issues.
-    *   Reports are saved to `saved/data/`.
-    *   *"Troubleshoot my conversions for customer '123-456-7890'."*
-    
-*   **Validate Complex GAQL Queries:** Validate complex GAQL queries to ensure they are valid and will return the expected results. The Assistant enforces strict validation rules, such as prohibiting the use of the `OR` operator in GAQL queries and the `FROM` clause in metadata queries.
-    *   *"validate:"*
+*   **Validate Complex GAQL Queries:** Validate complex GAQL queries against API metadata and compatibility rules.
+    *   *Claude Code:* `/validate-gaql`
+    *   *Natural Language:*
         ```sql
+        validate:
         SELECT
           campaign.id,
           campaign.name,
@@ -88,6 +79,16 @@ Key active skills include:
         ORDER BY metrics.clicks DESC
         LIMIT 500
         ```
+
+*   **Direct API Execution:** Run the generated Python code directly and view results, often formatted as tables. Execution takes place within a managed virtual environment that has the Google Ads API Client Libraries installed.
+
+*   **CSV Export:** Save tabular API results to a CSV file in the `saved/csv/` directory.
+    *   *"Save results to a csv file"*
+
+*   **Conversion Troubleshooting & Diagnostics:** Generate structured diagnostic reports to debug offline conversion issues.
+    *   *Claude Code:* `/troubleshoot-conversions`
+    *   *Natural Language:* *"Troubleshoot my conversions for customer '123-456-7890'."* (Reports saved to `saved/data/`).
+
 
 ## Supported Languages
 
@@ -211,11 +212,17 @@ Run the installation script matching your platform:
 ## Directory Structure
 
 *   `plugins/google-ads-api-developer-assistant/`: Source directory for the assistant plugin.
-*   `plugins/google-ads-api-developer-assistant/rules/`: Agent behavioral rules and protocols.
+*   `plugins/google-ads-api-developer-assistant/commands/`: Native slash commands for Claude Code.
 *   `plugins/google-ads-api-developer-assistant/skills/`: Assistant skills (GAQL analyzer, proto inspect, etc.).
+*   `plugins/google-ads-api-developer-assistant/rules/`: Agent behavioral rules and protocols.
 *   `plugins/google-ads-api-developer-assistant/sidecars/`: Background sidecar microservices.
 *   `plugins/google-ads-api-developer-assistant/client_libs/`: Cloned client libraries.
+*   `plugins/google-ads-api-developer-assistant/mcp_config.json`: Model Context Protocol configuration.
 *   `config/`: Configuration files (e.g. `api_version.txt`, `customer_id`).
+
+## Plugin Architecture
+
+To learn more about how Antigravity and Claude define plugins, see the [Antigravity plugin specification](https://antigravity.google/docs/cli/plugins/) and the [Claude plugin specification](https://github.com/anthropics/knowledge-work-plugins).
 
 ## Mutate Operations
 
