@@ -17,6 +17,7 @@
 import argparse
 import difflib
 import glob
+import importlib.metadata
 import os
 import re
 import sys
@@ -26,6 +27,61 @@ try:
     from google.ads.googleads.client import GoogleAdsClient
 except ImportError:
     GoogleAdsClient = None  # type: ignore
+
+
+def check_version_parity() -> None:
+    """Checks if installed google-ads version matches client_libs version used for protobuf definitions."""
+    installed_version = None
+    try:
+        installed_version = importlib.metadata.version("google-ads")
+    except Exception:
+        pass
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.abspath(os.path.join(script_dir, "../../../client_libs/google-ads-python")),
+        os.path.abspath(os.path.join(script_dir, "../../../../client_libs/google-ads-python")),
+        os.path.expanduser("~/.gemini/config/plugins/google_ads_assistant_plugin/client_libs/google-ads-python"),
+        os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python"),
+        os.path.abspath("client_libs/google-ads-python"),
+    ]
+
+    client_libs_version = None
+    for cand in candidates:
+        pyproject = os.path.join(cand, "pyproject.toml")
+        if os.path.isfile(pyproject):
+            try:
+                with open(pyproject, "r", encoding="utf-8") as f:
+                    m = re.search(r'version\s*=\s*["\']([^"\']+)["\']', f.read())
+                    if m:
+                        client_libs_version = m.group(1).strip()
+                        break
+            except Exception:
+                pass
+        changelog = os.path.join(cand, "ChangeLog")
+        if os.path.isfile(changelog):
+            try:
+                with open(changelog, "r", encoding="utf-8") as f:
+                    for line in f:
+                        m = re.search(r"^\*\s*([\d\.\w\-]+)", line)
+                        if m:
+                            client_libs_version = m.group(1).strip()
+                            break
+                    if client_libs_version:
+                        break
+            except Exception:
+                pass
+
+    if installed_version and client_libs_version:
+        v_inst = installed_version.lstrip("v").strip()
+        v_cl = client_libs_version.lstrip("v").strip()
+        if v_inst != v_cl:
+            print(
+                f"WARNING: Installed google-ads package version ({installed_version}) does not match "
+                f"client_libs/google-ads-python version ({client_libs_version}) used for protobuf inspection. "
+                f"Schema inspection or API calls may encounter field discrepancies.",
+                file=sys.stderr,
+            )
 
 
 def get_available_types(api_version: str) -> Dict[str, str]:
@@ -182,6 +238,7 @@ def inspect_protobuf(
     object_name: str, api_version: str, client: Optional[GoogleAdsClient] = None
 ) -> None:
     """Inspects any Google Ads API Protobuf resource, message or enum."""
+    check_version_parity()
     available_types = get_available_types(api_version)
     resolved_name, suggestions = resolve_type_name(object_name, available_types)
 

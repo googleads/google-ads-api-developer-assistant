@@ -28,6 +28,7 @@
 - **NO GAQL 'OR' OPERATOR:** Strictly prohibited from using the `OR` logical operator in ANY GAQL query. Use `IN` or execute separate queries.
 - **NO 'FROM' IN METADATA QUERIES:** When using `GoogleAdsFieldService.search_google_ads_fields`, the query MUST NOT contain a `FROM` clause. (e.g. `SELECT name WHERE name = 'campaign.id'`).
 - **NO RESOURCE PREFIXES IN METADATA:** In `GoogleAdsFieldService` queries, use bare field names (`name`, `category`), NOT prefixed names (`google_ads_field.name`).
+- **CLIENT LIBS & RUNTIME VERSION MISMATCH WARNING:** If the installed version of `google-ads` in the Python environment does not match the `client_libs/google-ads-python` version used for Protobuf inspection and source-of-truth definitions, explicitly issue a warning to the user.
 
 #### 1.3. Versioning Fallback & User Override
 If the user provides or overrides an API version, treat user input as the ultimate source of truth, cache it in `config/api_version.txt`, and use it automatically for subsequent tasks.
@@ -85,6 +86,7 @@ Every Python script generated MUST follow this automated linting pipeline:
 - NEVER guess the structure of an API resource, message, or Enum.
 - Always run `python3 skills/inspect-object/scripts/inspect_object.py --object_name <ObjectName> --api_version <api_version>` to inspect fields.
 - Refer to `client_libs/google-ads-python/` for exact proto definitions and official Google code examples.
+- **Version Parity Check & Warning:** If the installed `google-ads` version does not match the `client_libs/google-ads-python` version used for Protobuf inspection, issue a warning to the user regarding potential field schema or descriptor discrepancies.
 
 #### 4.2. Performance Max URL Filters
 - Use `python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py` to configure webpage exclusion listing trees (`vertical = WEBPAGE`).
