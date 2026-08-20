@@ -529,17 +529,108 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
         return None
 
 
+def check_assistant_repo(
+    check_only: bool = False,
+    force: bool = False,
+) -> Optional[dict[str, Any]]:
+    """Checks and updates the google-ads-api-developer-assistant repository itself."""
+    script_dir: str = os.path.dirname(os.path.abspath(__file__))
+    project_root: Optional[str] = None
+    candidates = [
+        os.path.abspath(os.path.join(script_dir, "../../../..")),
+        os.path.abspath(os.path.join(script_dir, "../../../../..")),
+        os.path.abspath("."),
+    ]
+    for c in candidates:
+        if os.path.isfile(
+            os.path.join(c, "plugins/google-ads-api-developer-assistant/plugin.json")
+        ) or os.path.isfile(os.path.join(c, "plugin.json")):
+            project_root = c
+            break
+
+    if not project_root:
+        return None
+
+    repo_slug = "googleads/google-ads-api-developer-assistant"
+    installed_version = None
+
+    # Read version from plugin.json
+    for p_json in [
+        os.path.join(project_root, "plugins/google-ads-api-developer-assistant/plugin.json"),
+        os.path.join(project_root, "plugin.json"),
+    ]:
+        if os.path.isfile(p_json):
+            try:
+                with open(p_json, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    installed_version = data.get("version")
+                    if installed_version:
+                        break
+            except Exception:
+                pass
+
+    if not installed_version and os.path.isdir(os.path.join(project_root, ".git")):
+        try:
+            res = subprocess.run(
+                ["git", "describe", "--tags", "--abbrev=0"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            tag = res.stdout.strip()
+            if tag:
+                installed_version = tag.lstrip("v")
+        except Exception:
+            pass
+
+    github_tag, tarball_url = fetch_github_latest_release(repo_slug)
+    github_version = github_tag.lstrip("v") if github_tag else None
+
+    needs_update = is_update_needed(installed_version, github_version) or force
+    status = "UP_TO_DATE"
+    updated = False
+
+    if needs_update and not check_only:
+        if os.path.isdir(os.path.join(project_root, ".git")):
+            updated = update_codebase_via_git(project_root, github_tag or "")
+        else:
+            updated = update_codebase_via_archive(
+                project_root, repo_slug, github_tag or "", tarball_url
+            )
+        status = "UPDATED" if updated else "UPDATE_FAILED"
+    elif needs_update and check_only:
+        status = "OUTDATED"
+
+    return {
+        "codebase": "google-ads-api-developer-assistant",
+        "path": project_root,
+        "repo_slug": repo_slug,
+        "installed_version": installed_version,
+        "github_version": github_version,
+        "status": status,
+        "updated": updated,
+    }
+
+
 def process_client_libs(
     client_libs_dir: str,
     check_only: bool = False,
     force: bool = False,
     target_library: Optional[str] = None,
+    include_assistant: bool = True,
 ) -> list[dict[str, Any]]:
-    """Discovers, verifies, and updates all codebases in client_libs_dir."""
+    """Discovers, verifies, and updates all codebases in client_libs_dir and the assistant."""
     results: list[dict[str, Any]] = []
 
+    # 1. Check Assistant repository if enabled and not filtering for a specific client lib
+    if include_assistant and (not target_library or target_library == "google-ads-api-developer-assistant"):
+        assistant_res = check_assistant_repo(check_only=check_only, force=force)
+        if assistant_res:
+            results.append(assistant_res)
+
     if not os.path.isdir(client_libs_dir):
-        raise FileNotFoundError(f"Directory not found: {client_libs_dir}")
+        return results
 
     entries = sorted(os.listdir(client_libs_dir))
     for entry in entries:

@@ -208,6 +208,46 @@ Run the installation script matching your platform:
     > ... (code displayed as the result of a previous request) ...
     > "Save the results to csv"
 
+## Stay in sync
+
+The Assistant includes automated synchronization tools to ensure your local client libraries, protobuf definitions, and API version metadata remain aligned with upstream releases on GitHub.
+
+### 1. Update Check & Confirmation at Session Startup
+Whenever an assistant session starts in Antigravity or Claude Code, the assistant executes an automated **"Validate Before Act & Interactive Sync"** directive:
+* It checks both the **Assistant repository itself** and local **client libraries** (`client_libs/`) against the latest upstream GitHub releases in check-only mode (`--check_only`).
+* If newer assistant releases or client library updates are detected, the assistant prompts you with the available updates and asks for confirmation before downloading:
+  > *"New updates are available on GitHub (e.g., google-ads-api-developer-assistant 4.0.0, google-ads-python 25.1.0 -> 26.0.0). Would you like to upgrade now?"*
+* If you confirm, it automatically synchronizes the codebases and refreshes `config/api_version.txt`. If you decline, it proceeds with your currently installed versions.
+
+### 2. Requesting Synchronization During a Session
+You can check for updates or trigger synchronization at any time while in an active session:
+
+* **Natural Language Prompts (Antigravity & Claude Code):**
+  * *"Sync my client libraries"*
+  * *"Check for Google Ads client library updates"*
+  * *"Update the Python client library to the latest release"*
+
+* **Dedicated Slash Command (Claude Code):**
+  * Run `/sync-client-libs` to inspect and synchronize all local client libraries.
+  * Target a specific library: `/sync-client-libs python` or `/sync-client-libs dotnet`.
+
+* **Verify Active Version:**
+  * Claude Code: `/ext-version`
+  * Natural Language: *"What is the active Google Ads API version?"*
+
+### 3. Manual Terminal Updates
+To update the repository, assistant plugin, and all configured client libraries outside an active session:
+* **Linux/macOS:**
+  ```bash
+  ./update.sh agy --all          # Update Antigravity plugin and all client libraries
+  ./update.sh claude --all       # Update Claude Code plugin and all client libraries
+  ```
+* **Windows (PowerShell):**
+  ```powershell
+  .\update.ps1 -Type agy -All
+  .\update.ps1 -Type claude -All
+  ```
+
 
 ## Directory Structure
 
@@ -240,7 +280,7 @@ To update your repository, plugin installation, and client libraries:
 *   **Linux/macOS:**
     ```bash
     ./update.sh agy          # Update Antigravity plugin
-    ./update.sh claudecode   # Update Claude Code plugin
+    ./update.sh claude       # Update Claude Code plugin
     ```
     To add or update specific client libraries:
     ```bash

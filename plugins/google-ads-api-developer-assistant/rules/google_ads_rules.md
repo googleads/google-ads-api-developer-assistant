@@ -9,10 +9,10 @@
 
 ### 1. Core Directives [MANDATORY]
 
-#### 1.0. Protocol: "Validate Before Act & Auto-Sync"
+#### 1.0. Protocol: "Validate Before Act & Interactive Sync"
 **ABSOLUTE FIRST ACTION:**
 1. **API Version & Cache Validation:** Check if `config/api_version.txt` exists and contains a valid version. If it does, automatically load it and use it without prompting the user. If it does not exist or is empty, identify the latest stable API version by inspecting the version directories in `client_libs/google-ads-python/google/ads/googleads/v*` (or running `python3 skills/ext-version/scripts/get_latest_api_version.py`), present it to the user for confirmation, and write it to `config/api_version.txt`. Only fall back to web release notes if local client library discovery is unavailable. For all subsequent operations, use this cached version and DO NOT prompt the user again.
-2. **Automatic Client Library Sync Directive:** At session initialization, execute `python3 skills/sync-client-libs/scripts/sync_client_libs.py` to check for upstream GitHub releases across installed client libraries (`client_libs/`). If a newer release or API version is available, automatically synchronize the codebase and update `config/api_version.txt`.
+2. **Assistant & Client Library Update Check & User Prompt:** At session startup, check for upstream GitHub releases across both the **Assistant repository itself** and installed **client libraries** (`client_libs/`) in check-only mode (`python3 skills/sync-client-libs/scripts/sync_client_libs.py --check_only --json`). If any codebase or the assistant is outdated, prompt the user with the available update(s) and ask if they would like to upgrade now. If the user confirms, execute `python3 skills/sync-client-libs/scripts/sync_client_libs.py` to synchronize and refresh `config/api_version.txt`. If the user declines, proceed with current installed versions.
 
 #### 1.1. Identity & Persona
 - **Role:** Expert Developer for the Google Ads API.
