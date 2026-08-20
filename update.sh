@@ -226,27 +226,36 @@ echo "Detected project root: ${PROJECT_DIR_ABS}"
 # --- Update Assistant Repo ---
 echo "Updating google-ads-api-developer-assistant..."
 
-CUSTOMER_ID_FILE="${PROJECT_DIR_ABS}/config/customer_id"
-TEMP_CUSTOMER_ID=$(mktemp)
+TEMP_CONFIG_DIR=$(mktemp -d)
+cleanup() {
+  rm -rf "${TEMP_CONFIG_DIR}"
+}
+trap cleanup EXIT
 
-# Backup config/customer_id if it exists
-if [[ -f "${CUSTOMER_ID_FILE}" ]]; then
-    cp "${CUSTOMER_ID_FILE}" "${TEMP_CUSTOMER_ID}"
-fi
+# Backup config/customer_id and config/customer_id.txt if they exist
+for cid_file in customer_id customer_id.txt; do
+  if [[ -f "${PROJECT_DIR_ABS}/config/${cid_file}" ]]; then
+    cp "${PROJECT_DIR_ABS}/config/${cid_file}" "${TEMP_CONFIG_DIR}/${cid_file}"
+  fi
+done
 
 if ! git pull; then
-    err "ERROR: Failed to update google-ads-api-developer-assistant repository."
-    if [[ -f "${TEMP_CUSTOMER_ID}" ]] && [[ -s "${TEMP_CUSTOMER_ID}" ]]; then
-         mv "${TEMP_CUSTOMER_ID}" "${CUSTOMER_ID_FILE}"
+  err "ERROR: Failed to update google-ads-api-developer-assistant repository."
+  # Restore config files if backup exists
+  for cid_file in customer_id customer_id.txt; do
+    if [[ -f "${TEMP_CONFIG_DIR}/${cid_file}" ]]; then
+      cp "${TEMP_CONFIG_DIR}/${cid_file}" "${PROJECT_DIR_ABS}/config/${cid_file}"
     fi
-    exit 1
+  done
+  exit 1
 fi
 
-# Restore config/customer_id
-if [[ -f "${TEMP_CUSTOMER_ID}" ]] && [[ -s "${TEMP_CUSTOMER_ID}" ]]; then
-    mv "${TEMP_CUSTOMER_ID}" "${CUSTOMER_ID_FILE}"
-    rm -f "${TEMP_CUSTOMER_ID}"
-fi
+# Restore config files
+for cid_file in customer_id customer_id.txt; do
+  if [[ -f "${TEMP_CONFIG_DIR}/${cid_file}" ]]; then
+    cp "${TEMP_CONFIG_DIR}/${cid_file}" "${PROJECT_DIR_ABS}/config/${cid_file}"
+  fi
+done
 
 echo "Successfully updated repository."
 
@@ -278,10 +287,10 @@ if [[ -d "${PLUGIN_SOURCE_DIR}/client_libs" ]]; then
     if [[ -d "${dir}/.git" ]]; then
       echo "Updating repository at: ${dir}..."
       if ! (cd "${dir}" && git pull); then
-        err "ERROR: Failed to update ${dir}"
-        exit 1
+        echo "WARN: Failed to update $(basename "${dir}"). Continuing..." >&2
+      else
+        echo "Successfully updated $(basename "${dir}")."
       fi
-      echo "Successfully updated $(basename "${dir}")."
     fi
   done
 fi
@@ -298,9 +307,12 @@ if [[ "${TYPE}" == "agy" ]]; then
     cp -r "${PLUGIN_SOURCE_DIR}" "${AGY_PLUGIN_TARGET_DIR}"
   else
     echo "Syncing plugin files to ${AGY_PLUGIN_TARGET_DIR}..."
-    for item in rules sidecars skills commands config plugin.json mcp_config.json README.md customer_id; do
-      if [[ -e "${PLUGIN_SOURCE_DIR}/${item}" ]]; then
-        cp -r "${PLUGIN_SOURCE_DIR}/${item}" "${AGY_PLUGIN_TARGET_DIR}/"
+    for item in "${PLUGIN_SOURCE_DIR}"/*; do
+      if [[ -e "${item}" ]]; then
+        item_name=$(basename "${item}")
+        if [[ "${item_name}" != "client_libs" ]]; then
+          cp -r "${item}" "${AGY_PLUGIN_TARGET_DIR}/"
+        fi
       fi
     done
   fi
@@ -330,10 +342,10 @@ if [[ "${TYPE}" == "agy" ]]; then
         if [[ ! -d "${source_path}" || "$(cd "${dir}" && pwd)" != "$(cd "${source_path}" 2>/dev/null && pwd)" ]]; then
           echo "Updating repository at: ${dir}..."
           if ! (cd "${dir}" && git pull); then
-            err "ERROR: Failed to update ${dir}"
-            exit 1
+            echo "WARN: Failed to update ${repo_name} in target directory. Continuing..." >&2
+          else
+            echo "Successfully updated $(basename "${dir}")."
           fi
-          echo "Successfully updated $(basename "${dir}")."
         fi
       fi
     done

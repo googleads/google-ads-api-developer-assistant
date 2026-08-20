@@ -134,12 +134,17 @@ Write-Host "Detected project root: $ProjectDirAbs"
 # --- Update Assistant Repo ---
 Write-Host "Updating google-ads-api-developer-assistant repository..."
 
-$CustomerIdFile = Join-Path $ProjectDirAbs "config\customer_id"
-$TempCustomerIdFile = [System.IO.Path]::GetTempFileName()
+$ConfigDir = Join-Path $ProjectDirAbs "config"
+$TempConfigDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
+New-Item -ItemType Directory -Force -Path $TempConfigDir | Out-Null
 
 try {
-    if (Test-Path -LiteralPath $CustomerIdFile) {
-        Copy-Item -LiteralPath $CustomerIdFile -Destination $TempCustomerIdFile -Force
+    $CidFiles = @("customer_id", "customer_id.txt")
+    foreach ($CidFile in $CidFiles) {
+        $SrcCid = Join-Path $ConfigDir $CidFile
+        if (Test-Path -LiteralPath $SrcCid) {
+            Copy-Item -LiteralPath $SrcCid -Destination (Join-Path $TempConfigDir $CidFile) -Force
+        }
     }
 
     git pull
@@ -148,22 +153,26 @@ try {
     }
     Write-Host "Successfully updated repository."
 
-    if ((Test-Path -LiteralPath $TempCustomerIdFile) -and (Get-Item $TempCustomerIdFile).Length -gt 0) {
-        Move-Item -LiteralPath $TempCustomerIdFile -Destination $CustomerIdFile -Force
+    foreach ($CidFile in $CidFiles) {
+        $BackupCid = Join-Path $TempConfigDir $CidFile
+        if (Test-Path -LiteralPath $BackupCid) {
+            Copy-Item -LiteralPath $BackupCid -Destination (Join-Path $ConfigDir $CidFile) -Force
+        }
     }
 }
 catch {
     Write-Error "ERROR: $_"
-    if ((Test-Path -LiteralPath $TempCustomerIdFile) -and (Get-Item $TempCustomerIdFile).Length -gt 0) {
-        if (-not (Test-Path -LiteralPath $CustomerIdFile) -or (Get-Item $CustomerIdFile).Length -eq 0) {
-            Copy-Item -LiteralPath $TempCustomerIdFile -Destination $CustomerIdFile -Force
+    foreach ($CidFile in $CidFiles) {
+        $BackupCid = Join-Path $TempConfigDir $CidFile
+        if (Test-Path -LiteralPath $BackupCid) {
+            Copy-Item -LiteralPath $BackupCid -Destination (Join-Path $ConfigDir $CidFile) -Force
         }
     }
     exit 1
 }
 finally {
-    if (Test-Path -LiteralPath $TempCustomerIdFile) {
-        Remove-Item -LiteralPath $TempCustomerIdFile -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $TempConfigDir) {
+        Remove-Item -Recurse -Force -LiteralPath $TempConfigDir -ErrorAction SilentlyContinue
     }
 }
 
@@ -234,9 +243,11 @@ if ($IncludeDirs.Count -eq 0) {
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "Successfully updated $(Split-Path $AbsLibPath -Leaf)."
             } else {
-                Write-Error "ERROR: Failed to update $AbsLibPath"
-                exit 1
+                Write-Warning "WARN: Failed to update $(Split-Path $AbsLibPath -Leaf). Continuing..."
             }
+        }
+        catch {
+            Write-Warning "WARN: Failed to update $(Split-Path $AbsLibPath -Leaf). Continuing..."
         }
         finally {
             Pop-Location
@@ -260,11 +271,9 @@ if ($Type.ToLower() -eq "agy") {
     }
     else {
         Write-Host "Syncing plugin files to $AgyPluginTargetDir..."
-        $ItemsToSync = @("rules", "sidecars", "skills", "commands", "config", "plugin.json", "mcp_config.json", "README.md", "customer_id")
-        foreach ($Item in $ItemsToSync) {
-            $SourceItem = Join-Path $PluginSourceDir $Item
-            if (Test-Path -LiteralPath $SourceItem) {
-                Copy-Item -Recurse -Force -LiteralPath $SourceItem -Destination (Join-Path $AgyPluginTargetDir $Item)
+        Get-ChildItem -LiteralPath $PluginSourceDir -Force | ForEach-Object {
+            if ($_.Name -ne "client_libs") {
+                Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination (Join-Path $AgyPluginTargetDir $_.Name)
             }
         }
     }
@@ -297,9 +306,11 @@ if ($Type.ToLower() -eq "agy") {
                         if ($LASTEXITCODE -eq 0) {
                             Write-Host "Successfully updated $($Dir.Name)."
                         } else {
-                            Write-Error "ERROR: Failed to update $($Dir.FullName)"
-                            exit 1
+                            Write-Warning "WARN: Failed to update $($Dir.Name) in target directory. Continuing..."
                         }
+                    }
+                    catch {
+                        Write-Warning "WARN: Failed to update $($Dir.Name) in target directory. Continuing..."
                     }
                     finally {
                         Pop-Location
