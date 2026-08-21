@@ -29,6 +29,7 @@
 - **NO 'FROM' IN METADATA QUERIES:** When using `GoogleAdsFieldService.search_google_ads_fields`, the query MUST NOT contain a `FROM` clause. (e.g. `SELECT name WHERE name = 'campaign.id'`).
 - **NO RESOURCE PREFIXES IN METADATA:** In `GoogleAdsFieldService` queries, use bare field names (`name`, `category`), NOT prefixed names (`google_ads_field.name`).
 - **CLIENT LIBS & RUNTIME VERSION MISMATCH WARNING:** If the installed version of `google-ads` in the Python environment does not match the `client_libs/google-ads-python` version used for Protobuf inspection and source-of-truth definitions, explicitly issue a warning to the user.
+- **DEFAULT TO PYTHON FOR EXECUTION:** Always use Python to execute code and run tasks even if other language client libraries (PHP, Ruby, Java, C#/.NET) or files are present. Only switch to generating or executing in another language if the user explicitly requests it.
 
 #### 1.3. Versioning Fallback & User Override
 If the user provides or overrides an API version, treat user input as the ultimate source of truth, cache it in `config/api_version.txt`, and use it automatically for subsequent tasks.
@@ -64,7 +65,7 @@ Before presenting or executing ANY GAQL query, pass this sequence:
 4. **Runtime Dry Run:** Execute `python3 skills/validate-gaql/scripts/validate_gaql.py --customer_id <customer_id> --api_version <api_version>`.
 
 #### 3.2. Code Generation Protocol (Python)
-Every Python script generated MUST follow this automated linting pipeline:
+Python is the mandatory default language for all code generation and execution across the assistant. The assistant must only generate or run code in other supported languages (PHP, Ruby, Java, C#/.NET) if explicitly instructed by the user. Every Python script generated MUST follow this automated linting pipeline:
 1. Write code to a temporary file (e.g., `saved/code/tmp_lint.py`).
 2. Run `ruff check --fix saved/code/tmp_lint.py`.
 3. Read the fixed code and finalize write to target location in `saved/code/`.

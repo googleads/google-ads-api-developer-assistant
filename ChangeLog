@@ -3,6 +3,7 @@
   - Migrated from legacy project-based structure (.agents/skills, api_examples/, update_project_context.py, AGENTS.md) to a unified multi-platform plugin architecture under `plugins/google-ads-api-developer-assistant/`.
   - Configured repository with `.claude-plugin/marketplace.json` for native Claude Code marketplace discovery and installation (`claude plugin marketplace add` / `claude plugin install`).
   - Implemented dual-contract governance (`rules/google_ads_rules.md`) across both Antigravity and Claude Code agent environments.
+  - Added mandatory `DEFAULT TO PYTHON FOR EXECUTION` hard constraint directive in `rules/google_ads_rules.md` requiring the assistant to always use Python for executing code and running tasks across the project unless explicitly requested otherwise by the user.
 - **Lifecycle & Maintenance Scripts:**
   - Updated install scripts (`install.sh`, `install.ps1`) and update scripts (`update.sh`, `update.ps1`) to require a target platform argument (`agy` or `claude`).
   - Added host environment verification in install scripts for Python >= 3.10 and host CLI availability (Antigravity CLI or Claude Code CLI).
