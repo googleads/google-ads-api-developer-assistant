@@ -117,7 +117,7 @@ By default, Python is strictly used for all code generation and execution across
 
 ### 1. Install Host Platform
 
-Choose and set up your assistant environment:
+Choose and set up your assistant environment. You can install both Antigravity and Claude Code or just one of them. Install the host platform(s) you want to use:
 
 #### Antigravity CLI
 * Download and install `antigravity-cli` from [https://antigravity.google/](https://antigravity.google/).
