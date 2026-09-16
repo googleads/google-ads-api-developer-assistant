@@ -284,19 +284,47 @@ def copy_and_append_version(
             os.makedirs(target_dir, exist_ok=True)
 
         shutil.copy2(home_config, target_config)
-        with open(target_config, "a", encoding="utf-8") as f:
-            if lang == "YAML":
-                line = f"ads_assistant: {version}"
-            elif lang == "PHP":
-                line = f'ads_assistant = "{version}"'
-            elif lang == "Ruby":
-                line = f"ENV['ADS_ASSISTANT'] = '{version}'"
-            elif lang == "Java":
-                line = f"api.googleads.ads_assistant={version}"
-            else:
-                line = f"ads_assistant: {version}"
+        with open(target_config, "r", encoding="utf-8") as f:
+            content = f.read()
 
-            f.write(f"\n{line}\n")
+        if lang == "YAML":
+            pattern = r"(?m)^\s*ads_assistant\s*:.*$"
+            line = f"ads_assistant: {version}"
+            if re.search(pattern, content):
+                new_content = re.sub(pattern, line, content)
+            else:
+                separator = "" if content.endswith("\n") else "\n"
+                new_content = f"{content}{separator}{line}\n"
+        elif lang == "PHP":
+            pattern = r'(?m)^\s*ads_assistant\s*=.*$'
+            line = f'ads_assistant = "{version}"'
+            if re.search(pattern, content):
+                new_content = re.sub(pattern, line, content)
+            else:
+                separator = "" if content.endswith("\n") else "\n"
+                new_content = f"{content}{separator}{line}\n"
+        elif lang == "Ruby":
+            pattern = r"(?m)^\s*ENV\['ADS_ASSISTANT'\]\s*=.*$"
+            line = f"ENV['ADS_ASSISTANT'] = '{version}'"
+            if re.search(pattern, content):
+                new_content = re.sub(pattern, line, content)
+            else:
+                separator = "" if content.endswith("\n") else "\n"
+                new_content = f"{content}{separator}{line}\n"
+        elif lang == "Java":
+            pattern = r"(?m)^\s*api\.googleads\.ads_assistant\s*=.*$"
+            line = f"api.googleads.ads_assistant={version}"
+            if re.search(pattern, content):
+                new_content = re.sub(pattern, line, content)
+            else:
+                separator = "" if content.endswith("\n") else "\n"
+                new_content = f"{content}{separator}{line}\n"
+        else:
+            separator = "" if content.endswith("\n") else "\n"
+            new_content = f"{content}{separator}ads_assistant: {version}\n"
+
+        with open(target_config, "w", encoding="utf-8") as f:
+            f.write(new_content)
 
         if os.path.isfile(target_config):
             os.chmod(target_config, 0o600)
@@ -331,10 +359,9 @@ def sync_and_set_config_kv(
     target_yaml = os.path.join(config_dir, "google-ads.yaml")
     src = os.path.expanduser(source_yaml)
 
-    # 1. Copy source if target does not exist or source is available
+    # 1. Read source YAML and construct own copy in config directory
     if os.path.isfile(src):
-        if not os.path.isfile(target_yaml):
-            copy_and_append_version(src, target_yaml, version=version, lang="YAML")
+        copy_and_append_version(src, target_yaml, version=version, lang="YAML")
     elif not os.path.isfile(target_yaml):
         # Try fallbacks from the same directory as source_yaml
         home_dir = os.path.dirname(src)

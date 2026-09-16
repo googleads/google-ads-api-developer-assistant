@@ -356,7 +356,22 @@ def run_server():
             if not config_val:
                 config_val = "1234567890"
 
-        config_file = sync_and_set_config_kv(key=config_key, value=config_val)
+        candidate_config_dirs = [
+            os.path.abspath("config"),
+            os.path.join(base_dir, "../../../../config"),
+            os.path.join(base_dir, "../../config"),
+        ]
+        target_config_dir = None
+        for cd in candidate_config_dirs:
+            if os.path.isdir(cd):
+                target_config_dir = cd
+                break
+
+        config_file = sync_and_set_config_kv(
+            key=config_key,
+            value=config_val,
+            config_dir=target_config_dir,
+        )
         print(f"Synced configuration to {config_file} with {config_key}: {config_val}")
     except Exception as e:
         print(f"Configuration sync notice: {e}", file=sys.stderr)

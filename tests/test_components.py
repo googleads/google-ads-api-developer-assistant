@@ -911,3 +911,36 @@ class TestSidecarA2A:
         assert "client_id: fallback_cid" in content
         assert "ads_assistant:" in content
 
+    def test_sync_and_set_config_kv_reconstructs_from_home_on_new_session(self, tmp_path):
+        from config.config_init import sync_and_set_config_kv
+
+        dest_dir = tmp_path / "config"
+        dest_dir.mkdir()
+        existing_yaml = dest_dir / "google-ads.yaml"
+        existing_yaml.write_text("developer_token: \"stale_token\"\n")
+
+        src_yaml = tmp_path / "google-ads.yaml"
+        src_yaml.write_text("developer_token: \"fresh_session_token\"\n")
+
+        res_path = sync_and_set_config_kv(
+            source_yaml=str(src_yaml),
+            config_dir=str(dest_dir),
+        )
+
+        content = open(res_path).read()
+        assert 'developer_token: "fresh_session_token"' in content
+        assert "stale_token" not in content
+        assert os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH") == str(existing_yaml)
+
+    def test_copy_and_append_version_no_duplicates(self, tmp_path):
+        from config.config_init import copy_and_append_version
+
+        src = tmp_path / "test.yaml"
+        src.write_text("developer_token: \"token\"\nads_assistant: 1.0.0\n")
+        dst = tmp_path / "out.yaml"
+
+        copy_and_append_version(str(src), str(dst), version="4.0.0", lang="YAML")
+        content = dst.read_text()
+        assert content.count("ads_assistant:") == 1
+        assert "ads_assistant: 4.0.0" in content
+
