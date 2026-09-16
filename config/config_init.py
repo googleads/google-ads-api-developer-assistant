@@ -441,3 +441,57 @@ def get_config_file_path(config_dir: Optional[str] = None) -> str:
         return env_path
     return sync_and_set_config_kv(config_dir=config_dir)
 
+
+def main() -> None:
+    """Initializes config/google-ads.yaml from ~/google-ads.yaml at session start."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Initialize config/google-ads.yaml from ~/google-ads.yaml and ensure required settings."
+    )
+    parser.add_argument("--key", default="login_customer_id", help="Config key to set or verify")
+    parser.add_argument("--value", default=None, help="Config value to set")
+    parser.add_argument("--config-dir", default=None, help="Target directory for config")
+    parser.add_argument("--source-yaml", default="~/google-ads.yaml", help="Source configuration file")
+
+    args = parser.parse_args()
+
+    val = args.value
+    if not val:
+        val = os.environ.get("GOOGLE_ADS_CONFIG_VALUE")
+    if not val:
+        candidate_cid_files = [
+            os.path.join(os.getcwd(), "config", "customer_id"),
+            os.path.join(os.getcwd(), "config", "customer_id.txt"),
+            os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/config/customer_id"),
+            os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/config/customer_id.txt"),
+        ]
+        for cid_file in candidate_cid_files:
+            if os.path.isfile(cid_file):
+                try:
+                    with open(cid_file, "r", encoding="utf-8") as f:
+                        content = f.read().strip()
+                        if content:
+                            val = content
+                            break
+                except OSError:
+                    continue
+
+    try:
+        config_path = sync_and_set_config_kv(
+            key=args.key,
+            value=val,
+            config_dir=args.config_dir,
+            source_yaml=args.source_yaml,
+        )
+        print(f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{config_path}"', file=sys.stdout)
+        print(f"[config_init] Successfully initialized {config_path}", file=sys.stderr)
+    except Exception as e:
+        print(f"[config_init] Initialization error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+
+

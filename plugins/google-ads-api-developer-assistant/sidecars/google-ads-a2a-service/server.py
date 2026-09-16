@@ -14,6 +14,8 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 for path_to_add in [
     os.path.abspath(os.path.join(base_dir, "../..")),
     os.path.abspath(os.path.join(base_dir, "../../../..")),
+    os.path.abspath(os.path.join(base_dir, "../../plugins/google-ads-api-developer-assistant")),
+    os.path.abspath("/usr/local/google/home/rwh/google-ads-api-developer-assistant"),
 ]:
     if path_to_add not in sys.path:
         sys.path.insert(0, path_to_add)
@@ -168,6 +170,13 @@ class A2AHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/v1/a2a/tasks":
+            # Ensure config is synchronized when server.py is called
+            try:
+                from config.config_init import sync_and_set_config_kv
+                sync_and_set_config_kv()
+            except Exception:
+                pass
+
             content_length = int(self.headers.get("Content-Length", 0))
             body_bytes = self.rfile.read(content_length)
             try:

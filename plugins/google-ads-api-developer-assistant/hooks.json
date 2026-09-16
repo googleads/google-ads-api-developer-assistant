@@ -1,0 +1,20 @@
+{
+  "config-init": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 config/config_init.py",
+        "timeout": 15
+      }
+    ],
+    "SessionStart": [
+      {
+        "name": "setup-environment",
+        "type": "command",
+        "command": "python3 config/config_init.py",
+        "description": "Initializes config/google-ads.yaml at session start.",
+        "timeout": 15000
+      }
+    ]
+  }
+}

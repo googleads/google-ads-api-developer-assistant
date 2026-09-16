@@ -5,6 +5,7 @@
   "args": ["server.py"],
   "restart_policy": "always",
   "env": {
-    "A2A_PORT": "8900"
+    "A2A_PORT": "8900",
+    "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "config/google-ads.yaml"
   }
 }
