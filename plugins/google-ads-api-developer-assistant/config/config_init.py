@@ -180,9 +180,12 @@ def write_yaml_config(
             if version:
                 f.write(f"ads_assistant: {version}\n")
 
-        # Enforce 0600 permissions
+        # Enforce 0600 permissions where supported (POSIX)
         if os.path.isfile(target_path):
-            os.chmod(target_path, 0o600)
+            try:
+                os.chmod(target_path, 0o600)
+            except OSError:
+                pass
 
         # Set environment variable for the Google Ads Python client
         os.environ["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = target_path
@@ -418,9 +421,12 @@ def sync_and_set_config_kv(
         with open(target_yaml, "w", encoding="utf-8") as f:
             f.write(updated_content)
 
-    # 3. Enforce 0600 permissions
+    # 3. Enforce 0600 permissions where supported (POSIX)
     if os.path.isfile(target_yaml):
-        os.chmod(target_yaml, 0o600)
+        try:
+            os.chmod(target_yaml, 0o600)
+        except OSError:
+            pass
 
     # 4. Set environment variable for the Google Ads Python client
     os.environ["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = target_yaml

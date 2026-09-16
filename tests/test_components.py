@@ -713,7 +713,8 @@ class TestSidecarA2A:
         assert 'developer_token: "test_token"' in content
         assert 'login_customer_id: "9876543210"' in content
         assert "ads_assistant: 4.0.0" in content
-        assert oct(os.stat(res_path).st_mode & 0o777) == "0o600"
+        if sys.platform != "win32":
+            assert oct(os.stat(res_path).st_mode & 0o777) == "0o600"
         assert os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH") == res_path
 
     def test_sync_and_set_config_kv_updates_existing(self, tmp_path):
@@ -757,7 +758,8 @@ class TestSidecarA2A:
         assert "login_customer_id: 1234567890" in content
         assert "use_proto_plus: True" in content
         assert "ads_assistant: 2.3.0" in content
-        assert oct(os.stat(str(target)).st_mode & 0o777) == "0o600"
+        if sys.platform != "win32":
+            assert oct(os.stat(str(target)).st_mode & 0o777) == "0o600"
         assert os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH") == str(target)
 
     def test_write_yaml_config_service_account(self, tmp_path):
@@ -799,11 +801,13 @@ class TestSidecarA2A:
         assert "ads_assistant: 4.0.0" in content
         assert "login_customer_id" not in content
 
-    def test_write_yaml_config_failure(self, monkeypatch):
+    def test_write_yaml_config_failure(self, tmp_path):
         from config.config_init import write_yaml_config
 
-        # Passing an invalid path that cannot be written to
-        invalid_path = "/nonexistent_dir_12345/sub/google-ads.yaml"
+        # A file cannot be used as a directory, guaranteed to fail on Linux and Windows
+        dummy_file = tmp_path / "dummy.txt"
+        dummy_file.write_text("not a directory")
+        invalid_path = str(dummy_file / "sub" / "google-ads.yaml")
         success = write_yaml_config({}, target_path=invalid_path)
         assert success is False
 
@@ -883,7 +887,8 @@ class TestSidecarA2A:
         content = dst.read_text()
         assert "[section]" in content
         assert 'ads_assistant = "1.2.3"' in content
-        assert oct(os.stat(str(dst)).st_mode & 0o777) == "0o600"
+        if sys.platform != "win32":
+            assert oct(os.stat(str(dst)).st_mode & 0o777) == "0o600"
 
     def test_sync_and_set_config_kv_fallback_php(self, tmp_path):
         from config.config_init import sync_and_set_config_kv
