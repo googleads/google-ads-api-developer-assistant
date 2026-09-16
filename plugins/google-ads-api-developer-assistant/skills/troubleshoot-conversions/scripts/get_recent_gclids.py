@@ -21,7 +21,6 @@ import argparse
 import os
 import sys
 from datetime import datetime, timedelta
-from typing import Optional
 
 def _get_config_path() -> str:
     config_path = os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH")
