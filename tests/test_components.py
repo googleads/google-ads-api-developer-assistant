@@ -496,7 +496,7 @@ class TestValidateConversionUpload:
 class TestTroubleshootConversions:
     """Unit tests for troubleshoot_conversions.py and structured JSON diagnostics."""
 
-    def test_troubleshoot_conversions_json_output(self, capsys):
+    def test_troubleshoot_conversions_json_output(self, capsys, tmp_path):
         mock_client = MagicMock()
         mock_service = MagicMock()
         mock_client.get_service.return_value = mock_service
@@ -513,7 +513,7 @@ class TestTroubleshootConversions:
         mock_service.search_stream.return_value = [batch1]
 
         data = troubleshoot_conversions.troubleshoot_conversions(
-            mock_client, "1234567890", json_output=True
+            mock_client, "1234567890", json_output=True, output_dir=str(tmp_path)
         )
 
         captured = capsys.readouterr()
@@ -713,7 +713,7 @@ class TestSidecarA2A:
         assert "# Use CID 12345678 for testing" in content
         assert 'developer_token: "test_token"' in content
         assert 'login_customer_id: "9876543210"' in content
-        assert "ads_assistant: 4.0.0" in content
+        assert "ads_assistant: 4.1.0" in content
         if sys.platform != "win32":
             assert oct(os.stat(res_path).st_mode & 0o777) == "0o600"
         assert os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH") == res_path
@@ -784,7 +784,7 @@ class TestSidecarA2A:
         assert "client_id" not in content
         assert "login_customer_id: 9998887776" in content
         assert "use_proto_plus: True" in content
-        assert "ads_assistant: 4.0.0" in content
+        assert "ads_assistant: 4.1.0" in content
 
     def test_write_yaml_config_defaults(self, tmp_path):
         from config.config_init import write_yaml_config
@@ -799,7 +799,7 @@ class TestSidecarA2A:
         assert "client_secret: INSERT_CLIENT_SECRET_HERE" in content
         assert "refresh_token: INSERT_REFRESH_TOKEN_HERE" in content
         assert "use_proto_plus: True" in content
-        assert "ads_assistant: 4.0.0" in content
+        assert "ads_assistant: 4.1.0" in content
         assert "login_customer_id" not in content
 
     def test_write_yaml_config_failure(self, tmp_path):
@@ -816,7 +816,7 @@ class TestSidecarA2A:
         from config.config_init import get_version
 
         version = get_version()
-        assert version == "4.0.0"
+        assert version == "4.1.0"
 
     def test_parse_ruby_config(self, tmp_path):
         from config.config_init import parse_ruby_config

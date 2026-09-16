@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "google-ads-api-developer-assistant"
-version = "4.0.0"
+version = "4.1.0"
 description = "Antigravity and Claude Code developer assistant plugin for the Google Ads API"
 readme = "README.md"
 requires-python = ">=3.10"

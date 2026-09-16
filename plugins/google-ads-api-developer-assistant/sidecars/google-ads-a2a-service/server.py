@@ -145,7 +145,7 @@ def get_plugin_version() -> str:
             cur = os.path.dirname(cur)
     except Exception:
         pass
-    return "4.0.0"
+    return "4.1.0"
 
 
 class A2AHandler(BaseHTTPRequestHandler):

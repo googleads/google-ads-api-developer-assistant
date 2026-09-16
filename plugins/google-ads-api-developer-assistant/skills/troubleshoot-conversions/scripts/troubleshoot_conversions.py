@@ -79,10 +79,14 @@ def merge_previous_findings(output_dir: str) -> List[str]:
     if prev_files:
         for pf in prev_files[:2]:
             try:
+                # Cap file read at 64KB to avoid unbounded memory allocation
                 with open(pf, "r", encoding="utf-8") as f:
-                    content = f.read()
+                    content = f.read(65536)
                     if "1. Introductory Analysis" in content:
                         summary_part = content.split("2. Primary Errors & Critical Issues")[0]
+                        # Strip nested historical context to prevent exponential growth across runs
+                        if "=== HISTORICAL CONTEXT ===" in summary_part:
+                            summary_part = summary_part.split("=== HISTORICAL CONTEXT ===")[0]
                         findings.append(
                             f"Historical Finding (from {os.path.basename(pf)}):\n{summary_part.strip()}"
                         )
@@ -92,11 +96,14 @@ def merge_previous_findings(output_dir: str) -> List[str]:
 
 
 def troubleshoot_conversions(
-    client: Any, customer_id: str, json_output: bool = False
+    client: Any, customer_id: str, json_output: bool = False, output_dir: Optional[str] = None
 ) -> Dict[str, Any]:
     """Collects and reports conversion upload diagnostics."""
     epoch = int(time.time())
-    output_dir = os.path.expanduser(os.path.join("~", "saved", "data"))
+    if not output_dir:
+        output_dir = os.environ.get(
+            "CONVERSION_OUTPUT_DIR", os.path.expanduser(os.path.join("~", "saved", "data"))
+        )
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, f"conversion_troubleshooting_report_{epoch}.txt")
 

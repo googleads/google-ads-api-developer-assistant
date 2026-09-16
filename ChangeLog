@@ -1,3 +1,20 @@
+* 4.1.0
+- **Configuration Management & Session Initialization (`config_init.py`):**
+  - Implemented `config/config_init.py` with automated multi-format configuration parsing (`parse_ruby_config`, `parse_ini_config`, `parse_properties_config`, `write_yaml_config`) to support fallback credentials from PHP, Ruby, and Java setups.
+  - Added automatic extension version discovery (`get_version`) and idempotent `copy_and_append_version()` to append or update `ads_assistant: {version}` without duplicating lines across restarts.
+  - Added `sync_and_set_config_kv()` and `get_config_file_path()` to reconstruct `config/google-ads.yaml` from `~/google-ads.yaml` (or fallbacks) at session start, enforce POSIX `0600` permissions with cross-platform error handling, and bind `GOOGLE_ADS_CONFIGURATION_FILE_PATH`.
+  - Added CLI `main()` entry point supporting `--key`, `--value`, `--config-dir`, and `--source-yaml` flags with automatic test customer ID discovery from `config/customer_id`.
+  - Added plugin lifecycle hook definitions (`hooks.json`) configuring `SessionStart` and `PreInvocation` hooks to automatically execute `config_init.py` before session interaction.
+- **Client Configuration & Home Directory Isolation:**
+  - Enforced strict isolation requirement that all Python client initializations, skill scripts, and generated code must load configuration from `config/google-ads.yaml` and NEVER default to or reference the user's home directory (`~/google-ads.yaml` or `/home/.../google-ads.yaml`).
+  - Added `_get_config_path()` helper across all skill scripts (`validate_gaql.py`, `inspect_object.py`, `create_pmax_webpage_filter.py`, `troubleshoot_conversions.py`, `get_recent_gclids.py`, `get_cids_under_mcc.py`) to pass `path=cfg_path` to `GoogleAdsClient.load_from_storage`.
+  - Updated `server.py` generated code template to output `GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version="{api_version}")`.
+  - Added per-request configuration synchronization in `server.py` `do_POST` when A2A tasks arrive.
+  - Added mandatory Protocol 1.0 step 3 and Rule 2.2 to `rules/google_ads_rules.md` requiring `config/google-ads.yaml` usage.
+- **Diagnostic Collector Hardening & Isolation:**
+  - Added bounded buffer reads (64KB) and nested history stripping in `troubleshoot_conversions.py` (`merge_previous_findings`) to prevent exponential memory allocation and file growth across consecutive diagnostic runs, and added configurable `output_dir` support.
+  - Added isolated test fixtures with `tmp_path` in `tests/test_components.py`.
+
 * 4.0.0
 - **Plugin Architecture & Migration:**
   - Migrated from legacy project-based structure (.agents/skills, api_examples/, update_project_context.py, AGENTS.md) to a unified multi-platform plugin architecture under `plugins/google-ads-api-developer-assistant/`.
