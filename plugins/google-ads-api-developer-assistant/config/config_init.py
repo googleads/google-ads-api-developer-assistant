@@ -352,11 +352,17 @@ def sync_and_set_config_kv(
     files if source_yaml is not found.
     """
     if not config_dir:
-        this_dir = os.path.dirname(os.path.abspath(__file__))
-        if os.path.basename(this_dir) == "config":
-            config_dir = this_dir
+        plugin_config_dir = os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
+        )
+        if os.path.isdir(plugin_config_dir) or os.path.isdir(os.path.dirname(plugin_config_dir)):
+            config_dir = plugin_config_dir
         else:
-            config_dir = os.path.join(this_dir, "config")
+            this_dir = os.path.dirname(os.path.abspath(__file__))
+            if os.path.basename(this_dir) == "config":
+                config_dir = this_dir
+            else:
+                config_dir = os.path.join(this_dir, "config")
 
     os.makedirs(config_dir, exist_ok=True)
     target_yaml = os.path.join(config_dir, "google-ads.yaml")
@@ -431,6 +437,34 @@ def sync_and_set_config_kv(
     # 4. Set environment variable for the Google Ads Python client
     os.environ["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = target_yaml
 
+    # Mirror to local workspace config/google-ads.yaml if workspace config/ exists
+    local_config_dir = os.path.abspath("config")
+    if os.path.isdir(local_config_dir) and os.path.abspath(config_dir) != local_config_dir:
+        try:
+            local_target = os.path.join(local_config_dir, "google-ads.yaml")
+            shutil.copy2(target_yaml, local_target)
+            if sys.platform != "win32":
+                try:
+                    os.chmod(local_target, 0o600)
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
+    # Clean up any dummy google-ads.yaml in client_libs to avoid discovery ambiguity
+    import glob
+    for root_dir in [
+        os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs"),
+        os.path.abspath("plugins/google-ads-api-developer-assistant/client_libs"),
+        os.path.abspath("client_libs"),
+    ]:
+        if os.path.isdir(root_dir):
+            for candidate in glob.glob(os.path.join(root_dir, "**/google-ads.yaml"), recursive=True):
+                try:
+                    os.remove(candidate)
+                except OSError:
+                    pass
+
     return target_yaml
 
 
@@ -442,9 +476,107 @@ def get_config_file_path(config_dir: Optional[str] = None) -> str:
     return sync_and_set_config_kv(config_dir=config_dir)
 
 
+def handle_hook() -> None:
+    """Handles Jetski lifecycle hook execution (PreInvocation and PreToolUse)."""
+    input_data: Dict[str, Any] = {}
+    if not sys.stdin.isatty():
+        try:
+            raw = sys.stdin.read()
+            if raw.strip():
+                input_data = json.loads(raw)
+        except Exception:
+            pass
+
+    try:
+        config_path = sync_and_set_config_kv()
+    except Exception:
+        config_path = os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+        )
+
+    # 1. PreToolUse hook (matcher: run_command, Bash, bash)
+    if "toolCall" in input_data:
+        tool_call = input_data.get("toolCall", {})
+        args = tool_call.get("args", {})
+        cmd = args.get("CommandLine") or args.get("command") or ""
+
+        needs_interception = any(
+            token in cmd for token in ("python", "pytest", "googleads", "GoogleAdsClient", "google-ads")
+        )
+        if needs_interception:
+            updated_cmd = cmd
+            # Case A: load_from_storage() or load_from_storage(None)
+            updated_cmd = re.sub(
+                r"GoogleAdsClient\.load_from_storage\(\s*(?:None)?\s*\)",
+                'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml")',
+                updated_cmd,
+            )
+            # Case B: load_from_storage(version=...) where path is not provided
+            updated_cmd = re.sub(
+                r"GoogleAdsClient\.load_from_storage\(\s*(?!path\s*=)(version\s*=[^)]+)\)",
+                r'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", \1)',
+                updated_cmd,
+            )
+            # Case C: os.path.expanduser('~/google-ads.yaml') or similar
+            updated_cmd = re.sub(
+                r"os\.path\.expanduser\(\s*['\"][^'\"]*google-ads\.yaml['\"]\s*\)",
+                r'"config/google-ads.yaml"',
+                updated_cmd,
+            )
+            # Case D: Any string literal pointing to ~/google-ads.yaml, /home/.../google-ads.yaml, or client_libs/.../google-ads.yaml
+            updated_cmd = re.sub(
+                r"(['\"])(?:~|/home/[^/'\"]+|client_libs/[^/'\"]+)/google-ads\.yaml\1",
+                r'"config/google-ads.yaml"',
+                updated_cmd,
+            )
+            # Case E: General fallback for any remaining ~/google-ads.yaml or /home/.../google-ads.yaml
+            updated_cmd = re.sub(
+                r"(?:~/google-ads\.yaml|/home/[^/\s'\"]+/google-ads\.yaml|client_libs/[^/\s'\"]+/google-ads\.yaml)",
+                "config/google-ads.yaml",
+                updated_cmd,
+            )
+            # Ensure GOOGLE_ADS_CONFIGURATION_FILE_PATH is exported in the subshell
+            if "GOOGLE_ADS_CONFIGURATION_FILE_PATH" not in updated_cmd:
+                updated_cmd = f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{config_path}" && {updated_cmd}'
+
+            overwrite: Dict[str, Any] = {}
+            if "command" in args:
+                overwrite["command"] = updated_cmd
+            if "CommandLine" in args or not overwrite:
+                overwrite["CommandLine"] = updated_cmd
+
+            print(json.dumps({
+                "decision": "allow",
+                "overwrite": overwrite
+            }))
+            return
+
+        print(json.dumps({"decision": "allow"}))
+        return
+
+    # 2. PreInvocation hook (model prompt injection)
+    msg = (
+        f"CRITICAL GOOGLE ADS CONFIGURATION NOTICE:\n"
+        f"The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml).\n"
+        f"All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
+        f"NEVER call GoogleAdsClient.load_from_storage() with no arguments, and NEVER reference ~/google-ads.yaml or any path under /home/.../google-ads.yaml."
+    )
+    print(json.dumps({
+        "injectSteps": [
+            {
+                "ephemeralMessage": msg
+            }
+        ]
+    }))
+
+
 def main() -> None:
     """Initializes config/google-ads.yaml from ~/google-ads.yaml at session start."""
     import argparse
+
+    if "--hook" in sys.argv or (not sys.stdin.isatty() and len(sys.argv) == 1):
+        handle_hook()
+        return
 
     parser = argparse.ArgumentParser(
         description="Initialize config/google-ads.yaml from ~/google-ads.yaml and ensure required settings."
@@ -453,6 +585,7 @@ def main() -> None:
     parser.add_argument("--value", default=None, help="Config value to set")
     parser.add_argument("--config-dir", default=None, help="Target directory for config")
     parser.add_argument("--source-yaml", default="~/google-ads.yaml", help="Source configuration file")
+    parser.add_argument("--hook", action="store_true", help="Run in Jetski lifecycle hook mode")
 
     args = parser.parse_args()
 

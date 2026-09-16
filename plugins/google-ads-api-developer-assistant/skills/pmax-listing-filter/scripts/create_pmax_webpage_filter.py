@@ -22,16 +22,16 @@ import os
 import sys
 from typing import Optional
 
-def _get_config_path() -> Optional[str]:
+def _get_config_path() -> str:
     config_path = os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH")
     if config_path and os.path.isfile(config_path):
         return config_path
 
     candidates = [
+        os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"),
         os.path.abspath("config/google-ads.yaml"),
         os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../config/google-ads.yaml")),
         os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../config/google-ads.yaml")),
-        os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"),
     ]
     for c in candidates:
         if os.path.isfile(c):
@@ -43,7 +43,7 @@ def _get_config_path() -> Optional[str]:
     except Exception:
         pass
 
-    return None
+    return os.path.abspath("config/google-ads.yaml")
 
 try:
     from google.ads.googleads.client import GoogleAdsClient
@@ -65,10 +65,7 @@ def create_pmax_webpage_filter(
     if client is None:
         try:
             cfg_path = _get_config_path()
-            if cfg_path:
-                client = GoogleAdsClient.load_from_storage(path=cfg_path, version=api_version)
-            else:
-                client = GoogleAdsClient.load_from_storage(version=api_version)
+            client = GoogleAdsClient.load_from_storage(path=cfg_path, version=api_version)
         except Exception as e:
             print(f"CRITICAL ERROR: Failed to load Google Ads configuration: {e}", file=sys.stderr)
             sys.exit(1)

@@ -414,6 +414,7 @@ if [[ "${TYPE}" == "claude" ]]; then
         if [[ -f "${log_file}" ]]; then
           cat "${log_file}"
         fi
+        rm -f "${target_lib_path}/google-ads.yaml"
       fi
     fi
   done
@@ -463,6 +464,7 @@ for lang in python php ruby java dotnet; do
         cat "${log_file}"
       fi
     fi
+    rm -f "${target_lib_path}/google-ads.yaml"
   fi
 done
 

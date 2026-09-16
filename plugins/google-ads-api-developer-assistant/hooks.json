@@ -1,19 +1,42 @@
 {
   "config-init": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 config/config_init.py --hook",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 config/config_init.py --hook",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 config/config_init.py --hook",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "PreInvocation": [
       {
         "type": "command",
-        "command": "python3 config/config_init.py",
+        "command": "python3 config/config_init.py --hook",
         "timeout": 15
-      }
-    ],
-    "SessionStart": [
-      {
-        "name": "setup-environment",
-        "type": "command",
-        "command": "python3 config/config_init.py",
-        "description": "Initializes config/google-ads.yaml at session start.",
-        "timeout": 15000
       }
     ]
   }

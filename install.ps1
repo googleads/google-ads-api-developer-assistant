@@ -279,6 +279,7 @@ if ($Type.ToLower() -eq "claude" -or $Type.ToLower() -eq "claudecode") {
                     exit 1
                 }
                 Write-Host "Successfully cloned $($Config.Name)."
+                Remove-Item -Force -LiteralPath (Join-Path $TargetRepoPath "google-ads.yaml") -ErrorAction SilentlyContinue
             }
         }
     }
@@ -335,6 +336,7 @@ foreach ($Lang in $AllLangs) {
                 Remove-Item -Recurse -Force -LiteralPath $TargetRepoPath
             }
             Copy-Item -Recurse -Force -LiteralPath $SourceRepoPath -Destination $TargetRepoPath
+            Remove-Item -Force -LiteralPath (Join-Path $TargetRepoPath "google-ads.yaml") -ErrorAction SilentlyContinue
         }
         else {
             Write-Host "Cloning $RepoUrl into $TargetRepoPath..."
@@ -344,6 +346,7 @@ foreach ($Lang in $AllLangs) {
                 exit 1
             }
             Write-Host "Successfully cloned $($Config.Name)."
+            Remove-Item -Force -LiteralPath (Join-Path $TargetRepoPath "google-ads.yaml") -ErrorAction SilentlyContinue
         }
     }
 }

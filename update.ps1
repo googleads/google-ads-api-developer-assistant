@@ -211,6 +211,7 @@ if ($SpecifiedLangs.Count -gt 0) {
                 Write-Error "ERROR: Failed to clone $RepoUrl"
                 exit 1
             }
+            Remove-Item -Force -LiteralPath (Join-Path $SourceLibPath "google-ads.yaml") -ErrorAction SilentlyContinue
         }
     }
 }
@@ -252,6 +253,7 @@ if ($IncludeDirs.Count -eq 0) {
         finally {
             Pop-Location
         }
+        Remove-Item -Force -LiteralPath (Join-Path $AbsLibPath "google-ads.yaml") -ErrorAction SilentlyContinue
     }
 }
 
@@ -290,6 +292,7 @@ if ($Type.ToLower() -eq "agy") {
                 Write-Host "Copying $($LibDir.Name) to $TargetLibPath..."
                 Copy-Item -Recurse -Force -LiteralPath $LibDir.FullName -Destination $TargetLibPath
             }
+            Remove-Item -Force -LiteralPath (Join-Path $TargetLibPath "google-ads.yaml") -ErrorAction SilentlyContinue
         }
     }
 
@@ -316,6 +319,7 @@ if ($Type.ToLower() -eq "agy") {
                         Pop-Location
                     }
                 }
+                Remove-Item -Force -LiteralPath (Join-Path $Dir.FullName "google-ads.yaml") -ErrorAction SilentlyContinue
             }
         }
     }

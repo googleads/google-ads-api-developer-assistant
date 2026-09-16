@@ -276,6 +276,7 @@ for lang in python php ruby java dotnet; do
         err "ERROR: Failed to clone ${repo_url}"
         exit 1
       fi
+      rm -f "${source_lib_path}/google-ads.yaml"
     fi
   fi
 done
@@ -291,6 +292,7 @@ if [[ -d "${PLUGIN_SOURCE_DIR}/client_libs" ]]; then
       else
         echo "Successfully updated $(basename "${dir}")."
       fi
+      rm -f "${dir}/google-ads.yaml"
     fi
   done
 fi
@@ -328,6 +330,7 @@ if [[ "${TYPE}" == "agy" ]]; then
         if [[ ! -d "${target_lib_path}" ]]; then
           echo "Copying ${lib_name} to ${target_lib_path}..."
           cp -r "${lib_dir}" "${target_lib_path}"
+          rm -f "${target_lib_path}/google-ads.yaml"
         fi
       fi
     done
@@ -346,6 +349,7 @@ if [[ "${TYPE}" == "agy" ]]; then
           else
             echo "Successfully updated $(basename "${dir}")."
           fi
+          rm -f "${dir}/google-ads.yaml"
         fi
       fi
     done
