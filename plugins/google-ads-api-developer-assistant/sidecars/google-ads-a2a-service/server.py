@@ -10,6 +10,14 @@ import re
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+base_dir = os.path.dirname(os.path.abspath(__file__))
+for path_to_add in [
+    os.path.abspath(os.path.join(base_dir, "../..")),
+    os.path.abspath(os.path.join(base_dir, "../../../..")),
+]:
+    if path_to_add not in sys.path:
+        sys.path.insert(0, path_to_add)
+
 PORT = int(os.environ.get("ANTIGRAVITY_SIDECAR_WEB_PORT", os.environ.get("A2A_PORT", "8900")))
 
 
@@ -320,6 +328,39 @@ if __name__ == "__main__":
         }
 
 def run_server():
+    # Startup initialization: sync ~/google-ads.yaml and ensure key-value pair is configured
+    try:
+        from config.config_init import sync_and_set_config_kv
+
+        config_key = os.environ.get("GOOGLE_ADS_CONFIG_KEY", "login_customer_id")
+        config_val = os.environ.get("GOOGLE_ADS_CONFIG_VALUE")
+        if not config_val:
+            candidate_cid_files = [
+                os.path.join(base_dir, "../../config/customer_id"),
+                os.path.join(base_dir, "../../config/customer_id.txt"),
+                os.path.join(base_dir, "../../../../config/customer_id"),
+                os.path.join(base_dir, "../../../../config/customer_id.txt"),
+                os.path.abspath("config/customer_id"),
+                os.path.abspath("config/customer_id.txt"),
+            ]
+            for cid_file in candidate_cid_files:
+                if os.path.isfile(cid_file):
+                    try:
+                        with open(cid_file, "r", encoding="utf-8") as f:
+                            content = f.read().strip()
+                            if content:
+                                config_val = content
+                                break
+                    except OSError:
+                        continue
+            if not config_val:
+                config_val = "1234567890"
+
+        config_file = sync_and_set_config_kv(key=config_key, value=config_val)
+        print(f"Synced configuration to {config_file} with {config_key}: {config_val}")
+    except Exception as e:
+        print(f"Configuration sync notice: {e}", file=sys.stderr)
+
     server_address = ("127.0.0.1", PORT)
     httpd = HTTPServer(server_address, A2AHandler)
     print(f"Starting Google Ads API Assistant Plugin Sidecar Server on http://127.0.0.1:{PORT}")

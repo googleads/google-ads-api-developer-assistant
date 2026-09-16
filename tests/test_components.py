@@ -692,3 +692,222 @@ class TestSidecarA2A:
         assert args[0] == 200
         assert args[1]["status"] == "FAILED"
         assert "Unsupported intent" in args[1]["error"]
+
+    def test_sync_and_set_config_kv_creates_and_sets(self, tmp_path):
+        from config.config_init import sync_and_set_config_kv
+
+        src_yaml = tmp_path / "source.yaml"
+        src_yaml.write_text("# Use CID 12345678 for testing\ndeveloper_token: \"test_token\"\n")
+        dest_dir = tmp_path / "config"
+
+        res_path = sync_and_set_config_kv(
+            key="login_customer_id",
+            value="9876543210",
+            source_yaml=str(src_yaml),
+            config_dir=str(dest_dir),
+        )
+
+        assert os.path.isfile(res_path)
+        content = open(res_path).read()
+        assert "# Use CID 12345678 for testing" in content
+        assert 'developer_token: "test_token"' in content
+        assert 'login_customer_id: "9876543210"' in content
+        assert "ads_assistant: 4.0.0" in content
+        assert oct(os.stat(res_path).st_mode & 0o777) == "0o600"
+        assert os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH") == res_path
+
+    def test_sync_and_set_config_kv_updates_existing(self, tmp_path):
+        from config.config_init import sync_and_set_config_kv
+
+        src_yaml = tmp_path / "source.yaml"
+        src_yaml.write_text("login_customer_id: \"old_val\"\ndeveloper_token: \"test_token\"\n")
+        dest_dir = tmp_path / "config"
+
+        res_path = sync_and_set_config_kv(
+            key="login_customer_id",
+            value="new_val",
+            source_yaml=str(src_yaml),
+            config_dir=str(dest_dir),
+        )
+
+        content = open(res_path).read()
+        assert 'login_customer_id: "new_val"' in content
+        assert "old_val" not in content
+
+    def test_write_yaml_config_oauth(self, tmp_path):
+        from config.config_init import write_yaml_config
+
+        target = tmp_path / "google-ads.yaml"
+        data = {
+            "developer_token": "token_123",
+            "client_id": "client_abc",
+            "client_secret": "secret_xyz",
+            "refresh_token": "refresh_999",
+            "login_customer_id": "1234567890",
+        }
+        success = write_yaml_config(data, target_path=str(target), version="2.3.0")
+        assert success is True
+        assert target.is_file()
+
+        content = target.read_text()
+        assert "developer_token: token_123" in content
+        assert "client_id: client_abc" in content
+        assert "client_secret: secret_xyz" in content
+        assert "refresh_token: refresh_999" in content
+        assert "login_customer_id: 1234567890" in content
+        assert "use_proto_plus: True" in content
+        assert "ads_assistant: 2.3.0" in content
+        assert oct(os.stat(str(target)).st_mode & 0o777) == "0o600"
+        assert os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH") == str(target)
+
+    def test_write_yaml_config_service_account(self, tmp_path):
+        from config.config_init import write_yaml_config
+
+        target = tmp_path / "google-ads.yaml"
+        data = {
+            "developer_token": "token_sa",
+            "json_key_file_path": "/path/to/key.json",
+            "impersonated_email": "sa@example.com",
+            "login_customer_id": "9998887776",
+        }
+        success = write_yaml_config(data, target_path=str(target))
+        assert success is True
+        assert target.is_file()
+
+        content = target.read_text()
+        assert "developer_token: token_sa" in content
+        assert "json_key_file_path: /path/to/key.json" in content
+        assert "impersonated_email: sa@example.com" in content
+        assert "client_id" not in content
+        assert "login_customer_id: 9998887776" in content
+        assert "use_proto_plus: True" in content
+        assert "ads_assistant: 4.0.0" in content
+
+    def test_write_yaml_config_defaults(self, tmp_path):
+        from config.config_init import write_yaml_config
+
+        target = tmp_path / "google-ads.yaml"
+        success = write_yaml_config({}, target_path=str(target))
+        assert success is True
+
+        content = target.read_text()
+        assert "developer_token: INSERT_DEVELOPER_TOKEN_HERE" in content
+        assert "client_id: INSERT_CLIENT_ID_HERE" in content
+        assert "client_secret: INSERT_CLIENT_SECRET_HERE" in content
+        assert "refresh_token: INSERT_REFRESH_TOKEN_HERE" in content
+        assert "use_proto_plus: True" in content
+        assert "ads_assistant: 4.0.0" in content
+        assert "login_customer_id" not in content
+
+    def test_write_yaml_config_failure(self, monkeypatch):
+        from config.config_init import write_yaml_config
+
+        # Passing an invalid path that cannot be written to
+        invalid_path = "/nonexistent_dir_12345/sub/google-ads.yaml"
+        success = write_yaml_config({}, target_path=invalid_path)
+        assert success is False
+
+    def test_get_version_discovery(self):
+        from config.config_init import get_version
+
+        version = get_version()
+        assert version == "4.0.0"
+
+    def test_parse_ruby_config(self, tmp_path):
+        from config.config_init import parse_ruby_config
+
+        ruby_file = tmp_path / "google_ads_config.rb"
+        ruby_file.write_text(
+            'Google::Ads::GoogleAds::Config.new do |c|\n'
+            '  c.developer_token = "ruby_dev_token"\n'
+            '  c.client_id = "ruby_client_id"\n'
+            '  c.client_secret = "ruby_client_secret"\n'
+            '  c.refresh_token = "ruby_refresh_token"\n'
+            '  c.login_customer_id = "1122334455"\n'
+            'end\n'
+        )
+        data = parse_ruby_config(str(ruby_file))
+        assert data["developer_token"] == "ruby_dev_token"
+        assert data["client_id"] == "ruby_client_id"
+        assert data["client_secret"] == "ruby_client_secret"
+        assert data["refresh_token"] == "ruby_refresh_token"
+        assert data["login_customer_id"] == "1122334455"
+
+    def test_parse_ini_config(self, tmp_path):
+        from config.config_init import parse_ini_config
+
+        ini_file = tmp_path / "google_ads_php.ini"
+        ini_file.write_text(
+            '[GOOGLE_ADS]\n'
+            'developerToken = "php_dev_token"\n'
+            'clientId = "php_client_id"\n'
+            'clientSecret = "php_client_secret"\n'
+            'refreshToken = "php_refresh_token"\n'
+            'loginCustomerId = "5544332211"\n'
+        )
+        data = parse_ini_config(str(ini_file))
+        assert data["developer_token"] == "php_dev_token"
+        assert data["client_id"] == "php_client_id"
+        assert data["client_secret"] == "php_client_secret"
+        assert data["refresh_token"] == "php_refresh_token"
+        assert data["login_customer_id"] == "5544332211"
+
+    def test_parse_properties_config(self, tmp_path):
+        from config.config_init import parse_properties_config
+
+        prop_file = tmp_path / "ads.properties"
+        prop_file.write_text(
+            'api.googleads.developerToken=java_dev_token\n'
+            'api.googleads.clientId=java_client_id\n'
+            'api.googleads.clientSecret=java_client_secret\n'
+            'api.googleads.refreshToken=java_refresh_token\n'
+            'api.googleads.loginCustomerId=9988776655\n'
+        )
+        data = parse_properties_config(str(prop_file))
+        assert data["developer_token"] == "java_dev_token"
+        assert data["client_id"] == "java_client_id"
+        assert data["client_secret"] == "java_client_secret"
+        assert data["refresh_token"] == "java_refresh_token"
+        assert data["login_customer_id"] == "9988776655"
+
+    def test_copy_and_append_version(self, tmp_path):
+        from config.config_init import copy_and_append_version
+
+        src = tmp_path / "orig.ini"
+        src.write_text("[section]\nfoo = bar\n")
+        dst = tmp_path / "copied.ini"
+
+        success = copy_and_append_version(str(src), str(dst), version="1.2.3", lang="PHP")
+        assert success is True
+        assert dst.is_file()
+        content = dst.read_text()
+        assert "[section]" in content
+        assert 'ads_assistant = "1.2.3"' in content
+        assert oct(os.stat(str(dst)).st_mode & 0o777) == "0o600"
+
+    def test_sync_and_set_config_kv_fallback_php(self, tmp_path):
+        from config.config_init import sync_and_set_config_kv
+
+        # No source.yaml, but google_ads_php.ini exists in home_dir
+        home_dir = tmp_path / "home"
+        home_dir.mkdir()
+        php_file = home_dir / "google_ads_php.ini"
+        php_file.write_text(
+            'developerToken = "fallback_token"\n'
+            'clientId = "fallback_cid"\n'
+            'clientSecret = "fallback_sec"\n'
+            'refreshToken = "fallback_ref"\n'
+        )
+        dest_dir = tmp_path / "config"
+
+        res_path = sync_and_set_config_kv(
+            source_yaml=str(home_dir / "google-ads.yaml"),
+            config_dir=str(dest_dir),
+        )
+
+        assert os.path.isfile(res_path)
+        content = open(res_path).read()
+        assert "developer_token: fallback_token" in content
+        assert "client_id: fallback_cid" in content
+        assert "ads_assistant:" in content
+

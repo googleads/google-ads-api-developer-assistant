@@ -3,3 +3,5 @@ saved/
 .agents/skills/get_cids_under_mcc/scripts/__pycache__
 *.pyc
 __pycache__
+config/google-ads.yaml
+plugins/google-ads-api-developer-assistant/config/google-ads.yaml
