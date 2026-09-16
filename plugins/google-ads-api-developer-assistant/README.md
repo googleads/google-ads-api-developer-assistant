@@ -351,7 +351,7 @@ The plugin exposes tools via MCP as defined in `mcp_config.json`:
       ],
       "env": {
         "A2A_PORT": "8900",
-        "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "~/google-ads.yaml"
+        "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "config/google-ads.yaml"
       },
       "url": "http://127.0.0.1:8900"
     }
