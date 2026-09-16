@@ -432,3 +432,12 @@ def sync_and_set_config_kv(
     os.environ["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = target_yaml
 
     return target_yaml
+
+
+def get_config_file_path(config_dir: Optional[str] = None) -> str:
+    """Returns the path to config/google-ads.yaml, ensuring it exists and is synced."""
+    env_path = os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH")
+    if env_path and os.path.isfile(env_path):
+        return env_path
+    return sync_and_set_config_kv(config_dir=config_dir)
+

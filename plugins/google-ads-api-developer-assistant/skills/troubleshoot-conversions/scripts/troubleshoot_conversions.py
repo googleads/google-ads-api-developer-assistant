@@ -21,7 +21,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 try:
     from google.ads.googleads.client import GoogleAdsClient
@@ -29,6 +29,30 @@ try:
 except ImportError:
     GoogleAdsClient = None  # type: ignore
     GoogleAdsException = Exception  # type: ignore
+
+
+def _get_config_path() -> Optional[str]:
+    config_path = os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH")
+    if config_path and os.path.isfile(config_path):
+        return config_path
+
+    candidates = [
+        os.path.abspath("config/google-ads.yaml"),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../config/google-ads.yaml")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../config/google-ads.yaml")),
+        os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+
+    try:
+        from config.config_init import sync_and_set_config_kv
+        return sync_and_set_config_kv()
+    except Exception:
+        pass
+
+    return None
 
 
 def run_query(client: Any, customer_id: str, query: str) -> List[Any]:
@@ -374,7 +398,11 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        googleads_client = GoogleAdsClient.load_from_storage(version=args.api_version)
+        cfg_path = _get_config_path()
+        if cfg_path:
+            googleads_client = GoogleAdsClient.load_from_storage(path=cfg_path, version=args.api_version)
+        else:
+            googleads_client = GoogleAdsClient.load_from_storage(version=args.api_version)
     except Exception as e:
         print(f"CRITICAL ERROR: Failed to load Google Ads configuration: {e}", file=sys.stderr)
         sys.exit(1)

@@ -654,6 +654,7 @@ class TestSidecarA2A:
         )
         assert res["status"] == "COMPLETED"
         assert "GoogleAdsClient" in res["result"]["generated_code"]
+        assert 'load_from_storage(path="config/google-ads.yaml"' in res["result"]["generated_code"]
 
     def test_troubleshoot_conversions_task(self):
         handler = server.A2AHandler.__new__(server.A2AHandler)

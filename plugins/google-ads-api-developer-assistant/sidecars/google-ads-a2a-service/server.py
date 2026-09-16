@@ -297,7 +297,7 @@ def fetch_campaign_data(client: GoogleAdsClient, customer_id: str) -> None:
             print(f"Google Ads API Error: {{error.message}}")
 
 if __name__ == "__main__":
-    client = GoogleAdsClient.load_from_storage(version="{api_version}")
+    client = GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version="{api_version}")
     fetch_campaign_data(client, "{customer_id}")
 '''
 

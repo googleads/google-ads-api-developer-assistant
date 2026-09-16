@@ -46,8 +46,9 @@ If the user provides or overrides an API version, treat user input as the ultima
 - **Reports & Output:** `saved/data/` (All report and data outputs).
 
 #### 2.2. Configuration Protocol
-- Always initialize clients via `GoogleAdsClient.load_from_storage(version=api_version)`. Never use `load_from_env()`.
+- Always initialize clients via `GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version=api_version)`. Never use `load_from_env()`.
 - Ensure `GOOGLE_ADS_CONFIGURATION_FILE_PATH` is set to `config/google-ads.yaml` prior to client script execution.
+- CRITICAL: When executing or generating Python code, ALWAYS use `config/google-ads.yaml` (in the config directory) and NEVER use `~/google-ads.yaml` or any path in the home directory (such as `/home/rwh_google_com/google-ads.yaml`).
 
 ---
 
