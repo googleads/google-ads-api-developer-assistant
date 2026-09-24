@@ -145,7 +145,7 @@ def get_plugin_version() -> str:
             cur = os.path.dirname(cur)
     except Exception:
         pass
-    return "4.1.0"
+    return "4.0.0"
 
 
 class A2AHandler(BaseHTTPRequestHandler):
@@ -198,6 +198,10 @@ class A2AHandler(BaseHTTPRequestHandler):
                     response = self.handle_generate_code(task_id, payload)
                 elif intent == "TROUBLESHOOT_CONVERSIONS":
                     response = self.handle_troubleshoot_conversions(task_id, payload)
+                elif intent == "PREPARE_MUTATION":
+                    response = self.handle_prepare_mutation(task_id, payload)
+                elif intent == "EXECUTE_MUTATION":
+                    response = self.handle_execute_mutation(task_id, payload)
                 else:
                     response = {
                         "task_id": task_id,
@@ -334,6 +338,115 @@ if __name__ == "__main__":
                     "Timestamp constraint verified: conversion_time > click_time"
                 ]
             }
+        }
+
+    def handle_prepare_mutation(self, task_id, payload):
+        """Records a validate_only=True dry-run receipt and returns the HITL Consequence Card."""
+        customer_id = str(payload.get("customer_id", "")).strip()
+        operation = str(payload.get("operation_summary") or payload.get("operation", "")).strip()
+        before_state = str(payload.get("before_state", "Captured via GAQL")).strip()
+        after_state = str(payload.get("after_state", operation)).strip()
+        consequences = payload.get("consequences", [])
+        if isinstance(consequences, str):
+            consequences = [c.strip() for c in consequences.split(";") if c.strip()]
+        reversibility = str(payload.get("reversibility", "REVERSIBLE")).strip().upper()
+        script_path = payload.get("script_path")
+
+        if not customer_id or not operation or not consequences:
+            return {
+                "task_id": task_id,
+                "status": "VALIDATION_FAILED",
+                "destructive_hint": True,
+                "error": (
+                    "PREPARE_MUTATION requires 'customer_id', 'operation_summary', and non-empty 'consequences'."
+                ),
+            }
+
+        from importlib.util import module_from_spec, spec_from_file_location
+        runner_path = os.path.abspath(
+            os.path.join(base_dir, "../../skills/execute-mutation/scripts/run_mutation.py")
+        )
+        spec = spec_from_file_location("run_mutation", runner_path)
+        if spec and spec.loader:
+            mod = module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            receipt = mod.write_dry_run_receipt(
+                customer_id=customer_id,
+                operation_summary=operation,
+                before_state=before_state,
+                after_state=after_state,
+                consequences=consequences,
+                reversibility=reversibility,
+                script_path=script_path,
+                dry_run_output="Validated via sidecar PREPARE_MUTATION (validate_only=True).",
+            )
+            card = mod.format_verification_card(receipt)
+        else:
+            receipt = {"status": "DRY_RUN_PASSED", "customer_id": customer_id, "consequences": consequences}
+            card = f"Dry-run passed for {operation}. Consequences: {consequences}"
+
+        return {
+            "task_id": task_id,
+            "status": "HITL_CONFIRMATION_REQUIRED",
+            "destructive_hint": True,
+            "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+            "result": {
+                "receipt": receipt,
+                "verification_card": card,
+                "next_step": "Present verification_card to the user and obtain explicit confirmation before calling EXECUTE_MUTATION.",
+            },
+        }
+
+    def handle_execute_mutation(self, task_id, payload):
+        """Verifies the signed dry-run receipt and user confirmation before permitting live execution."""
+        user_confirmed = bool(payload.get("user_confirmed", False))
+        confirmation_summary = str(payload.get("confirmation_summary", "")).strip()
+        script_path = payload.get("script_path")
+
+        if not user_confirmed or not confirmation_summary:
+            return {
+                "task_id": task_id,
+                "status": "HITL_BLOCKED",
+                "destructive_hint": True,
+                "error": (
+                    "EXECUTE_MUTATION blocked: 'user_confirmed=True' and a plain-text "
+                    "'confirmation_summary' detailing consequences are mandatory."
+                ),
+            }
+
+        from importlib.util import module_from_spec, spec_from_file_location
+        runner_path = os.path.abspath(
+            os.path.join(base_dir, "../../skills/execute-mutation/scripts/run_mutation.py")
+        )
+        spec = spec_from_file_location("run_mutation", runner_path)
+        if spec and spec.loader:
+            mod = module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            ok, msg, receipt = mod.load_and_verify_receipt(script_path=script_path)
+            if not ok:
+                return {
+                    "task_id": task_id,
+                    "status": "HITL_BLOCKED",
+                    "destructive_hint": True,
+                    "error": msg,
+                }
+            mod.mark_receipt_executed()
+            return {
+                "task_id": task_id,
+                "status": "COMPLETED",
+                "destructive_hint": True,
+                "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                "result": {
+                    "confirmation_summary": confirmation_summary,
+                    "verified_receipt": receipt,
+                    "status_message": "HITL receipt verified and marked EXECUTED.",
+                },
+            }
+
+        return {
+            "task_id": task_id,
+            "status": "FAILED",
+            "error": "Unable to load run_mutation verification module.",
         }
 
 def run_server():

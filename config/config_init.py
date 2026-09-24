@@ -6,7 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 def get_version(ext_version_script: Optional[str] = None) -> str:
@@ -476,8 +476,210 @@ def get_config_file_path(config_dir: Optional[str] = None) -> str:
     return sync_and_set_config_kv(config_dir=config_dir)
 
 
+READONLY_SKILL_SCRIPTS = (
+    "validate_gaql.py",
+    "inspect_object.py",
+    "get_cids_under_mcc.py",
+    "get_extension_version.py",
+    "get_latest_api_version.py",
+    "sync_client_libs.py",
+    "build_version_delta.py",
+    "scan_customer_codebase.py",
+    "run_migration_verification.py",
+    "troubleshoot_conversions.py",
+    "get_recent_gclids.py",
+    "validate_conversion_upload.py",
+    "config_init.py",
+)
+
+MUTATION_CALL_PATTERN = re.compile(
+    r"\.\s*(?:mutate(?:_[a-z0-9_]+)?|apply_recommendation|upload_click_conversions|"
+    r"upload_call_conversions|add_batch_job_operations|run_batch_job)\s*\("
+)
+
+
+def _verify_dry_run_receipt_for_hook(
+    script_path: Optional[str] = None,
+    max_age_seconds: int = 1800,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """Checks saved/data/last_dry_run.json for a valid, recent dry-run receipt."""
+    import hashlib
+    import time
+
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(this_dir, ".."))
+    candidate_receipts = [
+        os.path.abspath(os.path.join("saved", "data", "last_dry_run.json")),
+        os.path.join(plugin_root, "saved", "data", "last_dry_run.json"),
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/data/last_dry_run.json"
+        ),
+    ]
+
+    receipt: Optional[Dict[str, Any]] = None
+    for candidate in candidate_receipts:
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and data:
+                    receipt = data
+                    break
+            except Exception:
+                continue
+
+    if not receipt:
+        return (
+            False,
+            "BLOCKED BY HITL MUTATION GUARD: Live Google Ads API mutation attempted without a "
+            "validate_only=True dry-run receipt in saved/data/last_dry_run.json. "
+            "Run with --dry-run via skills/execute-mutation/scripts/run_mutation.py first, "
+            "present the Consequence Summary to the user, and obtain confirmation.",
+            {},
+        )
+
+    status = str(receipt.get("status", ""))
+    if status != "DRY_RUN_PASSED":
+        return (
+            False,
+            f"BLOCKED BY HITL MUTATION GUARD: Dry-run receipt status is '{status}' "
+            "(expected 'DRY_RUN_PASSED'). Run a fresh validate_only=True dry-run and re-confirm with the user.",
+            receipt,
+        )
+
+    ts = float(receipt.get("timestamp", 0.0))
+    age = time.time() - ts
+    if age > max_age_seconds:
+        return (
+            False,
+            f"BLOCKED BY HITL MUTATION GUARD: Dry-run receipt expired ({int(age)}s old > {max_age_seconds}s limit). "
+            "Re-run validate_only=True dry-run and re-verify consequences with the user.",
+            receipt,
+        )
+
+    consequences = receipt.get("consequences", [])
+    if not consequences or not any(str(c).strip() for c in consequences):
+        return (
+            False,
+            "BLOCKED BY HITL MUTATION GUARD: Dry-run receipt in saved/data/last_dry_run.json is missing "
+            "mandatory consequence disclosures.",
+            receipt,
+        )
+
+    if script_path:
+        resolved_script = os.path.abspath(script_path)
+        expected_hash = str(receipt.get("script_sha256", ""))
+        if expected_hash and os.path.isfile(resolved_script):
+            hasher = hashlib.sha256()
+            with open(resolved_script, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    hasher.update(chunk)
+            if hasher.hexdigest() != expected_hash:
+                return (
+                    False,
+                    f"BLOCKED BY HITL MUTATION GUARD: Mutation script '{script_path}' was modified after "
+                    "the validate_only=True dry-run (SHA-256 mismatch). Re-run --dry-run first.",
+                    receipt,
+                )
+
+    consequences_formatted = "; ".join(str(c).strip() for c in consequences if str(c).strip())
+    prompt_reason = (
+        f"⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION [Customer ID: {receipt.get('customer_id', 'Unknown')}]\n"
+        f"• Operation: {receipt.get('operation_summary', 'Unknown')}\n"
+        f"• Change: {receipt.get('before_state', 'N/A')} -> {receipt.get('after_state', 'N/A')}\n"
+        f"• Reversibility: {receipt.get('reversibility', 'UNKNOWN')}\n"
+        f"• Consequences: {consequences_formatted}\n"
+        f"Confirm execution of this live Google Ads API mutation?"
+    )
+    return True, prompt_reason, receipt
+
+
+def evaluate_mutation_guard(cmd: str) -> Tuple[str, Optional[str]]:
+    """Inspects a shell command for Google Ads API mutations and returns (decision, reason)."""
+    if not cmd or not any(tok in cmd for tok in ("python", "python3", "run_mutation.py")):
+        return "allow", None
+
+    # Ignore test suites and linters when invoked as the runner command or module
+    if re.search(
+        r"(?:^|&&|\|\||;)\s*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:[\w./-]+/)?(?:pytest|ruff|mypy|flake8)\b|"
+        r"\bpython3?\s+-m\s+(?:pytest|ruff|mypy|flake8)\b",
+        cmd,
+    ):
+        return "allow", None
+
+    # 1. Explicit invocation of skills/execute-mutation/scripts/run_mutation.py
+    if "run_mutation.py" in cmd:
+        if "--dry-run" in cmd and "--execute" not in cmd:
+            return "allow", None
+        if "--execute" in cmd:
+            script_match = re.search(
+                r"--script(?:=|\s+)(?:'([^']+)'|\"([^\"]+)\"|([^\s'\"]+))", cmd
+            )
+            target_script = None
+            if script_match:
+                target_script = (
+                    script_match.group(1)
+                    or script_match.group(2)
+                    or script_match.group(3)
+                )
+            ok, message, _ = _verify_dry_run_receipt_for_hook(script_path=target_script)
+            return ("force_ask", message) if ok else ("deny", message)
+
+    # 2. Direct execution of a .py script or python -c snippet
+    script_candidates = re.findall(
+        r"(?:'([^']+\.py)'|\"([^\"]+\.py)\"|([^\s'\"]+\.py))", cmd
+    )
+    py_files: list[str] = []
+    for grp in script_candidates:
+        candidate = grp[0] or grp[1] or grp[2]
+        if candidate and not any(ro in candidate for ro in READONLY_SKILL_SCRIPTS):
+            py_files.append(candidate)
+
+    code_blobs: list[str] = [cmd]
+    resolved_target_script: Optional[str] = None
+    for py_file in py_files:
+        if os.path.isfile(py_file):
+            resolved_target_script = py_file
+            try:
+                with open(py_file, "r", encoding="utf-8") as f:
+                    code_blobs.append(f.read())
+            except OSError:
+                pass
+
+    combined_code = "\n".join(code_blobs)
+    uncommented_code = re.sub(r"(?m)^\s*#.*$", "", combined_code)
+
+    if not MUTATION_CALL_PATTERN.search(uncommented_code):
+        return "allow", None
+
+    # A Google Ads mutation method is present in the executed code.
+    # Determine whether this execution is a validate_only=True dry-run or a live mutation.
+    explicit_dry_run_flag = (
+        "--dry-run" in cmd or "--validate-only" in cmd
+    ) and "--execute" not in cmd
+    explicit_execute_flag = "--execute" in cmd
+
+    has_validate_only_true = bool(
+        re.search(r"validate_only\s*=\s*True", uncommented_code)
+    )
+    has_validate_only_false = bool(
+        re.search(r"validate_only\s*=\s*False", uncommented_code)
+    )
+
+    if explicit_dry_run_flag or (
+        has_validate_only_true
+        and not has_validate_only_false
+        and not explicit_execute_flag
+    ):
+        return "allow", None
+
+    # Live mutation detected -> require verified dry-run receipt & consequence disclosure
+    ok, message, _ = _verify_dry_run_receipt_for_hook(script_path=resolved_target_script)
+    return ("force_ask", message) if ok else ("deny", message)
+
+
 def handle_hook() -> None:
-    """Handles Jetski lifecycle hook execution (PreInvocation and PreToolUse)."""
+    """Handles Jetski and Claude Code CLI lifecycle hook execution (PreInvocation and PreToolUse)."""
     input_data: Dict[str, Any] = {}
     if not sys.stdin.isatty():
         try:
@@ -500,9 +702,31 @@ def handle_hook() -> None:
         args = tool_call.get("args", {})
         cmd = args.get("CommandLine") or args.get("command") or ""
 
+        decision, reason = evaluate_mutation_guard(cmd)
+        if decision == "deny":
+            print(
+                json.dumps(
+                    {
+                        "decision": "deny",
+                        "permissionDecision": "deny",
+                        "reason": reason,
+                        "permissionDecisionReason": reason,
+                    }
+                )
+            )
+            return
+
         needs_interception = any(
-            token in cmd for token in ("python", "pytest", "googleads", "GoogleAdsClient", "google-ads")
+            token in cmd
+            for token in (
+                "python",
+                "pytest",
+                "googleads",
+                "GoogleAdsClient",
+                "google-ads",
+            )
         )
+        overwrite: Dict[str, Any] = {}
         if needs_interception:
             updated_cmd = cmd
             # Case A: load_from_storage() or load_from_storage(None)
@@ -537,37 +761,48 @@ def handle_hook() -> None:
             )
             # Ensure GOOGLE_ADS_CONFIGURATION_FILE_PATH is exported in the subshell
             if "GOOGLE_ADS_CONFIGURATION_FILE_PATH" not in updated_cmd:
-                updated_cmd = f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{config_path}" && {updated_cmd}'
+                updated_cmd = (
+                    f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{config_path}" && {updated_cmd}'
+                )
 
-            overwrite: Dict[str, Any] = {}
             if "command" in args:
                 overwrite["command"] = updated_cmd
             if "CommandLine" in args or not overwrite:
                 overwrite["CommandLine"] = updated_cmd
 
-            print(json.dumps({
-                "decision": "allow",
-                "overwrite": overwrite
-            }))
-            return
+        response_payload: Dict[str, Any] = {"decision": decision}
+        if decision == "force_ask":
+            response_payload["permissionDecision"] = "ask"
+            if reason:
+                response_payload["reason"] = reason
+                response_payload["permissionDecisionReason"] = reason
+        if overwrite:
+            response_payload["overwrite"] = overwrite
 
-        print(json.dumps({"decision": "allow"}))
+        print(json.dumps(response_payload))
         return
 
     # 2. PreInvocation hook (model prompt injection)
     msg = (
-        f"CRITICAL GOOGLE ADS CONFIGURATION NOTICE:\n"
-        f"The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml).\n"
-        f"All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
-        f"NEVER call GoogleAdsClient.load_from_storage() with no arguments, and NEVER reference ~/google-ads.yaml or any path under /home/.../google-ads.yaml."
+        f"CRITICAL GOOGLE ADS CONFIGURATION & HITL MUTATION NOTICE:\n"
+        f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml).\n"
+        f"   All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
+        f"2. HITL MUTATION VERIFICATION MANDATE: Before executing ANY live Google Ads mutation, you MUST:\n"
+        f"   (a) Query current resource state via GAQL,\n"
+        f"   (b) Execute a validate_only=True dry-run via skills/execute-mutation/scripts/run_mutation.py --dry-run to generate saved/data/last_dry_run.json,\n"
+        f"   (c) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute."
     )
-    print(json.dumps({
-        "injectSteps": [
+    print(
+        json.dumps(
             {
-                "ephemeralMessage": msg
+                "injectSteps": [
+                    {
+                        "ephemeralMessage": msg,
+                    }
+                ]
             }
-        ]
-    }))
+        )
+    )
 
 
 def main() -> None:

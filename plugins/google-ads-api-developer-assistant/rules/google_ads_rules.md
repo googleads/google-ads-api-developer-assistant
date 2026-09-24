@@ -1,7 +1,7 @@
 # Google Ads API Developer Assistant Rules & Directives
 
 ## Metadata
-- **Version:** 4.1.0
+- **Version:** 4.3.0
 - **Optimized for:** Machine Comprehension & Agentic Execution
 - **Runtime:** Python 3.x
 
@@ -24,9 +24,9 @@
 - **Constraint:** Never provide marketing, legal, or business strategy advice.
 
 #### 1.2. Hard Constraints (Zero Tolerance)
-- **NO MUTATE:** Strictly prohibited from executing `mutate`, `create`, `update`, or `delete` API calls. All mutations must be generated as code scripts saved to `saved/code/` for the user to execute.
+- **NO UNVERIFIED MUTATIONS (HITL MANDATORY):** Strictly prohibited from executing live `mutate`, `create`, `update`, or `remove` API calls without first completing the **4-Step HITL Mutation & Consequence Protocol** (Section 4.3 & `skills/execute-mutation/SKILL.md`): (1) GAQL Before-State lookup, (2) live `validate_only=True` dry-run with signed receipt in `saved/data/last_dry_run.json`, (3) explicit user confirmation after presenting the **Consequence & Impact Summary**, and (4) `PreToolUse` hook-gated execution (`--execute`).
 - **NO SECRETS:** Never print, log, or save developer tokens, OAuth secrets, or PII.
-- **READ-ONLY:** Only execute `search`, `search_stream`, or `get` API methods.
+- **DRY-RUN FIRST FOR WRITES:** All mutation scripts in `saved/code/` MUST support `--dry-run` (`validate_only=True`, the default) and `--execute` (`validate_only=False`). Never invoke `--execute` before `--dry-run` succeeds and the user explicitly confirms the consequences.
 - **NO MUTATE CLIENT LIBS:** Strictly prohibited from modifying ANY files within the `client_libs/` directory. Analyze and read them for source-of-truth definitions, but suggest changes in chat rather than modifying client library files.
 - **SOURCE OF TRUTH:** Never rely solely on high-level summaries. Always verify `.proto` definitions or Python client library docstrings in `client_libs/` before concluding API capabilities or requirements.
 - **NO GAQL 'OR' OPERATOR:** Strictly prohibited from using the `OR` logical operator in ANY GAQL query. Use `IN` or execute separate queries.
@@ -98,6 +98,20 @@ Python is the mandatory default language for all code generation and execution a
 
 #### 4.2. Performance Max URL Filters
 - Use `python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py` to configure webpage exclusion listing trees (`vertical = WEBPAGE`).
+
+#### 4.3. 4-Step HITL Mutation & Consequence Verification Protocol [MANDATORY]
+When a user requests any write/mutation operation (`mutate`, `create`, `update`, `remove`, `apply_recommendation`, or conversion upload), you MUST execute this exact sequence (see `skills/execute-mutation/SKILL.md`):
+1. **Step 1 — Pre-Mutation State & Blast Radius Lookup (GAQL Read):**
+   - Query the target resource(s) and active child entity counts (`ad_group`, `ad_group_ad`) via `GoogleAdsService.search_stream` to capture the **Before State** (`status`, `amount_micros`, `cpc_bid_micros`, etc.). Convert all `micros` fields to local currency by dividing by `1,000,000`.
+2. **Step 2 — Mandatory `validate_only=True` Dry-Run & Signed Receipt:**
+   - Generate the mutation script in `saved/code/` with `--dry-run` (`validate_only=True`, default) and `--execute` (`validate_only=False`) flags.
+   - Run the dry-run via `python3 skills/execute-mutation/scripts/run_mutation.py --script saved/code/<script>.py --dry-run --customer-id <cid> --operation "<summary>" --before "<before_state>" --after "<after_state>" --consequences "<impact_1>; <impact_2>" --reversibility "<REVERSIBLE|IRREVERSIBLE>"`.
+   - This validates the payload against the live Google Ads API (`validate_only=True`) and writes a SHA-256 signed receipt to `saved/data/last_dry_run.json`.
+3. **Step 3 — Explicit User Verification & Consequence Disclosure:**
+   - Present the **Mutation & Consequence Verification Card** to the user (Customer ID, Resource & Operation, `Before` $\rightarrow$ `After` delta, financial/serving/bidding consequences, and reversibility) and wait for explicit confirmation (`ask_question` in `agy` or direct CLI prompt in `Claude Code CLI`).
+4. **Step 4 — Hook-Gated Live Execution (`Mutate-to-Get`):**
+   - Only after the user explicitly confirms, run `python3 skills/execute-mutation/scripts/run_mutation.py --script saved/code/<script>.py --execute`.
+   - Use `response_content_type = ResponseContentType.MUTABLE_RESOURCE` when supported so the updated resource state is returned immediately without an extra read call.
 
 ---
 
