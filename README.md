@@ -23,12 +23,13 @@ The master configuration files act as the system contract for the assistant:
 *   **Version Parity Enforcement**: Verifies parity between the runtime `google-ads` Python package and local `client_libs/google-ads-python` source-of-truth definitions, issuing warnings on discrepancies.
 *   **Code Generation Pipeline**: Passes all generated Python code through strict `ruff` linting before saving or displaying it.
 *   **Programmatic GAQL Validation**: Evaluates queries against field metadata and compatibility boundaries.
-*   **Safety Constraints**: Strictly prohibits running unreviewed mutate operations directly.
+*   **Safety Constraints (4-Step HITL Mutation Guard)**: Enforces a mandatory 4-step Human-in-the-Loop (HITL) verification protocol for all API mutations—requiring a GAQL before-state read, a `validate_only=True` dry-run with a SHA-256 signed receipt (`saved/data/last_dry_run.json`), explicit consequence disclosure, and deterministic `PreToolUse` hook confirmation (`"decision": "force_ask"`) before any live write executes.
 
 ### 2. Domain-Specific "Skills" & Native Commands
 Rather than relying on generic AI completions, the assistant is empowered with specialized, test-backed tool directories under `plugins/google-ads-api-developer-assistant/skills/` and native slash commands under `plugins/google-ads-api-developer-assistant/commands/`.
 
 Key capabilities support dual invocation (natural language prompts in Antigravity or dedicated slash commands in Claude Code):
+*   **HITL-Verified Mutations (`execute-mutation`)**: Executes a two-phase `--dry-run` (`validate_only=True`) and `--execute` workflow with cryptographic receipt verification and financial/serving consequence disclosure.
 *   **GAQL Validation (`/validate-gaql`)**: Dry-runs queries via the API `validate_only` parameter.
 *   **Object Inspection (`/inspect-object`)**: Inspects API resources, nested messages, or enum definitions on the fly.
 *   **MCC Account Mapping (`/get-cids`)**: Maps client hierarchies and retrieves sub-account CIDs under manager accounts.
@@ -191,7 +192,7 @@ Run the installation script matching your platform:
 
 4.  **Configure Credentials:** Make sure your API credentials configuration files are in your `$HOME` directory. Each language has its own configuration file naming convention and structure. 
 5.  **Optional: Default Customer ID:** To set a default customer ID, enter your customer ID in `config/customer_id` (e.g., `1234567890`). You can then use prompts like *"Get my campaigns"* and the Assistant will use the CID for the request.
-6.  **Google Ads API Version Validation:** On your first run in a session, the assistant will automatically identify the latest stable Google Ads API version and ask you to confirm it. Once confirmed, this version is cached in [api_version.txt](file:///usr/local/google/home/rwh/google-ads-api-developer-assistant/config/api_version.txt) and used for all subsequent prompts. If you need to force a version change or refresh the cache, simply delete or edit the `config/api_version.txt` file.
+6.  **Google Ads API Version Validation:** On your first run in a session, the assistant will automatically identify the latest stable Google Ads API version and ask you to confirm it. Once confirmed, this version is cached in `config/api_version.txt` and used for all subsequent prompts. If you need to force a version change or refresh the cache, simply delete or edit the `config/api_version.txt` file.
 
 ## Usage
 
@@ -279,9 +280,43 @@ To prevent silent schema discrepancies, missing fields, or descriptor errors:
 
 To learn more about how Antigravity and Claude define plugins, see the [Antigravity plugin specification](https://antigravity.google/docs/cli/plugins/) and the [Claude plugin specification](https://github.com/anthropics/knowledge-work-plugins).
 
-## Mutate Operations
+## Mutate Operations (4-Step HITL & Consequence Verification)
 
-The Assistant is designed to generate code for mutate operations (e.g., creating campaigns, adding users) but will **not** execute them. This execution policy ensures you have full control over any changes to your Google Ads account. You must review the generated code for accuracy and execute it manually outside of the Assistant.
+When you ask the Assistant to perform a write or mutation operation (such as updating a campaign budget, pausing an ad group, applying a recommendation, removing a criterion, or uploading conversions), the Assistant enforces a **Defense-in-Depth Human-in-the-Loop (HITL) Verification Protocol** (`skills/execute-mutation/`) backed by deterministic `PreToolUse` lifecycle hooks (`config/config_init.py`).
+
+### 1. The 4-Step Mutation Protocol
+
+1. **Step 1 — Pre-Mutation State & Blast Radius Lookup (Mandatory GAQL Read):**
+   Before generating or running any mutation code, the Assistant queries the target resource(s) via `GoogleAdsService.search_stream` to capture the **Before State** (exact resource names, current `status`, current `amount_micros` / `cpc_bid_micros` converted to local currency by dividing by `1,000,000`, and active child entity counts such as `ad_group` and `ad_group_ad`).
+2. **Step 2 — Mandatory `validate_only=True` Dry-Run & Signed Receipt:**
+   All generated mutation scripts in `saved/code/` support `--dry-run` (`validate_only=True`, default) and `--execute` (`validate_only=False`). The Assistant first executes the script in dry-run mode via `skills/execute-mutation/scripts/run_mutation.py --dry-run`:
+   ```bash
+   python3 skills/execute-mutation/scripts/run_mutation.py \
+     --script saved/code/update_campaign_budget.py \
+     --dry-run \
+     --customer-id "1234567890" \
+     --operation "Update CampaignBudget (customers/1234567890/campaignBudgets/98765)" \
+     --before "$50.00/day (50,000,000 micros), Status: ENABLED" \
+     --after "$250.00/day (250,000,000 micros), Status: ENABLED" \
+     --consequences "Daily budget cap increases by +$200.00/day (+400%); Max monthly spend exposure increases to ~$7,600.00/mo" \
+     --reversibility "REVERSIBLE"
+   ```
+   If `validate_only=True` passes with zero API or policy errors, `run_mutation.py` writes a cryptographic receipt to `saved/data/last_dry_run.json` containing the SHA-256 digest of the script file, the timestamp, the state delta, and the consequence disclosures.
+3. **Step 3 — Structured Consequence Disclosure & User Verification:**
+   The Assistant presents the **Mutation & Consequence Verification Card** to you and pauses for explicit confirmation before executing the change:
+   * **Budgets & Bidding:** Exact currency delta (`$X.XX/day` $\rightarrow$ `$Y.YY/day`, `%` change), monthly spend exposure (`daily_budget * 30.4`), and Smart Bidding learning-phase reset warnings for $>20\%$ shifts.
+   * **Status Changes (`PAUSED` $\leftrightarrow$ `ENABLED`):** Exact count of downstream active Ad Groups and Ads that will immediately stop serving (or resume spending).
+   * **Destructive Operations (`REMOVE`):** Explicit warning when an operation is **IRREVERSIBLE (PERMANENT)** and cannot be re-enabled (recommending `PAUSED` when temporary suspension is intended), plus shared-resource blast radius checks.
+   * **Targeting & Conversion Goals:** Warnings on auction expansion/restriction or downstream automated bidding signal changes.
+4. **Step 4 — Hook-Gated Live Execution (`Mutate-to-Get`):**
+   Only after you explicitly confirm, the Assistant runs `--execute` (`validate_only=False` with `ResponseContentType.MUTABLE_RESOURCE` so the updated resource state is returned in a single round-trip). Upon execution, the receipt in `saved/data/last_dry_run.json` is marked `EXECUTED` so a single dry-run receipt cannot be replayed multiple times.
+
+### 2. Deterministic `PreToolUse` Hook Enforcement (`hooks.json` & `config/config_init.py`)
+
+To guarantee that the LLM can never skip the dry-run or execute a live mutation without your consent, `config/config_init.py` inspects every `run_command` / `Bash` invocation before execution:
+* **Automatic Allow (`"decision": "allow"`):** Read-only queries (`search`, `search_stream`, diagnostic/validation skill scripts) and explicit `validate_only=True` / `--dry-run` invocations.
+* **Hard Block (`"decision": "deny"`):** Any attempt to run a live `.mutate*()`, `.apply_recommendation()`, conversion upload, or batch job call without a valid, un-expired ($\le 30\text{ min}$) `DRY_RUN_PASSED` receipt in `saved/data/last_dry_run.json`, or if the mutation script was modified after the dry-run (`script_sha256` mismatch).
+* **Mandatory CLI Confirmation Gate (`"decision": "force_ask"` / `"permissionDecision": "ask"`):** When a verified `--execute` mutation runs, the hook overrides any cached `"Always Allow"` terminal permissions in **Antigravity (`agy`)** and **Claude Code CLI** and renders an interactive terminal confirmation prompt displaying the `Customer ID`, `Operation`, `Before -> After` delta, `Reversibility`, and `Consequences`.
 
 ## Known Quirks
 

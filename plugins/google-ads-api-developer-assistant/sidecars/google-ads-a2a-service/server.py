@@ -15,7 +15,6 @@ for path_to_add in [
     os.path.abspath(os.path.join(base_dir, "../..")),
     os.path.abspath(os.path.join(base_dir, "../../../..")),
     os.path.abspath(os.path.join(base_dir, "../../plugins/google-ads-api-developer-assistant")),
-    os.path.abspath("/usr/local/google/home/rwh/google-ads-api-developer-assistant"),
 ]:
     if path_to_add not in sys.path:
         sys.path.insert(0, path_to_add)

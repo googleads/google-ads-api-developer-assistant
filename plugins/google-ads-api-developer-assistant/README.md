@@ -4,7 +4,7 @@
 [![Target Runtimes](https://img.shields.io/badge/runtimes-Antigravity%20%7C%20Claude%20Desktop%20%7C%20Claude%20Code-brightgreen.svg)](plugin.json)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](rules/google_ads_rules.md)
 
-An agentic developer assistant plugin for the **Google Ads API**. This plugin equips AI assistants in **Antigravity (agy)**, **Claude Desktop**, and **Claude Code CLI** with deep domain intelligence, executable diagnostic tools, static analysis pipelines, Protobuf object inspectors, conversion validators, and strict API safety guardrails.
+An agentic developer assistant plugin for the **Google Ads API**. This plugin equips AI assistants in **Antigravity (agy)**, **Claude Desktop**, and **Claude Code CLI** with deep domain intelligence, executable diagnostic tools, static analysis pipelines, Protobuf object inspectors, conversion validators, and strict HITL API mutation guardrails.
 
 ---
 
@@ -15,6 +15,7 @@ An agentic developer assistant plugin for the **Google Ads API**. This plugin eq
 - [Plugin Architecture](#plugin-architecture)
 - [Skills Reference](#skills-reference)
 - [Core Directives & Guardrails](#core-directives--guardrails)
+- [Mutate Operations (4-Step HITL & Consequence Verification)](#-mutate-operations-4-step-hitl--consequence-verification)
 - [Installation & Setup](#installation--setup)
   - [1. Prerequisites](#1-prerequisites)
   - [2. Plugin Installation](#2-plugin-installation)
@@ -34,15 +35,15 @@ An agentic developer assistant plugin for the **Google Ads API**. This plugin eq
 
 ## 🎯 Overview
 
-The **Google Ads API Developer Assistant** plugin is engineered specifically for developers building against the Google Ads API. It operates under a strict **read-only / zero-mutate execution policy**—ensuring the assistant analyzes and inspects live data safely while generating production-ready, Ruff-linted Python mutation scripts for manual execution.
+The **Google Ads API Developer Assistant** plugin is engineered specifically for developers building against the Google Ads API. It combines deep schema inspection and read-only diagnostics with a **4-Step Human-in-the-Loop (HITL) Mutation & Consequence Verification Protocol**—ensuring any API write is first dry-run validated (`validate_only=True`), cryptographically signed (`saved/data/last_dry_run.json`), and explicitly approved by the user after reviewing its financial and operational consequences.
 
 ---
 
 ## 🚀 Key Features
 
+- **4-Step HITL Mutation & Consequence Verification (`execute-mutation`)**: Two-phase `--dry-run` (`validate_only=True`) and `--execute` workflow with SHA-256 tamper-evident receipts (`saved/data/last_dry_run.json`), financial/serving consequence analysis, and deterministic `PreToolUse` hook confirmation (`"decision": "force_ask"`).
 - **Programmatic GAQL Validation**: 4-step sequence (Schema Discovery, Compatibility Checking, Static Analysis, and Runtime Dry-Runs using `validate_only=True`). Enforces strict rules such as zero `OR` operator tolerance.
 - **Dynamic Protobuf Object Inspection**: Real-time inspection of API resources, messages, and Enums from the official Python client library descriptors without guessing schema structures.
-- **Strict Read-Only Safety Policy**: Hard constraints preventing accidental execution of destructive API mutations (`create`, `mutate`, `update`, `delete`). All mutations are generated as verified code in `~/saved/code/`.
 - **Conversion Upload Troubleshooting**: Diagnostic reporting against `offline_conversion_upload_client_summary`, click timestamp vs. conversion timestamp logic validation, GCLID sampling, and pre-upload CSV structure checks.
 - **MCC Account Hierarchy Exploration**: Recursive discovery of child Customer IDs (CIDs) and sub-manager structures with console trees or CSV exports.
 - **Performance Max Webpage Exclusions**: Scripting for asset group webpage listing filter trees (`vertical = WEBPAGE`).
@@ -146,6 +147,7 @@ When installed in Claude Code, the plugin provides custom slash commands with bu
 | **`explain`** | Formats conceptual topics into 4 mandatory sections: *Big Picture*, *Analogy*, *Interconnectedness*, *Simple Language*. | `skills/explain/SKILL.md` |
 | **`assistant-tutorial`** | Interactive, progressive conversational guide covering 11 core Google Ads API topics. | `skills/assistant-tutorial/SKILL.md` |
 | **`sync-client-libs`** | Discovers client libraries under `client_libs/`, verifies installed releases against GitHub, and automatically syncs outdated codebases. | `skills/sync-client-libs/scripts/sync_client_libs.py` |
+| **`execute-mutation`** | Executes Google Ads API write/mutation operations using the 4-Step HITL Verification & Consequence Disclosure Protocol. | `skills/execute-mutation/scripts/run_mutation.py` |
 | **`step-by-step`** | Breaks complex multi-part procedures into numbered phases with verification checkpoints. | `skills/step-by-step/SKILL.md` |
 
 ---
@@ -156,8 +158,8 @@ The assistant strictly complies with [google_ads_rules.md](rules/google_ads_rule
 
 1. **Validate Before Act Protocol**:
    - Reads the target Google Ads API version from `config/api_version.txt`. If unset, identifies the latest stable release, presents it for user confirmation, and persists it.
-2. **Zero-Mutate / Read-Only Constraint**:
-   - The assistant **never** executes live mutations (`mutate`, `create`, `update`, `delete`). All mutation scripts are written to `~/saved/code/` for manual review and execution by the developer.
+2. **4-Step HITL Mutation & Consequence Verification Mandate**:
+   - Executing live mutations (`mutate`, `create`, `update`, `remove`) without a verified `validate_only=True` dry-run receipt (`saved/data/last_dry_run.json`) and explicit consequence confirmation is hard-blocked by the `PreToolUse` hook (`config/config_init.py`).
 3. **GAQL Syntax Strictness**:
    - **No `OR` operator**: The `OR` operator is strictly forbidden in GAQL. The assistant rewrites queries using `IN` or splits them into separate requests.
    - **No `FROM` clause in metadata**: Queries against `GoogleAdsFieldService` must not contain a `FROM` clause.
@@ -166,6 +168,17 @@ The assistant strictly complies with [google_ads_rules.md](rules/google_ads_rule
    - The local `client_libs/google-ads-python/` repository provides the ultimate local source of truth for `.proto` definitions and official examples. Client library files are strictly read-only.
 5. **Traceback Suppression**:
    - All generated Python scripts wrap calls in `try...except GoogleAdsException` to suppress verbose gRPC call stack dumps and output clean, actionable error messages.
+
+---
+
+## 🛡️ Mutate Operations (4-Step HITL & Consequence Verification)
+
+All write/mutation requests follow a strict two-gate defense-in-depth architecture combining the [`execute-mutation` skill](skills/execute-mutation/SKILL.md) with deterministic `PreToolUse` lifecycle interception in [`config/config_init.py`](config/config_init.py):
+
+1. **Pre-Mutation State & Blast Radius Lookup (GAQL Read):** Queries target resource state (`status`, `amount_micros`, `cpc_bid_micros` converted from `micros` by dividing by `1,000,000`) and active child entity counts (`ad_group`, `ad_group_ad`).
+2. **Mandatory `validate_only=True` Dry-Run & Signed Receipt:** Executes the script in `--dry-run` mode via `skills/execute-mutation/scripts/run_mutation.py --dry-run` to validate schema, `FieldMask` paths, and policy compliance against the live Google Ads API, writing a SHA-256 signed receipt to `saved/data/last_dry_run.json`.
+3. **Structured Consequence Disclosure & User Prompt:** Presents the **Mutation & Consequence Verification Card** detailing financial deltas, ad-serving blast radius, and reversibility (`REVERSIBLE` vs. `IRREVERSIBLE`), pausing for explicit user confirmation.
+4. **Deterministic `PreToolUse` Hook Gate & `Mutate-to-Get` Execution:** When `--execute` runs, `config/config_init.py` verifies the freshness ($\le 30\text{ min}$) and SHA-256 script hash of `saved/data/last_dry_run.json`. Unverified or modified scripts are hard-blocked (`"decision": "deny"`), while verified mutations trigger a native CLI confirmation prompt (`"decision": "force_ask"` in `agy` and `"permissionDecision": "ask"` in `Claude Code CLI`) displaying the consequence summary before executing with `ResponseContentType.MUTABLE_RESOURCE`.
 
 ---
 

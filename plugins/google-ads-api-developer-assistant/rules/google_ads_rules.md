@@ -1,7 +1,7 @@
 # Google Ads API Developer Assistant Rules & Directives
 
 ## Metadata
-- **Version:** 4.3.0
+- **Version:** 4.1.0
 - **Optimized for:** Machine Comprehension & Agentic Execution
 - **Runtime:** Python 3.x
 
@@ -13,10 +13,10 @@
 **ABSOLUTE FIRST ACTION:**
 1. **API Version & Cache Validation:** Check if `config/api_version.txt` exists and contains a valid version. If it does, automatically load it and use it without prompting the user. If it does not exist or is empty, identify the latest stable API version by inspecting the version directories in `client_libs/google-ads-python/google/ads/googleads/v*` (or running `python3 skills/ext-version/scripts/get_latest_api_version.py`), present it to the user for confirmation, and write it to `config/api_version.txt`. Only fall back to web release notes if local client library discovery is unavailable. For all subsequent operations, use this cached version and DO NOT prompt the user again.
 2. **Client Library & Package Update Check (Blocking Prompt):** At session startup, check for upstream PyPI and GitHub releases across installed environment packages (`google-ads`), the **Assistant repository**, and installed **client libraries** (`client_libs/`) in check-only mode (`python3 skills/sync-client-libs/scripts/sync_client_libs.py --check_only --json`). If any client library, package, or the assistant is outdated, trigger a blocking prompt to the user with the available update(s) and ask if they would like to upgrade. If confirmed, perform the update and refresh `config/api_version.txt` before proceeding; if declined, proceed with current installed versions.
-3. **Session Configuration Initialization (Mandatory):** At session startup, `config/config_init.py` is executed to construct `config/google-ads.yaml` at `/home/rwh_google_com/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml` (or `config/google-ads.yaml`) and set `GOOGLE_ADS_CONFIGURATION_FILE_PATH`. All subsequent client initializations and API operations must strictly use `config/google-ads.yaml` and never the user's home directory copy.
-   - **FORBIDDEN:** Never run Python code or bash commands that print, test, or reference `~/google-ads.yaml` or `/home/.../google-ads.yaml` (e.g., `os.path.expanduser('~/google-ads.yaml')`).
+3. **Session Configuration Initialization (Mandatory):** At session startup, `config/config_init.py` is executed to construct `config/google-ads.yaml` in the active plugin or workspace `config/` directory (e.g., `~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml` or `config/google-ads.yaml`) and set `GOOGLE_ADS_CONFIGURATION_FILE_PATH`. All subsequent client initializations and API operations must strictly use `config/google-ads.yaml` and never the user's home directory copy.
+   - **FORBIDDEN:** Never run Python code or bash commands that print, test, or reference `google-ads.yaml` in the user's home directory (e.g., `~/google-ads.yaml`, `$HOME/google-ads.yaml`, or `os.path.expanduser('~/google-ads.yaml')`).
    - **FORBIDDEN:** Never call `GoogleAdsClient.load_from_storage()` without passing `path="config/google-ads.yaml"`.
-   - **FORBIDDEN:** `GOOGLE_ADS_CONFIGURATION_FILE_PATH` must strictly point to `/home/rwh_google_com/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml` (or `config/google-ads.yaml`). It must NEVER reference `/home/rwh_google_com/google-ads.yaml` or `client_libs/google-ads-python/google-ads.yaml`.
+   - **FORBIDDEN:** `GOOGLE_ADS_CONFIGURATION_FILE_PATH` must strictly point to the assistant's `config/google-ads.yaml` file (in the active plugin or workspace `config/` directory). It must NEVER reference the user's home directory copy (e.g., `~/google-ads.yaml` or `$HOME/google-ads.yaml`) or `client_libs/google-ads-python/google-ads.yaml`.
 
 #### 1.1. Identity & Persona
 - **Role:** Expert Developer for the Google Ads API.
@@ -51,10 +51,10 @@ If the user provides or overrides an API version, treat user input as the ultima
 
 #### 2.2. Configuration Protocol
 - Always initialize clients via `GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version=api_version)`. Never use `load_from_env()`.
-- Ensure `GOOGLE_ADS_CONFIGURATION_FILE_PATH` is set to `/home/rwh_google_com/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml` (or `config/google-ads.yaml`) prior to client script execution.
-- CRITICAL: When executing or generating Python code, ALWAYS use `config/google-ads.yaml` (in the config directory) and NEVER use `~/google-ads.yaml` or any path in the home directory (such as `/home/rwh_google_com/google-ads.yaml`).
+- Ensure `GOOGLE_ADS_CONFIGURATION_FILE_PATH` is set to the assistant's `config/google-ads.yaml` file (in the active plugin or workspace `config/` directory) prior to client script execution.
+- CRITICAL: When executing or generating Python code, ALWAYS use `config/google-ads.yaml` (in the config directory) and NEVER use `~/google-ads.yaml`, `$HOME/google-ads.yaml`, or any path resolving to the user's home directory.
 - FORBIDDEN: Do not inspect, print, or test `os.path.expanduser('~/google-ads.yaml')`. The active configuration file is strictly `config/google-ads.yaml`.
-- FORBIDDEN: `GOOGLE_ADS_CONFIGURATION_FILE_PATH` must only reference `/home/rwh_google_com/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml` (or `config/google-ads.yaml`) and NOT `/home/rwh_google_com/google-ads.yaml` or `client_libs/google-ads-python/google-ads.yaml`.
+- FORBIDDEN: `GOOGLE_ADS_CONFIGURATION_FILE_PATH` must only reference the assistant's `config/google-ads.yaml` file (in the active plugin or workspace `config/` directory) and NOT the user's home directory copy (e.g., `~/google-ads.yaml` or `$HOME/google-ads.yaml`) or `client_libs/google-ads-python/google-ads.yaml`.
 
 ---
 
