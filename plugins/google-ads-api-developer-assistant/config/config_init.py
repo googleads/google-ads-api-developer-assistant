@@ -501,8 +501,10 @@ MUTATION_CALL_PATTERN = re.compile(
 def _verify_dry_run_receipt_for_hook(
     script_path: Optional[str] = None,
     max_age_seconds: int = 1800,
+    hook_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Checks saved/data/last_dry_run.json for a valid, recent dry-run receipt."""
+    from datetime import datetime, timezone
     import hashlib
     import time
 
@@ -582,6 +584,33 @@ def _verify_dry_run_receipt_for_hook(
                     receipt,
                 )
 
+    receipt["hook_prompted_at_iso"] = datetime.now(timezone.utc).isoformat()
+    if isinstance(hook_context, dict):
+        conv_id = hook_context.get("conversationId") or hook_context.get("session_id")
+        transcript_path = (
+            hook_context.get("transcriptPath") or hook_context.get("transcript_path")
+        )
+        model_name = hook_context.get("modelName") or hook_context.get("model")
+        if conv_id:
+            receipt["cli_conversation_id"] = str(conv_id)
+        if transcript_path:
+            receipt["cli_transcript_path"] = str(transcript_path)
+        if model_name:
+            receipt["model_name"] = str(model_name)
+
+    for candidate in candidate_receipts:
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "w", encoding="utf-8") as f:
+                    json.dump(receipt, f, indent=2)
+                if sys.platform != "win32":
+                    try:
+                        os.chmod(candidate, 0o600)
+                    except OSError:
+                        pass
+            except OSError:
+                continue
+
     consequences_formatted = "; ".join(str(c).strip() for c in consequences if str(c).strip())
     prompt_reason = (
         f"⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION [Customer ID: {receipt.get('customer_id', 'Unknown')}]\n"
@@ -594,7 +623,10 @@ def _verify_dry_run_receipt_for_hook(
     return True, prompt_reason, receipt
 
 
-def evaluate_mutation_guard(cmd: str) -> Tuple[str, Optional[str]]:
+def evaluate_mutation_guard(
+    cmd: str,
+    hook_context: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, Optional[str]]:
     """Inspects a shell command for Google Ads API mutations and returns (decision, reason)."""
     if not cmd or not any(tok in cmd for tok in ("python", "python3", "run_mutation.py")):
         return "allow", None
@@ -622,7 +654,10 @@ def evaluate_mutation_guard(cmd: str) -> Tuple[str, Optional[str]]:
                     or script_match.group(2)
                     or script_match.group(3)
                 )
-            ok, message, _ = _verify_dry_run_receipt_for_hook(script_path=target_script)
+            ok, message, _ = _verify_dry_run_receipt_for_hook(
+                script_path=target_script,
+                hook_context=hook_context,
+            )
             return ("force_ask", message) if ok else ("deny", message)
 
     # 2. Direct execution of a .py script or python -c snippet
@@ -674,7 +709,10 @@ def evaluate_mutation_guard(cmd: str) -> Tuple[str, Optional[str]]:
         return "allow", None
 
     # Live mutation detected -> require verified dry-run receipt & consequence disclosure
-    ok, message, _ = _verify_dry_run_receipt_for_hook(script_path=resolved_target_script)
+    ok, message, _ = _verify_dry_run_receipt_for_hook(
+        script_path=resolved_target_script,
+        hook_context=hook_context,
+    )
     return ("force_ask", message) if ok else ("deny", message)
 
 
@@ -697,12 +735,17 @@ def handle_hook() -> None:
         )
 
     # 1. PreToolUse hook (matcher: run_command, Bash, bash)
-    if "toolCall" in input_data:
+    if "toolCall" in input_data or "tool_input" in input_data:
         tool_call = input_data.get("toolCall", {})
-        args = tool_call.get("args", {})
+        if isinstance(tool_call, dict) and "args" in tool_call:
+            args = tool_call.get("args", {})
+        else:
+            args = input_data.get("tool_input", {})
+        if not isinstance(args, dict):
+            args = {}
         cmd = args.get("CommandLine") or args.get("command") or ""
 
-        decision, reason = evaluate_mutation_guard(cmd)
+        decision, reason = evaluate_mutation_guard(cmd, hook_context=input_data)
         if decision == "deny":
             print(
                 json.dumps(
@@ -787,10 +830,10 @@ def handle_hook() -> None:
         f"CRITICAL GOOGLE ADS CONFIGURATION & HITL MUTATION NOTICE:\n"
         f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml).\n"
         f"   All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
-        f"2. HITL MUTATION VERIFICATION MANDATE: Before executing ANY live Google Ads mutation, you MUST:\n"
+        f"2. HITL MUTATION VERIFICATION & AUDIT MANDATE: Before executing ANY live Google Ads mutation, you MUST:\n"
         f"   (a) Query current resource state via GAQL,\n"
         f"   (b) Execute a validate_only=True dry-run via skills/execute-mutation/scripts/run_mutation.py --dry-run to generate saved/data/last_dry_run.json,\n"
-        f"   (c) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute."
+        f"   (c) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute (which appends to saved/logs/mutation_audit.jsonl)."
     )
     print(
         json.dumps(

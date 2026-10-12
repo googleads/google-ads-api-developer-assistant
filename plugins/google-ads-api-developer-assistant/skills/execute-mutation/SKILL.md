@@ -63,7 +63,12 @@ Evaluate and articulate the exact consequences of the requested change across th
      --script saved/code/<mutation_name>.py \
      --execute
    ```
-   The `PreToolUse` lifecycle hook (`config/config_init.py`) will verify the cryptographic dry-run receipt in `saved/data/last_dry_run.json` and trigger a native CLI confirmation prompt (`"decision": "force_ask"`) displaying the consequence summary before the API call executes.
+   The `PreToolUse` lifecycle hook (`config/config_init.py`) will verify the cryptographic dry-run receipt in `saved/data/last_dry_run.json`, record `hook_prompted_at_iso` and CLI session metadata (`conversationId` / `session_id`, `transcriptPath`), and trigger a native CLI confirmation prompt (`"decision": "force_ask"`) displaying the consequence summary before the API call executes.
+4. **Automatic Mutation Audit Trail (`saved/logs/mutation_audit.jsonl`)**: Both `--dry-run` and `--execute` phases automatically intercept `GoogleAdsClient` mutation RPCs and append a structured JSONL audit record (`0600` permissions) containing:
+   - `actor`: OS user, hostname, `login_customer_id`, `target_customer_id`, auth type, and CLI session/transcript identifiers.
+   - `request`: `sent_at_iso`, `validate_only`, script path/SHA-256, and serialized Protobuf `Mutate*Request` payload(s).
+   - `approval`: `dry_run_validated_at_iso`, `hook_prompted_at_iso`, `user_approved_at_iso`, and disclosed before/after state and consequences.
+   - `response`: `received_at_iso`, `duration_ms`, `google_ads_request_ids`, and serialized Protobuf `Mutate*Response` (or `GoogleAdsFailure`) payload(s).
 
 ---
 
