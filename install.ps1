@@ -105,7 +105,7 @@ function Test-Enabled {
     }
 }
 
-# Helper to detect latest API version from client_libs and pre-seed config/api_version.txt
+# Helper to detect latest API version from client_libs and pre-seed config/assistant_config
 function Set-LatestApiVersion {
     param(
         [string]$SearchDir,
@@ -120,8 +120,21 @@ function Set-LatestApiVersion {
             if (-not (Test-Path -LiteralPath $TargetConfigDir)) {
                 New-Item -ItemType Directory -Force -Path $TargetConfigDir | Out-Null
             }
-            Set-Content -Path (Join-Path $TargetConfigDir "api_version.txt") -Value $Latest
-            Write-Host "Configured API version $Latest in $(Join-Path $TargetConfigDir 'api_version.txt')"
+            $CfgFile = Join-Path $TargetConfigDir "assistant_config"
+            $Cid = "12345678"
+            $ExecMutates = "false"
+            if (Test-Path -LiteralPath $CfgFile) {
+                $Existing = Get-Content -LiteralPath $CfgFile -Raw
+                if ($Existing -match '(?m)^\s*customer_id\s*=\s*["'']?([^"''\s#]+)["'']?') {
+                    $Cid = $Matches[1].Trim()
+                }
+                if ($Existing -match '(?mi)^\s*execute_mutates\s*=\s*["'']?(true|false)["'']?') {
+                    $ExecMutates = $Matches[1].ToLower()
+                }
+            }
+            $TomlContent = "api_version = `"$Latest`"`ncustomer_id = `"$Cid`"`nexecute_mutates = $ExecMutates`n"
+            Set-Content -Path $CfgFile -Value $TomlContent -NoNewline
+            Write-Host "Configured API version $Latest in $CfgFile"
         }
     }
 }

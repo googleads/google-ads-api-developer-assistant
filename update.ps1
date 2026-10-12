@@ -104,8 +104,21 @@ function Set-LatestApiVersion {
             if (-not (Test-Path -LiteralPath $TargetConfigDir)) {
                 New-Item -ItemType Directory -Force -Path $TargetConfigDir | Out-Null
             }
-            Set-Content -Path (Join-Path $TargetConfigDir "api_version.txt") -Value $Latest
-            Write-Host "Configured API version $Latest in $(Join-Path $TargetConfigDir 'api_version.txt')"
+            $CfgFile = Join-Path $TargetConfigDir "assistant_config"
+            $Cid = "12345678"
+            $ExecMutates = "false"
+            if (Test-Path -LiteralPath $CfgFile) {
+                $Existing = Get-Content -LiteralPath $CfgFile -Raw
+                if ($Existing -match '(?m)^\s*customer_id\s*=\s*["'']?([^"''\s#]+)["'']?') {
+                    $Cid = $Matches[1].Trim()
+                }
+                if ($Existing -match '(?mi)^\s*execute_mutates\s*=\s*["'']?(true|false)["'']?') {
+                    $ExecMutates = $Matches[1].ToLower()
+                }
+            }
+            $TomlContent = "api_version = `"$Latest`"`ncustomer_id = `"$Cid`"`nexecute_mutates = $ExecMutates`n"
+            Set-Content -Path $CfgFile -Value $TomlContent -NoNewline
+            Write-Host "Configured API version $Latest in $CfgFile"
         }
     }
 }
@@ -139,11 +152,11 @@ $TempConfigDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::New
 New-Item -ItemType Directory -Force -Path $TempConfigDir | Out-Null
 
 try {
-    $CidFiles = @("customer_id", "customer_id.txt")
-    foreach ($CidFile in $CidFiles) {
-        $SrcCid = Join-Path $ConfigDir $CidFile
-        if (Test-Path -LiteralPath $SrcCid) {
-            Copy-Item -LiteralPath $SrcCid -Destination (Join-Path $TempConfigDir $CidFile) -Force
+    $CfgFiles = @("assistant_config")
+    foreach ($CfgFile in $CfgFiles) {
+        $SrcCfg = Join-Path $ConfigDir $CfgFile
+        if (Test-Path -LiteralPath $SrcCfg) {
+            Copy-Item -LiteralPath $SrcCfg -Destination (Join-Path $TempConfigDir $CfgFile) -Force
         }
     }
 
@@ -153,19 +166,19 @@ try {
     }
     Write-Host "Successfully updated repository."
 
-    foreach ($CidFile in $CidFiles) {
-        $BackupCid = Join-Path $TempConfigDir $CidFile
-        if (Test-Path -LiteralPath $BackupCid) {
-            Copy-Item -LiteralPath $BackupCid -Destination (Join-Path $ConfigDir $CidFile) -Force
+    foreach ($CfgFile in $CfgFiles) {
+        $BackupCfg = Join-Path $TempConfigDir $CfgFile
+        if (Test-Path -LiteralPath $BackupCfg) {
+            Copy-Item -LiteralPath $BackupCfg -Destination (Join-Path $ConfigDir $CfgFile) -Force
         }
     }
 }
 catch {
     Write-Error "ERROR: $_"
-    foreach ($CidFile in $CidFiles) {
-        $BackupCid = Join-Path $TempConfigDir $CidFile
-        if (Test-Path -LiteralPath $BackupCid) {
-            Copy-Item -LiteralPath $BackupCid -Destination (Join-Path $ConfigDir $CidFile) -Force
+    foreach ($CfgFile in $CfgFiles) {
+        $BackupCfg = Join-Path $TempConfigDir $CfgFile
+        if (Test-Path -LiteralPath $BackupCfg) {
+            Copy-Item -LiteralPath $BackupCfg -Destination (Join-Path $ConfigDir $CfgFile) -Force
         }
     }
     exit 1

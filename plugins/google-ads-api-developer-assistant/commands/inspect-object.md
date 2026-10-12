@@ -11,7 +11,7 @@ Dynamically inspects the fields, data types, nested messages, and Enum values of
 1. **Extract Parameters**:
    - Extract the object name from `$ARGUMENTS` (e.g. `Campaign`, `AdGroupCriterion`, `CampaignStatusEnum`, `AdGroupAd`, `BiddingStrategy`).
    - If not provided, prompt the user for the object, message, or Enum name to inspect.
-   - Resolve API version from `config/api_version.txt` or default to the latest discovered version.
+   - Resolve API version from `config/assistant_config` (`api_version`) or default to the latest discovered version.
 
 2. **Execute Inspection**:
    - Run the inspection script:

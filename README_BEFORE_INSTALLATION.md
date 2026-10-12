@@ -67,6 +67,13 @@ Use the update script at any time to sync client libraries or add additional lan
   .\update.ps1 -Type claude -Dotnet
   ```
 
-## 6. Optional Configuration
-* **Default Customer ID:** Specify your default customer ID in `config/customer_id` (e.g., `1234567890`).
-* **API Version:** The latest stable API version is automatically detected and cached in `config/api_version.txt`. You can edit this file at any time to lock or override the target API version.
+## 6. Optional Configuration (`config/assistant_config`)
+All assistant settings are stored in a single TOML configuration file at `config/assistant_config`:
+```toml
+api_version = "v25"
+customer_id = "12345678"
+execute_mutates = false
+```
+* **Default Customer ID (`customer_id`):** Specify your default customer ID (e.g., `customer_id = "1234567890"`).
+* **API Version (`api_version`):** The latest stable API version is automatically detected and stored in `config/assistant_config`. You can edit this value at any time to lock or override the target API version.
+* **Live Mutations (`execute_mutates`):** Set `execute_mutates = true` or `false` (defaults to `false`) to control whether live Google Ads API mutations are permitted through the 4-Step HITL verification flow.

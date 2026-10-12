@@ -26,7 +26,7 @@ def get_effective_api_version(payload: dict = None) -> str:
     """
     Resolves the effective Google Ads API version using the standard hierarchy:
     1. Caller/user override from payload ('api_version') or GOOGLE_ADS_API_VERSION env var.
-    2. Cached version from config/api_version.txt.
+    2. Cached version from config/assistant_config (TOML).
     3. Dynamic discovery from local client_libs/ directory.
     4. Installed google.ads.googleads package attribute inspection.
     5. Fallback default ('v25').
@@ -44,28 +44,38 @@ def get_effective_api_version(payload: dict = None) -> str:
             env_version = f"v{env_version}"
         return env_version
 
-    # 2. Check config/api_version.txt in candidate configuration directories
+    # 2. Check config/assistant_config (TOML) in candidate configuration directories
     base_dir = os.path.dirname(os.path.abspath(__file__))
     candidate_config_files = [
         # Relative to sidecar directory (in plugin or project)
-        os.path.join(base_dir, "../../config/api_version.txt"),
-        os.path.join(base_dir, "../../../../config/api_version.txt"),
+        os.path.join(base_dir, "../../config/assistant_config"),
+        os.path.join(base_dir, "../../../../config/assistant_config"),
         # Current working directory
-        os.path.abspath("config/api_version.txt"),
+        os.path.abspath("config/assistant_config"),
         # Standard plugin and project locations in user home
-        os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/config/api_version.txt"),
-        os.path.expanduser("~/.gemini/config/plugins/google_ads_assistant_plugin/config/api_version.txt"),
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/assistant_config"
+        ),
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google_ads_assistant_plugin/config/assistant_config"
+        ),
     ]
 
     for config_file in candidate_config_files:
         if os.path.isfile(config_file):
             try:
                 with open(config_file, "r", encoding="utf-8") as f:
-                    content = f.read().strip()
-                    if content:
-                        if not content.startswith("v") and content.isdigit():
-                            content = f"v{content}"
-                        return content
+                    content = f.read()
+                m = re.search(
+                    r'(?m)^\s*api_version\s*=\s*["\']?([^"\'\s#]+)["\']?',
+                    content,
+                )
+                if m:
+                    ver = m.group(1).strip()
+                    if ver:
+                        if not ver.startswith("v") and ver.isdigit():
+                            ver = f"v{ver}"
+                        return ver
             except OSError:
                 continue
 
@@ -113,20 +123,23 @@ def get_effective_api_version(payload: dict = None) -> str:
             if user_input:
                 if not user_input.startswith("v") and user_input.isdigit():
                     user_input = f"v{user_input}"
-                # Save confirmed version to config/api_version.txt
+                # Save confirmed version to config/assistant_config
                 try:
+                    from config.config_init import write_assistant_config
+
                     target_config_file = candidate_config_files[0]
-                    os.makedirs(os.path.dirname(target_config_file), exist_ok=True)
-                    with open(target_config_file, "w", encoding="utf-8") as f:
-                        f.write(f"{user_input}\n")
-                except OSError:
+                    write_assistant_config(
+                        {"api_version": user_input},
+                        config_dir=os.path.dirname(target_config_file),
+                    )
+                except Exception:
                     pass
                 return user_input
         except (EOFError, KeyboardInterrupt):
             pass
 
     raise ValueError(
-        "Google Ads API version could not be automatically determined. Please supply an 'api_version' (e.g., 'v25') in the request payload or configure config/api_version.txt."
+        "Google Ads API version could not be automatically determined. Please supply an 'api_version' (e.g., 'v25') in the request payload or configure config/assistant_config."
     )
 
 
@@ -451,31 +464,10 @@ if __name__ == "__main__":
 def run_server():
     # Startup initialization: sync ~/google-ads.yaml and ensure key-value pair is configured
     try:
-        from config.config_init import sync_and_set_config_kv
+        from config.config_init import get_configured_customer_id, sync_and_set_config_kv
 
         config_key = os.environ.get("GOOGLE_ADS_CONFIG_KEY", "login_customer_id")
         config_val = os.environ.get("GOOGLE_ADS_CONFIG_VALUE")
-        if not config_val:
-            candidate_cid_files = [
-                os.path.join(base_dir, "../../config/customer_id"),
-                os.path.join(base_dir, "../../config/customer_id.txt"),
-                os.path.join(base_dir, "../../../../config/customer_id"),
-                os.path.join(base_dir, "../../../../config/customer_id.txt"),
-                os.path.abspath("config/customer_id"),
-                os.path.abspath("config/customer_id.txt"),
-            ]
-            for cid_file in candidate_cid_files:
-                if os.path.isfile(cid_file):
-                    try:
-                        with open(cid_file, "r", encoding="utf-8") as f:
-                            content = f.read().strip()
-                            if content:
-                                config_val = content
-                                break
-                    except OSError:
-                        continue
-            if not config_val:
-                config_val = "1234567890"
 
         candidate_config_dirs = [
             os.path.abspath("config"),
@@ -487,6 +479,9 @@ def run_server():
             if os.path.isdir(cd):
                 target_config_dir = cd
                 break
+
+        if not config_val:
+            config_val = get_configured_customer_id(config_dir=target_config_dir) or "1234567890"
 
         config_file = sync_and_set_config_kv(
             key=config_key,

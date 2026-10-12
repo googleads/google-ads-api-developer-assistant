@@ -20,7 +20,7 @@ An agentic developer assistant plugin for the **Google Ads API**. This plugin eq
   - [1. Prerequisites](#1-prerequisites)
   - [2. Plugin Installation](#2-plugin-installation)
   - [3. Credentials Configuration](#3-credentials-configuration)
-  - [4. API Versioning](#4-api-versioning)
+  - [4. Assistant Configuration (`config/assistant_config`)](#4-assistant-configuration-configassistant_config)
 - [CLI Scripts & Usage](#cli-scripts--usage)
   - [GAQL Validation](#gaql-validation)
   - [Protobuf Object & Enum Inspection](#protobuf-object--enum-inspection)
@@ -60,6 +60,9 @@ google-ads-api-developer-assistant/
 ├── README.md                                # Documentation & usage guide
 ├── migration.md                             # Platform migration notes & runtime limitations
 ├── mcp_config.json                          # MCP server configuration
+├── config/
+│   ├── assistant_config                     # Unified TOML config (api_version, customer_id, execute_mutates)
+│   └── config_init.py                       # Session config initializer & PreInvocation/PreToolUse hook
 ├── rules/
 │   └── google_ads_rules.md                  # Mandatory system directives & safety constraints
 ├── commands/                               # Claude Code custom slash commands
@@ -76,11 +79,16 @@ google-ads-api-developer-assistant/
 ├── skills/                                  # Bundled skills and executable diagnostic scripts
 │   ├── assistant-tutorial/                  # Interactive guided walkthrough
 │   │   └── SKILL.md
+│   ├── execute-mutation/                    # 4-Step HITL mutation runner & consequence verifier
+│   │   ├── SKILL.md
+│   │   └── scripts/run_mutation.py
 │   ├── explain/                             # Conceptual 4-part explanations with real-world analogies
 │   │   └── SKILL.md
-│   ├── ext-version/                         # Assistant extension version extraction
+│   ├── ext-version/                         # Assistant & API version discovery
 │   │   ├── SKILL.md
-│   │   └── scripts/get_extension_version.py
+│   │   └── scripts/
+│   │       ├── get_extension_version.py
+│   │       └── get_latest_api_version.py
 │   ├── get-cids-under-mcc/                  # Account hierarchy resolution & CID listing
 │   │   ├── SKILL.md
 │   │   └── scripts/get_cids_under_mcc.py
@@ -157,9 +165,9 @@ When installed in Claude Code, the plugin provides custom slash commands with bu
 The assistant strictly complies with [google_ads_rules.md](rules/google_ads_rules.md):
 
 1. **Validate Before Act Protocol**:
-   - Reads the target Google Ads API version from `config/api_version.txt`. If unset, identifies the latest stable release, presents it for user confirmation, and persists it.
+   - Reads the target Google Ads API version (`api_version`) from `config/assistant_config`. If unset, identifies the latest stable release, presents it for user confirmation, and persists it.
 2. **4-Step HITL Mutation & Consequence Verification Mandate**:
-   - Executing live mutations (`mutate`, `create`, `update`, `remove`) without a verified `validate_only=True` dry-run receipt (`saved/data/last_dry_run.json`) and explicit consequence confirmation is hard-blocked by the `PreToolUse` hook (`config/config_init.py`).
+   - Executing live mutations (`mutate`, `create`, `update`, `remove`) requires `execute_mutates = true` in `config/assistant_config`, a verified `validate_only=True` dry-run receipt (`saved/data/last_dry_run.json`), and explicit consequence confirmation via the `PreToolUse` hook (`config/config_init.py`).
 3. **GAQL Syntax Strictness**:
    - **No `OR` operator**: The `OR` operator is strictly forbidden in GAQL. The assistant rewrites queries using `IN` or splits them into separate requests.
    - **No `FROM` clause in metadata**: Queries against `GoogleAdsFieldService` must not contain a `FROM` clause.
@@ -178,7 +186,7 @@ All write/mutation requests follow a strict two-gate defense-in-depth architectu
 1. **Pre-Mutation State & Blast Radius Lookup (GAQL Read):** Queries target resource state (`status`, `amount_micros`, `cpc_bid_micros` converted from `micros` by dividing by `1,000,000`) and active child entity counts (`ad_group`, `ad_group_ad`).
 2. **Mandatory `validate_only=True` Dry-Run & Signed Receipt:** Executes the script in `--dry-run` mode via `skills/execute-mutation/scripts/run_mutation.py --dry-run` to validate schema, `FieldMask` paths, and policy compliance against the live Google Ads API, writing a SHA-256 signed receipt to `saved/data/last_dry_run.json`.
 3. **Structured Consequence Disclosure & User Prompt:** Presents the **Mutation & Consequence Verification Card** detailing financial deltas, ad-serving blast radius, and reversibility (`REVERSIBLE` vs. `IRREVERSIBLE`), pausing for explicit user confirmation.
-4. **Deterministic `PreToolUse` Hook Gate & `Mutate-to-Get` Execution:** When `--execute` runs, `config/config_init.py` verifies the freshness ($\le 30\text{ min}$) and SHA-256 script hash of `saved/data/last_dry_run.json`. Unverified or modified scripts are hard-blocked (`"decision": "deny"`), while verified mutations trigger a native CLI confirmation prompt (`"decision": "force_ask"` in `agy` and `"permissionDecision": "ask"` in `Claude Code CLI`) displaying the consequence summary before executing with `ResponseContentType.MUTABLE_RESOURCE`.
+4. **Deterministic `PreToolUse` Hook Gate & `Mutate-to-Get` Execution:** When `--execute` runs, `config/config_init.py` verifies `execute_mutates = true` in `config/assistant_config` and checks the freshness ($\le 30\text{ min}$), `script_sha256`, and `request_sha256` of `saved/data/last_dry_run.json`. Unverified or modified scripts are hard-blocked (`"decision": "deny"`), while verified mutations trigger a native CLI confirmation prompt (`"decision": "force_ask"` in `agy` and `"permissionDecision": "ask"` in `Claude Code CLI`) displaying the consequence summary before executing with `ResponseContentType.MUTABLE_RESOURCE`.
 
 ---
 
@@ -226,12 +234,13 @@ Set the environment variable:
 export GOOGLE_ADS_CONFIGURATION_FILE_PATH="config/google-ads.yaml"
 ```
 
-### 4. API Versioning
+### 4. Assistant Configuration (`config/assistant_config`)
 
-Set your preferred API version in `config/api_version.txt` (e.g., `v25`):
-```bash
-mkdir -p config
-echo "v25" > config/api_version.txt
+Configure your API version, default Customer ID, and mutate switch in `config/assistant_config` (TOML format):
+```toml
+api_version = "v25"
+customer_id = "12345678"
+execute_mutates = false
 ```
 
 ---

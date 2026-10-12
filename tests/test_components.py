@@ -567,6 +567,47 @@ class TestExtVersion:
             ver = get_latest_api_version.detect_latest_api_version()
             assert ver == "v26"
 
+    def test_detect_latest_api_version_updates_assistant_config_automatically(
+        self, tmp_path, monkeypatch
+    ):
+        from config import config_init
+
+        work_dir = tmp_path / "workspace"
+        cfg_dir = work_dir / "config"
+        cfg_dir.mkdir(parents=True)
+        cfg_file = cfg_dir / "assistant_config"
+        cfg_file.write_text(
+            'api_version = "v23"\ncustomer_id = "9998887776"\nexecute_mutates = true\n',
+            encoding="utf-8",
+        )
+
+        googleads_dir = (
+            work_dir / "client_libs" / "google-ads-python" / "google" / "ads" / "googleads"
+        )
+        for v in ("v23", "v25", "v28"):
+            (googleads_dir / v).mkdir(parents=True)
+
+        monkeypatch.chdir(work_dir)
+        ver = get_latest_api_version.detect_latest_api_version(
+            update_config=True, config_dir=str(cfg_dir)
+        )
+        assert ver == "v28"
+        parsed = config_init.parse_assistant_config(cfg_file.read_text(encoding="utf-8"))
+        assert parsed["api_version"] == "v28"
+        assert parsed["customer_id"] == "9998887776"
+        assert parsed["execute_mutates"] is True
+
+        # Also verify config_init.sync_api_version automatically updates config/assistant_config
+        (googleads_dir / "v29").mkdir(parents=True)
+        synced_ver = config_init.sync_api_version(config_dir=str(cfg_dir))
+        assert synced_ver == "v29"
+        parsed_after = config_init.parse_assistant_config(
+            cfg_file.read_text(encoding="utf-8")
+        )
+        assert parsed_after["api_version"] == "v29"
+        assert parsed_after["customer_id"] == "9998887776"
+        assert parsed_after["execute_mutates"] is True
+
     def test_detect_latest_api_version_fallback(self):
         with patch("os.path.isdir", return_value=False), \
              patch.dict("sys.modules", {"google.ads.googleads": None}):
@@ -959,7 +1000,10 @@ class TestSidecarA2A:
         work_dir = tmp_path / "workspace"
         cfg_dir = work_dir / "config"
         cfg_dir.mkdir(parents=True)
-        (cfg_dir / "customer_id").write_text("7778889990\n", encoding="utf-8")
+        (cfg_dir / "assistant_config").write_text(
+            'api_version = "v25"\ncustomer_id = "7778889990"\nexecute_mutates = false\n',
+            encoding="utf-8",
+        )
 
         dummy_lib_yaml = work_dir / "client_libs" / "google-ads-python" / "google-ads.yaml"
         dummy_lib_yaml.parent.mkdir(parents=True)
@@ -1082,7 +1126,10 @@ class TestAdditionalSkillCoverage:
         monkeypatch.chdir(work_dir)
         latest = sync_client_libs.update_api_version_cache_if_needed(str(lib_dir))
         assert latest == "v27"
-        assert (cfg_dir / "api_version.txt").read_text(encoding="utf-8").strip() == "v27"
+        cfg_content = (cfg_dir / "assistant_config").read_text(encoding="utf-8")
+        assert 'api_version = "v27"' in cfg_content
+        assert 'customer_id = "12345678"' in cfg_content
+        assert "execute_mutates = false" in cfg_content
 
     def test_troubleshoot_conversions_alerts_and_report_file(self, tmp_path):
         mock_client = MagicMock()

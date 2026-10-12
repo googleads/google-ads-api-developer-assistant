@@ -87,8 +87,8 @@ try {
         Write-Error "FAIL: plugin.json missing in $AgyPluginDir"
         exit 1
     }
-    if (-not (Test-Path (Join-Path $AgyPluginDir "config\api_version.txt"))) {
-        Write-Error "FAIL: config\api_version.txt missing in $AgyPluginDir"
+    if (-not (Test-Path (Join-Path $AgyPluginDir "config\assistant_config"))) {
+        Write-Error "FAIL: config\assistant_config missing in $AgyPluginDir"
         exit 1
     }
     Write-Host "PASS: Antigravity plugin successfully installed."

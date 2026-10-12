@@ -40,7 +40,7 @@ python3 skills/sync-client-libs/scripts/sync_client_libs.py --json
 
 ## Supported Ecosystems
 
-- **Python (`google-ads-python`)**: Reads `pyproject.toml` / `ChangeLog`, updates `config/api_version.txt` on sync.
+- **Python (`google-ads-python`)**: Reads `pyproject.toml` / `ChangeLog`, updates `api_version` in `config/assistant_config` on sync.
 - **PHP (`google-ads-php`)**: Reads `composer.json` metadata.
 - **Ruby (`google-ads-ruby`)**: Reads `*.gemspec` / `version.rb`.
 - **Java (`google-ads-java`)**: Reads `pom.xml`.

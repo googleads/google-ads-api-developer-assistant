@@ -1,27 +1,38 @@
-* 4.1.0
+# ChangeLog
+
+## 4.1.0
+
+- **Unified TOML Assistant Configuration (`config/assistant_config`):**
+  - Consolidated `config/api_version.txt`, `config/customer_id`, and `config/execute_mutates` into a single TOML configuration file `config/assistant_config` containing `api_version`, `customer_id`, and `execute_mutates` (defaulting to `execute_mutates = false`).
+  - Added TOML configuration helpers in `config/config_init.py` (`parse_assistant_config`, `format_assistant_config`, `read_assistant_config`, `write_assistant_config`, `get_configured_customer_id`, `get_configured_api_version`, `is_execute_mutates_enabled`, and `sync_api_version`) with workspace-first precedence (`./config/assistant_config` overriding the plugin's `config/assistant_config`) and automatic fallback migration from legacy single-value files.
+  - Updated `get_latest_api_version.py` (`update_assistant_config_api_version`) and `sync_client_libs.py` (`update_api_version_cache_if_needed`) to automatically update `api_version` in `config/assistant_config` across workspace and plugin config directories while preserving `customer_id` and `execute_mutates`.
+  - Updated `install.sh`, `install.ps1`, `update.sh`, and `update.ps1` to seed, back up, and restore `config/assistant_config` across installations and updates.
 - **4-Step HITL Mutation & Consequence Verification Protocol (`execute-mutation`):**
   - Replaced the blanket `NO MUTATE` / `READ-ONLY` hard prohibition in `rules/google_ads_rules.md` (Section 1.2 & Section 4.3) with the mandatory **4-Step HITL Mutation & Consequence Verification Protocol**: (1) GAQL Before-State & blast-radius lookup, (2) live `validate_only=True` dry-run with a SHA-256 signed verification receipt (`saved/data/last_dry_run.json`), (3) structured Consequence & Impact Disclosure to the user with explicit confirmation, and (4) `PreToolUse` hook-gated live execution (`--execute` with `ResponseContentType.MUTABLE_RESOURCE`).
+  - Added user-configurable `execute_mutates` master switch (`execute_mutates = false` by default in `config/assistant_config`) enforced across `evaluate_mutation_guard()` (`PreToolUse` hook), `run_mutation.py` (`--execute`), and the A2A sidecar (`handle_execute_mutation`), while always permitting `--dry-run` (`validate_only=True`) validations.
   - Added the `execute-mutation` skill (`skills/execute-mutation/SKILL.md`) defining the Google Ads Consequence Matrix across Budgets & Bidding, Status Changes (`PAUSED` / `ENABLED`), Destructive `REMOVE` Operations, Targeting & Exclusions, and Conversion Actions & Goals, alongside a standard `--dry-run` / `--execute` Python mutation script template.
-  - Implemented `skills/execute-mutation/scripts/run_mutation.py` (`write_dry_run_receipt`, `load_and_verify_receipt`, `format_verification_card`, `mark_receipt_executed`) to run `validate_only=True` dry-runs, generate SHA-256 tamper-evident receipts (`saved/data/last_dry_run.json`), render the **Mutation & Consequence Verification Card**, and enforce one-time receipt replay protection on live execution.
+  - Implemented `skills/execute-mutation/scripts/run_mutation.py` (`write_dry_run_receipt`, `load_and_verify_receipt`, `format_verification_card`, `mark_receipt_executed`) to run `validate_only=True` dry-runs, generate SHA-256 tamper-evident receipts (`saved/data/last_dry_run.json`), bind serialized protobuf RPC request payloads (`payload_sha256` via gRPC client interceptor), render the **Mutation & Consequence Verification Card**, and enforce one-time receipt replay protection on live execution.
+  - Added append-only JSONL mutation audit logging (`saved/logs/mutation_audit.jsonl`, `append_mutation_audit_log`, `query_mutation_audit_log`, and `--audit-log` CLI inspection) recording `DRY_RUN_VERIFIED`, `LIVE_EXECUTION_ATTEMPT`, `EXECUTED`, and `EXECUTION_FAILED` lifecycle events.
 - **Deterministic `PreToolUse` Mutation Guard (`config/config_init.py`):**
   - Added `evaluate_mutation_guard()` and `_verify_dry_run_receipt_for_hook()` to `handle_hook()` in `config/config_init.py`:
     - Automatically allows read-only queries (`search`, `search_stream`, diagnostic/validation skill scripts) and `validate_only=True` / `--dry-run` executions (`"decision": "allow"`).
-    - Hard-blocks (`"decision": "deny"` / `"permissionDecision": "deny"`) any live `.mutate*()`, `.apply_recommendation()`, conversion upload, or batch job execution lacking a fresh ($\le 30\text{ min}$) `DRY_RUN_PASSED` receipt in `saved/data/last_dry_run.json`, missing consequence disclosures, or exhibiting a script SHA-256 mismatch.
+    - Hard-blocks (`"decision": "deny"` / `"permissionDecision": "deny"`) any live `.mutate*()`, `.apply_recommendation()`, conversion upload, or batch job execution when `execute_mutates = false` in `config/assistant_config`, or when lacking a fresh ($\le 30\text{ min}$) `DRY_RUN_PASSED` receipt in `saved/data/last_dry_run.json`, missing consequence disclosures, or exhibiting a script or protobuf RPC payload SHA-256 mismatch.
     - Forces an interactive CLI confirmation prompt (`"decision": "force_ask"` in `agy` and `"permissionDecision": "ask"` in `Claude Code CLI`) displaying the full Consequence Summary (`Customer ID`, `Operation`, `Before -> After` state delta, `Reversibility`, and `Consequences`) when a verified live mutation executes.
-  - Updated `PreInvocation` ephemeral prompt injection in `config/config_init.py` to enforce the 4-step HITL mutation requirement on every turn.
-- **A2A Sidecar & Testing:**
+  - Updated `PreInvocation` ephemeral prompt injection in `config/config_init.py` to surface the active `execute_mutates` state from `config/assistant_config` and enforce the 4-step HITL mutation requirement on every turn.
+- **A2A Sidecar, Documentation & Testing:**
   - Added `PREPARE_MUTATION` and `EXECUTE_MUTATION` intent handlers (`handle_prepare_mutation`, `handle_execute_mutation` with `destructive_hint: True`) in `sidecars/google-ads-a2a-service/server.py`.
-  - Added unit test suite `tests/test_hitl_mutation_guard.py` covering read-only/dry-run allowance, unverified live mutation denial, verified receipt `"force_ask"` prompting, and post-dry-run SHA-256 tamper detection.
+  - Added the **How Mutates Work** and `config/assistant_config` documentation sections to `README.md` and `plugins/google-ads-api-developer-assistant/README.md`, and updated `README_BEFORE_INSTALLATION.md` and `FAQ.md`.
+  - Added and expanded unit test suites in `tests/test_hitl_mutation_guard.py` and `tests/test_components.py` covering `config/assistant_config` parsing/precedence, `execute_mutates` gating, read-only/dry-run allowance, unverified live mutation denial, verified receipt `"force_ask"` prompting, script & protobuf RPC payload SHA-256 tamper detection, and audit trail logging.
 - **Configuration Management & Session Initialization (`config_init.py`):**
   - Implemented `config/config_init.py` with automated multi-format configuration parsing (`parse_ruby_config`, `parse_ini_config`, `parse_properties_config`, `write_yaml_config`) to support fallback credentials from PHP, Ruby, and Java setups.
   - Added automatic extension version discovery (`get_version`) and idempotent `copy_and_append_version()` to append or update `ads_assistant: {version}` without duplicating lines across restarts.
   - Added `sync_and_set_config_kv()` and `get_config_file_path()` to reconstruct `config/google-ads.yaml` from `~/google-ads.yaml` (or fallbacks) at session start, enforce POSIX `0600` permissions with cross-platform error handling, and bind `GOOGLE_ADS_CONFIGURATION_FILE_PATH`.
-  - Added CLI `main()` entry point supporting `--key`, `--value`, `--config-dir`, and `--source-yaml` flags with automatic test customer ID discovery from `config/customer_id`.
+  - Added CLI `main()` entry point supporting `--key`, `--value`, `--config-dir`, and `--source-yaml` flags with automatic test customer ID discovery from `config/assistant_config`.
   - Added plugin lifecycle hook definitions (`hooks.json`) configuring `PreInvocation` and `PreToolUse` hooks (supporting `run_command`, `Bash`, and `bash` tools) to inject ephemeral configuration notices and rewrite commands before execution.
-  - Added command interception in `handle_hook()` to automatically rewrite references from `~/google-ads.yaml`, `/home/.../google-ads.yaml`, and `os.path.expanduser('~/google-ads.yaml')` to `config/google-ads.yaml`, rewrite `GoogleAdsClient.load_from_storage()` calls to pass `path="config/google-ads.yaml"`, and prepend `export GOOGLE_ADS_CONFIGURATION_FILE_PATH=...`.
+  - Added command interception in `handle_hook()` to automatically rewrite references from `~/google-ads.yaml`, `os.path.expanduser('~/google-ads.yaml')`, and user home directory paths to `config/google-ads.yaml`, rewrite `GoogleAdsClient.load_from_storage()` calls to pass `path="config/google-ads.yaml"`, and prepend `export GOOGLE_ADS_CONFIGURATION_FILE_PATH=...`.
   - Added automatic cleanup of dummy upstream `google-ads.yaml` files inside `client_libs/` in `sync_and_set_config_kv()`, `install.sh`, `update.sh`, `install.ps1`, and `update.ps1` to prevent multiple configuration file discovery and isolate `GOOGLE_ADS_CONFIGURATION_FILE_PATH` strictly to `config/google-ads.yaml`.
 - **Client Configuration & Home Directory Isolation:**
-  - Enforced strict isolation requirement that all Python client initializations, skill scripts, and generated code must load configuration from `config/google-ads.yaml` and NEVER default to or reference the user's home directory (`~/google-ads.yaml` or `/home/.../google-ads.yaml`).
+  - Enforced strict isolation requirement that all Python client initializations, skill scripts, and generated code must load configuration from `config/google-ads.yaml` and NEVER default to or reference the user's home directory (`~/google-ads.yaml`).
   - Added `_get_config_path()` helper across all skill scripts (`validate_gaql.py`, `inspect_object.py`, `create_pmax_webpage_filter.py`, `troubleshoot_conversions.py`, `get_recent_gclids.py`, `get_cids_under_mcc.py`) to pass `path=cfg_path` to `GoogleAdsClient.load_from_storage`, prioritizing plugin configuration and preventing fallbacks to default arguments.
   - Updated `server.py` generated code template to output `GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version="{api_version}")`.
   - Added per-request configuration synchronization in `server.py` `do_POST` when A2A tasks arrive.
@@ -30,9 +41,10 @@
   - Added bounded buffer reads (64KB) and nested history stripping in `troubleshoot_conversions.py` (`merge_previous_findings`) to prevent exponential memory allocation and file growth across consecutive diagnostic runs, and added configurable `output_dir` support.
   - Added isolated test fixtures with `tmp_path` in `tests/test_components.py`.
 
-* 4.0.0
+## 4.0.0
+
 - **Plugin Architecture & Migration:**
-  - Migrated from legacy project-based structure (.agents/skills, api_examples/, update_project_context.py, AGENTS.md) to a unified multi-platform plugin architecture under `plugins/google-ads-api-developer-assistant/`.
+  - Migrated from legacy project-based structure (`.agents/skills`, `api_examples/`, `update_project_context.py`, `AGENTS.md`) to a unified multi-platform plugin architecture under `plugins/google-ads-api-developer-assistant/`.
   - Configured repository with `.claude-plugin/marketplace.json` for native Claude Code marketplace discovery and installation (`claude plugin marketplace add` / `claude plugin install`).
   - Implemented dual-contract governance (`rules/google_ads_rules.md`) across both Antigravity and Claude Code agent environments.
   - Added mandatory `DEFAULT TO PYTHON FOR EXECUTION` hard constraint directive in `rules/google_ads_rules.md` requiring the assistant to always use Python for executing code and running tasks across the project unless explicitly requested otherwise by the user.
@@ -68,128 +80,139 @@
 - **Documentation:**
   - Updated documentation across `README.md` (including "Stay in sync" section), `plugins/google-ads-api-developer-assistant/README.md`, `FAQ.md`, `README_BEFORE_INSTALLATION.md`, and `migration.md`.
 
-* 3.0.0
-- Fixed a breaking bug in install.ps1 and tests/test_install.ps1 where legacy settings.json references caused the Windows installation to crash.
-- Changed the assistant's role description in AGENTS.md to "Expert Developer for the Google Ads API".
-- Added a rule to AGENTS.md requiring report-type queries to print retrieved results to stdout in a structured table format.
-- Migrate from gemini-cli to antigravity.
+## 3.0.0
+
+- Fixed a breaking bug in `install.ps1` and `tests/test_install.ps1` where legacy `settings.json` references caused the Windows installation to crash.
+- Changed the assistant's role description in `AGENTS.md` to "Expert Developer for the Google Ads API".
+- Added a rule to `AGENTS.md` requiring report-type queries to print retrieved results to stdout in a structured table format.
+- Migrate from `gemini-cli` to `antigravity`.
 - Moved GAQL validation to a skill.
 - Added skill to fetch all child accounts under an MCC.
-- Added rule to AGENTS.md to always check Devsite first for current version.
-- Added rule to AGENTS.md to prevent using SQL aggregate functions in GAQL queries.
-- Converted explain command to a skill.
-- Converted step_by_step command to a skill.
-- Replaced conversions_support_package with troubleshoot_conversions skill.
-- Relocated conversion troubleshooting and upload summary scripts and tests into troubleshoot_conversions skill directory.
-- Added troubleshoot_conversions skill with EVAL.txtpb evaluation definitions and TEST.md test documentation.
+- Added rule to `AGENTS.md` to always check Devsite first for current version.
+- Added rule to `AGENTS.md` to prevent using SQL aggregate functions in GAQL queries.
+- Converted `explain` command to a skill.
+- Converted `step_by_step` command to a skill.
+- Replaced `conversions_support_package` with `troubleshoot_conversions` skill.
+- Relocated conversion troubleshooting and upload summary scripts and tests into `troubleshoot_conversions` skill directory.
+- Added `troubleshoot_conversions` skill with `EVAL.txtpb` evaluation definitions and `TEST.md` test documentation.
 - Added datetime stamps to all log messages.
-- Log file is now written to .agents/ directory and is not reset on each run.
+- Log file is now written to `.agents/` directory and is not reset on each run.
 - Made structure of directory and files Antigravity compliant.
-- Added required api_version argument to get_cids_under_mcc, validate_gaql, and troubleshoot_conversions skills.
-- Added static query checks to validate_gaql for date segments, click_view, and change_status.
-- Added new inspect_object skill for dynamically looking up Protobuf messages and Enums.
-- Added new pmax_listing_filter skill for creating Performance Max webpage URL exclusions.
-- Added validate_conversion_upload helper script to troubleshoot_conversions skill to pre-validate upload file formatting.
-- Streamlined AGENTS.md and de-duplicated conversions/AGENTS.md to use new programmatic skills.
-- Resolved Namespace AttributeError bug in api_examples/conversion_reports.py by adding the limit argument.
-- Renamed skill simply to explain.
-- Drastically reduced the size of conversions/AGENTS.md by migrating most of the functionality to a skill.
+- Added required `api_version` argument to `get_cids_under_mcc`, `validate_gaql`, and `troubleshoot_conversions` skills.
+- Added static query checks to `validate_gaql` for date segments, `click_view`, and `change_status`.
+- Added new `inspect_object` skill for dynamically looking up Protobuf messages and Enums.
+- Added new `pmax_listing_filter` skill for creating Performance Max webpage URL exclusions.
+- Added `validate_conversion_upload` helper script to `troubleshoot_conversions` skill to pre-validate upload file formatting.
+- Streamlined `AGENTS.md` and de-duplicated `conversions/AGENTS.md` to use new programmatic skills.
+- Resolved `Namespace AttributeError` bug in `api_examples/conversion_reports.py` by adding the `limit` argument.
+- Renamed skill simply to `explain`.
+- Drastically reduced the size of `conversions/AGENTS.md` by migrating most of the functionality to a skill.
 - Created cache file for current API version with TTL of 19 hours.
-- .venv is not deleted at the end of the session. Its Python version is checked on startup and if a newer version
-   is available a new .venv is created.
+- `.venv` is not deleted at the end of the session. Its Python version is checked on startup and if a newer version is available a new `.venv` is created.
 
+## 2.3.0
 
-* 2.3.0
-- Added context_dir argument to update scripts to add additional directories. (e.g., your codebase)
+- Added `context_dir` argument to update scripts to add additional directories (e.g., your codebase).
 - When the assistant executes Python code it is in a virtual environment that has the Google Ads API Client Libraries installed.
-- AT init check the current version of the extension again the latest on github. Display a message is an update is
-available.
+- At init check the current version of the extension against the latest on GitHub. Display a message if an update is available.
 - Silenced extraneous startup messages.
-- Changed name of startup hook to configure_environment.py.
-- Changed name of cleanup hook to cleanup_environment.py.
-- Removed placeholders from GEMINI.md.
+- Changed name of startup hook to `configure_environment.py`.
+- Changed name of cleanup hook to `cleanup_environment.py`.
+- Removed placeholders from `GEMINI.md`.
 - Optimized code to retrieve disapproved ads.
-- Silenced automated pip install screen output telemetry noise.
-- Attached diagnostic dynamic path traces logs auditing isolation SessionStart traversals.
+- Silenced automated `pip install` screen output telemetry noise.
+- Attached diagnostic dynamic path traces logs auditing isolation `SessionStart` traversals.
 - Documented Rule 4.5 Workspace Isolation Compliance enforcing explicit binary pointers.
-- Zero tolerance rule to prevent OR operator in GAQL.
-- Zero tolerance rule to prevent FROM operator in metadata queries.
-- Fix formatting in README.md.
+- Zero tolerance rule to prevent `OR` operator in GAQL.
+- Zero tolerance rule to prevent `FROM` operator in metadata queries.
+- Fix formatting in `README.md`.
 
-* 2.2.0
-- api_examples: api version is a required argument with no default value.
-- Modified /explain to make output more structured.
+## 2.2.0
+
+- `api_examples`: `api_version` is a required argument with no default value.
+- Modified `/explain` to make output more structured.
 - Added license to all files.
-- Fixed bug in configure_environment.py hook script and added modifying policy files.
+- Fixed bug in `configure_environment.py` hook script and added modifying policy files.
 - Surgical update rules.
 - Rule to prohibit dummy credentials.
-- Rule for Asset Group URL Filtering
+- Rule for Asset Group URL Filtering.
 
-* 2.1.0
-- Updated Workflow: API Versioning & Pre-Task Validation
-- Added anti-pattern to Configuration Protocol
-- Modified explain command to return structured explanations.
+## 2.1.0
 
-* 2.0.1
-- Added unit tests for configure_environment.py hook script.
-- Added unit tests for cleanup_config.py hook script.
-- Verified project tests pass by isolating from client_libs collection errors.
+- Updated Workflow: API Versioning & Pre-Task Validation.
+- Added anti-pattern to Configuration Protocol.
+- Modified `explain` command to return structured explanations.
+
+## 2.0.1
+
+- Added unit tests for `configure_environment.py` hook script.
+- Added unit tests for `cleanup_config.py` hook script.
+- Verified project tests pass by isolating from `client_libs` collection errors.
 - Fixed linting errors in new test files.
 
-* 2.0.0
-- Hierachical context file for conversions troubleshooting.
-- Added Conversion Troubleshooting & Diagnostics functionality (api_examples/collect_conversions_troubleshooting_data.py).
+## 2.0.0
+
+- Hierarchical context file for conversions troubleshooting.
+- Added Conversion Troubleshooting & Diagnostics functionality (`api_examples/collect_conversions_troubleshooting_data.py`).
 - Updated examples to use Google Ads API v23.
-- Updated README.md 
+- Updated `README.md`.
 - Changed directory structure to use a single sub-directory for all saved data.
 - Added unit test coverage for new diagnostic tools and examples.
-- Reformatted GEMINI.md for better clarity on conversion types and autonomous diagnostic prompts.
-- Install-deps option to install.sh and install.ps1.
-- Skills/ext_version to get the extension version.
-- gemini-extension.json to register extensions with https://geminicli.com/extensions/
+- Reformatted `GEMINI.md` for better clarity on conversion types and autonomous diagnostic prompts.
+- `install-deps` option to `install.sh` and `install.ps1`.
+- `skills/ext_version` to get the extension version.
+- `gemini-extension.json` to register extensions with `https://geminicli.com/extensions/`.
 - Documentation resource for public protos.
 - Hooks for start and end of a session.
-- Mandatory GAQL validation rules to GEMINI.md
-- Dynamic grpc interceptor for Python calls within extension.
-- Python is installed by default with install.sh and install.ps1.
+- Mandatory GAQL validation rules to `GEMINI.md`.
+- Dynamic gRPC interceptor for Python calls within extension.
+- Python is installed by default with `install.sh` and `install.ps1`.
 - Updated update process to allow for adding additional client libraries.
-- Changed name of setup files to install and provided an uninstall procedure.
-- Added additional rules for GAQL edge cases to GEMINI.md.
-- Added command conversions_support_data.
+- Changed name of setup files to `install` and provided an uninstall procedure.
+- Added additional rules for GAQL edge cases to `GEMINI.md`.
+- Added command `conversions_support_data`.
 
-* 1.5.0
-- Added rigorous GAQL validation rules to GEMINI.md
+## 1.5.0
 
-* 1.4.2
-- Updated tests for setup.sh and update.sh
+- Added rigorous GAQL validation rules to `GEMINI.md`.
 
-* 1.4.1
-- Fixed minor bugs in tests for api_examples.
-- Added test api_examples/tests/test_get_conversion_upload_summary.py
+## 1.4.2
 
-* 1.4.0
-- Modified ChangeLog so changes are listed in reverse chronological order.
-- Added step_by_step custom command.
+- Updated tests for `setup.sh` and `update.sh`.
 
-* 1.3.0
-- Added explain command.
+## 1.4.1
+
+- Fixed minor bugs in tests for `api_examples`.
+- Added test `api_examples/tests/test_get_conversion_upload_summary.py`.
+
+## 1.4.0
+
+- Modified `ChangeLog` so changes are listed in reverse chronological order.
+- Added `step_by_step` custom command.
+
+## 1.3.0
+
+- Added `explain` command.
 - Placed client libraries in a sub-directory of the project directory.
 - Updated setup and update scripts.
-- Added constraint to GEMINI.md to never modify files in api_examples.
+- Added constraint to `GEMINI.md` to never modify files in `api_examples`.
 
-* 1.2.0
-- Updated README.md for clarity
-- Modified setup.sh to work with Linux and macOS.
-- Modified update.sh to work with Linux and macOS.
+## 1.2.0
+
+- Updated `README.md` for clarity.
+- Modified `setup.sh` to work with Linux and macOS.
+- Modified `update.sh` to work with Linux and macOS.
 - Added PowerShell scripts for Windows.
 - Removed extension installation to manifest since it regularly hangs.
 - Modified logic in setup and update scripts.
 - Added tests for setup and update scripts.
 
-* 1.1.0
-- Added support for PHP, Ruby, Java, and C#.
-- Find latest verion of the API and prompt user whether to use this version.
-- Modified setup.sh to clone copies of the client libraries.
+## 1.1.0
 
-* 1.0.0
-- Release of verion 1.0
+- Added support for PHP, Ruby, Java, and C#.
+- Find latest version of the API and prompt user whether to use this version.
+- Modified `setup.sh` to clone copies of the client libraries.
+
+## 1.0.0
+
+- Release of version 1.0.

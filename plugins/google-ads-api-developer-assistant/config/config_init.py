@@ -434,6 +434,35 @@ def sync_and_set_config_kv(
         except OSError:
             pass
 
+    # 3b. Ensure config/assistant_config exists in TOML format (defaulting execute_mutates = false)
+    target_assistant_cfg = os.path.join(config_dir, ASSISTANT_CONFIG_FILENAME)
+    if key == "execute_mutates" and value is not None:
+        parsed_bool = parse_execute_mutates_value(str(value))
+        set_execute_mutates(bool(parsed_bool), config_dir=config_dir)
+    elif key == "api_version":
+        api_ver_val = str(value).strip() if value is not None else detect_latest_api_version()
+        write_assistant_config({"api_version": api_ver_val}, config_dir=config_dir)
+    elif key == "customer_id" and value is not None:
+        write_assistant_config({"customer_id": str(value).strip()}, config_dir=config_dir)
+    elif not os.path.isfile(target_assistant_cfg):
+        seeded = False
+        for candidate_cfg in get_assistant_config_paths():
+            if (
+                os.path.isfile(candidate_cfg)
+                and os.path.abspath(candidate_cfg) != os.path.abspath(target_assistant_cfg)
+            ):
+                try:
+                    shutil.copy2(candidate_cfg, target_assistant_cfg)
+                    seeded = True
+                    break
+                except OSError:
+                    continue
+        if not seeded:
+            write_assistant_config(
+                {"api_version": detect_latest_api_version()},
+                config_dir=config_dir,
+            )
+
     # 4. Set environment variable for the Google Ads Python client
     os.environ["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = target_yaml
 
@@ -474,6 +503,383 @@ def get_config_file_path(config_dir: Optional[str] = None) -> str:
     if env_path and os.path.isfile(env_path):
         return env_path
     return sync_and_set_config_kv(config_dir=config_dir)
+
+
+ASSISTANT_CONFIG_FILENAME = "assistant_config"
+EXECUTE_MUTATES_FILENAME = ASSISTANT_CONFIG_FILENAME
+DEFAULT_API_VERSION = "v25"
+DEFAULT_CUSTOMER_ID = "12345678"
+DEFAULT_EXECUTE_MUTATES = False
+
+
+def detect_latest_api_version() -> str:
+    """Detects the latest Google Ads API version from local client_libs or package metadata."""
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate_paths = [
+        os.path.abspath("client_libs/google-ads-python/google/ads/googleads"),
+        os.path.abspath(
+            "plugins/google-ads-api-developer-assistant/client_libs/google-ads-python/google/ads/googleads"
+        ),
+        os.path.abspath(
+            os.path.join(
+                this_dir,
+                "../client_libs/google-ads-python/google/ads/googleads",
+            )
+        ),
+        os.path.abspath(
+            os.path.join(
+                this_dir,
+                "../plugins/google-ads-api-developer-assistant/client_libs/google-ads-python/google/ads/googleads",
+            )
+        ),
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python/google/ads/googleads"
+        ),
+    ]
+    for candidate in candidate_paths:
+        if os.path.isdir(candidate):
+            try:
+                v_dirs = [
+                    d
+                    for d in os.listdir(candidate)
+                    if os.path.isdir(os.path.join(candidate, d))
+                    and re.match(r"^v\d+$", d)
+                ]
+                if v_dirs:
+                    v_dirs.sort(key=lambda x: int(x[1:]))
+                    return v_dirs[-1]
+            except OSError:
+                continue
+
+    try:
+        import google.ads.googleads  # type: ignore
+
+        installed_versions = [
+            attr for attr in dir(google.ads.googleads) if re.match(r"^v\d+$", attr)
+        ]
+        if installed_versions:
+            installed_versions.sort(key=lambda x: int(x[1:]))
+            return installed_versions[-1]
+    except Exception:
+        pass
+
+    return DEFAULT_API_VERSION
+
+
+def sync_api_version(config_dir: Optional[str] = None) -> str:
+    """Detects the latest API version and updates api_version in config/assistant_config."""
+    latest_v = detect_latest_api_version()
+    write_assistant_config({"api_version": latest_v}, config_dir=config_dir)
+    return latest_v
+
+
+def parse_assistant_config(raw_text: str) -> Dict[str, Any]:
+    """Parses a TOML-formatted assistant_config string into a dictionary."""
+    data: Dict[str, Any] = {}
+    if not raw_text or not raw_text.strip():
+        return data
+
+    # 1. Try standard library tomllib when available (Python 3.11+)
+    try:
+        import tomllib  # type: ignore
+
+        parsed_toml = tomllib.loads(raw_text)
+        if isinstance(parsed_toml, dict):
+            data.update(parsed_toml)
+    except Exception:
+        pass
+
+    # 2. Line-by-line fallback parser for Python 3.10 or loose key=value syntax
+    if not data:
+        for raw_line in raw_text.splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            if not line or line.startswith("["):
+                continue
+            m = re.match(r"^([A-Za-z0-9_]+)\s*[=:]\s*(.+)$", line)
+            if not m:
+                continue
+            k = m.group(1).strip()
+            v_raw = m.group(2).strip()
+            if (v_raw.startswith('"') and v_raw.endswith('"')) or (
+                v_raw.startswith("'") and v_raw.endswith("'")
+            ):
+                data[k] = v_raw[1:-1]
+            elif v_raw.lower() in ("true", "false"):
+                data[k] = v_raw.lower() == "true"
+            else:
+                data[k] = v_raw
+
+    # Normalize known keys
+    if "api_version" in data and data["api_version"] is not None:
+        ver_str = str(data["api_version"]).strip().strip("'\"")
+        if ver_str and not ver_str.startswith("v") and ver_str.isdigit():
+            ver_str = f"v{ver_str}"
+        data["api_version"] = ver_str
+
+    if "customer_id" in data and data["customer_id"] is not None:
+        data["customer_id"] = str(data["customer_id"]).strip().strip("'\"")
+
+    if "execute_mutates" in data and data["execute_mutates"] is not None:
+        em_val = data["execute_mutates"]
+        if isinstance(em_val, bool):
+            data["execute_mutates"] = em_val
+        else:
+            em_str = str(em_val).strip().strip("'\"").lower()
+            if em_str in ("true", "false"):
+                data["execute_mutates"] = em_str == "true"
+            else:
+                del data["execute_mutates"]
+
+    return data
+
+
+def format_assistant_config(data: Dict[str, Any]) -> str:
+    """Formats assistant configuration dictionary as a canonical TOML string."""
+    api_ver = str(
+        data.get("api_version") or detect_latest_api_version() or DEFAULT_API_VERSION
+    ).strip().strip("'\"")
+    if api_ver and not api_ver.startswith("v") and api_ver.isdigit():
+        api_ver = f"v{api_ver}"
+    cid = str(
+        data.get("customer_id")
+        if data.get("customer_id") is not None
+        else DEFAULT_CUSTOMER_ID
+    ).strip().strip("'\"")
+    exec_mutates = bool(data.get("execute_mutates", DEFAULT_EXECUTE_MUTATES))
+    exec_str = "true" if exec_mutates else "false"
+
+    lines = [
+        f'api_version = "{api_ver}"',
+        f'customer_id = "{cid}"',
+        f"execute_mutates = {exec_str}",
+    ]
+    for k, v in data.items():
+        if k in ("api_version", "customer_id", "execute_mutates"):
+            continue
+        if isinstance(v, bool):
+            lines.append(f"{k} = {'true' if v else 'false'}")
+        elif isinstance(v, (int, float)):
+            lines.append(f"{k} = {v}")
+        else:
+            lines.append(f'{k} = "{v}"')
+    return "\n".join(lines) + "\n"
+
+
+def get_assistant_config_paths(config_dir: Optional[str] = None) -> list[str]:
+    """Returns candidate paths for reading/writing config/assistant_config."""
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates: list[str] = []
+    if config_dir:
+        candidates.append(
+            os.path.join(os.path.abspath(config_dir), ASSISTANT_CONFIG_FILENAME)
+        )
+    candidates.extend([
+        os.path.abspath(os.path.join("config", ASSISTANT_CONFIG_FILENAME)),
+        os.path.join(this_dir, ASSISTANT_CONFIG_FILENAME),
+        os.path.join(
+            this_dir,
+            "../plugins/google-ads-api-developer-assistant/config",
+            ASSISTANT_CONFIG_FILENAME,
+        ),
+        os.path.expanduser(
+            f"~/.gemini/config/plugins/google-ads-api-developer-assistant/config/{ASSISTANT_CONFIG_FILENAME}"
+        ),
+    ])
+    deduped: list[str] = []
+    for path in candidates:
+        norm = os.path.normpath(path)
+        if norm not in deduped:
+            deduped.append(norm)
+    return deduped
+
+
+def read_assistant_config(config_dir: Optional[str] = None) -> Dict[str, Any]:
+    """Reads and parses the highest-precedence config/assistant_config file."""
+    for candidate in get_assistant_config_paths(config_dir=config_dir):
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    parsed = parse_assistant_config(f.read())
+                if parsed:
+                    return parsed
+            except OSError:
+                continue
+    return {}
+
+
+def write_assistant_config(
+    updates: Optional[Dict[str, Any]] = None,
+    config_dir: Optional[str] = None,
+) -> str:
+    """Updates keys in config/assistant_config (TOML), preserving existing settings."""
+    if not config_dir:
+        this_dir = os.path.dirname(os.path.abspath(__file__))
+        if os.path.basename(this_dir) == "config":
+            config_dir = this_dir
+        else:
+            config_dir = os.path.join(this_dir, "config")
+
+    os.makedirs(config_dir, exist_ok=True)
+    target_path = os.path.join(config_dir, ASSISTANT_CONFIG_FILENAME)
+
+    current_data: Dict[str, Any] = {}
+    if os.path.isfile(target_path):
+        try:
+            with open(target_path, "r", encoding="utf-8") as f:
+                current_data = parse_assistant_config(f.read())
+        except OSError:
+            current_data = {}
+    else:
+        for candidate in get_assistant_config_paths():
+            if os.path.isfile(candidate):
+                try:
+                    with open(candidate, "r", encoding="utf-8") as f:
+                        current_data = parse_assistant_config(f.read())
+                    if current_data:
+                        break
+                except OSError:
+                    continue
+
+    if updates:
+        current_data.update(updates)
+
+    toml_content = format_assistant_config(current_data)
+    with open(target_path, "w", encoding="utf-8") as f:
+        f.write(toml_content)
+
+    if sys.platform != "win32" and os.path.isfile(target_path):
+        try:
+            os.chmod(target_path, 0o600)
+        except OSError:
+            pass
+
+    return target_path
+
+
+def parse_execute_mutates_value(raw_text: str) -> Optional[bool]:
+    """Parses 'execute_mutates = <true, false>' from TOML or key=value text and returns a boolean."""
+    parsed_cfg = parse_assistant_config(raw_text)
+    if "execute_mutates" in parsed_cfg and isinstance(parsed_cfg["execute_mutates"], bool):
+        return parsed_cfg["execute_mutates"]
+
+    for raw_line in raw_text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = re.match(
+            r"^execute_mutates\s*[=:]\s*['\"]?(true|false)['\"]?\s*$",
+            line,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).lower() == "true"
+        bare = line.strip("'\"").lower()
+        if bare in ("true", "false"):
+            return bare == "true"
+    return None
+
+
+def get_execute_mutates_paths(config_dir: Optional[str] = None) -> list[str]:
+    """Returns candidate paths for reading/writing the execute_mutates setting in assistant_config."""
+    return get_assistant_config_paths(config_dir=config_dir)
+
+
+def is_execute_mutates_enabled(config_dir: Optional[str] = None) -> bool:
+    """Returns whether the plugin is configured to support mutations (defaults to False)."""
+    env_override = os.environ.get("GOOGLE_ADS_EXECUTE_MUTATES", "").strip()
+    if env_override:
+        parsed_env = parse_execute_mutates_value(env_override)
+        if parsed_env is not None:
+            return parsed_env
+        return False
+
+    for candidate in get_assistant_config_paths(config_dir=config_dir):
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    parsed = parse_execute_mutates_value(f.read())
+                if parsed is not None:
+                    return parsed
+                return False
+            except OSError:
+                continue
+
+    return False
+
+
+def set_execute_mutates(
+    enabled: bool,
+    config_dir: Optional[str] = None,
+) -> str:
+    """Updates 'execute_mutates = <true|false>' in config/assistant_config (TOML)."""
+    return write_assistant_config(
+        {"execute_mutates": bool(enabled)},
+        config_dir=config_dir,
+    )
+
+
+def get_configured_customer_id(config_dir: Optional[str] = None) -> Optional[str]:
+    """Reads customer_id from config/assistant_config (with fallback to legacy customer_id files)."""
+    search_dirs: list[str] = []
+    if config_dir:
+        search_dirs.append(os.path.abspath(config_dir))
+    search_dirs.extend([
+        os.path.abspath("config"),
+        os.path.dirname(os.path.abspath(__file__)),
+        os.path.abspath(
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "../plugins/google-ads-api-developer-assistant/config",
+            )
+        ),
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
+        ),
+    ])
+
+    seen_dirs: list[str] = []
+    for d in search_dirs:
+        norm_d = os.path.normpath(d)
+        if norm_d not in seen_dirs:
+            seen_dirs.append(norm_d)
+
+    for d in seen_dirs:
+        cfg_file = os.path.join(d, ASSISTANT_CONFIG_FILENAME)
+        if os.path.isfile(cfg_file):
+            try:
+                with open(cfg_file, "r", encoding="utf-8") as f:
+                    cfg = parse_assistant_config(f.read())
+                cid = str(cfg.get("customer_id", "")).strip()
+                if cid:
+                    return cid
+            except OSError:
+                pass
+        for legacy_name in ("customer_id", "customer_id.txt"):
+            legacy_file = os.path.join(d, legacy_name)
+            if os.path.isfile(legacy_file):
+                try:
+                    with open(legacy_file, "r", encoding="utf-8") as f:
+                        content = f.read().strip()
+                    if content:
+                        return content
+                except OSError:
+                    pass
+    return None
+
+
+def get_configured_api_version(config_dir: Optional[str] = None) -> Optional[str]:
+    """Reads api_version from config/assistant_config."""
+    for candidate in get_assistant_config_paths(config_dir=config_dir):
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    cfg = parse_assistant_config(f.read())
+                ver = str(cfg.get("api_version", "")).strip()
+                if ver:
+                    return ver
+            except OSError:
+                continue
+    return None
 
 
 READONLY_SKILL_SCRIPTS = (
@@ -752,6 +1158,13 @@ def evaluate_mutation_guard(
         if "--dry-run" in cmd and "--execute" not in cmd:
             return "allow", None
         if "--execute" in cmd:
+            if not is_execute_mutates_enabled():
+                return (
+                    "deny",
+                    "BLOCKED BY HITL MUTATION GUARD: Mutate support is disabled by configuration "
+                    "(execute_mutates = false in config/assistant_config). Set 'execute_mutates = true' in "
+                    "config/assistant_config to enable live Google Ads API mutations.",
+                )
             script_match = re.search(
                 r"--script(?:=|\s+)(?:'([^']+)'|\"([^\"]+)\"|([^\s'\"]+))", cmd
             )
@@ -815,6 +1228,14 @@ def evaluate_mutation_guard(
         and not explicit_execute_flag
     ):
         return "allow", None
+
+    if not is_execute_mutates_enabled():
+        return (
+            "deny",
+            "BLOCKED BY HITL MUTATION GUARD: Mutate support is disabled by configuration "
+            "(execute_mutates = false in config/assistant_config). Set 'execute_mutates = true' in "
+            "config/assistant_config to enable live Google Ads API mutations.",
+        )
 
     # Live mutation detected -> require verified dry-run receipt & consequence disclosure
     ok, message, _ = _verify_dry_run_receipt_for_hook(
@@ -934,14 +1355,19 @@ def handle_hook() -> None:
         return
 
     # 2. PreInvocation hook (model prompt injection)
+    mutates_enabled = is_execute_mutates_enabled()
+    mutates_state_str = "execute_mutates = true" if mutates_enabled else "execute_mutates = false"
     msg = (
         f"CRITICAL GOOGLE ADS CONFIGURATION & HITL MUTATION NOTICE:\n"
         f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml).\n"
         f"   All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
-        f"2. HITL MUTATION VERIFICATION & AUDIT MANDATE: Before executing ANY live Google Ads mutation, you MUST:\n"
-        f"   (a) Query current resource state via GAQL,\n"
-        f"   (b) Execute a validate_only=True dry-run via skills/execute-mutation/scripts/run_mutation.py --dry-run to generate saved/data/last_dry_run.json,\n"
-        f"   (c) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute (which appends to saved/logs/mutation_audit.jsonl)."
+        f"2. HITL MUTATION VERIFICATION & AUDIT MANDATE ({mutates_state_str} in config/assistant_config): "
+        f"Live mutations are currently {'ENABLED' if mutates_enabled else 'DISABLED (set execute_mutates = true in config/assistant_config to enable)'}. "
+        f"Before executing ANY live Google Ads mutation, you MUST:\n"
+        f"   (a) Ensure execute_mutates = true is configured in config/assistant_config,\n"
+        f"   (b) Query current resource state via GAQL,\n"
+        f"   (c) Execute a validate_only=True dry-run via skills/execute-mutation/scripts/run_mutation.py --dry-run to generate saved/data/last_dry_run.json,\n"
+        f"   (d) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute (which appends to saved/logs/mutation_audit.jsonl)."
     )
     print(
         json.dumps(
@@ -969,32 +1395,26 @@ def main() -> None:
     )
     parser.add_argument("--key", default="login_customer_id", help="Config key to set or verify")
     parser.add_argument("--value", default=None, help="Config value to set")
+    parser.add_argument(
+        "--execute-mutates",
+        default=None,
+        choices=["true", "false"],
+        help="Configure whether the plugin supports live mutations (execute_mutates = <true, false> in config/assistant_config)",
+    )
     parser.add_argument("--config-dir", default=None, help="Target directory for config")
     parser.add_argument("--source-yaml", default="~/google-ads.yaml", help="Source configuration file")
     parser.add_argument("--hook", action="store_true", help="Run in Jetski lifecycle hook mode")
 
     args = parser.parse_args()
 
+    if args.execute_mutates is not None:
+        set_execute_mutates(args.execute_mutates.lower() == "true", config_dir=args.config_dir)
+
     val = args.value
     if not val:
         val = os.environ.get("GOOGLE_ADS_CONFIG_VALUE")
     if not val:
-        candidate_cid_files = [
-            os.path.join(os.getcwd(), "config", "customer_id"),
-            os.path.join(os.getcwd(), "config", "customer_id.txt"),
-            os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/config/customer_id"),
-            os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/config/customer_id.txt"),
-        ]
-        for cid_file in candidate_cid_files:
-            if os.path.isfile(cid_file):
-                try:
-                    with open(cid_file, "r", encoding="utf-8") as f:
-                        content = f.read().strip()
-                        if content:
-                            val = content
-                            break
-                except OSError:
-                    continue
+        val = get_configured_customer_id(config_dir=args.config_dir)
 
     try:
         config_path = sync_and_set_config_kv(
@@ -1012,5 +1432,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

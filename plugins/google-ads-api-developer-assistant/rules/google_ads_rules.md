@@ -11,8 +11,8 @@
 
 #### 1.0. Protocol: "Validate Before Act & Interactive Sync"
 **ABSOLUTE FIRST ACTION:**
-1. **API Version & Cache Validation:** Check if `config/api_version.txt` exists and contains a valid version. If it does, automatically load it and use it without prompting the user. If it does not exist or is empty, identify the latest stable API version by inspecting the version directories in `client_libs/google-ads-python/google/ads/googleads/v*` (or running `python3 skills/ext-version/scripts/get_latest_api_version.py`), present it to the user for confirmation, and write it to `config/api_version.txt`. Only fall back to web release notes if local client library discovery is unavailable. For all subsequent operations, use this cached version and DO NOT prompt the user again.
-2. **Client Library & Package Update Check (Blocking Prompt):** At session startup, check for upstream PyPI and GitHub releases across installed environment packages (`google-ads`), the **Assistant repository**, and installed **client libraries** (`client_libs/`) in check-only mode (`python3 skills/sync-client-libs/scripts/sync_client_libs.py --check_only --json`). If any client library, package, or the assistant is outdated, trigger a blocking prompt to the user with the available update(s) and ask if they would like to upgrade. If confirmed, perform the update and refresh `config/api_version.txt` before proceeding; if declined, proceed with current installed versions.
+1. **API Version & Cache Validation:** Check if `config/assistant_config` exists and contains a valid `api_version`. If it does, automatically load it and use it without prompting the user. If it does not exist or is empty, identify the latest stable API version by inspecting the version directories in `client_libs/google-ads-python/google/ads/googleads/v*` (or running `python3 skills/ext-version/scripts/get_latest_api_version.py`), present it to the user for confirmation, and write it to `config/assistant_config` (`api_version = "<version>"`). Only fall back to web release notes if local client library discovery is unavailable. For all subsequent operations, use this cached version and DO NOT prompt the user again.
+2. **Client Library & Package Update Check (Blocking Prompt):** At session startup, check for upstream PyPI and GitHub releases across installed environment packages (`google-ads`), the **Assistant repository**, and installed **client libraries** (`client_libs/`) in check-only mode (`python3 skills/sync-client-libs/scripts/sync_client_libs.py --check_only --json`). If any client library, package, or the assistant is outdated, trigger a blocking prompt to the user with the available update(s) and ask if they would like to upgrade. If confirmed, perform the update and refresh `api_version` in `config/assistant_config` before proceeding; if declined, proceed with current installed versions.
 3. **Session Configuration Initialization (Mandatory):** At session startup, `config/config_init.py` is executed to construct `config/google-ads.yaml` in the active plugin or workspace `config/` directory (e.g., `~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml` or `config/google-ads.yaml`) and set `GOOGLE_ADS_CONFIGURATION_FILE_PATH`. All subsequent client initializations and API operations must strictly use `config/google-ads.yaml` and never the user's home directory copy.
    - **FORBIDDEN:** Never run Python code or bash commands that print, test, or reference `google-ads.yaml` in the user's home directory (e.g., `~/google-ads.yaml`, `$HOME/google-ads.yaml`, or `os.path.expanduser('~/google-ads.yaml')`).
    - **FORBIDDEN:** Never call `GoogleAdsClient.load_from_storage()` without passing `path="config/google-ads.yaml"`.
@@ -24,6 +24,7 @@
 - **Constraint:** Never provide marketing, legal, or business strategy advice.
 
 #### 1.2. Hard Constraints (Zero Tolerance)
+- **MUTATE SUPPORT OPT-IN (`execute_mutates = false` by default):** Live mutations are disabled by default via `execute_mutates = false` in `config/assistant_config`. Live `mutate`, `create`, `update`, or `remove` execution (`--execute`) is hard-blocked unless the user sets `execute_mutates = true` in `config/assistant_config`.
 - **NO UNVERIFIED MUTATIONS (HITL MANDATORY):** Strictly prohibited from executing live `mutate`, `create`, `update`, or `remove` API calls without first completing the **4-Step HITL Mutation & Consequence Protocol** (Section 4.3 & `skills/execute-mutation/SKILL.md`): (1) GAQL Before-State lookup, (2) live `validate_only=True` dry-run with signed receipt in `saved/data/last_dry_run.json`, (3) explicit user confirmation after presenting the **Consequence & Impact Summary**, and (4) `PreToolUse` hook-gated execution (`--execute`).
 - **NO SECRETS:** Never print, log, or save developer tokens, OAuth secrets, or PII.
 - **DRY-RUN FIRST FOR WRITES:** All mutation scripts in `saved/code/` MUST support `--dry-run` (`validate_only=True`, the default) and `--execute` (`validate_only=False`). Never invoke `--execute` before `--dry-run` succeeds and the user explicitly confirms the consequences.
@@ -36,14 +37,14 @@
 - **DEFAULT TO PYTHON FOR EXECUTION:** Always use Python to execute code and run tasks even if other language client libraries (PHP, Ruby, Java, C#/.NET) or files are present. Only switch to generating or executing in another language if the user explicitly requests it.
 
 #### 1.3. Versioning Fallback & User Override
-If the user provides or overrides an API version, treat user input as the ultimate source of truth, cache it in `config/api_version.txt`, and use it automatically for subsequent tasks.
+If the user provides or overrides an API version, treat user input as the ultimate source of truth, cache it in `config/assistant_config` (`api_version = "<version>"`), and use it automatically for subsequent tasks.
 
 ---
 
 ### 2. File & Data Logistics
 
 #### 2.1. Project & Client Library Structure
-- **Config:** `config/` (Target config files, e.g. `google-ads.yaml`).
+- **Config:** `config/` (Target config files: `assistant_config` in TOML format with `api_version`, `customer_id`, and `execute_mutates`, plus `google-ads.yaml`).
 - **Client Libraries (Source of Truth):** `client_libs/google-ads-python/` (Contains official Google Ads Python client library source, `.proto` definitions, and example scripts under `client_libs/google-ads-python/examples/`).
 - **Scripts:** `api_examples/` (Modifiable scripts).
 - **Generated Code:** `saved/code/` (All generated or modified scripts).
@@ -100,7 +101,7 @@ Python is the mandatory default language for all code generation and execution a
 - Use `python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py` to configure webpage exclusion listing trees (`vertical = WEBPAGE`).
 
 #### 4.3. 4-Step HITL Mutation & Consequence Verification Protocol [MANDATORY]
-When a user requests any write/mutation operation (`mutate`, `create`, `update`, `remove`, `apply_recommendation`, or conversion upload), you MUST execute this exact sequence (see `skills/execute-mutation/SKILL.md`):
+When a user requests any write/mutation operation (`mutate`, `create`, `update`, `remove`, `apply_recommendation`, or conversion upload), verify whether live mutations are enabled in `config/assistant_config` (`execute_mutates = <true, false>`, default `execute_mutates = false`) and execute this exact sequence (see `skills/execute-mutation/SKILL.md`):
 1. **Step 1 — Pre-Mutation State & Blast Radius Lookup (GAQL Read):**
    - Query the target resource(s) and active child entity counts (`ad_group`, `ad_group_ad`) via `GoogleAdsService.search_stream` to capture the **Before State** (`status`, `amount_micros`, `cpc_bid_micros`, etc.). Convert all `micros` fields to local currency by dividing by `1,000,000`.
 2. **Step 2 — Mandatory `validate_only=True` Dry-Run & Signed Receipt:**
@@ -110,6 +111,7 @@ When a user requests any write/mutation operation (`mutate`, `create`, `update`,
 3. **Step 3 — Explicit User Verification & Consequence Disclosure:**
    - Present the **Mutation & Consequence Verification Card** to the user (Customer ID, Resource & Operation, `Before` $\rightarrow$ `After` delta, financial/serving/bidding consequences, and reversibility) and wait for explicit confirmation (`ask_question` in `agy` or direct CLI prompt in `Claude Code CLI`).
 4. **Step 4 — Hook-Gated Live Execution (`Mutate-to-Get`):**
+   - Ensure `execute_mutates = true` is set in `config/assistant_config` (by default `execute_mutates = false` blocks all live mutations).
    - Only after the user explicitly confirms, run `python3 skills/execute-mutation/scripts/run_mutation.py --script saved/code/<script>.py --execute`.
    - Use `response_content_type = ResponseContentType.MUTABLE_RESOURCE` when supported so the updated resource state is returned immediately without an extra read call.
 

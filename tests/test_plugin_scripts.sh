@@ -53,8 +53,8 @@ if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
   echo "FAIL: plugin.json missing in ${AGY_PLUGIN_DIR}"
   exit 1
 fi
-if [[ ! -f "${AGY_PLUGIN_DIR}/config/api_version.txt" ]]; then
-  echo "FAIL: config/api_version.txt missing in ${AGY_PLUGIN_DIR}"
+if [[ ! -f "${AGY_PLUGIN_DIR}/config/assistant_config" ]]; then
+  echo "FAIL: config/assistant_config missing in ${AGY_PLUGIN_DIR}"
   exit 1
 fi
 echo "PASS: Antigravity plugin successfully installed."

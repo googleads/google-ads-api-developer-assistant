@@ -5,9 +5,16 @@ import os
 from pathlib import Path
 import sys
 from typing import Any
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config.config_init import evaluate_mutation_guard
+
+
+@pytest.fixture(autouse=True)
+def _enable_mutates_for_hitl_tests(monkeypatch: Any) -> None:
+    """Enables execute_mutates=true for general HITL workflow tests unless overridden."""
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates=true")
 
 
 def _load_run_mutation_module() -> Any:
@@ -1480,6 +1487,203 @@ def test_pre_rpc_sha256_verification_blocks_altered_or_extra_requests_before_sen
     )
     assert decision == "deny"
     assert reason is not None and "SHA-256 mismatch" in reason
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+
+def test_execute_mutates_config_defaults_to_false_and_blocks_live_mutations(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Verifies that execute_mutates in config/assistant_config (TOML) defaults to false and blocks live mutations across all layers."""
+    import json
+    import subprocess
+    from config import config_init
+
+    run_mutation = _load_run_mutation_module()
+    audit_log_file = tmp_path / "mutates_disabled_audit.jsonl"
+    monkeypatch.setenv("GOOGLE_ADS_MUTATION_AUDIT_LOG", str(audit_log_file))
+
+    # 1. Remove the test fixture override so the real on-disk default is evaluated
+    monkeypatch.delenv("GOOGLE_ADS_EXECUTE_MUTATES", raising=False)
+
+    repo_root = Path(__file__).resolve().parent.parent
+    root_assistant_cfg = repo_root / "config" / "assistant_config"
+    plugin_assistant_cfg = (
+        repo_root
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "config"
+        / "assistant_config"
+    )
+    assert root_assistant_cfg.is_file()
+    assert plugin_assistant_cfg.is_file()
+    assert not (repo_root / "config" / "api_version.txt").exists()
+    assert not (repo_root / "config" / "customer_id").exists()
+    assert not (repo_root / "config" / "execute_mutates").exists()
+
+    root_parsed = config_init.parse_assistant_config(
+        root_assistant_cfg.read_text(encoding="utf-8")
+    )
+    plugin_parsed = config_init.parse_assistant_config(
+        plugin_assistant_cfg.read_text(encoding="utf-8")
+    )
+    assert root_parsed["execute_mutates"] is False
+    assert plugin_parsed["execute_mutates"] is False
+    assert "api_version" in root_parsed
+    assert "customer_id" in root_parsed
+
+    # Default state must be False
+    assert config_init.is_execute_mutates_enabled() is False
+    assert run_mutation.is_execute_mutates_enabled() is False
+
+    # 2. Verify TOML parser and set_execute_mutates in an isolated config_dir
+    assert config_init.parse_execute_mutates_value("execute_mutates = false") is False
+    assert config_init.parse_execute_mutates_value("execute_mutates = true") is True
+    assert config_init.parse_execute_mutates_value("execute_mutates=false") is False
+    assert config_init.parse_execute_mutates_value("# comment\nexecute_mutates = true\n") is True
+    assert config_init.parse_execute_mutates_value("invalid_line = 123") is None
+
+    isolated_cfg_dir = tmp_path / "isolated_config"
+    written_path = config_init.set_execute_mutates(False, config_dir=str(isolated_cfg_dir))
+    assert Path(written_path).name == "assistant_config"
+    written_text = Path(written_path).read_text(encoding="utf-8")
+    assert 'api_version = "' in written_text
+    assert 'customer_id = "' in written_text
+    assert "execute_mutates = false\n" in written_text
+    assert config_init.is_execute_mutates_enabled(config_dir=str(isolated_cfg_dir)) is False
+
+    config_init.set_execute_mutates(True, config_dir=str(isolated_cfg_dir))
+    assert "execute_mutates = true\n" in Path(written_path).read_text(encoding="utf-8")
+    assert config_init.is_execute_mutates_enabled(config_dir=str(isolated_cfg_dir)) is True
+
+    # Reset back to false in isolated_cfg_dir
+    config_init.set_execute_mutates(False, config_dir=str(isolated_cfg_dir))
+
+    # 3. Even when a valid dry-run receipt exists, PreToolUse hook and run_mutation.py block --execute when execute_mutates = false
+    script_file = tmp_path / "disabled_mutate_test.py"
+    marker_file = tmp_path / "should_never_run.marker"
+    script_file.write_text(
+        "import argparse\n"
+        "from pathlib import Path\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--customer-id', default='1234567890')\n"
+        "parser.add_argument('--dry-run', action='store_true')\n"
+        "parser.add_argument('--execute', action='store_true')\n"
+        "args = parser.parse_args()\n"
+        "if args.execute:\n"
+        f"    Path({str(marker_file)!r}).write_text('EXECUTED', encoding='utf-8')\n"
+        "else:\n"
+        "    print('Dry-run OK while execute_mutates = false')\n",
+        encoding="utf-8",
+    )
+
+    runner_path = (
+        repo_root
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "skills"
+        / "execute-mutation"
+        / "scripts"
+        / "run_mutation.py"
+    )
+
+    # 3a. Dry-run is still allowed when execute_mutates = false and displays DISABLED status in the card
+    dry_proc = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(script_file),
+            "--dry-run",
+            "--customer-id",
+            "1234567890",
+            "--operation",
+            "Update CampaignBudget 555",
+            "--consequences",
+            "Daily budget increases to $100/day",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "Mutates Config: DISABLED (execute_mutates = false" in dry_proc.stdout
+
+    # 3b. PreToolUse hook (evaluate_mutation_guard) denies --execute when execute_mutates = false
+    decision, reason = evaluate_mutation_guard(
+        f"python3 {runner_path} --script {script_file} --execute"
+    )
+    assert decision == "deny"
+    assert reason is not None
+    assert "execute_mutates = false" in reason
+
+    # Direct inline live mutation is also denied with execute_mutates = false message
+    decision_inline, reason_inline = evaluate_mutation_guard(
+        "python3 -c 'svc.mutate_campaigns(request=req)'"
+    )
+    assert decision_inline == "deny"
+    assert reason_inline is not None
+    assert "execute_mutates = false" in reason_inline
+
+    # 3c. Subprocess invocation of run_mutation.py --execute is hard-blocked before running script_file
+    exec_proc = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(script_file),
+            "--execute",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert exec_proc.returncode == 2
+    assert "execute_mutates = false" in exec_proc.stderr
+    assert not marker_file.exists()
+
+    # Verify BLOCKED_MUTATES_DISABLED audit entry was recorded
+    entries = [
+        json.loads(line)
+        for line in audit_log_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(entries) == 2
+    assert entries[0]["status"] == "DRY_RUN_PASSED"
+    assert entries[1]["phase"] == "EXECUTE"
+    assert entries[1]["status"] == "BLOCKED_MUTATES_DISABLED"
+    assert "execute_mutates = false" in entries[1]["response"]["error"]
+
+    # 3d. RPC interceptor (_wrap_service_for_audit) also blocks validate_only=False calls when execute_mutates = false
+    class _RawService:
+        def __init__(self) -> None:
+            self.called = False
+
+        def mutate_campaigns(self, request: Any = None) -> Any:
+            self.called = True
+            return {"results": []}
+
+    raw_svc = _RawService()
+    captured_rpc: list[dict[str, Any]] = []
+    wrapped_svc = run_mutation._wrap_service_for_audit(
+        raw_svc, "CampaignService", captured_rpc
+    )
+    with pytest.raises(PermissionError, match="execute_mutates = false"):
+        wrapped_svc.mutate_campaigns(
+            request={"customer_id": "1234567890", "validate_only": False, "operations": []}
+        )
+    assert raw_svc.called is False
+    assert len(captured_rpc) == 1
+    assert captured_rpc[0]["status"] == "BLOCKED_MUTATES_DISABLED"
+
+    # 4. Enabling execute_mutates = true allows the 4-Step HITL flow to proceed to force_ask and live execution
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates = true")
+    decision_enabled, reason_enabled = evaluate_mutation_guard(
+        f"python3 {runner_path} --script {script_file} --execute"
+    )
+    assert decision_enabled == "force_ask"
+    assert reason_enabled is not None
 
     for receipt_path in run_mutation.get_receipt_paths():
         if os.path.isfile(receipt_path):

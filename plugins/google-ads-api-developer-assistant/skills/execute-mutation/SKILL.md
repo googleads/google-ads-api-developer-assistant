@@ -5,7 +5,15 @@ description: Executes Google Ads API write/mutation operations using the mandato
 
 # Execute Mutation Skill (4-Step HITL & Consequence Protocol)
 
-When a user requests a write or mutation operation against the Google Ads API (`mutate`, `create`, `update`, `remove`, `apply_recommendation`, or offline conversion uploads), you MUST follow this 4-step workflow. Live mutations without a verified `validate_only=True` dry-run receipt (`saved/data/last_dry_run.json`) are deterministically blocked by the `PreToolUse` hook.
+When a user requests a write or mutation operation against the Google Ads API (`mutate`, `create`, `update`, `remove`, `apply_recommendation`, or offline conversion uploads), you MUST follow this 4-step workflow.
+
+> **Prerequisite — User Mutate Configuration (`config/assistant_config`):**
+> By default, live mutations are disabled (`execute_mutates = false` in `config/assistant_config`). While `validate_only=True` dry-runs (`--dry-run`) are always allowed, any live mutation (`--execute` or `validate_only=False`) is deterministically blocked by both the `PreToolUse` hook (`config/config_init.py`) and `run_mutation.py` unless `config/assistant_config` is set to:
+> ```toml
+> execute_mutates = true
+> ```
+
+Live mutations without both `execute_mutates = true` in `config/assistant_config` and a verified `validate_only=True` dry-run receipt (`saved/data/last_dry_run.json`) are deterministically blocked by the `PreToolUse` hook.
 
 ---
 
@@ -57,16 +65,16 @@ Evaluate and articulate the exact consequences of the requested change across th
 
 1. After `--dry-run` succeeds, present the **Mutation & Consequence Verification Card** output to the user and ask for explicit confirmation (`ask_question` in `agy` or an explicit confirmation prompt in `Claude Code CLI`).
 2. **Wait for the user's response.** Do NOT invoke `--execute` in the same turn as `--dry-run`.
-3. Once confirmed by the user, execute the live mutation:
+3. Verify that `config/assistant_config` contains `execute_mutates = true` (or update it via `python3 config/config_init.py --execute-mutates true` if the user explicitly requests enabling mutations). Once confirmed by the user, execute the live mutation:
    ```bash
    python3 skills/execute-mutation/scripts/run_mutation.py \
      --script saved/code/<mutation_name>.py \
      --execute
    ```
-   The `PreToolUse` lifecycle hook (`config/config_init.py`) will verify the cryptographic dry-run receipt in `saved/data/last_dry_run.json`, record `hook_prompted_at_iso` and CLI session metadata (`conversationId` / `session_id`, `transcriptPath`), and trigger a native CLI confirmation prompt (`"decision": "force_ask"`) displaying the consequence summary before the API call executes.
-4. **Automatic Mutation Audit Trail (`saved/logs/mutation_audit.jsonl`)**: Both `--dry-run` and `--execute` phases automatically intercept `GoogleAdsClient` mutation RPCs and append a structured JSONL audit record (`0600` permissions) containing:
+   The `PreToolUse` lifecycle hook (`config/config_init.py`) will verify `execute_mutates = true` in `config/assistant_config` and the cryptographic dry-run receipt in `saved/data/last_dry_run.json`, record `hook_prompted_at_iso` and CLI session metadata (`conversationId` / `session_id`, `transcriptPath`), and trigger a native CLI confirmation prompt (`"decision": "force_ask"`) displaying the consequence summary before the API call executes.
+4. **Automatic Mutation Audit Trail (`saved/logs/mutation_audit.jsonl`)**: Both `--dry-run` and `--execute` phases automatically intercept `GoogleAdsClient` mutation RPCs, verify canonical request SHA-256 digests before sending any live RPC, and append a structured JSONL audit record (`0600` permissions) containing:
    - `actor`: OS user, hostname, `login_customer_id`, `target_customer_id`, auth type, and CLI session/transcript identifiers.
-   - `request`: `sent_at_iso`, `validate_only`, script path/SHA-256, and serialized Protobuf `Mutate*Request` payload(s).
+   - `request`: `sent_at_iso`, `validate_only`, script path/SHA-256, canonical `request_sha256` / `request_sha256_verified`, and serialized Protobuf `Mutate*Request` payload(s).
    - `approval`: `dry_run_validated_at_iso`, `hook_prompted_at_iso`, `user_approved_at_iso`, and disclosed before/after state and consequences.
    - `response`: `received_at_iso`, `duration_ms`, `google_ads_request_ids`, and serialized Protobuf `Mutate*Response` (or `GoogleAdsFailure`) payload(s).
 

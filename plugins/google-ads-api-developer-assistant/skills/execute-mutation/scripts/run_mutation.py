@@ -8,6 +8,7 @@ import getpass
 import hashlib
 import json
 import os
+import re
 import runpy
 import shlex
 import socket
@@ -21,6 +22,8 @@ import uuid
 
 RECEIPT_FILENAME = "last_dry_run.json"
 AUDIT_LOG_FILENAME = "mutation_audit.jsonl"
+ASSISTANT_CONFIG_FILENAME = "assistant_config"
+EXECUTE_MUTATES_FILENAME = ASSISTANT_CONFIG_FILENAME
 DEFAULT_MAX_RECEIPT_AGE_SECONDS = 1800  # 30 minutes
 _TRACE_ENV_VAR = "_GOOGLE_ADS_MUTATION_TRACE_FILE"
 _EXPECTED_HASHES_ENV_VAR = "_GOOGLE_ADS_EXPECTED_REQUEST_SHA256"
@@ -151,6 +154,82 @@ def get_audit_log_paths() -> List[str]:
         if norm not in deduped:
             deduped.append(norm)
     return deduped
+
+
+def parse_execute_mutates_value(raw_text: str) -> Optional[bool]:
+    """Parses 'execute_mutates = <true, false>' from TOML or key=value text and returns a boolean."""
+    try:
+        import tomllib  # type: ignore
+
+        parsed_toml = tomllib.loads(raw_text)
+        if isinstance(parsed_toml, dict) and "execute_mutates" in parsed_toml:
+            em_val = parsed_toml["execute_mutates"]
+            if isinstance(em_val, bool):
+                return em_val
+            if isinstance(em_val, str) and em_val.strip().lower() in ("true", "false"):
+                return em_val.strip().lower() == "true"
+    except Exception:
+        pass
+
+    for raw_line in raw_text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = re.match(
+            r"^execute_mutates\s*[=:]\s*['\"]?(true|false)['\"]?\s*$",
+            line,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).lower() == "true"
+        bare = line.strip("'\"").lower()
+        if bare in ("true", "false"):
+            return bare == "true"
+    return None
+
+
+def get_execute_mutates_paths() -> List[str]:
+    """Returns candidate paths for reading the execute_mutates setting in config/assistant_config."""
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
+    repo_root = os.path.abspath(os.path.join(plugin_root, "../.."))
+    paths = [
+        os.path.abspath(os.path.join("config", ASSISTANT_CONFIG_FILENAME)),
+        os.path.join(plugin_root, "config", ASSISTANT_CONFIG_FILENAME),
+        os.path.join(repo_root, "config", ASSISTANT_CONFIG_FILENAME),
+        os.path.expanduser(
+            f"~/.gemini/config/plugins/google-ads-api-developer-assistant/config/{ASSISTANT_CONFIG_FILENAME}"
+        ),
+    ]
+    deduped: List[str] = []
+    for p in paths:
+        norm = os.path.normpath(p)
+        if norm not in deduped:
+            deduped.append(norm)
+    return deduped
+
+
+def is_execute_mutates_enabled() -> bool:
+    """Returns whether the plugin is configured to support mutations (defaults to False)."""
+    env_override = os.environ.get("GOOGLE_ADS_EXECUTE_MUTATES", "").strip()
+    if env_override:
+        parsed_env = parse_execute_mutates_value(env_override)
+        if parsed_env is not None:
+            return parsed_env
+        return False
+
+    for candidate in get_execute_mutates_paths():
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    parsed = parse_execute_mutates_value(f.read())
+                if parsed is not None:
+                    return parsed
+                return False
+            except OSError:
+                continue
+
+    return False
 
 
 def _find_google_ads_yaml() -> Optional[str]:
@@ -392,6 +471,33 @@ def _wrap_service_for_audit(
                     "request_sha256": req_sha256,
                     "request_payload": req_payload,
                 }
+
+                # Pre-RPC Mutates Config check: block live mutations if execute_mutates = false
+                is_live_rpc = (
+                    isinstance(req_payload, dict)
+                    and req_payload.get("validate_only") is False
+                ) or should_enforce
+                if is_live_rpc and not is_execute_mutates_enabled():
+                    err_msg = (
+                        f"BLOCKED BEFORE RPC: Mutate support is disabled by configuration "
+                        f"(execute_mutates = false in config/assistant_config). Cannot execute live "
+                        f"mutation call to {svc_name}.{m_name}."
+                    )
+                    call_record.update({
+                        "received_at_iso": datetime.now(timezone.utc).isoformat(),
+                        "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                        "status": "BLOCKED_MUTATES_DISABLED",
+                        "expected_request_sha256": None,
+                        "request_sha256_verified": False,
+                        "google_ads_request_id": None,
+                        "response_payload": {
+                            "exception_type": "PermissionError",
+                            "message": err_msg,
+                        },
+                        "error": err_msg,
+                    })
+                    captured_calls.append(call_record)
+                    raise PermissionError(err_msg)
 
                 # Pre-RPC SHA-256 verification: ensure live request matches dry-run BEFORE sending
                 if should_enforce:
@@ -714,7 +820,12 @@ def append_mutation_audit_log(
     ]
     rpc_errors = [str(c["error"]) for c in calls if c.get("error")]
     error_summary: Optional[str] = None
-    if exit_code != 0 or status in ("FAILED", "DRY_RUN_FAILED"):
+    if exit_code != 0 or status in (
+        "FAILED",
+        "DRY_RUN_FAILED",
+        "BLOCKED_MUTATES_DISABLED",
+        "BLOCKED_SHA256_MISMATCH",
+    ):
         error_summary = (
             "; ".join(rpc_errors)
             if rpc_errors
@@ -1071,12 +1182,19 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
         if "IRREVERSIBLE" in reversibility
         else "REVERSIBLE"
     )
+    mutates_enabled = is_execute_mutates_enabled()
+    mutates_cfg_line = (
+        "ENABLED (execute_mutates = true)"
+        if mutates_enabled
+        else "DISABLED (execute_mutates = false — set execute_mutates = true in config/assistant_config before --execute)"
+    )
     return (
         "======================================================================\n"
         "GOOGLE ADS API MUTATION & CONSEQUENCE VERIFICATION CARD\n"
         "======================================================================\n"
         f"Customer ID   : {receipt.get('customer_id', 'Unknown')}\n"
         f"Operation     : {receipt.get('operation_summary', 'Unknown')}\n"
+        f"Mutates Config: {mutates_cfg_line}\n"
         f"Dry-Run Status: PASSED (validate_only=True verified at {receipt.get('timestamp_iso', '')})\n"
         f"Request SHA256: {receipt.get('request_sha256', 'N/A')}\n"
         f"Before State  : {receipt.get('before_state', 'N/A')}\n"
@@ -1270,6 +1388,47 @@ def main() -> None:
         return
 
     # Phase 2: --execute
+    if not is_execute_mutates_enabled():
+        blocked_iso = datetime.now(timezone.utc).isoformat()
+        err_msg = (
+            "BLOCKED: Mutate support is disabled by configuration "
+            "(execute_mutates = false in config/assistant_config). "
+            "Set 'execute_mutates = true' in config/assistant_config to enable live mutations."
+        )
+        _, _, existing_receipt = load_and_verify_receipt(script_path=script_path)
+        cid_blocked = args.customer_id or str(existing_receipt.get("customer_id", ""))
+        op_blocked = str(args.operation or existing_receipt.get("operation_summary", ""))
+        before_blocked = str(existing_receipt.get("before_state", args.before))
+        after_blocked = str(existing_receipt.get("after_state", args.after or op_blocked))
+        rev_blocked = str(existing_receipt.get("reversibility", args.reversibility))
+        conseq_blocked = [
+            str(c) for c in existing_receipt.get("consequences", []) if str(c).strip()
+        ]
+        append_mutation_audit_log(
+            phase="EXECUTE",
+            status="BLOCKED_MUTATES_DISABLED",
+            customer_id=cid_blocked,
+            operation_summary=op_blocked,
+            before_state=before_blocked,
+            after_state=after_blocked,
+            consequences=conseq_blocked,
+            reversibility=rev_blocked,
+            script_path=script_path,
+            script_sha256=script_sha256,
+            validate_only=False,
+            request_sent_at_iso=blocked_iso,
+            response_received_at_iso=blocked_iso,
+            duration_ms=0.0,
+            exit_code=2,
+            stdout="",
+            stderr=err_msg,
+            command=[sys.executable, script_path, "--execute", *extra_args],
+            rpc_calls=[],
+            receipt=existing_receipt if existing_receipt else None,
+        )
+        print(err_msg, file=sys.stderr)
+        sys.exit(2)
+
     ok, message, receipt = load_and_verify_receipt(script_path=script_path)
     if not ok:
         print(f"BLOCKED: {message}", file=sys.stderr)

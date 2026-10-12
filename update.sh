@@ -193,7 +193,7 @@ is_enabled() {
   esac
 }
 
-# Helper to detect latest API version from client_libs and pre-seed config/api_version.txt
+# Helper to detect latest API version from client_libs and pre-seed config/assistant_config
 detect_and_seed_api_version() {
   local search_dir="$1"
   local target_config_dir="$2"
@@ -203,8 +203,27 @@ detect_and_seed_api_version() {
     latest_v=$(find "${search_dir}" -mindepth 1 -maxdepth 1 -type d -name 'v*' 2>/dev/null | sed 's/.*\/v//' | grep -E '^[0-9]+$' | sort -n | tail -n 1)
     if [[ -n "${latest_v}" ]]; then
       mkdir -p "${target_config_dir}"
-      echo "v${latest_v}" > "${target_config_dir}/api_version.txt"
-      echo "Configured API version v${latest_v} in ${target_config_dir}/api_version.txt"
+      local cfg_file="${target_config_dir}/assistant_config"
+      local cid="12345678"
+      local exec_mutates="false"
+      if [[ -f "${cfg_file}" ]]; then
+        local existing_cid=""
+        existing_cid=$(grep -E '^[[:space:]]*customer_id[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*customer_id[[:space:]]*=[[:space:]]*["'\'']?([^"'\''#[:space:]]+)["'\'']?.*$/\1/' || true)
+        if [[ -n "${existing_cid}" ]]; then
+          cid="${existing_cid}"
+        fi
+        local existing_em=""
+        existing_em=$(grep -E '^[[:space:]]*execute_mutates[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*execute_mutates[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\1/' | tr '[:upper:]' '[:lower:]' || true)
+        if [[ "${existing_em}" == "true" || "${existing_em}" == "false" ]]; then
+          exec_mutates="${existing_em}"
+        fi
+      fi
+      cat <<EOF > "${cfg_file}"
+api_version = "v${latest_v}"
+customer_id = "${cid}"
+execute_mutates = ${exec_mutates}
+EOF
+      echo "Configured API version v${latest_v} in ${cfg_file}"
     fi
   fi
 }
@@ -232,28 +251,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Backup config/customer_id and config/customer_id.txt if they exist
-for cid_file in customer_id customer_id.txt; do
-  if [[ -f "${PROJECT_DIR_ABS}/config/${cid_file}" ]]; then
-    cp "${PROJECT_DIR_ABS}/config/${cid_file}" "${TEMP_CONFIG_DIR}/${cid_file}"
+# Backup config/assistant_config if it exists
+for cfg_file in assistant_config; do
+  if [[ -f "${PROJECT_DIR_ABS}/config/${cfg_file}" ]]; then
+    cp "${PROJECT_DIR_ABS}/config/${cfg_file}" "${TEMP_CONFIG_DIR}/${cfg_file}"
   fi
 done
 
 if ! git pull; then
   err "ERROR: Failed to update google-ads-api-developer-assistant repository."
   # Restore config files if backup exists
-  for cid_file in customer_id customer_id.txt; do
-    if [[ -f "${TEMP_CONFIG_DIR}/${cid_file}" ]]; then
-      cp "${TEMP_CONFIG_DIR}/${cid_file}" "${PROJECT_DIR_ABS}/config/${cid_file}"
+  for cfg_file in assistant_config; do
+    if [[ -f "${TEMP_CONFIG_DIR}/${cfg_file}" ]]; then
+      cp "${TEMP_CONFIG_DIR}/${cfg_file}" "${PROJECT_DIR_ABS}/config/${cfg_file}"
     fi
   done
   exit 1
 fi
 
 # Restore config files
-for cid_file in customer_id customer_id.txt; do
-  if [[ -f "${TEMP_CONFIG_DIR}/${cid_file}" ]]; then
-    cp "${TEMP_CONFIG_DIR}/${cid_file}" "${PROJECT_DIR_ABS}/config/${cid_file}"
+for cfg_file in assistant_config; do
+  if [[ -f "${TEMP_CONFIG_DIR}/${cfg_file}" ]]; then
+    cp "${TEMP_CONFIG_DIR}/${cfg_file}" "${PROJECT_DIR_ABS}/config/${cfg_file}"
   fi
 done
 

@@ -10,7 +10,7 @@ Configures Asset Group-level URL expansion exclusions (webpage listing filter tr
 ## Instructions:
 1. **Extract Parameters**:
    - Extract `customer_id`, `asset_group_id`, or URL exclusion rules from `$ARGUMENTS`.
-   - Resolve API version from `config/api_version.txt`.
+   - Resolve API version from `config/assistant_config` (`api_version`).
 
 2. **Execute Script / Filter Generation**:
    - Run the listing filter generation script:

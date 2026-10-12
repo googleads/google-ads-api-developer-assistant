@@ -494,7 +494,7 @@ def sync_directories(source_dir: str, target_dir: str) -> bool:
 
 
 def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
-    """Inspects updated google-ads-python library and refreshes config/api_version.txt."""
+    """Inspects updated google-ads-python library and refreshes api_version in config/assistant_config."""
     python_root = os.path.join(lib_path, "google/ads/googleads")
     if not os.path.isdir(python_root):
         return None
@@ -512,17 +512,54 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
         latest_v = v_dirs[-1]
 
         # Candidate config locations
-        config_targets = [
-            os.path.abspath("config/api_version.txt"),
+        raw_targets = [
+            os.path.abspath("config/assistant_config"),
             os.path.abspath(
-                os.path.join(lib_path, "../../../config/api_version.txt")
+                os.path.join(lib_path, "../../config/assistant_config")
+            ),
+            os.path.abspath(
+                os.path.join(lib_path, "../../../config/assistant_config")
+            ),
+            os.path.abspath(
+                os.path.join(lib_path, "../../../../config/assistant_config")
             ),
         ]
+        config_targets: list[str] = []
+        for t in raw_targets:
+            norm_t = os.path.normpath(t)
+            if norm_t not in config_targets:
+                config_targets.append(norm_t)
+
         for cfg_path in config_targets:
             cfg_dir = os.path.dirname(cfg_path)
             if os.path.isdir(cfg_dir):
+                cid = "12345678"
+                exec_mutates_str = "false"
+                if os.path.isfile(cfg_path):
+                    try:
+                        with open(cfg_path, "r", encoding="utf-8") as f:
+                            existing_text = f.read()
+                        m_cid = re.search(
+                            r'(?m)^\s*customer_id\s*=\s*["\']?([^"\'\s#]+)["\']?',
+                            existing_text,
+                        )
+                        if m_cid:
+                            cid = m_cid.group(1).strip()
+                        m_em = re.search(
+                            r'(?m)^\s*execute_mutates\s*=\s*["\']?(true|false)["\']?',
+                            existing_text,
+                            re.IGNORECASE,
+                        )
+                        if m_em:
+                            exec_mutates_str = m_em.group(1).lower()
+                    except OSError:
+                        pass
                 with open(cfg_path, "w", encoding="utf-8") as f:
-                    f.write(f"{latest_v}\n")
+                    f.write(
+                        f'api_version = "{latest_v}"\n'
+                        f'customer_id = "{cid}"\n'
+                        f"execute_mutates = {exec_mutates_str}\n"
+                    )
 
         return latest_v
     except Exception:
@@ -672,6 +709,8 @@ def process_client_libs(
                 status = "UPDATE_FAILED"
         elif needs_update and check_only:
             status = "OUTDATED"
+        elif not check_only and entry == "google-ads-python":
+            update_api_version_cache_if_needed(lib_path)
 
         results.append(
             {

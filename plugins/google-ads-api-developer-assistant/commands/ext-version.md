@@ -17,7 +17,7 @@ Retrieves and prints the current Google Ads API Developer Assistant version and 
      ```bash
      python3 skills/ext-version/scripts/get_latest_api_version.py
      ```
-   - Or read `plugin.json` and `config/api_version.txt`.
+   - Or read `plugin.json` and `config/assistant_config`.
 
 2. **Output Format**:
    - Assistant Plugin Version.
