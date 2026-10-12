@@ -950,3 +950,288 @@ class TestSidecarA2A:
         assert content.count("ads_assistant:") == 1
         assert "ads_assistant: 4.0.0" in content
 
+    def test_config_init_main_default_cid_and_dummy_cleanup(self, tmp_path, monkeypatch, capsys):
+        import config.config_init as cfg_init
+
+        src_yaml = tmp_path / "home_google_ads.yaml"
+        src_yaml.write_text('developer_token: "tok_abc"\n', encoding="utf-8")
+
+        work_dir = tmp_path / "workspace"
+        cfg_dir = work_dir / "config"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "customer_id").write_text("7778889990\n", encoding="utf-8")
+
+        dummy_lib_yaml = work_dir / "client_libs" / "google-ads-python" / "google-ads.yaml"
+        dummy_lib_yaml.parent.mkdir(parents=True)
+        dummy_lib_yaml.write_text("dummy: true\n", encoding="utf-8")
+
+        monkeypatch.chdir(work_dir)
+        monkeypatch.delenv("GOOGLE_ADS_CONFIG_VALUE", raising=False)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "config_init.py",
+                "--config-dir",
+                str(cfg_dir),
+                "--source-yaml",
+                str(src_yaml),
+            ],
+        )
+
+        cfg_init.main()
+        captured = capsys.readouterr()
+        assert "export GOOGLE_ADS_CONFIGURATION_FILE_PATH=" in captured.out
+
+        out_yaml = cfg_dir / "google-ads.yaml"
+        assert out_yaml.is_file()
+        assert 'login_customer_id: "7778889990"' in out_yaml.read_text(encoding="utf-8")
+        assert not dummy_lib_yaml.exists()
+
+
+class TestAdditionalSkillCoverage:
+    """Tests for edge cases in validate_gaql, sync_client_libs, and troubleshoot_conversions."""
+
+    def test_validate_gaql_runtime_exception_exits_nonzero(self, capsys):
+        mock_client = MagicMock()
+        mock_service = MagicMock()
+        mock_client.get_service.return_value = mock_service
+        mock_service.search.side_effect = RuntimeError("Simulated gRPC transport error")
+
+        with pytest.raises(SystemExit) as exc_info:
+            validate_gaql.validate_gaql(
+                customer_id="1234567890",
+                api_version="v25",
+                query="SELECT campaign.id FROM campaign",
+                client=mock_client,
+            )
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "CRITICAL ERROR: Simulated gRPC transport error" in captured.out
+
+    def test_detect_installed_version_multi_language(self, tmp_path):
+        # PHP (composer.json)
+        php_dir = tmp_path / "google-ads-php"
+        php_dir.mkdir()
+        (php_dir / "composer.json").write_text(
+            json.dumps({"name": "googleads/google-ads-php", "version": "24.1.0"}),
+            encoding="utf-8",
+        )
+        assert sync_client_libs.detect_installed_version("google-ads-php", str(php_dir)) == "24.1.0"
+
+        # Ruby (.gemspec)
+        ruby_dir = tmp_path / "google-ads-ruby"
+        ruby_dir.mkdir()
+        (ruby_dir / "google-ads-googleads.gemspec").write_text(
+            'Gem::Specification.new do |s|\n  s.version = "29.0.0"\nend\n',
+            encoding="utf-8",
+        )
+        assert sync_client_libs.detect_installed_version("google-ads-ruby", str(ruby_dir)) == "29.0.0"
+
+        # Java (pom.xml)
+        java_dir = tmp_path / "google-ads-java"
+        java_dir.mkdir()
+        (java_dir / "pom.xml").write_text(
+            "<project><version>33.0.0</version></project>\n",
+            encoding="utf-8",
+        )
+        assert sync_client_libs.detect_installed_version("google-ads-java", str(java_dir)) == "33.0.0"
+
+        # .NET (.csproj)
+        dotnet_dir = tmp_path / "google-ads-dotnet" / "src"
+        dotnet_dir.mkdir(parents=True)
+        (dotnet_dir / "Google.Ads.GoogleAds.csproj").write_text(
+            "<Project><PropertyGroup><Version>21.2.0</Version></PropertyGroup></Project>\n",
+            encoding="utf-8",
+        )
+        assert (
+            sync_client_libs.detect_installed_version(
+                "google-ads-dotnet", str(tmp_path / "google-ads-dotnet")
+            )
+            == "21.2.0"
+        )
+
+    def test_sync_directories_preserves_git_and_yaml(self, tmp_path):
+        src_dir = tmp_path / "src_lib"
+        src_dir.mkdir()
+        (src_dir / "new_module.py").write_text("x = 1\n", encoding="utf-8")
+        (src_dir / ".git").mkdir()
+
+        dst_dir = tmp_path / "dst_lib"
+        dst_dir.mkdir()
+        (dst_dir / "old_module.py").write_text("old = 1\n", encoding="utf-8")
+        (dst_dir / "google-ads.yaml").write_text("keep: true\n", encoding="utf-8")
+        (dst_dir / ".git").mkdir()
+        (dst_dir / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+        ok = sync_client_libs.sync_directories(str(src_dir), str(dst_dir))
+        assert ok is True
+        assert (dst_dir / "new_module.py").is_file()
+        assert not (dst_dir / "old_module.py").exists()
+        assert (dst_dir / "google-ads.yaml").is_file()
+        assert (dst_dir / ".git" / "HEAD").is_file()
+
+    def test_update_api_version_cache_if_needed(self, tmp_path, monkeypatch):
+        work_dir = tmp_path / "work"
+        cfg_dir = work_dir / "config"
+        cfg_dir.mkdir(parents=True)
+
+        lib_dir = work_dir / "client_libs" / "google-ads-python"
+        for ver in ("v23", "v25", "v27"):
+            (lib_dir / "google" / "ads" / "googleads" / ver).mkdir(parents=True)
+
+        monkeypatch.chdir(work_dir)
+        latest = sync_client_libs.update_api_version_cache_if_needed(str(lib_dir))
+        assert latest == "v27"
+        assert (cfg_dir / "api_version.txt").read_text(encoding="utf-8").strip() == "v27"
+
+    def test_troubleshoot_conversions_alerts_and_report_file(self, tmp_path):
+        mock_client = MagicMock()
+        mock_service = MagicMock()
+        mock_client.get_service.return_value = mock_service
+
+        # 1. Customer row with accepted_customer_data_terms = False
+        cust_row = MagicMock()
+        cust_row.customer.descriptive_name = "Unaccepted Terms Account"
+        cust_row.customer.conversion_tracking_setting.accepted_customer_data_terms = False
+        cust_row.customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled = False
+
+        # 2. Client summary row with failures and alerts
+        client_row = MagicMock()
+        csum = client_row.offline_conversion_upload_client_summary
+        csum.client.name = "GOOGLE_ADS_API"
+        csum.status.name = "NEEDS_ATTENTION"
+        csum.total_event_count = 100
+        csum.successful_event_count = 75
+        ds = MagicMock()
+        ds.upload_date = "2026-10-10"
+        ds.successful_count = 75
+        ds.failed_count = 25
+        ds.pending_count = 0
+        csum.daily_summaries = [ds]
+        alert = MagicMock()
+        alert.error = "CLICK_NOT_FOUND"
+        alert.error_percentage = 0.25
+        csum.alerts = [alert]
+
+        def search_stream_side_effect(customer_id, query):
+            batch = MagicMock()
+            if "FROM customer" in query:
+                batch.results = [cust_row]
+            elif "FROM offline_conversion_upload_client_summary" in query:
+                batch.results = [client_row]
+            else:
+                batch.results = []
+            return [batch]
+
+        mock_service.search_stream.side_effect = search_stream_side_effect
+
+        data = troubleshoot_conversions.troubleshoot_conversions(
+            mock_client,
+            "1234567890",
+            json_output=False,
+            output_dir=str(tmp_path),
+        )
+        assert "CRITICAL: Customer Data Terms NOT accepted." in data["primary_errors"]
+        assert len(data["client_summaries"]) == 1
+        assert data["client_summaries"][0]["failure_rate"] == 0.25
+        assert data["client_summaries"][0]["alerts"][0]["error"] == "CLICK_NOT_FOUND"
+
+        report_path = data["report_path"]
+        assert os.path.isfile(report_path)
+        report_text = open(report_path, encoding="utf-8").read()
+        assert report_text.startswith("Created by the Google Ads API Developer Assistant")
+        assert "CRITICAL: Customer Data Terms NOT accepted." in report_text
+        assert "CLICK_NOT_FOUND" in report_text
+
+
+class TestPluginIntegrity:
+    """Verifies plugin structural integrity, config_init parity, and absence of host-specific paths."""
+
+    def test_config_init_parity(self):
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        root_cfg = os.path.join(repo_root, "config", "config_init.py")
+        plugin_cfg = os.path.join(
+            repo_root,
+            "plugins",
+            "google-ads-api-developer-assistant",
+            "config",
+            "config_init.py",
+        )
+        with open(root_cfg, "r", encoding="utf-8") as f1, open(
+            plugin_cfg, "r", encoding="utf-8"
+        ) as f2:
+            assert f1.read() == f2.read(), (
+                "config/config_init.py and plugins/.../config/config_init.py must remain identical"
+            )
+
+    def test_no_host_specific_hardcoded_paths_in_rules_and_docs(self):
+        import re
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        files_to_check = [
+            os.path.join(repo_root, "README.md"),
+            os.path.join(
+                repo_root,
+                "plugins",
+                "google-ads-api-developer-assistant",
+                "rules",
+                "google_ads_rules.md",
+            ),
+            os.path.join(
+                repo_root,
+                "plugins",
+                "google-ads-api-developer-assistant",
+                "sidecars",
+                "google-ads-a2a-service",
+                "server.py",
+            ),
+        ]
+        forbidden_pattern = re.compile(
+            r"(/usr/local/google/home/[A-Za-z0-9_-]+|/home/[A-Za-z0-9_]+/|/Users/[A-Za-z0-9_]+/)"
+        )
+        for fpath in files_to_check:
+            with open(fpath, "r", encoding="utf-8") as f:
+                content = f.read()
+            match = forbidden_pattern.search(content)
+            assert match is None, (
+                f"Found forbidden host-specific path '{match.group(0)}' in {fpath}"
+            )
+
+    def test_manifests_and_skill_frontmatter_valid(self):
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        plugin_dir = os.path.join(
+            repo_root, "plugins", "google-ads-api-developer-assistant"
+        )
+        json_manifests = [
+            os.path.join(plugin_dir, "plugin.json"),
+            os.path.join(plugin_dir, "hooks.json"),
+            os.path.join(plugin_dir, "mcp_config.json"),
+            os.path.join(
+                plugin_dir,
+                "sidecars",
+                "google-ads-a2a-service",
+                "sidecar.json",
+            ),
+        ]
+        for manifest_path in json_manifests:
+            assert os.path.isfile(manifest_path), f"Missing manifest: {manifest_path}"
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                parsed = json.load(f)
+            assert isinstance(parsed, dict) and parsed
+
+        skills_root = os.path.join(plugin_dir, "skills")
+        skill_dirs = [
+            os.path.join(skills_root, d)
+            for d in os.listdir(skills_root)
+            if os.path.isdir(os.path.join(skills_root, d))
+        ]
+        assert len(skill_dirs) > 0
+        for sdir in skill_dirs:
+            skill_md = os.path.join(sdir, "SKILL.md")
+            assert os.path.isfile(skill_md), f"Missing SKILL.md in {sdir}"
+            with open(skill_md, "r", encoding="utf-8") as f:
+                text = f.read()
+            assert text.startswith("---\n"), f"SKILL.md in {sdir} must start with YAML frontmatter"
+            assert "name:" in text and "description:" in text
+
+

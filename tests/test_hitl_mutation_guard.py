@@ -911,3 +911,229 @@ def test_dry_run_failure_writes_audit_log_and_withholds_receipt(
     assert "RequestError.BAD_RESOURCE_ID" in entry["response"]["error"]
 
 
+def test_receipt_replay_protection_expiration_and_empty_consequences(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Verifies receipt replay blocking (EXECUTED), expiration (max_age_seconds), and empty consequences."""
+    import json
+    import subprocess
+    import time
+    import pytest
+
+    run_mutation = _load_run_mutation_module()
+    audit_log_file = tmp_path / "lifecycle_audit.jsonl"
+    monkeypatch.setenv("GOOGLE_ADS_MUTATION_AUDIT_LOG", str(audit_log_file))
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+    # 1. Empty consequences must raise ValueError
+    with pytest.raises(ValueError, match="At least one explicit consequence"):
+        run_mutation.write_dry_run_receipt(
+            customer_id="1234567890",
+            operation_summary="Invalid empty consequences",
+            before_state="Before",
+            after_state="After",
+            consequences=["   ", ""],
+            reversibility="REVERSIBLE",
+        )
+
+    script_file = tmp_path / "replay_script.py"
+    script_file.write_text(
+        "def mutate(svc, req):\n"
+        "    req.validate_only = False\n"
+        "    return svc.mutate_campaigns(request=req)\n"
+        "print('Executed live script')\n",
+        encoding="utf-8",
+    )
+
+    # 2. Write valid receipt, then backdate timestamp to test expiration (>1800s)
+    run_mutation.write_dry_run_receipt(
+        customer_id="1234567890",
+        operation_summary="Update Campaign 1",
+        before_state="ENABLED",
+        after_state="PAUSED",
+        consequences=["Campaign stops serving"],
+        reversibility="REVERSIBLE",
+        script_path=str(script_file),
+    )
+    expired_ts = time.time() - 3600
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            with open(receipt_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["timestamp"] = expired_ts
+            with open(receipt_path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+
+    ok, msg, _ = run_mutation.load_and_verify_receipt(script_path=str(script_file))
+    assert ok is False
+    assert "expired" in msg
+
+    decision, reason = evaluate_mutation_guard(f"python3 {script_file} --execute")
+    assert decision == "deny"
+    assert reason is not None and "expired" in reason
+
+    # 3. Missing consequences in tampered receipt file must be rejected
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            with open(receipt_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["timestamp"] = time.time()
+            data["consequences"] = []
+            with open(receipt_path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+
+    ok, msg, _ = run_mutation.load_and_verify_receipt(script_path=str(script_file))
+    assert ok is False
+    assert "missing mandatory consequence disclosures" in msg
+
+    decision, reason = evaluate_mutation_guard(f"python3 {script_file} --execute")
+    assert decision == "deny"
+    assert reason is not None and "missing mandatory consequence disclosures" in reason
+
+    # 4. Fresh receipt -> mark_receipt_executed -> replay blocked
+    run_mutation.write_dry_run_receipt(
+        customer_id="1234567890",
+        operation_summary="Update Campaign 1",
+        before_state="ENABLED",
+        after_state="PAUSED",
+        consequences=["Campaign stops serving"],
+        reversibility="REVERSIBLE",
+        script_path=str(script_file),
+    )
+    run_mutation.mark_receipt_executed(
+        user_approved_at_iso="2026-10-12T16:00:00+00:00",
+        request_sent_at_iso="2026-10-12T16:00:01+00:00",
+        response_received_at_iso="2026-10-12T16:00:02+00:00",
+        audit_id="audit-uuid-999",
+    )
+
+    ok, msg, loaded = run_mutation.load_and_verify_receipt(script_path=str(script_file))
+    assert ok is False
+    assert "EXECUTED" in msg
+    assert loaded.get("audit_id") == "audit-uuid-999"
+    assert loaded.get("user_approved_at_iso") == "2026-10-12T16:00:00+00:00"
+
+    decision, reason = evaluate_mutation_guard(f"python3 {script_file} --execute")
+    assert decision == "deny"
+    assert reason is not None and "EXECUTED" in reason
+
+    runner_path = (
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "skills"
+        / "execute-mutation"
+        / "scripts"
+        / "run_mutation.py"
+    )
+    replay_proc = subprocess.run(
+        [sys.executable, str(runner_path), "--script", str(script_file), "--execute"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert replay_proc.returncode == 2
+    assert "BLOCKED:" in replay_proc.stderr
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+
+def test_evaluate_mutation_guard_inline_methods_and_comments() -> None:
+    """Verifies inline mutation prefix detection and ignores commented-out mutation calls."""
+    run_mutation = _load_run_mutation_module()
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+    # Commented-out mutation call on its own line must be allowed
+    commented_cmd = (
+        'python3 -c "\n# service.mutate_campaigns(request=req)\nprint(\'hello\')"'
+    )
+    decision, reason = evaluate_mutation_guard(commented_cmd)
+    assert decision == "allow"
+    assert reason is None
+
+    # All live mutation prefixes without validate_only=True must be denied when no receipt exists
+    for method_call in (
+        "svc.apply_recommendation(request=req)",
+        "svc.upload_click_conversions(request=req)",
+        "svc.upload_call_conversions(request=req)",
+        "svc.add_batch_job_operations(request=req)",
+        "svc.run_batch_job(request=req)",
+    ):
+        decision, reason = evaluate_mutation_guard(f'python3 -c "{method_call}"')
+        assert decision == "deny", f"Expected deny for {method_call}"
+        assert reason is not None and "BLOCKED BY HITL MUTATION GUARD" in reason
+
+
+def test_handle_hook_command_rewriting_and_dual_host_payloads(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    """Verifies handle_hook() command rewriting (Cases A-E), Antigravity/Claude payloads, and PreInvocation."""
+    import io
+    import json
+    from config import config_init
+
+    fake_cfg = str(tmp_path / "config" / "google-ads.yaml")
+    monkeypatch.setattr(config_init, "sync_and_set_config_kv", lambda: fake_cfg)
+
+    # 1. PreInvocation hook (empty JSON or no toolCall/tool_input)
+    monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
+    config_init.handle_hook()
+    out_pre = json.loads(capsys.readouterr().out)
+    assert "injectSteps" in out_pre
+    assert "HITL MUTATION VERIFICATION & AUDIT MANDATE" in out_pre["injectSteps"][0]["ephemeralMessage"]
+
+    # 2. Antigravity PreToolUse hook: rewrites Cases A, B, C, D, E and prepends export
+    raw_cmd = (
+        "python3 -c \"from google.ads.googleads.client import GoogleAdsClient; "
+        "c1 = GoogleAdsClient.load_from_storage(); "
+        "c2 = GoogleAdsClient.load_from_storage(version='v25'); "
+        "p1 = os.path.expanduser('~/google-ads.yaml'); "
+        "p2 = '/home/testuser/google-ads.yaml'; "
+        "p3 = 'client_libs/google-ads-python/google-ads.yaml'\""
+    )
+    agy_payload = {
+        "toolCall": {
+            "args": {
+                "CommandLine": raw_cmd,
+            }
+        }
+    }
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(agy_payload)))
+    config_init.handle_hook()
+    out_agy = json.loads(capsys.readouterr().out)
+    assert out_agy["decision"] == "allow"
+    rewritten = out_agy["overwrite"]["CommandLine"]
+    assert f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{fake_cfg}" &&' in rewritten
+    assert 'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml")' in rewritten
+    assert 'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version=\'v25\')' in rewritten
+    assert "/home/testuser/google-ads.yaml" not in rewritten
+    assert "client_libs/google-ads-python/google-ads.yaml" not in rewritten
+
+    # 3. Claude Code PreToolUse hook: live mutation denied when no receipt exists
+    run_mutation = _load_run_mutation_module()
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+    claude_payload = {
+        "tool_input": {
+            "command": "python3 -c 'svc.mutate_campaigns(request=req)'",
+        },
+        "session_id": "claude-s1",
+    }
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(claude_payload)))
+    config_init.handle_hook()
+    out_claude = json.loads(capsys.readouterr().out)
+    assert out_claude["decision"] == "deny"
+    assert out_claude["permissionDecision"] == "deny"
+    assert "BLOCKED BY HITL MUTATION GUARD" in out_claude["permissionDecisionReason"]
+
+
+
