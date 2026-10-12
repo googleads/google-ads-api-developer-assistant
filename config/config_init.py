@@ -498,6 +498,42 @@ MUTATION_CALL_PATTERN = re.compile(
 )
 
 
+def _normalize_request_for_hash(obj: Any) -> Any:
+    """Normalizes a serialized RPC request payload by recursively stripping validate_only."""
+    if isinstance(obj, dict):
+        return {
+            str(k): _normalize_request_for_hash(v)
+            for k, v in sorted(obj.items(), key=lambda item: str(item[0]))
+            if str(k) != "validate_only"
+        }
+    if isinstance(obj, list):
+        return [_normalize_request_for_hash(item) for item in obj]
+    return obj
+
+
+def _compute_canonical_request_sha256(
+    service_name: str,
+    method_name: str,
+    req_payload: Any,
+) -> str:
+    """Computes a canonical SHA-256 hex digest of a serialized mutate request payload."""
+    import hashlib
+
+    normalized = _normalize_request_for_hash(req_payload)
+    canonical_envelope = {
+        "service": str(service_name).strip(),
+        "method": str(method_name).strip(),
+        "request": normalized,
+    }
+    canonical_json = json.dumps(
+        canonical_envelope,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
 def _verify_dry_run_receipt_for_hook(
     script_path: Optional[str] = None,
     max_age_seconds: int = 1800,
@@ -584,6 +620,76 @@ def _verify_dry_run_receipt_for_hook(
                     receipt,
                 )
 
+    # Verify canonical mutate request SHA-256 integrity on the receipt before allowing live execution
+    recorded_req_sha = str(receipt.get("request_sha256", "")).strip()
+    dry_run_calls = receipt.get("dry_run_rpc_calls")
+    recorded_sha_list = receipt.get("request_sha256_list")
+    if isinstance(dry_run_calls, list) and dry_run_calls:
+        recomputed_list: list[str] = []
+        for idx, call in enumerate(dry_run_calls):
+            if not isinstance(call, dict):
+                return (
+                    False,
+                    f"BLOCKED BY HITL MUTATION GUARD: Dry-run receipt RPC call #{idx + 1} is malformed. "
+                    "Re-run --dry-run first.",
+                    receipt,
+                )
+            recomputed_sha = _compute_canonical_request_sha256(
+                str(call.get("service", "")),
+                str(call.get("method", "")),
+                call.get("request_payload"),
+            )
+            call_sha = str(call.get("request_sha256", "")).strip()
+            if call_sha and call_sha != recomputed_sha:
+                return (
+                    False,
+                    f"BLOCKED BY HITL MUTATION GUARD: Mutate request SHA-256 mismatch on dry-run RPC call #{idx + 1} "
+                    "(SHA-256 mismatch). Re-run --dry-run first.",
+                    receipt,
+                )
+            recomputed_list.append(recomputed_sha)
+
+        if isinstance(recorded_sha_list, list) and recorded_sha_list != recomputed_list:
+            return (
+                False,
+                "BLOCKED BY HITL MUTATION GUARD: Dry-run receipt request_sha256_list mismatch "
+                "(SHA-256 mismatch). Re-run --dry-run first.",
+                receipt,
+            )
+        recomputed_agg = (
+            recomputed_list[0]
+            if len(recomputed_list) == 1
+            else hashlib.sha256(
+                json.dumps(recomputed_list, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+        )
+        if recorded_req_sha and recorded_req_sha != recomputed_agg:
+            return (
+                False,
+                "BLOCKED BY HITL MUTATION GUARD: Dry-run receipt request_sha256 mismatch "
+                "(SHA-256 mismatch). Re-run --dry-run first.",
+                receipt,
+            )
+    elif recorded_req_sha:
+        fallback_meta = {
+            "customer_id": str(receipt.get("customer_id", "")).strip(),
+            "operation_summary": str(receipt.get("operation_summary", "")).strip(),
+            "before_state": str(receipt.get("before_state", "")).strip(),
+            "after_state": str(receipt.get("after_state", "")).strip(),
+            "script_path": str(receipt.get("script_path", "")),
+            "script_sha256": str(receipt.get("script_sha256", "")),
+        }
+        recomputed_fallback_sha = _compute_canonical_request_sha256(
+            "ScriptExecution", "mutate", fallback_meta
+        )
+        if recorded_req_sha != recomputed_fallback_sha:
+            return (
+                False,
+                "BLOCKED BY HITL MUTATION GUARD: Dry-run receipt request_sha256 mismatch "
+                "(SHA-256 mismatch). Re-run --dry-run first.",
+                receipt,
+            )
+
     receipt["hook_prompted_at_iso"] = datetime.now(timezone.utc).isoformat()
     if isinstance(hook_context, dict):
         conv_id = hook_context.get("conversationId") or hook_context.get("session_id")
@@ -612,10 +718,12 @@ def _verify_dry_run_receipt_for_hook(
                 continue
 
     consequences_formatted = "; ".join(str(c).strip() for c in consequences if str(c).strip())
+    req_sha_display = str(receipt.get("request_sha256", "N/A"))
     prompt_reason = (
         f"⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION [Customer ID: {receipt.get('customer_id', 'Unknown')}]\n"
         f"• Operation: {receipt.get('operation_summary', 'Unknown')}\n"
         f"• Change: {receipt.get('before_state', 'N/A')} -> {receipt.get('after_state', 'N/A')}\n"
+        f"• Request SHA256: {req_sha_display}\n"
         f"• Reversibility: {receipt.get('reversibility', 'UNKNOWN')}\n"
         f"• Consequences: {consequences_formatted}\n"
         f"Confirm execution of this live Google Ads API mutation?"

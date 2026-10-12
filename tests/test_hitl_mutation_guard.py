@@ -372,9 +372,10 @@ def test_subprocess_google_ads_client_interception_and_failure_audit(
     )
     (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
     (pkg_dir / "client.py").write_text(
+        "import os\n"
         "class _FakeBudgetService:\n"
         "    def mutate_campaign_budgets(self, request=None):\n"
-        "        if isinstance(request, dict) and request.get('fail_mode'):\n"
+        "        if os.environ.get('FAKE_ADS_SIMULATE_FAILURE') == '1':\n"
         "            ex = RuntimeError('QuotaCheckError.ACCOUNT_INACTIVE')\n"
         "            ex.request_id = 'req-fail-500'\n"
         "            ex.failure = {'errors': [{'message': 'Account inactive', 'error_code': {'quota_error': 'ACCOUNT_INACTIVE'}}]}\n"
@@ -395,7 +396,7 @@ def test_subprocess_google_ads_client_interception_and_failure_audit(
 
     script_file = tmp_path / "rpc_script.py"
     script_file.write_text(
-        "import argparse, sys\n"
+        "import argparse, os, sys\n"
         "from google.ads.googleads.client import GoogleAdsClient\n"
         "parser = argparse.ArgumentParser()\n"
         "parser.add_argument('--customer-id', default='1234567890')\n"
@@ -403,12 +404,13 @@ def test_subprocess_google_ads_client_interception_and_failure_audit(
         "parser.add_argument('--execute', action='store_true')\n"
         "parser.add_argument('--fail', action='store_true')\n"
         "args = parser.parse_args()\n"
+        "if args.fail:\n"
+        "    os.environ['FAKE_ADS_SIMULATE_FAILURE'] = '1'\n"
         "client = GoogleAdsClient.load_from_storage(path='config/google-ads.yaml')\n"
         "svc = client.get_service('CampaignBudgetService')\n"
         "req = {\n"
         "    'customer_id': args.customer_id,\n"
         "    'validate_only': not args.execute,\n"
-        "    'fail_mode': args.fail,\n"
         "    'operations': [{'update': {'resource_name': 'customers/1234567890/campaignBudgets/999', 'amount_micros': 90000000}}],\n"
         "}\n"
         "try:\n"
@@ -1134,6 +1136,354 @@ def test_handle_hook_command_rewriting_and_dual_host_payloads(
     assert out_claude["decision"] == "deny"
     assert out_claude["permissionDecision"] == "deny"
     assert "BLOCKED BY HITL MUTATION GUARD" in out_claude["permissionDecisionReason"]
+
+
+def test_compute_mutate_request_sha256_canonical_normalization() -> None:
+    """Verifies that compute_mutate_request_sha256 normalizes validate_only and detects any payload change."""
+    run_mutation = _load_run_mutation_module()
+
+    dry_run_req = {
+        "customer_id": "1234567890",
+        "validate_only": True,
+        "operations": [
+            {
+                "update": {
+                    "resource_name": "customers/1234567890/campaignBudgets/111",
+                    "amount_micros": 75000000,
+                },
+                "update_mask": "amount_micros",
+            }
+        ],
+    }
+    live_req_reordered = {
+        "operations": [
+            {
+                "update_mask": "amount_micros",
+                "update": {
+                    "amount_micros": 75000000,
+                    "resource_name": "customers/1234567890/campaignBudgets/111",
+                },
+            }
+        ],
+        "validate_only": False,
+        "customer_id": "1234567890",
+    }
+
+    sha_dry = run_mutation.compute_mutate_request_sha256(
+        "CampaignBudgetService", "mutate_campaign_budgets", dry_run_req
+    )
+    sha_live = run_mutation.compute_mutate_request_sha256(
+        "CampaignBudgetService", "mutate_campaign_budgets", live_req_reordered
+    )
+    assert len(sha_dry) == 64
+    assert sha_dry == sha_live
+
+    # Any change to customer_id, amount_micros, resource_name, or service/method must change the SHA-256
+    altered_amount_req = {
+        "customer_id": "1234567890",
+        "validate_only": False,
+        "operations": [
+            {
+                "update": {
+                    "resource_name": "customers/1234567890/campaignBudgets/111",
+                    "amount_micros": 999000000,
+                },
+                "update_mask": "amount_micros",
+            }
+        ],
+    }
+    assert (
+        run_mutation.compute_mutate_request_sha256(
+            "CampaignBudgetService", "mutate_campaign_budgets", altered_amount_req
+        )
+        != sha_dry
+    )
+    assert (
+        run_mutation.compute_mutate_request_sha256(
+            "CampaignService", "mutate_campaigns", live_req_reordered
+        )
+        != sha_dry
+    )
+
+
+def test_pre_rpc_sha256_verification_blocks_altered_or_extra_requests_before_sending(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Verifies that mutate request SHA-256 is checked BEFORE sending the RPC and blocks any mismatch."""
+    import json
+    import subprocess
+    import pytest
+
+    run_mutation = _load_run_mutation_module()
+    audit_log_file = tmp_path / "pre_rpc_sha_audit.jsonl"
+    monkeypatch.setenv("GOOGLE_ADS_MUTATION_AUDIT_LOG", str(audit_log_file))
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+    # 1. Direct unit test of _wrap_service_for_audit pre-RPC blocking
+    class _CountingBudgetService:
+        def __init__(self) -> None:
+            self.sent_requests: list[Any] = []
+
+        def mutate_campaign_budgets(self, request: Any = None) -> Any:
+            self.sent_requests.append(request)
+            return {
+                "request_id": "req-verified-1",
+                "results": [{"resource_name": "customers/123/campaignBudgets/456"}],
+            }
+
+    approved_payload = {
+        "customer_id": "123",
+        "validate_only": True,
+        "operations": [
+            {
+                "update": {
+                    "resource_name": "customers/123/campaignBudgets/456",
+                    "amount_micros": 50000000,
+                }
+            }
+        ],
+    }
+    expected_sha = run_mutation.compute_mutate_request_sha256(
+        "CampaignBudgetService", "mutate_campaign_budgets", approved_payload
+    )
+
+    # 1a. Altered payload is blocked BEFORE mutate_campaign_budgets is invoked
+    raw_svc_tampered = _CountingBudgetService()
+    captured_tampered: list[dict[str, Any]] = []
+    wrapped_tampered = run_mutation._wrap_service_for_audit(
+        raw_svc_tampered,
+        "CampaignBudgetService",
+        captured_tampered,
+        expected_request_hashes=[expected_sha],
+        enforce_request_hash=True,
+    )
+    with pytest.raises(PermissionError, match="BLOCKED BEFORE RPC: Mutate request SHA-256 mismatch"):
+        wrapped_tampered.mutate_campaign_budgets(
+            request={
+                "customer_id": "123",
+                "validate_only": False,
+                "operations": [
+                    {
+                        "update": {
+                            "resource_name": "customers/123/campaignBudgets/456",
+                            "amount_micros": 999999999,  # Altered amount!
+                        }
+                    }
+                ],
+            }
+        )
+    # Underlying RPC method was NEVER called
+    assert len(raw_svc_tampered.sent_requests) == 0
+    assert len(captured_tampered) == 1
+    assert captured_tampered[0]["status"] == "BLOCKED_SHA256_MISMATCH"
+    assert captured_tampered[0]["request_sha256_verified"] is False
+    assert captured_tampered[0]["expected_request_sha256"] == expected_sha
+    assert captured_tampered[0]["request_sha256"] != expected_sha
+
+    # 1b. Matching payload (with validate_only=False) succeeds, but a 2nd unapproved call is blocked before sending
+    raw_svc_ok = _CountingBudgetService()
+    captured_ok: list[dict[str, Any]] = []
+    wrapped_ok = run_mutation._wrap_service_for_audit(
+        raw_svc_ok,
+        "CampaignBudgetService",
+        captured_ok,
+        expected_request_hashes=[expected_sha],
+        enforce_request_hash=True,
+    )
+    resp = wrapped_ok.mutate_campaign_budgets(
+        request={
+            "customer_id": "123",
+            "validate_only": False,
+            "operations": [
+                {
+                    "update": {
+                        "resource_name": "customers/123/campaignBudgets/456",
+                        "amount_micros": 50000000,
+                    }
+                }
+            ],
+        }
+    )
+    assert resp["request_id"] == "req-verified-1"
+    assert len(raw_svc_ok.sent_requests) == 1
+    assert captured_ok[0]["request_sha256"] == expected_sha
+    assert captured_ok[0]["request_sha256_verified"] is True
+
+    with pytest.raises(PermissionError, match="BLOCKED BEFORE RPC: Unapproved mutation call #2"):
+        wrapped_ok.mutate_campaign_budgets(
+            request={
+                "customer_id": "123",
+                "validate_only": False,
+                "operations": [
+                    {
+                        "update": {
+                            "resource_name": "customers/123/campaignBudgets/456",
+                            "amount_micros": 50000000,
+                        }
+                    }
+                ],
+            }
+        )
+    # 2nd call was blocked before reaching raw_svc_ok.mutate_campaign_budgets
+    assert len(raw_svc_ok.sent_requests) == 1
+    assert captured_ok[1]["status"] == "BLOCKED_SHA256_MISMATCH"
+
+    # 2. End-to-end subprocess test: script alters request payload during --execute
+    live_rpc_marker = tmp_path / "live_rpc_was_sent.marker"
+    pkg_dir = tmp_path / "google" / "ads" / "googleads"
+    pkg_dir.mkdir(parents=True)
+    (tmp_path / "google" / "__init__.py").write_text(
+        "__path__ = __import__('pkgutil').extend_path(__path__, __name__)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "google" / "ads" / "__init__.py").write_text(
+        "__path__ = __import__('pkgutil').extend_path(__path__, __name__)\n",
+        encoding="utf-8",
+    )
+    (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
+    (pkg_dir / "client.py").write_text(
+        "from pathlib import Path\n"
+        "class _FakeBudgetService:\n"
+        "    def mutate_campaign_budgets(self, request=None):\n"
+        "        if isinstance(request, dict) and not request.get('validate_only', True):\n"
+        f"            Path({str(live_rpc_marker)!r}).write_text('SENT', encoding='utf-8')\n"
+        "        return {\n"
+        "            'request_id': 'req-e2e-111',\n"
+        "            'results': [{'resource_name': 'customers/1234567890/campaignBudgets/777'}],\n"
+        "        }\n\n"
+        "class GoogleAdsClient:\n"
+        "    @classmethod\n"
+        "    def load_from_storage(cls, path=None, version=None):\n"
+        "        return cls()\n"
+        "    def get_service(self, name, *args, **kwargs):\n"
+        "        return _FakeBudgetService()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONPATH", f"{tmp_path}{os.pathsep}{os.environ.get('PYTHONPATH', '')}")
+
+    bait_and_switch_script = tmp_path / "bait_and_switch.py"
+    bait_and_switch_script.write_text(
+        "import argparse\n"
+        "from google.ads.googleads.client import GoogleAdsClient\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--customer-id', default='1234567890')\n"
+        "parser.add_argument('--dry-run', action='store_true')\n"
+        "parser.add_argument('--execute', action='store_true')\n"
+        "args = parser.parse_args()\n"
+        "client = GoogleAdsClient.load_from_storage(path='config/google-ads.yaml')\n"
+        "svc = client.get_service('CampaignBudgetService')\n"
+        "# Bait-and-switch: uses 50M micros in dry-run, but tries to send 500M micros in execute!\n"
+        "amount = 500000000 if args.execute else 50000000\n"
+        "req = {\n"
+        "    'customer_id': args.customer_id,\n"
+        "    'validate_only': not args.execute,\n"
+        "    'operations': [{'update': {'resource_name': 'customers/1234567890/campaignBudgets/777', 'amount_micros': amount}}],\n"
+        "}\n"
+        "svc.mutate_campaign_budgets(request=req)\n",
+        encoding="utf-8",
+    )
+
+    runner_path = (
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "skills"
+        / "execute-mutation"
+        / "scripts"
+        / "run_mutation.py"
+    )
+
+    # Dry-run succeeds and records request_sha256 in receipt
+    dry_proc = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(bait_and_switch_script),
+            "--dry-run",
+            "--customer-id",
+            "1234567890",
+            "--operation",
+            "Update budget 777 to $50/day",
+            "--consequences",
+            "Budget set to $50/day",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "Request SHA256:" in dry_proc.stdout
+
+    # Execute must be BLOCKED BEFORE sending the live RPC because the request SHA-256 differs!
+    exec_proc = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(bait_and_switch_script),
+            "--execute",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert exec_proc.returncode != 0
+    assert "BLOCKED_SHA256_MISMATCH" in exec_proc.stderr
+    assert "BLOCKED BEFORE RPC: Mutate request SHA-256 mismatch" in exec_proc.stderr
+    # Crucial verification: the underlying live RPC method was NEVER invoked!
+    assert not live_rpc_marker.exists()
+
+    # Verify audit log recorded BLOCKED_SHA256_MISMATCH and request_sha256_verified=False
+    entries = [
+        json.loads(line)
+        for line in audit_log_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(entries) == 2
+    dry_audit, blocked_audit = entries
+    assert dry_audit["status"] == "DRY_RUN_PASSED"
+    assert dry_audit["request"]["request_sha256_verified"] is True
+    assert blocked_audit["phase"] == "EXECUTE"
+    assert blocked_audit["status"] == "BLOCKED_SHA256_MISMATCH"
+    assert blocked_audit["request"]["request_sha256_verified"] is False
+    assert (
+        blocked_audit["request"]["request_sha256"]
+        != blocked_audit["request"]["expected_request_sha256"]
+    )
+    assert (
+        blocked_audit["request"]["expected_request_sha256"]
+        == dry_audit["request"]["request_sha256"]
+    )
+
+    # 3. Verify that tampering with dry_run_rpc_calls in last_dry_run.json is caught by both hook and runner
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            with open(receipt_path, "r", encoding="utf-8") as f:
+                r_data = json.load(f)
+            r_data["dry_run_rpc_calls"][0]["request_payload"]["operations"][0]["update"][
+                "amount_micros"
+            ] = 500000000
+            with open(receipt_path, "w", encoding="utf-8") as f:
+                json.dump(r_data, f)
+
+    ok_receipt, msg_receipt, _ = run_mutation.load_and_verify_receipt(
+        script_path=str(bait_and_switch_script)
+    )
+    assert ok_receipt is False
+    assert "SHA-256 mismatch" in msg_receipt
+
+    decision, reason = evaluate_mutation_guard(
+        f"python3 {runner_path} --script {bait_and_switch_script} --execute"
+    )
+    assert decision == "deny"
+    assert reason is not None and "SHA-256 mismatch" in reason
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
 
 
 

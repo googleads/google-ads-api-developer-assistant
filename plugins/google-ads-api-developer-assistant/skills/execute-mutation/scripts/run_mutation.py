@@ -8,7 +8,6 @@ import getpass
 import hashlib
 import json
 import os
-import re
 import runpy
 import shlex
 import socket
@@ -24,6 +23,8 @@ RECEIPT_FILENAME = "last_dry_run.json"
 AUDIT_LOG_FILENAME = "mutation_audit.jsonl"
 DEFAULT_MAX_RECEIPT_AGE_SECONDS = 1800  # 30 minutes
 _TRACE_ENV_VAR = "_GOOGLE_ADS_MUTATION_TRACE_FILE"
+_EXPECTED_HASHES_ENV_VAR = "_GOOGLE_ADS_EXPECTED_REQUEST_SHA256"
+_ENFORCE_HASH_ENV_VAR = "_GOOGLE_ADS_ENFORCE_REQUEST_SHA256"
 
 _MUTATION_METHOD_PREFIXES = (
     "mutate",
@@ -50,6 +51,64 @@ def compute_file_sha256(file_path: str) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+def _normalize_request_for_hash(obj: Any) -> Any:
+    """Normalizes a serialized RPC request payload by recursively stripping validate_only."""
+    if isinstance(obj, dict):
+        return {
+            str(k): _normalize_request_for_hash(v)
+            for k, v in sorted(obj.items(), key=lambda item: str(item[0]))
+            if str(k) != "validate_only"
+        }
+    if isinstance(obj, list):
+        return [_normalize_request_for_hash(item) for item in obj]
+    return obj
+
+
+def compute_mutate_request_sha256(
+    service_name: str,
+    method_name: str,
+    req_payload: Any,
+) -> str:
+    """Computes a canonical SHA-256 hex digest of a Google Ads mutate request payload.
+
+    Normalizes out `validate_only` so that the `validate_only=True` dry-run request
+    and the `validate_only=False` live request produce the exact same SHA-256 digest
+    if and only if the target service, method, customer_id, and operations are identical.
+    """
+    serialized = _serialize_rpc_object(req_payload)
+    normalized = _normalize_request_for_hash(serialized)
+    canonical_envelope = {
+        "service": str(service_name).strip(),
+        "method": str(method_name).strip(),
+        "request": normalized,
+    }
+    canonical_json = json.dumps(
+        canonical_envelope,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def compute_aggregate_request_sha256(
+    request_hashes: List[str],
+    fallback_payload: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Computes an aggregate SHA-256 digest across one or more mutate requests."""
+    clean_hashes = [str(h).strip() for h in request_hashes if str(h).strip()]
+    if len(clean_hashes) == 1:
+        return clean_hashes[0]
+    if len(clean_hashes) > 1:
+        canonical_list = json.dumps(clean_hashes, separators=(",", ":"))
+        return hashlib.sha256(canonical_list.encode("utf-8")).hexdigest()
+    if fallback_payload is not None:
+        return compute_mutate_request_sha256(
+            "ScriptExecution", "mutate", fallback_payload
+        )
+    return ""
 
 
 def get_receipt_paths() -> List[str]:
@@ -287,8 +346,13 @@ def _wrap_service_for_audit(
     service: Any,
     service_name: str,
     captured_calls: List[Dict[str, Any]],
+    expected_request_hashes: Optional[List[str]] = None,
+    enforce_request_hash: bool = False,
 ) -> Any:
-    """Wraps mutation methods on a GoogleAdsClient service instance to record request/response payloads."""
+    """Wraps mutation methods on a GoogleAdsClient service instance to verify SHA-256 and record payloads."""
+    should_enforce = enforce_request_hash or (expected_request_hashes is not None)
+    expected_list = list(expected_request_hashes) if expected_request_hashes else []
+
     for attr_name in dir(service):
         if attr_name.startswith("_"):
             continue
@@ -316,12 +380,72 @@ def _wrap_service_for_audit(
                 else:
                     req_payload = _serialize_rpc_object(kwargs)
 
+                req_sha256 = compute_mutate_request_sha256(
+                    svc_name, m_name, req_payload
+                )
+                call_index = len(captured_calls)
+
                 call_record: Dict[str, Any] = {
                     "service": svc_name,
                     "method": m_name,
                     "sent_at_iso": sent_at_iso,
+                    "request_sha256": req_sha256,
                     "request_payload": req_payload,
                 }
+
+                # Pre-RPC SHA-256 verification: ensure live request matches dry-run BEFORE sending
+                if should_enforce:
+                    if call_index >= len(expected_list):
+                        err_msg = (
+                            f"BLOCKED BEFORE RPC: Unapproved mutation call #{call_index + 1} to "
+                            f"{svc_name}.{m_name} (request_sha256={req_sha256}) was not present in "
+                            f"the validate_only=True dry-run receipt (expected {len(expected_list)} call(s))."
+                        )
+                        call_record.update({
+                            "received_at_iso": datetime.now(timezone.utc).isoformat(),
+                            "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                            "status": "BLOCKED_SHA256_MISMATCH",
+                            "expected_request_sha256": None,
+                            "request_sha256_verified": False,
+                            "google_ads_request_id": None,
+                            "response_payload": {
+                                "exception_type": "PermissionError",
+                                "message": err_msg,
+                            },
+                            "error": err_msg,
+                        })
+                        captured_calls.append(call_record)
+                        raise PermissionError(err_msg)
+
+                    expected_sha = expected_list[call_index]
+                    if req_sha256 != expected_sha:
+                        err_msg = (
+                            f"BLOCKED BEFORE RPC: Mutate request SHA-256 mismatch on call #{call_index + 1} "
+                            f"to {svc_name}.{m_name} (expected {expected_sha} from validate_only=True dry-run, "
+                            f"got {req_sha256}). The live mutate request payload was altered after dry-run."
+                        )
+                        call_record.update({
+                            "received_at_iso": datetime.now(timezone.utc).isoformat(),
+                            "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                            "status": "BLOCKED_SHA256_MISMATCH",
+                            "expected_request_sha256": expected_sha,
+                            "request_sha256_verified": False,
+                            "google_ads_request_id": None,
+                            "response_payload": {
+                                "exception_type": "PermissionError",
+                                "message": err_msg,
+                            },
+                            "error": err_msg,
+                        })
+                        captured_calls.append(call_record)
+                        raise PermissionError(err_msg)
+
+                    call_record["expected_request_sha256"] = expected_sha
+                    call_record["request_sha256_verified"] = True
+                else:
+                    call_record["expected_request_sha256"] = req_sha256
+                    call_record["request_sha256_verified"] = True
+
                 try:
                     response = method_fn(*args, **kwargs)
                     received_at_iso = datetime.now(timezone.utc).isoformat()
@@ -383,6 +507,16 @@ def _run_target_script_with_interception(
 ) -> None:
     """Executes the target mutation script while intercepting GoogleAdsClient service calls."""
     captured_calls: List[Dict[str, Any]] = []
+    enforce_hash = os.environ.get(_ENFORCE_HASH_ENV_VAR, "") == "1"
+    expected_hashes: Optional[List[str]] = None
+    raw_expected = os.environ.get(_EXPECTED_HASHES_ENV_VAR, "").strip()
+    if raw_expected:
+        try:
+            parsed = json.loads(raw_expected)
+            if isinstance(parsed, list):
+                expected_hashes = [str(item) for item in parsed]
+        except Exception:
+            expected_hashes = []
 
     try:
         from google.ads.googleads.client import GoogleAdsClient
@@ -392,7 +526,13 @@ def _run_target_script_with_interception(
         @functools.wraps(orig_get_service)
         def _hooked_get_service(self: Any, name: str, *args: Any, **kwargs: Any) -> Any:
             svc = orig_get_service(self, name, *args, **kwargs)
-            return _wrap_service_for_audit(svc, name, captured_calls)
+            return _wrap_service_for_audit(
+                svc,
+                name,
+                captured_calls,
+                expected_request_hashes=expected_hashes,
+                enforce_request_hash=enforce_hash,
+            )
 
         GoogleAdsClient.get_service = _hooked_get_service  # type: ignore[method-assign]
     except Exception:
@@ -417,13 +557,21 @@ def _run_target_script_with_interception(
 def _execute_script_subprocess(
     script_path: str,
     script_args: List[str],
+    expected_request_hashes: Optional[List[str]] = None,
+    enforce_request_hash: bool = False,
 ) -> Tuple[subprocess.CompletedProcess[str], str, str, float, List[Dict[str, Any]]]:
-    """Runs the mutation script in a subprocess with RPC audit interception enabled."""
+    """Runs the mutation script in a subprocess with RPC audit interception and pre-RPC SHA-256 verification."""
     fd, trace_path = tempfile.mkstemp(prefix="ads_mutation_trace_", suffix=".json")
     os.close(fd)
 
     env = os.environ.copy()
     env[_TRACE_ENV_VAR] = trace_path
+    if enforce_request_hash or expected_request_hashes is not None:
+        env[_ENFORCE_HASH_ENV_VAR] = "1"
+        env[_EXPECTED_HASHES_ENV_VAR] = json.dumps(expected_request_hashes or [])
+    else:
+        env.pop(_ENFORCE_HASH_ENV_VAR, None)
+        env.pop(_EXPECTED_HASHES_ENV_VAR, None)
 
     cmd = [
         sys.executable,
@@ -484,7 +632,16 @@ def append_mutation_audit_log(
 ) -> Dict[str, Any]:
     """Writes a structured audit entry to saved/logs/mutation_audit.jsonl."""
     receipt_data = receipt or {}
-    calls = rpc_calls or []
+    calls: List[Dict[str, Any]] = []
+    for raw_call in rpc_calls or []:
+        c_copy = dict(raw_call)
+        if not c_copy.get("request_sha256"):
+            c_copy["request_sha256"] = compute_mutate_request_sha256(
+                str(c_copy.get("service", "")),
+                str(c_copy.get("method", "")),
+                c_copy.get("request_payload"),
+            )
+        calls.append(c_copy)
 
     effective_sent_at = (
         str(calls[0].get("sent_at_iso"))
@@ -496,6 +653,16 @@ def append_mutation_audit_log(
         if calls and calls[-1].get("received_at_iso")
         else response_received_at_iso
     )
+
+    fallback_request_payload = {
+        "customer_id": str(customer_id).strip(),
+        "validate_only": validate_only,
+        "operation_summary": operation_summary.strip(),
+        "before_state": before_state.strip(),
+        "after_state": after_state.strip(),
+        "script_path": script_path or "",
+        "script_sha256": script_sha256,
+    }
 
     if calls:
         request_payload: Any = (
@@ -509,20 +676,36 @@ def append_mutation_audit_log(
             else [c.get("response_payload") for c in calls]
         )
     else:
-        request_payload = {
-            "customer_id": str(customer_id).strip(),
-            "validate_only": validate_only,
-            "operation_summary": operation_summary.strip(),
-            "before_state": before_state.strip(),
-            "after_state": after_state.strip(),
-            "script_path": script_path or "",
-            "script_sha256": script_sha256,
-        }
+        request_payload = fallback_request_payload
         response_payload = {
             "stdout": stdout.strip(),
             "stderr": stderr.strip(),
             "exit_code": exit_code,
         }
+
+    call_hashes = [
+        str(c["request_sha256"]) for c in calls if c.get("request_sha256")
+    ]
+    aggregate_request_sha256 = compute_aggregate_request_sha256(
+        call_hashes, fallback_request_payload
+    )
+    expected_receipt_sha256 = str(
+        receipt_data.get("request_sha256") or aggregate_request_sha256
+    )
+    if calls:
+        request_sha256_verified = all(
+            bool(c.get("request_sha256_verified", True)) for c in calls
+        ) and (
+            phase != "EXECUTE"
+            or not receipt_data.get("request_sha256")
+            or aggregate_request_sha256 == expected_receipt_sha256
+        )
+    else:
+        request_sha256_verified = (
+            phase != "EXECUTE"
+            or not receipt_data.get("request_sha256")
+            or aggregate_request_sha256 == expected_receipt_sha256
+        )
 
     request_ids = [
         str(c["google_ads_request_id"])
@@ -551,6 +734,10 @@ def append_mutation_audit_log(
             "operation_summary": operation_summary.strip(),
             "script_path": script_path or "",
             "script_sha256": script_sha256,
+            "request_sha256": aggregate_request_sha256,
+            "request_sha256_list": call_hashes,
+            "expected_request_sha256": expected_receipt_sha256,
+            "request_sha256_verified": request_sha256_verified,
             "command": command or [],
             "payload": request_payload,
             "rpc_calls": [
@@ -558,6 +745,13 @@ def append_mutation_audit_log(
                     "service": c.get("service"),
                     "method": c.get("method"),
                     "sent_at_iso": c.get("sent_at_iso"),
+                    "request_sha256": c.get("request_sha256"),
+                    "expected_request_sha256": c.get(
+                        "expected_request_sha256", c.get("request_sha256")
+                    ),
+                    "request_sha256_verified": bool(
+                        c.get("request_sha256_verified", True)
+                    ),
                     "request_payload": c.get("request_payload"),
                 }
                 for c in calls
@@ -644,6 +838,33 @@ def write_dry_run_receipt(
             "At least one explicit consequence must be provided in --consequences."
         )
 
+    normalized_calls: List[Dict[str, Any]] = []
+    request_sha256_list: List[str] = []
+    for raw_call in rpc_calls or []:
+        c_copy = dict(raw_call)
+        c_sha = str(c_copy.get("request_sha256") or "")
+        if not c_sha:
+            c_sha = compute_mutate_request_sha256(
+                str(c_copy.get("service", "")),
+                str(c_copy.get("method", "")),
+                c_copy.get("request_payload"),
+            )
+            c_copy["request_sha256"] = c_sha
+        request_sha256_list.append(c_sha)
+        normalized_calls.append(c_copy)
+
+    fallback_req_meta = {
+        "customer_id": str(customer_id).strip(),
+        "operation_summary": operation_summary.strip(),
+        "before_state": before_state.strip(),
+        "after_state": after_state.strip(),
+        "script_path": resolved_script,
+        "script_sha256": script_hash,
+    }
+    request_sha256 = compute_aggregate_request_sha256(
+        request_sha256_list, fallback_req_meta
+    )
+
     receipt: Dict[str, Any] = {
         "receipt_id": str(uuid.uuid4()),
         "status": "DRY_RUN_PASSED",
@@ -659,10 +880,12 @@ def write_dry_run_receipt(
         "reversibility": reversibility.strip().upper(),
         "script_path": resolved_script,
         "script_sha256": script_hash,
+        "request_sha256": request_sha256,
+        "request_sha256_list": request_sha256_list,
         "dry_run_output": dry_run_output.strip(),
     }
-    if rpc_calls:
-        receipt["dry_run_rpc_calls"] = rpc_calls
+    if normalized_calls:
+        receipt["dry_run_rpc_calls"] = normalized_calls
 
     for target_path in get_receipt_paths():
         try:
@@ -773,6 +996,67 @@ def load_and_verify_receipt(
                     receipt,
                 )
 
+    # Verify canonical mutate request SHA-256 integrity on the receipt
+    dry_run_calls = receipt.get("dry_run_rpc_calls")
+    recorded_req_sha = str(receipt.get("request_sha256", "")).strip()
+    recorded_sha_list = receipt.get("request_sha256_list")
+    if isinstance(dry_run_calls, list) and dry_run_calls:
+        recomputed_list: List[str] = []
+        for idx, call in enumerate(dry_run_calls):
+            if not isinstance(call, dict):
+                return (
+                    False,
+                    f"Dry-run receipt RPC call #{idx + 1} is malformed. Re-run --dry-run before executing.",
+                    receipt,
+                )
+            recomputed_sha = compute_mutate_request_sha256(
+                str(call.get("service", "")),
+                str(call.get("method", "")),
+                call.get("request_payload"),
+            )
+            call_sha = str(call.get("request_sha256", "")).strip()
+            if call_sha and call_sha != recomputed_sha:
+                return (
+                    False,
+                    f"Dry-run receipt mutate request SHA-256 mismatch on RPC call #{idx + 1} "
+                    "(dry-run request payload was tampered with). Re-run --dry-run before executing.",
+                    receipt,
+                )
+            recomputed_list.append(recomputed_sha)
+
+        if isinstance(recorded_sha_list, list) and recorded_sha_list != recomputed_list:
+            return (
+                False,
+                "Dry-run receipt request_sha256_list mismatch (SHA-256 mismatch). "
+                "Re-run --dry-run before executing.",
+                receipt,
+            )
+        recomputed_agg = compute_aggregate_request_sha256(recomputed_list)
+        if recorded_req_sha and recorded_req_sha != recomputed_agg:
+            return (
+                False,
+                "Dry-run receipt aggregate request_sha256 mismatch (SHA-256 mismatch). "
+                "Re-run --dry-run before executing.",
+                receipt,
+            )
+    elif recorded_req_sha:
+        fallback_meta = {
+            "customer_id": str(receipt.get("customer_id", "")).strip(),
+            "operation_summary": str(receipt.get("operation_summary", "")).strip(),
+            "before_state": str(receipt.get("before_state", "")).strip(),
+            "after_state": str(receipt.get("after_state", "")).strip(),
+            "script_path": str(receipt.get("script_path", "")),
+            "script_sha256": str(receipt.get("script_sha256", "")),
+        }
+        recomputed_fallback_sha = compute_aggregate_request_sha256([], fallback_meta)
+        if recorded_req_sha != recomputed_fallback_sha:
+            return (
+                False,
+                "Dry-run receipt request_sha256 mismatch (receipt parameters were modified after dry-run). "
+                "Re-run --dry-run before executing.",
+                receipt,
+            )
+
     return True, "Dry-run receipt verified.", receipt
 
 
@@ -794,6 +1078,7 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
         f"Customer ID   : {receipt.get('customer_id', 'Unknown')}\n"
         f"Operation     : {receipt.get('operation_summary', 'Unknown')}\n"
         f"Dry-Run Status: PASSED (validate_only=True verified at {receipt.get('timestamp_iso', '')})\n"
+        f"Request SHA256: {receipt.get('request_sha256', 'N/A')}\n"
         f"Before State  : {receipt.get('before_state', 'N/A')}\n"
         f"After State   : {receipt.get('after_state', 'N/A')}\n"
         f"Reversibility : {rev_badge}\n"
@@ -999,8 +1284,19 @@ def main() -> None:
         script_args.extend(["--customer-id", cid])
     script_args.extend(extra_args)
 
+    expected_rpc_hashes = [
+        str(h).strip()
+        for h in receipt.get("request_sha256_list", [])
+        if str(h).strip()
+    ]
+
     result, sent_at_iso, received_at_iso, duration_ms, captured_calls = (
-        _execute_script_subprocess(script_path, script_args)
+        _execute_script_subprocess(
+            script_path,
+            script_args,
+            expected_request_hashes=expected_rpc_hashes,
+            enforce_request_hash=True,
+        )
     )
 
     consequences_from_receipt = [
@@ -1011,10 +1307,36 @@ def main() -> None:
     after_state = str(receipt.get("after_state", args.after or operation_summary))
     reversibility = str(receipt.get("reversibility", args.reversibility))
 
-    if result.returncode != 0:
+    blocked_by_sha_mismatch = any(
+        c.get("status") == "BLOCKED_SHA256_MISMATCH" for c in captured_calls
+    )
+    actual_rpc_hashes = [
+        str(c.get("request_sha256", "")).strip()
+        for c in captured_calls
+        if str(c.get("request_sha256", "")).strip()
+    ]
+    missing_expected_calls = (
+        result.returncode == 0
+        and bool(expected_rpc_hashes)
+        and actual_rpc_hashes != expected_rpc_hashes
+    )
+
+    if result.returncode != 0 or blocked_by_sha_mismatch or missing_expected_calls:
+        failure_status = (
+            "BLOCKED_SHA256_MISMATCH"
+            if (blocked_by_sha_mismatch or missing_expected_calls)
+            else "FAILED"
+        )
+        effective_exit_code = result.returncode if result.returncode != 0 else 2
+        stderr_out = result.stderr
+        if missing_expected_calls and not stderr_out:
+            stderr_out = (
+                f"BLOCKED: Expected {len(expected_rpc_hashes)} verified mutate RPC call(s) "
+                f"matching dry-run SHA-256 {expected_rpc_hashes}, but observed {actual_rpc_hashes}."
+            )
         append_mutation_audit_log(
             phase="EXECUTE",
-            status="FAILED",
+            status=failure_status,
             customer_id=cid,
             operation_summary=operation_summary,
             before_state=before_state,
@@ -1027,20 +1349,20 @@ def main() -> None:
             request_sent_at_iso=sent_at_iso,
             response_received_at_iso=received_at_iso,
             duration_ms=duration_ms,
-            exit_code=result.returncode,
+            exit_code=effective_exit_code,
             stdout=result.stdout,
-            stderr=result.stderr,
+            stderr=stderr_out,
             command=[sys.executable, script_path, *script_args],
             rpc_calls=captured_calls,
             receipt=receipt,
             user_approved_at_iso=user_approved_at_iso,
         )
         print(
-            f"Live mutation FAILED (exit code {result.returncode}):\n"
-            f"{result.stdout}\n{result.stderr}",
+            f"Live mutation {failure_status} (exit code {effective_exit_code}):\n"
+            f"{result.stdout}\n{stderr_out}",
             file=sys.stderr,
         )
-        sys.exit(result.returncode)
+        sys.exit(effective_exit_code)
 
     audit_entry = append_mutation_audit_log(
         phase="EXECUTE",
@@ -1067,7 +1389,7 @@ def main() -> None:
     )
     mark_receipt_executed(
         user_approved_at_iso=user_approved_at_iso,
-        request_sent_at_iso= audit_entry["request"]["sent_at_iso"],
+        request_sent_at_iso=audit_entry["request"]["sent_at_iso"],
         response_received_at_iso=audit_entry["response"]["received_at_iso"],
         audit_id=audit_entry["audit_id"],
     )
