@@ -1,0 +1,164 @@
+{
+  "version": "4.1.0",
+  "timestamp_utc": "2026-10-13T18:45:42.460103+00:00",
+  "python_version": "3.14.7",
+  "platform": "Linux-7.1.6-1rodete1-amd64-x86_64-with-glibc2.43",
+  "suite_total_ms": 1886.09,
+  "all_functional_passed": true,
+  "all_performance_passed": true,
+  "benchmarks": {
+    "version_resolution_in_process": {
+      "name": "version_resolution_in_process",
+      "description": "Resolve plugin version from plugin.json (uncached in v4.0.0; in-process cached in v4.1.0)",
+      "min_version": "4.0.0",
+      "iterations": 1000,
+      "functional_passed": true,
+      "functional_details": {
+        "resolved_version": "4.1.0"
+      },
+      "performance_passed": true,
+      "max_total_ms": 50.0,
+      "total_ms": 0.567,
+      "mean_ms": 0.0006,
+      "p50_ms": 0.0005,
+      "p95_ms": 0.0006,
+      "ops_per_sec": 1762683.6,
+      "error": null
+    },
+    "config_sync_and_legacy_migration": {
+      "name": "config_sync_and_legacy_migration",
+      "description": "Sync google-ads.yaml, clean client_libs dummy YAML, and migrate v4.0.0 config",
+      "min_version": "4.1.0",
+      "iterations": 50,
+      "functional_passed": true,
+      "functional_details": {
+        "migrated_cid": "8887776665",
+        "dummy_cleaned": true
+      },
+      "performance_passed": true,
+      "max_total_ms": 350.0,
+      "total_ms": 99.314,
+      "mean_ms": 1.9863,
+      "p50_ms": 1.8528,
+      "p95_ms": 3.1539,
+      "ops_per_sec": 503.5,
+      "error": null
+    },
+    "hook_pre_tool_use_interception": {
+      "name": "hook_pre_tool_use_interception",
+      "description": "Evaluate PreToolUse HITL mutation guard across read-only, dry-run, and live mutate commands",
+      "min_version": "4.1.0",
+      "iterations": 500,
+      "functional_passed": true,
+      "functional_details": {
+        "readonly_decision": "allow",
+        "dry_run_decision": "allow",
+        "unverified_mutate_decision": "deny"
+      },
+      "performance_passed": true,
+      "max_total_ms": 120.0,
+      "total_ms": 49.631,
+      "mean_ms": 0.0993,
+      "p50_ms": 0.0277,
+      "p95_ms": 0.3162,
+      "ops_per_sec": 10074.4,
+      "error": null
+    },
+    "gaql_static_analysis": {
+      "name": "gaql_static_analysis",
+      "description": "Validate GAQL syntax, clauses, date segments, and dry-run response caching",
+      "min_version": "4.0.0",
+      "iterations": 200,
+      "functional_passed": true,
+      "functional_details": {
+        "valid_accepted": true,
+        "invalid_rejected": 3,
+        "has_sha256_cache": true
+      },
+      "performance_passed": true,
+      "max_total_ms": 150.0,
+      "total_ms": 4.679,
+      "mean_ms": 0.0234,
+      "p50_ms": 0.0189,
+      "p95_ms": 0.0489,
+      "ops_per_sec": 42742.7,
+      "error": null
+    },
+    "protobuf_type_discovery_and_inspection": {
+      "name": "protobuf_type_discovery_and_inspection",
+      "description": "Discover and inspect Protobuf definitions (recursive glob in v4.0.0; memory+disk cache in v4.1.0)",
+      "min_version": "4.0.0",
+      "iterations": 200,
+      "functional_passed": true,
+      "functional_details": {
+        "discovered_types": 1,
+        "disk_cache_verified": true
+      },
+      "performance_passed": true,
+      "max_total_ms": 60.0,
+      "total_ms": 10.3,
+      "mean_ms": 0.0515,
+      "p50_ms": 0.0381,
+      "p95_ms": 0.0959,
+      "ops_per_sec": 19416.6,
+      "error": null
+    },
+    "client_libs_parallel_release_sync": {
+      "name": "client_libs_parallel_release_sync",
+      "description": "Check 5 client libraries against GitHub releases (sequential in v4.0.0; ThreadPoolExecutor in v4.1.0)",
+      "min_version": "4.0.0",
+      "iterations": 5,
+      "functional_passed": true,
+      "functional_details": {
+        "libraries_checked": 5,
+        "single_run_ms": 33.96,
+        "sequential_equivalent_ms": 125.0
+      },
+      "performance_passed": true,
+      "max_total_ms": 400.0,
+      "total_ms": 145.023,
+      "mean_ms": 29.0045,
+      "p50_ms": 28.3253,
+      "p95_ms": 30.917,
+      "ops_per_sec": 34.5,
+      "error": null
+    },
+    "conversion_csv_validation": {
+      "name": "conversion_csv_validation",
+      "description": "Validate 100-row offline conversion upload CSV (headers, ISO dates, GCLIDs)",
+      "min_version": "4.0.0",
+      "iterations": 50,
+      "functional_passed": true,
+      "functional_details": {
+        "rows_per_batch": 100
+      },
+      "performance_passed": true,
+      "max_total_ms": 450.0,
+      "total_ms": 91.354,
+      "mean_ms": 1.8271,
+      "p50_ms": 1.6434,
+      "p95_ms": 2.6111,
+      "ops_per_sec": 547.3,
+      "error": null
+    },
+    "hitl_mutation_receipt_and_sha256_normalization": {
+      "name": "hitl_mutation_receipt_and_sha256_normalization",
+      "description": "Compute canonical Protobuf SHA-256, write signed dry-run receipt, and verify integrity",
+      "min_version": "4.1.0",
+      "iterations": 100,
+      "functional_passed": true,
+      "functional_details": {
+        "canonical_sha256_verified": true,
+        "tamper_detected": true
+      },
+      "performance_passed": true,
+      "max_total_ms": 450.0,
+      "total_ms": 82.47,
+      "mean_ms": 0.8247,
+      "p50_ms": 0.7594,
+      "p95_ms": 1.1424,
+      "ops_per_sec": 1212.6,
+      "error": null
+    }
+  }
+}

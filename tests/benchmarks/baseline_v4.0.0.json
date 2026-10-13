@@ -1,0 +1,106 @@
+{
+  "version": "4.0.0",
+  "timestamp_utc": "2026-10-13T18:45:40.147213+00:00",
+  "python_version": "3.14.7",
+  "platform": "Linux-7.1.6-1rodete1-amd64-x86_64-with-glibc2.43",
+  "suite_total_ms": 2453.93,
+  "all_functional_passed": true,
+  "all_performance_passed": false,
+  "benchmarks": {
+    "version_resolution_in_process": {
+      "name": "version_resolution_in_process",
+      "description": "Resolve plugin version from plugin.json (uncached in v4.0.0; in-process cached in v4.1.0)",
+      "min_version": "4.0.0",
+      "iterations": 1000,
+      "functional_passed": true,
+      "functional_details": {
+        "resolved_version": "4.0.0"
+      },
+      "performance_passed": false,
+      "max_total_ms": 50.0,
+      "total_ms": 119.867,
+      "mean_ms": 0.1199,
+      "p50_ms": 0.1005,
+      "p95_ms": 0.2012,
+      "ops_per_sec": 8342.6,
+      "error": null
+    },
+    "gaql_static_analysis": {
+      "name": "gaql_static_analysis",
+      "description": "Validate GAQL syntax, clauses, date segments, and dry-run response caching",
+      "min_version": "4.0.0",
+      "iterations": 200,
+      "functional_passed": true,
+      "functional_details": {
+        "valid_accepted": true,
+        "invalid_rejected": 3,
+        "has_sha256_cache": false
+      },
+      "performance_passed": true,
+      "max_total_ms": 150.0,
+      "total_ms": 42.793,
+      "mean_ms": 0.214,
+      "p50_ms": 0.164,
+      "p95_ms": 0.36,
+      "ops_per_sec": 4673.6,
+      "error": null
+    },
+    "protobuf_type_discovery_and_inspection": {
+      "name": "protobuf_type_discovery_and_inspection",
+      "description": "Discover and inspect Protobuf definitions (recursive glob in v4.0.0; memory+disk cache in v4.1.0)",
+      "min_version": "4.0.0",
+      "iterations": 200,
+      "functional_passed": true,
+      "functional_details": {
+        "discovered_types": 1,
+        "disk_cache_verified": false
+      },
+      "performance_passed": false,
+      "max_total_ms": 60.0,
+      "total_ms": 99.527,
+      "mean_ms": 0.4976,
+      "p50_ms": 0.4796,
+      "p95_ms": 0.7282,
+      "ops_per_sec": 2009.5,
+      "error": null
+    },
+    "client_libs_parallel_release_sync": {
+      "name": "client_libs_parallel_release_sync",
+      "description": "Check 5 client libraries against GitHub releases (sequential in v4.0.0; ThreadPoolExecutor in v4.1.0)",
+      "min_version": "4.0.0",
+      "iterations": 5,
+      "functional_passed": true,
+      "functional_details": {
+        "libraries_checked": 5,
+        "single_run_ms": 127.93,
+        "sequential_equivalent_ms": 125.0
+      },
+      "performance_passed": false,
+      "max_total_ms": 400.0,
+      "total_ms": 632.773,
+      "mean_ms": 126.5546,
+      "p50_ms": 126.5158,
+      "p95_ms": 126.6488,
+      "ops_per_sec": 7.9,
+      "error": null
+    },
+    "conversion_csv_validation": {
+      "name": "conversion_csv_validation",
+      "description": "Validate 100-row offline conversion upload CSV (headers, ISO dates, GCLIDs)",
+      "min_version": "4.0.0",
+      "iterations": 50,
+      "functional_passed": true,
+      "functional_details": {
+        "rows_per_batch": 100
+      },
+      "performance_passed": true,
+      "max_total_ms": 450.0,
+      "total_ms": 101.161,
+      "mean_ms": 2.0232,
+      "p50_ms": 1.988,
+      "p95_ms": 2.7098,
+      "ops_per_sec": 494.3,
+      "error": null
+    }
+  }
+}

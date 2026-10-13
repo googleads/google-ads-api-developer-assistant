@@ -49,7 +49,16 @@
   - Replaced out-of-process `subprocess.run` execution of `get_extension_version.py` in `config/config_init.py` (`get_version`) with direct in-process `plugin.json` parsing and module-level caching (`_CACHED_VERSION`), and added in-memory version caching (`_CACHED_PLUGIN_VERSION`) in `sidecars/google-ads-a2a-service/server.py` (`get_plugin_version`).
   - Pre-compiled all hot-path regular expressions at module level in `config/config_init.py` (`evaluate_mutation_guard`, `handle_hook`) and `skills/inspect-object/scripts/inspect_object.py`.
   - Added two-tier (in-memory `_AVAILABLE_TYPES_CACHE` and on-disk `tempfile.gettempdir()/gads_assistant_types_<version>.json`) caching keyed by directory modification time (`mtime`) in `skills/inspect-object/scripts/inspect_object.py` (`get_available_types`) to avoid re-scanning and regex-parsing ~450 Python protobuf definition files on repeated inspections.
+  - Added two-tier (in-memory `_GAQL_MEMORY_CACHE` and on-disk `saved/data/gaql_validation_cache.json`) GAQL validation response caching keyed by `SHA-256(query + api_version)` in `skills/validate-gaql/scripts/validate_gaql.py` (`compute_gaql_cache_key`, `get_cached_validation`, `set_cached_validation`, `invalidate_gaql_cache`) with configurable TTL (`--cache-ttl`) and cache control flags (`--no-cache`, `--clear-cache`, `--cache-path`).
   - Parallelized upstream GitHub release checks (`fetch_github_latest_release`) across multiple client libraries in `skills/sync-client-libs/scripts/sync_client_libs.py` (`process_client_libs`) using `concurrent.futures.ThreadPoolExecutor`.
+- **Cross-Version Performance & Functionality Benchmark Suite (`tests/benchmark_suite.py`):**
+  - Added `tests/benchmark_suite.py` and `TestPerformanceRegressions` (`tests/test_components.py`) with saved baselines (`tests/benchmarks/baseline_v4.0.0.json` captured from git tag `v4.0.0`, and `tests/benchmarks/baseline_v4.1.0.json`) and live git worktree comparison (`--compare-git-ref v4.0.0`):
+    - `version_resolution_in_process` (1,000 iters): `119.87 ms` in `v4.0.0` $\rightarrow$ `0.57 ms` in `v4.1.0` (**211.41x speedup**).
+    - `gaql_static_analysis` (200 iters): `42.79 ms` in `v4.0.0` $\rightarrow$ `4.68 ms` in `v4.1.0` (**9.15x speedup** with SHA-256 validation caching).
+    - `protobuf_type_discovery_and_inspection` (200 iters): `99.53 ms` in `v4.0.0` $\rightarrow$ `10.30 ms` in `v4.1.0` (**9.66x speedup** with memory + disk caching).
+    - `client_libs_parallel_release_sync` (5 iters, 5 repos @ 25ms RTT): `632.77 ms` in `v4.0.0` $\rightarrow$ `145.02 ms` in `v4.1.0` (**4.36x speedup** via `ThreadPoolExecutor`).
+    - `conversion_csv_validation` (50 iters, 100 rows/batch): `101.16 ms` in `v4.0.0` $\rightarrow$ `91.35 ms` in `v4.1.0` (**1.11x speedup**).
+    - New `v4.1.0` subsystem benchmarks: `config_sync_and_legacy_migration` (`99.31 ms` / 50 iters), `hook_pre_tool_use_interception` (`49.63 ms` / 500 iters), and `hitl_mutation_receipt_and_sha256_normalization` (`82.47 ms` / 100 iters).
 
 ## 4.0.0
 

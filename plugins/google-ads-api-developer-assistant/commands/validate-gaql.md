@@ -23,7 +23,7 @@ Validates Google Ads Query Language (GAQL) queries against Google Ads API schema
      - Ensure no SQL aggregation functions (`SUM()`, `COUNT()`) are used.
      - Ensure **segment renames** are respected (in v23+, `segments.hour` was renamed to `segments.hour_of_day`).
    - **Step 4: Dry-Run Execution** (if credentials and customer ID are available):
-     Run `skills/validate-gaql/scripts/validate_gaql.py`:
+     Run `skills/validate-gaql/scripts/validate_gaql.py` (validation results are cached locally keyed by `SHA-256(query + api_version)` in `saved/data/gaql_validation_cache.json`; pass `--no-cache` to bypass or `--clear-cache` to invalidate):
      ```bash
      python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/validate-gaql/scripts/validate_gaql.py" --query "<query>" --customer_id "<customer_id>" --api_version "<api_version>"
      ```

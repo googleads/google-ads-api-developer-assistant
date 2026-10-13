@@ -472,6 +472,34 @@ When upgrading from `4.0.0` to `4.1.0`, existing CLI arguments, A2A sidecar payl
    * In `4.0.0`, live mutations were restricted only via prompt instructions (`NO MUTATE`).
    * In `4.1.0`, the `PreToolUse` hook in `config/config_init.py` (`handle_hook`) deterministically blocks (`deny`) any command invoking a live `.mutate*()` call unless `execute_mutates = true` is enabled in `config/assistant_config` and a valid dry-run receipt (`saved/data/last_dry_run.json`) exists. Read-only queries and `validate_only=True` dry-runs are unaffected.
 
+## Performance & Functionality Benchmarks (`v4.0.0` vs `v4.1.0`)
+
+The repository includes an automated cross-version benchmark suite (`tests/benchmark_suite.py`) that verifies functional correctness and latency budgets (`total_ms`, `p50_ms`, `p95_ms`, `ops/sec`) against saved version baselines (`tests/benchmarks/baseline_v4.0.0.json` and `tests/benchmarks/baseline_v4.1.0.json`) or arbitrary git refs.
+
+| Benchmark | Iterations | `v4.0.0` Baseline (ms) | `v4.1.0` Current (ms) | Budget (ms) | Delta | Speedup | Status |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | :---: |
+| `version_resolution_in_process` | 1,000 | `119.87` | `0.57` | `50.0` | `-99.5%` | **211.41x** | `PASS` |
+| `gaql_static_analysis` | 200 | `42.79` | `4.68` | `150.0` | `-89.1%` | **9.15x** | `PASS` |
+| `protobuf_type_discovery_and_inspection` | 200 | `99.53` | `10.30` | `60.0` | `-89.7%` | **9.66x** | `PASS` |
+| `client_libs_parallel_release_sync` | 5 | `632.77` | `145.02` | `400.0` | `-77.1%` | **4.36x** | `PASS` |
+| `conversion_csv_validation` | 50 | `101.16` | `91.35` | `450.0` | `-9.7%` | **1.11x** | `PASS` |
+| `config_sync_and_legacy_migration` | 50 | `N/A (v4.1)` | `99.31` | `350.0` | `NEW` | `N/A` | `PASS` |
+| `hook_pre_tool_use_interception` | 500 | `N/A (v4.1)` | `49.63` | `120.0` | `NEW` | `N/A` | `PASS` |
+| `hitl_mutation_receipt_and_sha256_normalization` | 100 | `N/A (v4.1)` | `82.47` | `450.0` | `NEW` | `N/A` | `PASS` |
+
+To run the benchmark suite or compare against a baseline or git tag:
+
+```bash
+# Run benchmark suite and compare against the saved v4.0.0 baseline
+python3 tests/benchmark_suite.py
+
+# Compare current workspace directly against git tag v4.0.0
+python3 tests/benchmark_suite.py --compare-git-ref v4.0.0
+
+# Run as part of pytest
+pytest -v tests/benchmark_suite.py
+```
+
 ## Known Quirks
 
 *   The underlying model may have been trained on an older API version. It may occasionally generate code with deprecated fields. Execution errors often provide feedback that allows the assistant to self-correct on the next attempt, using the context from the client libraries. To avoid these errors, we always search for the latest version of the API when initializing the session and ask you to verify the version.

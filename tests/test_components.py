@@ -1312,3 +1312,183 @@ class TestPluginIntegrity:
             assert "name:" in text and "description:" in text
 
 
+class TestPerformanceRegressions:
+    """Guards against performance regressions in hooks, config sync, proto inspection, and GitHub checks."""
+
+    def test_get_version_in_process_no_subprocess_and_cached(self, monkeypatch):
+        import time
+        import config.config_init as cfg_init
+        import server
+
+        monkeypatch.setattr(cfg_init, "_CACHED_VERSION", None)
+        monkeypatch.setattr(server, "_CACHED_PLUGIN_VERSION", None)
+
+        def forbid_subprocess(*args, **kwargs):
+            raise AssertionError("get_version() must not spawn a subprocess when ext_version_script is omitted")
+
+        monkeypatch.setattr(cfg_init.subprocess, "run", forbid_subprocess)
+
+        v = cfg_init.get_version()
+        assert v == "4.1.0"
+        assert cfg_init._CACHED_VERSION == "4.1.0"
+
+        sv = server.get_plugin_version()
+        assert sv == "4.1.0"
+        assert server._CACHED_PLUGIN_VERSION == "4.1.0"
+
+        start = time.perf_counter()
+        for _ in range(1000):
+            cfg_init.get_version()
+            server.get_plugin_version()
+        elapsed = time.perf_counter() - start
+        assert elapsed < 0.05, f"Cached get_version() calls regressed in latency: {elapsed:.4f}s"
+
+    def test_sync_and_set_config_kv_no_recursive_glob(self, tmp_path, monkeypatch):
+        import glob
+        import time
+        import config.config_init as cfg_init
+
+        orig_glob = glob.glob
+
+        def guard_glob(pathname, *args, **kwargs):
+            if kwargs.get("recursive"):
+                raise AssertionError(f"Forbidden recursive glob.glob({pathname!r}, recursive=True) called")
+            return orig_glob(pathname, *args, **kwargs)
+
+        monkeypatch.setattr(glob, "glob", guard_glob)
+
+        work_dir = tmp_path / "workspace"
+        cfg_dir = work_dir / "config"
+        cfg_dir.mkdir(parents=True)
+        src_yaml = tmp_path / "source_google_ads.yaml"
+        src_yaml.write_text('developer_token: "test_token"\n', encoding="utf-8")
+
+        # Create dummy top-level client_libs yaml and nested subdirectories
+        lib_dir = work_dir / "client_libs" / "google-ads-python"
+        lib_dir.mkdir(parents=True)
+        dummy_yaml = lib_dir / "google-ads.yaml"
+        dummy_yaml.write_text("dummy: true\n", encoding="utf-8")
+        for i in range(30):
+            nested = lib_dir / f"pkg_{i}" / "sub"
+            nested.mkdir(parents=True)
+            (nested / "module.py").write_text("# stub\n", encoding="utf-8")
+
+        monkeypatch.chdir(work_dir)
+        start = time.perf_counter()
+        cfg_init.sync_and_set_config_kv(
+            key="login_customer_id",
+            value="1234567890",
+            source_yaml=str(src_yaml),
+            config_dir=str(cfg_dir),
+        )
+        elapsed = time.perf_counter() - start
+
+        assert not dummy_yaml.exists(), "Top-level dummy google-ads.yaml in client_libs should be removed"
+        assert elapsed < 0.25, f"sync_and_set_config_kv() took too long: {elapsed:.4f}s"
+
+    def test_inspect_object_get_available_types_memory_and_disk_cache(self, tmp_path, monkeypatch):
+        import tempfile
+        import time
+
+        # Create a synthetic v99 proto directory to test cold -> disk cache -> memory cache transitions
+        fake_lib_root = tmp_path / "client_libs" / "google-ads-python"
+        v_dir = fake_lib_root / "google" / "ads" / "googleads" / "v99"
+        types_dir = v_dir / "services" / "types"
+        types_dir.mkdir(parents=True)
+        (types_dir / "campaign_service.py").write_text(
+            "class MutateCampaignsRequest:\n    pass\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(inspect_object.os.path, "expanduser", lambda p: str(fake_lib_root))
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+        inspect_object._AVAILABLE_TYPES_CACHE.clear()
+
+        # 1. Cold call populates disk and memory cache
+        res1 = inspect_object.get_available_types("v99")
+        assert "MutateCampaignsRequest" in res1
+        disk_cache_file = tmp_path / "gads_assistant_types_v99.json"
+        assert disk_cache_file.is_file(), "On-disk proto type cache file was not created"
+
+        # 2. Forbid glob.glob on warm cache (both memory and disk)
+        def forbid_glob(*args, **kwargs):
+            raise AssertionError("glob.glob should not be called when proto types cache is warm")
+
+        monkeypatch.setattr(inspect_object.glob, "glob", forbid_glob)
+
+        # Warm memory cache check + timing
+        start = time.perf_counter()
+        for _ in range(200):
+            res_mem = inspect_object.get_available_types("v99")
+        elapsed = time.perf_counter() - start
+        assert res_mem == res1
+        assert elapsed < 0.05, f"In-memory get_available_types() cache regressed: {elapsed:.4f}s"
+
+        # Warm disk cache check (clear in-memory cache, verify disk cache hits without globbing)
+        inspect_object._AVAILABLE_TYPES_CACHE.clear()
+        res_disk = inspect_object.get_available_types("v99")
+        assert res_disk == res1
+
+    def test_sync_client_libs_parallel_github_fetches(self, tmp_path, monkeypatch):
+        import time
+
+        libs_dir = tmp_path / "client_libs"
+        libs_dir.mkdir()
+        for repo_name in sync_client_libs.KNOWN_REPOS:
+            (libs_dir / repo_name).mkdir()
+
+        def slow_fetch(repo_path):
+            time.sleep(0.15)
+            return ("v25.0.0", "https://example.com/tarball")
+
+        monkeypatch.setattr(sync_client_libs, "fetch_github_latest_release", slow_fetch)
+        monkeypatch.setattr(sync_client_libs, "detect_installed_version", lambda d, r: "25.0.0")
+
+        # 5 libraries * 0.15s = 0.75s if sequential; parallel ThreadPoolExecutor should finish in < 0.45s
+        start = time.perf_counter()
+        results = sync_client_libs.process_client_libs(
+            client_libs_dir=str(libs_dir),
+            check_only=True,
+            include_assistant=False,
+        )
+        elapsed = time.perf_counter() - start
+
+        assert [r["codebase"] for r in results] == sorted(sync_client_libs.KNOWN_REPOS.keys())
+        assert elapsed < 0.50, (
+            f"process_client_libs() took {elapsed:.3f}s for 5 libraries (expected parallel execution < 0.50s)"
+        )
+
+    def test_precompiled_hook_regexes_and_fast_evaluation(self):
+        import re
+        import time
+        import config.config_init as cfg_init
+
+        expected_patterns = (
+            "_TEST_OR_LINTER_CMD_RE",
+            "_SCRIPT_ARG_RE",
+            "_PY_FILE_ARG_RE",
+            "_COMMENT_LINE_RE",
+            "_VALIDATE_ONLY_TRUE_RE",
+            "_VALIDATE_ONLY_FALSE_RE",
+            "_LOAD_FROM_STORAGE_EMPTY_RE",
+            "_LOAD_FROM_STORAGE_VER_RE",
+            "_EXPANDUSER_YAML_RE",
+            "_QUOTED_HOME_YAML_RE",
+            "_BARE_HOME_YAML_RE",
+            "_SKILL_REL_PATH_RE",
+        )
+        for attr in expected_patterns:
+            pattern_obj = getattr(cfg_init, attr, None)
+            assert isinstance(pattern_obj, re.Pattern), f"Missing pre-compiled regex {attr} in config_init.py"
+
+        start = time.perf_counter()
+        for _ in range(500):
+            decision, _ = cfg_init.evaluate_mutation_guard(
+                "python3 skills/validate-gaql/scripts/validate_gaql.py --query 'SELECT campaign.id FROM campaign'"
+            )
+            assert decision == "allow"
+        elapsed = time.perf_counter() - start
+        assert elapsed < 0.10, f"evaluate_mutation_guard() hot path regressed: {elapsed:.4f}s for 500 calls"
+
+
+

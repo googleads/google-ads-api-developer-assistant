@@ -983,6 +983,7 @@ READONLY_SKILL_SCRIPTS = (
     "get_recent_gclids.py",
     "validate_conversion_upload.py",
     "config_init.py",
+    "benchmark_suite.py",
 )
 
 MUTATION_CALL_PATTERN = re.compile(
