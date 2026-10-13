@@ -2,7 +2,7 @@
   "version": "4.0.0",
   "timestamp_utc": "2026-10-13T18:45:40.147213+00:00",
   "python_version": "3.14.7",
-  "platform": "Linux-7.1.6-1rodete1-amd64-x86_64-with-glibc2.43",
+  "platform": "Linux",
   "suite_total_ms": 2453.93,
   "all_functional_passed": true,
   "all_performance_passed": false,

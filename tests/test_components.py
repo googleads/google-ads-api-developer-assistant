@@ -1242,36 +1242,39 @@ class TestPluginIntegrity:
             )
 
     def test_no_host_specific_hardcoded_paths_in_rules_and_docs(self):
+        import glob
         import re
 
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        plugin_dir = os.path.join(
+            repo_root, "plugins", "google-ads-api-developer-assistant"
+        )
         files_to_check = [
             os.path.join(repo_root, "README.md"),
+            os.path.join(repo_root, "README_BEFORE_INSTALLATION.md"),
+            os.path.join(repo_root, "ChangeLog.md"),
+            os.path.join(repo_root, "FAQ.md"),
+            os.path.join(plugin_dir, "README.md"),
+            os.path.join(plugin_dir, "rules", "google_ads_rules.md"),
             os.path.join(
-                repo_root,
-                "plugins",
-                "google-ads-api-developer-assistant",
-                "rules",
-                "google_ads_rules.md",
-            ),
-            os.path.join(
-                repo_root,
-                "plugins",
-                "google-ads-api-developer-assistant",
+                plugin_dir,
                 "sidecars",
                 "google-ads-a2a-service",
                 "server.py",
             ),
+            *glob.glob(os.path.join(plugin_dir, "skills", "*", "SKILL.md")),
+            *glob.glob(os.path.join(plugin_dir, "commands", "*.md")),
+            *glob.glob(os.path.join(repo_root, "tests", "benchmarks", "*.json")),
         ]
         forbidden_pattern = re.compile(
-            r"(/usr/local/google/home/[A-Za-z0-9_-]+|/home/[A-Za-z0-9_]+/|/Users/[A-Za-z0-9_]+/)"
+            r"(/usr/local/google/home/[A-Za-z0-9_-]+|/home/[A-Za-z0-9_]+/|/Users/[A-Za-z0-9_]+/|\brwh\b|rodete)"
         )
         for fpath in files_to_check:
             with open(fpath, "r", encoding="utf-8") as f:
                 content = f.read()
             match = forbidden_pattern.search(content)
             assert match is None, (
-                f"Found forbidden host-specific path '{match.group(0)}' in {fpath}"
+                f"Found forbidden host-specific reference '{match.group(0)}' in {fpath}"
             )
 
     def test_manifests_and_skill_frontmatter_valid(self):

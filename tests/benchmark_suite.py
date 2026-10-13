@@ -668,7 +668,7 @@ def run_all_benchmarks() -> Dict[str, Any]:
         "version": resolved_version,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "python_version": platform.python_version(),
-        "platform": platform.platform(),
+        "platform": platform.system(),
         "suite_total_ms": suite_total_ms,
         "all_functional_passed": all_functional_passed,
         "all_performance_passed": all_performance_passed,
