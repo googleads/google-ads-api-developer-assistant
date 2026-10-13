@@ -1226,8 +1226,8 @@ def _verify_dry_run_receipt_for_hook(
 
 
 _TEST_OR_LINTER_CMD_RE = re.compile(
-    r"(?:^|&&|\|\||;)\s*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:[\w./-]+/)?(?:pytest|ruff|mypy|flake8)\b|"
-    r"\bpython3?\s+-m\s+(?:pytest|ruff|mypy|flake8)\b"
+    r"(?:^|&&|\|\||;)\s*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:[\w./-]+/)?(?:pytest|ruff|mypy|flake8)(?=\s|$)|"
+    r"\bpython3?\s+-m\s+(?:pytest|ruff|mypy|flake8)(?=\s|$)"
 )
 _SCRIPT_ARG_RE = re.compile(
     r"--script(?:=|\s+)(?:'([^']+)'|\"([^\"]+)\"|([^\s'\"]+))"
@@ -1263,7 +1263,7 @@ def evaluate_mutation_guard(
     hook_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Optional[str]]:
     """Inspects a shell command for Google Ads API mutations and returns (decision, reason)."""
-    if not cmd or not any(tok in cmd for tok in ("python", "python3", "run_mutation.py")):
+    if not cmd or not any(tok in cmd for tok in ("python", "python3", "run_mutation.py", ".py")):
         return "allow", None
 
     # Ignore test suites and linters when invoked as the runner command or module
@@ -1322,16 +1322,15 @@ def evaluate_mutation_guard(
         return "allow", None
 
     # A Google Ads mutation method is present in the executed code.
-    # Determine whether this execution is a validate_only=True dry-run or a live mutation.
-    explicit_dry_run_flag = (
-        "--dry-run" in cmd or "--validate-only" in cmd
-    ) and "--execute" not in cmd
+    # For direct script or inline execution (outside run_mutation.py), require an explicit
+    # static validate_only=True and no validate_only=False or --execute flag; never trust
+    # a bare --dry-run CLI flag alone if the script itself lacks validate_only=True.
     explicit_execute_flag = "--execute" in cmd
 
     has_validate_only_true = bool(_VALIDATE_ONLY_TRUE_RE.search(uncommented_code))
     has_validate_only_false = bool(_VALIDATE_ONLY_FALSE_RE.search(uncommented_code))
 
-    if explicit_dry_run_flag or (
+    if (
         has_validate_only_true
         and not has_validate_only_false
         and not explicit_execute_flag
@@ -1406,6 +1405,7 @@ def handle_hook() -> None:
                 "GoogleAdsClient",
                 "google-ads",
                 "skills/",
+                ".py",
             )
         )
         overwrite: Dict[str, Any] = {}

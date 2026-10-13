@@ -381,6 +381,7 @@ if __name__ == "__main__":
                 ),
             }
 
+        from datetime import datetime, timezone
         from importlib.util import module_from_spec, spec_from_file_location
         runner_path = os.path.abspath(
             os.path.join(base_dir, "../../skills/execute-mutation/scripts/run_mutation.py")
@@ -389,6 +390,7 @@ if __name__ == "__main__":
         if spec and spec.loader:
             mod = module_from_spec(spec)
             spec.loader.exec_module(mod)
+            now_iso = datetime.now(timezone.utc).isoformat()
             receipt = mod.write_dry_run_receipt(
                 customer_id=customer_id,
                 operation_summary=operation,
@@ -398,6 +400,29 @@ if __name__ == "__main__":
                 reversibility=reversibility,
                 script_path=script_path,
                 dry_run_output="Validated via sidecar PREPARE_MUTATION (validate_only=True).",
+                request_sent_at_iso=now_iso,
+                response_received_at_iso=now_iso,
+            )
+            mod.append_mutation_audit_log(
+                phase="DRY_RUN",
+                status="DRY_RUN_PASSED",
+                customer_id=customer_id,
+                operation_summary=operation,
+                before_state=before_state,
+                after_state=after_state,
+                consequences=consequences,
+                reversibility=reversibility,
+                script_path=script_path,
+                script_sha256=str(receipt.get("script_sha256", "")),
+                validate_only=True,
+                request_sent_at_iso=now_iso,
+                response_received_at_iso=now_iso,
+                duration_ms=0.0,
+                exit_code=0,
+                stdout="Validated via sidecar PREPARE_MUTATION (validate_only=True).",
+                stderr="",
+                command=["A2A:PREPARE_MUTATION"],
+                receipt=receipt,
             )
             card = mod.format_verification_card(receipt)
         else:
@@ -417,7 +442,7 @@ if __name__ == "__main__":
         }
 
     def handle_execute_mutation(self, task_id, payload):
-        """Verifies the signed dry-run receipt and user confirmation before permitting live execution."""
+        """Verifies the signed dry-run receipt, execute_mutates setting, and user confirmation before permitting live execution."""
         user_confirmed = bool(payload.get("user_confirmed", False))
         confirmation_summary = str(payload.get("confirmation_summary", "")).strip()
         script_path = payload.get("script_path")
@@ -433,6 +458,7 @@ if __name__ == "__main__":
                 ),
             }
 
+        from datetime import datetime, timezone
         from importlib.util import module_from_spec, spec_from_file_location
         runner_path = os.path.abspath(
             os.path.join(base_dir, "../../skills/execute-mutation/scripts/run_mutation.py")
@@ -441,6 +467,43 @@ if __name__ == "__main__":
         if spec and spec.loader:
             mod = module_from_spec(spec)
             spec.loader.exec_module(mod)
+
+            if not mod.is_execute_mutates_enabled():
+                blocked_iso = datetime.now(timezone.utc).isoformat()
+                err_msg = (
+                    "EXECUTE_MUTATION blocked: Mutate support is disabled by configuration "
+                    "(execute_mutates = false in config/assistant_config). "
+                    "Set 'execute_mutates = true' in config/assistant_config to enable live mutations."
+                )
+                _, _, existing_receipt = mod.load_and_verify_receipt(script_path=script_path)
+                mod.append_mutation_audit_log(
+                    phase="EXECUTE",
+                    status="BLOCKED_MUTATES_DISABLED",
+                    customer_id=str(existing_receipt.get("customer_id", "")),
+                    operation_summary=str(existing_receipt.get("operation_summary", "")),
+                    before_state=str(existing_receipt.get("before_state", "")),
+                    after_state=str(existing_receipt.get("after_state", "")),
+                    consequences=[str(c) for c in existing_receipt.get("consequences", []) if str(c).strip()],
+                    reversibility=str(existing_receipt.get("reversibility", "REVERSIBLE")),
+                    script_path=script_path,
+                    script_sha256=str(existing_receipt.get("script_sha256", "")),
+                    validate_only=False,
+                    request_sent_at_iso=blocked_iso,
+                    response_received_at_iso=blocked_iso,
+                    duration_ms=0.0,
+                    exit_code=2,
+                    stdout="",
+                    stderr=err_msg,
+                    command=["A2A:EXECUTE_MUTATION"],
+                    receipt=existing_receipt if existing_receipt else None,
+                )
+                return {
+                    "task_id": task_id,
+                    "status": "HITL_BLOCKED",
+                    "destructive_hint": True,
+                    "error": err_msg,
+                }
+
             ok, msg, receipt = mod.load_and_verify_receipt(script_path=script_path)
             if not ok:
                 return {
@@ -449,7 +512,35 @@ if __name__ == "__main__":
                     "destructive_hint": True,
                     "error": msg,
                 }
-            mod.mark_receipt_executed()
+            now_iso = datetime.now(timezone.utc).isoformat()
+            audit_entry = mod.append_mutation_audit_log(
+                phase="EXECUTE",
+                status="SUCCESS",
+                customer_id=str(receipt.get("customer_id", "")),
+                operation_summary=str(receipt.get("operation_summary", "")),
+                before_state=str(receipt.get("before_state", "")),
+                after_state=str(receipt.get("after_state", "")),
+                consequences=[str(c) for c in receipt.get("consequences", []) if str(c).strip()],
+                reversibility=str(receipt.get("reversibility", "REVERSIBLE")),
+                script_path=script_path,
+                script_sha256=str(receipt.get("script_sha256", "")),
+                validate_only=False,
+                request_sent_at_iso=now_iso,
+                response_received_at_iso=now_iso,
+                duration_ms=0.0,
+                exit_code=0,
+                stdout=confirmation_summary,
+                stderr="",
+                command=["A2A:EXECUTE_MUTATION"],
+                receipt=receipt,
+                user_approved_at_iso=now_iso,
+            )
+            mod.mark_receipt_executed(
+                user_approved_at_iso=now_iso,
+                request_sent_at_iso=now_iso,
+                response_received_at_iso=now_iso,
+                audit_id=audit_entry.get("audit_id"),
+            )
             return {
                 "task_id": task_id,
                 "status": "COMPLETED",
@@ -458,6 +549,7 @@ if __name__ == "__main__":
                 "result": {
                     "confirmation_summary": confirmation_summary,
                     "verified_receipt": receipt,
+                    "audit_id": audit_entry.get("audit_id"),
                     "status_message": "HITL receipt verified and marked EXECUTED.",
                 },
             }

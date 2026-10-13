@@ -1708,4 +1708,134 @@ def test_execute_mutates_config_defaults_to_false_and_blocks_live_mutations(
             os.remove(receipt_path)
 
 
+def test_security_hardening_direct_script_spoofing_executable_and_sidecar(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Verifies the 3 security hardening fixes:
+    1. Direct script '--dry-run' CLI flag spoofing is blocked if script lacks validate_only=True or has validate_only=False.
+    2. Direct './script.py' executable invocation (without 'python' prefix) is inspected and gated by evaluate_mutation_guard.
+    3. Sidecar handle_execute_mutation enforces is_execute_mutates_enabled() and writes to mutation_audit.jsonl.
+    """
+    import importlib.util
+    import json
+
+    run_mutation = _load_run_mutation_module()
+    audit_log_file = tmp_path / "hardening_audit.jsonl"
+    monkeypatch.setenv("GOOGLE_ADS_MUTATION_AUDIT_LOG", str(audit_log_file))
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+    # --- Fix 1 & 2: Direct script --dry-run spoofing and direct ./script.py execution ---
+    spoof_script = tmp_path / "spoof_dry_run.py"
+    spoof_script.write_text(
+        "from google.ads.googleads.client import GoogleAdsClient\n"
+        "client = GoogleAdsClient.load_from_storage(path='config/google-ads.yaml')\n"
+        "svc = client.get_service('CampaignService')\n"
+        "# Script ignores --dry-run and sends a live mutation!\n"
+        "svc.mutate_campaigns(customer_id='1234567890', operations=[], validate_only=False)\n",
+        encoding="utf-8",
+    )
+
+    # Even with --dry-run or --validate-only on the CLI, direct script execution is DENIED
+    decision_spoof, reason_spoof = evaluate_mutation_guard(
+        f"python3 {spoof_script} --dry-run"
+    )
+    assert decision_spoof == "deny"
+    assert reason_spoof is not None
+
+    # Direct executable invocation (./spoof_dry_run.py without 'python3' prefix) is ALSO intercepted and DENIED
+    decision_exec_direct, reason_exec_direct = evaluate_mutation_guard(
+        f"{spoof_script}"
+    )
+    assert decision_exec_direct == "deny"
+    assert reason_exec_direct is not None
+
+    # Whereas a direct script that genuinely sets validate_only=True (and no validate_only=False) is allowed
+    genuine_dry_script = tmp_path / "genuine_dry_run.py"
+    genuine_dry_script.write_text(
+        "from google.ads.googleads.client import GoogleAdsClient\n"
+        "client = GoogleAdsClient.load_from_storage(path='config/google-ads.yaml')\n"
+        "svc = client.get_service('CampaignService')\n"
+        "svc.mutate_campaigns(customer_id='1234567890', operations=[], validate_only=True)\n",
+        encoding="utf-8",
+    )
+    decision_genuine, _ = evaluate_mutation_guard(f"{genuine_dry_script}")
+    assert decision_genuine == "allow"
+
+    # --- Fix 3: Sidecar handle_prepare_mutation & handle_execute_mutation enforcement ---
+    repo_root = Path(__file__).resolve().parent.parent
+    server_path = (
+        repo_root
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "sidecars"
+        / "google-ads-a2a-service"
+        / "server.py"
+    )
+    spec = importlib.util.spec_from_file_location("sidecar_server", server_path)
+    assert spec is not None and spec.loader is not None
+    sidecar_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sidecar_mod)
+
+    handler = object.__new__(sidecar_mod.A2AHandler)
+
+    # Step A: PREPARE_MUTATION writes dry-run receipt and logs DRY_RUN_PASSED to audit log
+    prep_res = handler.handle_prepare_mutation(
+        "task-prep-1",
+        {
+            "customer_id": "1234567890",
+            "operation_summary": "Update CampaignBudget 999",
+            "before_state": "$10/day",
+            "after_state": "$25/day",
+            "consequences": ["Daily budget increases by +$15/day"],
+            "reversibility": "REVERSIBLE",
+            "script_path": str(spoof_script),
+        },
+    )
+    assert prep_res["status"] == "HITL_CONFIRMATION_REQUIRED"
+
+    # Step B: With execute_mutates = false, sidecar EXECUTE_MUTATION is blocked and audited
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates = false")
+    blocked_res = handler.handle_execute_mutation(
+        "task-exec-blocked",
+        {
+            "user_confirmed": True,
+            "confirmation_summary": "User approved +$15/day budget increase",
+            "script_path": str(spoof_script),
+        },
+    )
+    assert blocked_res["status"] == "HITL_BLOCKED"
+    assert "execute_mutates = false" in blocked_res["error"]
+
+    # Step C: With execute_mutates = true, sidecar EXECUTE_MUTATION succeeds, logs SUCCESS, and marks receipt EXECUTED
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates = true")
+    ok_res = handler.handle_execute_mutation(
+        "task-exec-ok",
+        {
+            "user_confirmed": True,
+            "confirmation_summary": "User approved +$15/day budget increase",
+            "script_path": str(spoof_script),
+        },
+    )
+    assert ok_res["status"] == "COMPLETED"
+    assert ok_res["result"].get("audit_id")
+
+    entries = [
+        json.loads(line)
+        for line in audit_log_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [e["status"] for e in entries] == [
+        "DRY_RUN_PASSED",
+        "BLOCKED_MUTATES_DISABLED",
+        "SUCCESS",
+    ]
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+
 
