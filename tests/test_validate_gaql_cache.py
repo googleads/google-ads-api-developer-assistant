@@ -172,6 +172,19 @@ class TestValidateGaqlCache:
         assert vg.get_cached_validation(q1, "v25", cache_path=cache_file) is None
         assert vg.get_cached_validation(q3, "v24", cache_path=cache_file) is None
 
+        # 4. Regression check: paths containing colons (e.g. Windows drive letters C:\...)
+        win_path = r"C:\hostedtoolcache\windows\gaql_cache.json"
+        orig_load = vg._load_disk_cache
+        orig_save = vg._save_disk_cache
+        with (
+            patch.object(vg, "_get_cache_file_path", return_value=win_path),
+            patch.object(vg, "_load_disk_cache", side_effect=lambda _p: orig_load(cache_file)),
+            patch.object(vg, "_save_disk_cache", side_effect=lambda _p, d: orig_save(cache_file, d)),
+        ):
+            vg.set_cached_validation(q1, "v25", cache_path=win_path)
+            vg.set_cached_validation(q3, "v24", cache_path=win_path)
+            assert vg.invalidate_gaql_cache(cache_path=win_path) == 2
+
     def test_cache_ttl_expiration_invalidation(self, tmp_path):
         """Expired cache entries are automatically invalidated on read."""
         cache_file = str(tmp_path / "gaql_cache.json")

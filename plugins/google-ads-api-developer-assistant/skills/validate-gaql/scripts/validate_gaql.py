@@ -191,6 +191,7 @@ def invalidate_gaql_cache(
             _save_disk_cache(resolved_path, disk_data)
         return 1 if (in_mem or in_disk) else 0
 
+    prefix = f"{resolved_path}:"
     if api_version is not None:
         norm_ver = _normalize_api_version(api_version)
         keys_to_delete = [
@@ -198,12 +199,12 @@ def invalidate_gaql_cache(
         ]
         for k in keys_to_delete:
             del disk_data[k]
-            _GAQL_MEMORY_CACHE.pop(f"{resolved_path}:{k}", None)
+            _GAQL_MEMORY_CACHE.pop(f"{prefix}{k}", None)
             removed += 1
         for mk in list(_GAQL_MEMORY_CACHE.keys()):
-            if mk.startswith(f"{resolved_path}:") and _GAQL_MEMORY_CACHE[mk].get("api_version") == norm_ver:
+            if mk.startswith(prefix) and _GAQL_MEMORY_CACHE[mk].get("api_version") == norm_ver:
                 del _GAQL_MEMORY_CACHE[mk]
-                if mk.split(":", 1)[-1] not in keys_to_delete:
+                if mk[len(prefix):] not in keys_to_delete:
                     removed += 1
         if keys_to_delete:
             _save_disk_cache(resolved_path, disk_data)
@@ -212,8 +213,8 @@ def invalidate_gaql_cache(
     # Clear all entries for resolved_path
     removed_keys = set(disk_data.keys())
     for mk in list(_GAQL_MEMORY_CACHE.keys()):
-        if mk.startswith(f"{resolved_path}:"):
-            removed_keys.add(mk.split(":", 1)[-1])
+        if mk.startswith(prefix):
+            removed_keys.add(mk[len(prefix):])
             del _GAQL_MEMORY_CACHE[mk]
     if disk_data or os.path.isfile(resolved_path):
         _save_disk_cache(resolved_path, {})
