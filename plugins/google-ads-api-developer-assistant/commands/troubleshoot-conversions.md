@@ -16,15 +16,15 @@ Investigates offline conversion upload failures, validates upload CSV formats, a
 2. **Execute Diagnostics**:
    - **If a CSV path is provided**: Validate the conversion upload file:
      ```bash
-     python3 skills/troubleshoot-conversions/scripts/validate_conversion_upload.py --csv_path "<csv_path>" --api_version "<api_version>"
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/troubleshoot-conversions/scripts/validate_conversion_upload.py" --csv_path "<csv_path>" --api_version "<api_version>"
      ```
    - **To diagnose upload history & errors**:
      ```bash
-     python3 skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py --customer_id "<customer_id>" --api_version "<api_version>"
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py" --customer_id "<customer_id>" --api_version "<api_version>"
      ```
    - **To sample recent GCLIDs**:
      ```bash
-     python3 skills/troubleshoot-conversions/scripts/get_recent_gclids.py --customer_id "<customer_id>" --api_version "<api_version>"
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/troubleshoot-conversions/scripts/get_recent_gclids.py" --customer_id "<customer_id>" --api_version "<api_version>"
      ```
 
 3. **Output Format**:

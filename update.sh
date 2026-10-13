@@ -322,7 +322,10 @@ detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/
 
 # --- Antigravity Specific Sync ---
 if [[ "${TYPE}" == "agy" ]]; then
-  if [[ ! -d "${AGY_PLUGIN_TARGET_DIR}" ]]; then
+  if [[ -L "${AGY_PLUGIN_TARGET_DIR}" ]]; then
+    echo "Antigravity plugin directory at ${AGY_PLUGIN_TARGET_DIR} is a symlink to this repository."
+    echo "Repository updates apply directly to the plugin without copying."
+  elif [[ ! -d "${AGY_PLUGIN_TARGET_DIR}" ]]; then
     echo "Plugin not yet installed at ${AGY_PLUGIN_TARGET_DIR}. Installing for agy..."
     mkdir -p "$(dirname "${AGY_PLUGIN_TARGET_DIR}")"
     cp -r "${PLUGIN_SOURCE_DIR}" "${AGY_PLUGIN_TARGET_DIR}"

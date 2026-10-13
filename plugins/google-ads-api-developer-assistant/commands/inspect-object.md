@@ -16,7 +16,7 @@ Dynamically inspects the fields, data types, nested messages, and Enum values of
 2. **Execute Inspection**:
    - Run the inspection script:
      ```bash
-     python3 skills/inspect-object/scripts/inspect_object.py --name "$ARGUMENTS" --api_version "<api_version>"
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/inspect-object/scripts/inspect_object.py" --name "$ARGUMENTS" --api_version "<api_version>"
      ```
    - If the script is unavailable in the environment, inspect the proto files directly in `client_libs/google-ads-python/google/ads/googleads/<api_version>/`.
 

@@ -1124,6 +1124,24 @@ def test_handle_hook_command_rewriting_and_dual_host_payloads(
     assert 'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version=\'v25\')' in rewritten
     assert "/home/testuser/google-ads.yaml" not in rewritten
     assert "client_libs/google-ads-python/google-ads.yaml" not in rewritten
+    assert "export GOOGLE_ADS_ASSISTANT_DIR=" in rewritten
+
+    # 2b. Antigravity PreToolUse hook: rewrites relative skills/ path when executed outside repo
+    skills_cmd = "python3 skills/ext-version/scripts/get_extension_version.py"
+    skills_payload = {
+        "toolCall": {
+            "args": {
+                "CommandLine": skills_cmd,
+            }
+        }
+    }
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(skills_payload)))
+    config_init.handle_hook()
+    out_skills = json.loads(capsys.readouterr().out)
+    assert out_skills["decision"] == "allow"
+    rewritten_skills = out_skills["overwrite"]["CommandLine"]
+    assert "export GOOGLE_ADS_ASSISTANT_DIR=" in rewritten_skills
+    assert "skills/ext-version/scripts/get_extension_version.py" in rewritten_skills
 
     # 3. Claude Code PreToolUse hook: live mutation denied when no receipt exists
     run_mutation = _load_run_mutation_module()

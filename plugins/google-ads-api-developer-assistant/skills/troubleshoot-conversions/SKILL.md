@@ -11,17 +11,17 @@ Use this skill when investigating offline conversion upload failures, validating
 
 1. **Diagnostic Collection:** Run the `troubleshoot_conversions.py` script:
    ```bash
-   python3 skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py --customer_id <customer_id> --api_version <api_version>
+   python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py" --customer_id <customer_id> --api_version <api_version>
    ```
 
 2. **CSV Pre-Validation:** Before attempting conversion uploads, validate the CSV format:
    ```bash
-   python3 skills/troubleshoot-conversions/scripts/validate_conversion_upload.py --csv_path <path_to_csv> --api_version <api_version>
+   python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/troubleshoot-conversions/scripts/validate_conversion_upload.py" --csv_path <path_to_csv> --api_version <api_version>
    ```
 
 3. **Retrieve Recent GCLIDs:**
    ```bash
-   python3 skills/troubleshoot-conversions/scripts/get_recent_gclids.py --customer_id <customer_id> --api_version <api_version>
+   python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/troubleshoot-conversions/scripts/get_recent_gclids.py" --customer_id <customer_id> --api_version <api_version>
    ```
 
 4. **Reporting Mandate:**

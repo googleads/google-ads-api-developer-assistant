@@ -110,4 +110,34 @@ if [[ ! -d "${PROJECT_ROOT}/plugins/google-ads-api-developer-assistant/client_li
 fi
 echo "PASS: update.sh claude --php added client library successfully."
 
+echo "Test 10: install.sh agy --link creates symbolic link at AGY_PLUGIN_DIR"
+rm -rf "${AGY_PLUGIN_DIR}"
+"${PROJECT_ROOT}/install.sh" agy --link
+if [[ ! -L "${AGY_PLUGIN_DIR}" ]]; then
+  echo "FAIL: install.sh agy --link did not create a symbolic link at ${AGY_PLUGIN_DIR}"
+  exit 1
+fi
+if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
+  echo "FAIL: plugin.json missing via symlink at ${AGY_PLUGIN_DIR}"
+  exit 1
+fi
+echo "PASS: install.sh agy --link successfully installed symlinked plugin."
+
+echo "Test 11: update.sh agy preserves symbolic link"
+"${PROJECT_ROOT}/update.sh" agy
+if [[ ! -L "${AGY_PLUGIN_DIR}" ]]; then
+  echo "FAIL: update.sh agy broke symbolic link at ${AGY_PLUGIN_DIR}"
+  exit 1
+fi
+echo "PASS: update.sh agy preserved symbolic link."
+
+echo "Test 12: global script execution from arbitrary directory using GOOGLE_ADS_ASSISTANT_DIR"
+export GOOGLE_ADS_ASSISTANT_DIR="${AGY_PLUGIN_DIR}"
+version_output=$(cd "${TEST_HOME}" && python3 "${GOOGLE_ADS_ASSISTANT_DIR}/skills/ext-version/scripts/get_extension_version.py")
+if [[ "${version_output}" != "4.1.0" ]]; then
+  echo "FAIL: expected version 4.1.0, got: '${version_output}'"
+  exit 1
+fi
+echo "PASS: global script execution succeeded from outside directory."
+
 echo "=== All Tests Passed Successfully! ==="

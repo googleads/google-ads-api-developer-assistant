@@ -11,11 +11,11 @@ Retrieves and prints the current Google Ads API Developer Assistant version and 
 1. **Retrieve Versions**:
    - Run the version retrieval script:
      ```bash
-     python3 skills/ext-version/scripts/get_extension_version.py
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/ext-version/scripts/get_extension_version.py"
      ```
    - Run the latest API version script:
      ```bash
-     python3 skills/ext-version/scripts/get_latest_api_version.py
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/ext-version/scripts/get_latest_api_version.py"
      ```
    - Or read `plugin.json` and `config/assistant_config`.
 

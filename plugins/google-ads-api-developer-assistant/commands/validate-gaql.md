@@ -25,7 +25,7 @@ Validates Google Ads Query Language (GAQL) queries against Google Ads API schema
    - **Step 4: Dry-Run Execution** (if credentials and customer ID are available):
      Run `skills/validate-gaql/scripts/validate_gaql.py`:
      ```bash
-     python3 skills/validate-gaql/scripts/validate_gaql.py --query "<query>" --customer_id "<customer_id>" --api_version "<api_version>"
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/validate-gaql/scripts/validate_gaql.py" --query "<query>" --customer_id "<customer_id>" --api_version "<api_version>"
      ```
 
 3. **Output Format**:

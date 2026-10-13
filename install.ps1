@@ -49,7 +49,8 @@ param(
     [switch]$Ruby,
     [switch]$Java,
     [switch]$Dotnet,
-    [switch]$All
+    [switch]$All,
+    [switch]$Link
 )
 
 $ErrorActionPreference = "Stop"
@@ -327,7 +328,13 @@ if (Test-Path -LiteralPath $TargetPluginDir) {
     Remove-Item -Recurse -Force -LiteralPath $TargetPluginDir
 }
 
-Copy-Item -Recurse -Force -LiteralPath $PluginSource -Destination $TargetPluginDir
+if ($Link) {
+    Write-Host "Creating symbolic link: $TargetPluginDir -> $PluginSource"
+    New-Item -ItemType SymbolicLink -Path $TargetPluginDir -Target $PluginSource | Out-Null
+}
+else {
+    Copy-Item -Recurse -Force -LiteralPath $PluginSource -Destination $TargetPluginDir
+}
 
 # Add any additional selected client libraries to plugin structure
 $PluginClientLibsDir = Join-Path $TargetPluginDir "client_libs"

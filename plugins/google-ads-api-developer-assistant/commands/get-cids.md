@@ -16,11 +16,11 @@ Retrieves the complete account hierarchy and child CIDs under a Google Ads Manag
 2. **Execute Retrieval**:
    - Run the hierarchy retrieval script:
      ```bash
-     python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py --customer_id "<mcc_customer_id>" --api_version "<api_version>" --print_cids
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id "<mcc_customer_id>" --api_version "<api_version>" --print_cids
      ```
    - If the user requested saving to CSV:
      ```bash
-     python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py --customer_id "<mcc_customer_id>" --api_version "<api_version>" --save_csv
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id "<mcc_customer_id>" --api_version "<api_version>" --save_csv
      ```
 
 3. **Output Format**:

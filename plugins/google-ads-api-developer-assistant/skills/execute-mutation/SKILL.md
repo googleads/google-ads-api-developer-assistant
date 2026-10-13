@@ -48,7 +48,7 @@ Evaluate and articulate the exact consequences of the requested change across th
 2. Lint the generated script with `ruff check --fix saved/code/<mutation_name>.py`.
 3. Execute the dry-run via `run_mutation.py` to validate against the Google Ads API and generate the signed verification receipt (`saved/data/last_dry_run.json`):
    ```bash
-   python3 skills/execute-mutation/scripts/run_mutation.py \
+   python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/execute-mutation/scripts/run_mutation.py" \
      --script saved/code/<mutation_name>.py \
      --dry-run \
      --customer-id "<customer_id>" \
@@ -67,7 +67,7 @@ Evaluate and articulate the exact consequences of the requested change across th
 2. **Wait for the user's response.** Do NOT invoke `--execute` in the same turn as `--dry-run`.
 3. Verify that `config/assistant_config` contains `execute_mutates = true` (or update it via `python3 config/config_init.py --execute-mutates true` if the user explicitly requests enabling mutations). Once confirmed by the user, execute the live mutation:
    ```bash
-   python3 skills/execute-mutation/scripts/run_mutation.py \
+   python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/execute-mutation/scripts/run_mutation.py" \
      --script saved/code/<mutation_name>.py \
      --execute
    ```

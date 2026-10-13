@@ -71,6 +71,7 @@ INSTALL_PHP=false
 INSTALL_RUBY=false
 INSTALL_JAVA=false
 INSTALL_DOTNET=false
+INSTALL_LINK=false
 ANY_SELECTED=false
 
 # --- Help Function ---
@@ -87,6 +88,7 @@ usage() {
   echo "    --type TYPE                Target platform ('agy' or 'claude')"
   echo "    --agy                      Install for Antigravity (shorthand for --type agy)"
   echo "    --claude                   Install for Claude Code (shorthand for --type claude)"
+  echo "    --link, --symlink          Symlink plugin repository into ~/.gemini/config/plugins (for agy)"
   echo "    --all                      Include all client libraries (Python, PHP, Ruby, Java, .NET)"
   echo "    --php                      Include google-ads-php client library"
   echo "    --ruby                     Include google-ads-ruby client library"
@@ -142,6 +144,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --claude|--claudecode)
       TYPE="claude"
+      shift
+      ;;
+    --link|--symlink)
+      INSTALL_LINK=true
       shift
       ;;
     --all)
@@ -457,40 +463,73 @@ fi
 # Antigravity installation
 echo "Installing plugin for agy into: ${PLUGIN_TARGET_DIR}"
 mkdir -p "$(dirname "${PLUGIN_TARGET_DIR}")"
-rm -rf "${PLUGIN_TARGET_DIR}"
-cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
 
-# Ensure plugin client_libs directory exists
-mkdir -p "${PLUGIN_TARGET_DIR}/client_libs"
+if [[ "${INSTALL_LINK}" == "true" ]]; then
+  echo "Symlinking repository plugin directory to ${PLUGIN_TARGET_DIR}..."
+  mkdir -p "${PLUGIN_SOURCE_DIR}/client_libs"
 
-# Add all enabled client libraries (including Python by default) to plugin structure
-for lang in python php ruby java dotnet; do
-  if is_enabled "$lang"; then
-    repo_name=$(get_repo_name "$lang")
-    target_lib_path="${PLUGIN_TARGET_DIR}/client_libs/${repo_name}"
-    source_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
-    url=$(get_repo_url "$lang")
-    log_file="${TEMP_LOG_DIR}/install_${lang}.log"
+  for lang in python php ruby java dotnet; do
+    if is_enabled "$lang"; then
+      repo_name=$(get_repo_name "$lang")
+      target_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
+      url=$(get_repo_url "$lang")
+      log_file="${TEMP_LOG_DIR}/install_${lang}.log"
 
-    if [[ -d "${source_lib_path}" ]]; then
-      echo "Adding ${repo_name} to plugin client_libs from local repository..."
-      rm -rf "${target_lib_path}"
-      cp -r "${source_lib_path}" "${target_lib_path}"
-    else
-      echo "Cloning ${repo_name} into plugin client_libs..."
-      clone_or_update "$url" "${target_lib_path}" "${log_file}"
-      if [[ -f "${log_file}" ]]; then
-        cat "${log_file}"
+      if [[ ! -d "${target_lib_path}" ]]; then
+        echo "Cloning ${repo_name} into repository client_libs..."
+        clone_or_update "$url" "${target_lib_path}" "${log_file}"
+        if [[ -f "${log_file}" ]]; then
+          cat "${log_file}"
+        fi
+        rm -f "${target_lib_path}/google-ads.yaml"
       fi
     fi
-    rm -f "${target_lib_path}/google-ads.yaml"
-  fi
-done
+  done
 
-# Pre-seed latest API version in plugin and project config
-detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
-detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
+  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_SOURCE_DIR}/config"
+  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
+
+  rm -rf "${PLUGIN_TARGET_DIR}"
+  ln -sfn "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
+  echo "Created symlink: ${PLUGIN_TARGET_DIR} -> ${PLUGIN_SOURCE_DIR}"
+else
+  rm -rf "${PLUGIN_TARGET_DIR}"
+  cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
+
+  # Ensure plugin client_libs directory exists
+  mkdir -p "${PLUGIN_TARGET_DIR}/client_libs"
+
+  # Add all enabled client libraries (including Python by default) to plugin structure
+  for lang in python php ruby java dotnet; do
+    if is_enabled "$lang"; then
+      repo_name=$(get_repo_name "$lang")
+      target_lib_path="${PLUGIN_TARGET_DIR}/client_libs/${repo_name}"
+      source_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
+      url=$(get_repo_url "$lang")
+      log_file="${TEMP_LOG_DIR}/install_${lang}.log"
+
+      if [[ -d "${source_lib_path}" ]]; then
+        echo "Adding ${repo_name} to plugin client_libs from local repository..."
+        rm -rf "${target_lib_path}"
+        cp -r "${source_lib_path}" "${target_lib_path}"
+      else
+        echo "Cloning ${repo_name} into plugin client_libs..."
+        clone_or_update "$url" "${target_lib_path}" "${log_file}"
+        if [[ -f "${log_file}" ]]; then
+          cat "${log_file}"
+        fi
+      fi
+      rm -f "${target_lib_path}/google-ads.yaml"
+    fi
+  done
+
+  # Pre-seed latest API version in plugin and project config
+  detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
+  detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
+fi
 
 echo "Plugin installation for agy complete."
+echo "Active plugin location: ${PLUGIN_TARGET_DIR}"
+echo "Globally accessible across all workspaces on this host."
 echo ""
 echo "Restart your Antigravity / agy host to activate the plugin."

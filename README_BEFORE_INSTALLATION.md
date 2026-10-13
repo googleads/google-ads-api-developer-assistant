@@ -28,12 +28,16 @@ By default, the **Python** client library is included in the plugin. You can als
 * **Linux / macOS:**
   ```bash
   ./install.sh agy
+  # Or symlink directly to git checkout for live updates:
+  ./install.sh agy --link
   # Or include additional client libraries:
   ./install.sh agy --java --dotnet
   ```
 * **Windows (PowerShell):**
   ```powershell
   .\install.ps1 -Type agy
+  # Or symlink directly to git checkout:
+  .\install.ps1 -Type agy -Link
   # Or include additional client libraries:
   .\install.ps1 -Type agy -Java -Dotnet
   ```

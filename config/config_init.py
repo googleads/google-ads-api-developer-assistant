@@ -1296,11 +1296,26 @@ def handle_hook() -> None:
                 "googleads",
                 "GoogleAdsClient",
                 "google-ads",
+                "skills/",
             )
         )
         overwrite: Dict[str, Any] = {}
         if needs_interception:
             updated_cmd = cmd
+
+            # Resolve assistant plugin root directory
+            this_dir = os.path.dirname(os.path.abspath(__file__))
+            plugin_root = os.path.abspath(os.path.join(this_dir, ".."))
+            global_plugin_dir = os.path.expanduser(
+                "~/.gemini/config/plugins/google-ads-api-developer-assistant"
+            )
+            if not os.path.isdir(os.path.join(plugin_root, "skills")) and os.path.isdir(global_plugin_dir):
+                plugin_root = global_plugin_dir
+
+            env_dir = os.environ.get("GOOGLE_ADS_ASSISTANT_DIR")
+            if env_dir and os.path.isdir(env_dir):
+                plugin_root = os.path.abspath(env_dir)
+
             # Case A: load_from_storage() or load_from_storage(None)
             updated_cmd = re.sub(
                 r"GoogleAdsClient\.load_from_storage\(\s*(?:None)?\s*\)",
@@ -1331,10 +1346,37 @@ def handle_hook() -> None:
                 "config/google-ads.yaml",
                 updated_cmd,
             )
+
+            # Case F: skills/<skill_name>/(scripts|references)/<file> path resolution
+            # When invoked in workspaces outside the repository, resolve relative skills/ paths to plugin_root
+            def _resolve_skill_path(match: re.Match) -> str:
+                rel_path = match.group(0)
+                if os.path.exists(rel_path):
+                    return rel_path
+                target = os.path.join(plugin_root, rel_path)
+                if os.path.exists(target):
+                    return target
+                alt_target = os.path.join(global_plugin_dir, rel_path)
+                if os.path.exists(alt_target):
+                    return alt_target
+                return rel_path
+
+            updated_cmd = re.sub(
+                r"\bskills/[a-zA-Z0-9_\-]+/(?:scripts|references)/[a-zA-Z0-9_\-\.]+",
+                _resolve_skill_path,
+                updated_cmd,
+            )
+
             # Ensure GOOGLE_ADS_CONFIGURATION_FILE_PATH is exported in the subshell
             if "GOOGLE_ADS_CONFIGURATION_FILE_PATH" not in updated_cmd:
                 updated_cmd = (
                     f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{config_path}" && {updated_cmd}'
+                )
+
+            # Ensure GOOGLE_ADS_ASSISTANT_DIR is exported in the subshell
+            if "GOOGLE_ADS_ASSISTANT_DIR" not in updated_cmd:
+                updated_cmd = (
+                    f'export GOOGLE_ADS_ASSISTANT_DIR="{plugin_root}" && {updated_cmd}'
                 )
 
             if "command" in args:

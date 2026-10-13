@@ -13,7 +13,7 @@ Updates and synchronizes Google Ads API client libraries in `client_libs/`.
 2. **Execute Sync**:
    - Run the client library synchronization script:
      ```bash
-     python3 skills/sync-client-libs/scripts/sync_client_libs.py
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/sync-client-libs/scripts/sync_client_libs.py"
      ```
    - Or pull the specified repository in `client_libs/`.
 3. **Report Status**:

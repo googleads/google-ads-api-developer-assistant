@@ -10,3 +10,7 @@ NEVER guess the structure of an API object or Enum type.
 1. **Mandatory Inspection:** Use the object inspector to dynamically inspect any resource, message, or Enum structure.
 2. **Usage:** Verify selectable fields, nested protobuf messages, and enum values before generating queries or code.
 3. **Version Parity Check:** If the installed `google-ads` package version does not match the `client_libs/google-ads-python` version used for protobuf inspection, issue a warning to the user regarding potential schema differences.
+4. **CLI Inspection:**
+   ```bash
+   python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/inspect-object/scripts/inspect_object.py" --name <resource_or_enum> --api_version <api_version>
+   ```

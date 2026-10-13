@@ -15,7 +15,7 @@ Configures Asset Group-level URL expansion exclusions (webpage listing filter tr
 2. **Execute Script / Filter Generation**:
    - Run the listing filter generation script:
      ```bash
-     python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py --customer_id "<customer_id>" --asset_group_id "<asset_group_id>" --api_version "<api_version>"
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py" --customer_id "<customer_id>" --asset_group_id "<asset_group_id>" --api_version "<api_version>"
      ```
    - Ensure the filter uses `vertical = WEBPAGE` and `AssetGroupListingGroupFilter` exclusion trees (`listing_source = ASSET_GROUP`).
 
