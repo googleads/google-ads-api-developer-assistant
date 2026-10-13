@@ -50,7 +50,9 @@ try:
     from google.ads.googleads.errors import GoogleAdsException
 except ImportError:
     GoogleAdsClient = None  # type: ignore
-    GoogleAdsException = Exception  # type: ignore
+
+    class GoogleAdsException(Exception):  # type: ignore[no-redef]
+        pass
 
 
 def create_pmax_webpage_filter(

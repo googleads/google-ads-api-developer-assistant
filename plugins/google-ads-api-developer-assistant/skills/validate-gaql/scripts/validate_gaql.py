@@ -250,7 +250,9 @@ try:
     from google.ads.googleads.errors import GoogleAdsException
 except ImportError:
     GoogleAdsClient = None  # type: ignore
-    GoogleAdsException = Exception  # type: ignore
+
+    class GoogleAdsException(Exception):  # type: ignore[no-redef]
+        pass
 
 
 def handle_googleads_exception(exception: GoogleAdsException) -> None:
