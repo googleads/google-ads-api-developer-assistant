@@ -133,6 +133,23 @@ function Set-LatestApiVersion {
                     $ExecMutates = $Matches[1].ToLower()
                 }
             }
+            if ($Cid -eq "12345678") {
+                $LegacyCandidates = @(
+                    (Join-Path $TargetConfigDir "customer_id"),
+                    (Join-Path $TargetConfigDir "customer_id.txt"),
+                    (Join-Path (Join-Path $ProjectDirAbs "config") "customer_id"),
+                    (Join-Path (Join-Path $ProjectDirAbs "config") "customer_id.txt")
+                )
+                foreach ($LegacyFile in $LegacyCandidates) {
+                    if ($LegacyFile -and (Test-Path -LiteralPath $LegacyFile)) {
+                        $LegacyCid = (Get-Content -LiteralPath $LegacyFile -Raw).Trim().Trim("`"'")
+                        if ($LegacyCid -and $LegacyCid -ne "12345678") {
+                            $Cid = $LegacyCid
+                            break
+                        }
+                    }
+                }
+            }
             $TomlContent = "api_version = `"$Latest`"`ncustomer_id = `"$Cid`"`nexecute_mutates = $ExecMutates`n"
             Set-Content -Path $CfgFile -Value $TomlContent -NoNewline
             Write-Host "Configured API version $Latest in $CfgFile"
@@ -334,39 +351,39 @@ if ($Link) {
 }
 else {
     Copy-Item -Recurse -Force -LiteralPath $PluginSource -Destination $TargetPluginDir
-}
 
-# Add any additional selected client libraries to plugin structure
-$PluginClientLibsDir = Join-Path $TargetPluginDir "client_libs"
-if (-not (Test-Path -LiteralPath $PluginClientLibsDir)) {
-    New-Item -ItemType Directory -Force -Path $PluginClientLibsDir | Out-Null
-}
+    # Add any additional selected client libraries to plugin structure
+    $PluginClientLibsDir = Join-Path $TargetPluginDir "client_libs"
+    if (-not (Test-Path -LiteralPath $PluginClientLibsDir)) {
+        New-Item -ItemType Directory -Force -Path $PluginClientLibsDir | Out-Null
+    }
 
-$AllLangs = @("python", "php", "ruby", "java", "dotnet")
-foreach ($Lang in $AllLangs) {
-    if (Test-Enabled -Lang $Lang) {
-        $Config = Get-RepoConfig -Lang $Lang
-        $TargetRepoPath = Join-Path $PluginClientLibsDir $Config.Name
-        $SourceRepoPath = Join-Path $PluginSource (Join-Path "client_libs" $Config.Name)
-        $RepoUrl = $Config.Url
+    $AllLangs = @("python", "php", "ruby", "java", "dotnet")
+    foreach ($Lang in $AllLangs) {
+        if (Test-Enabled -Lang $Lang) {
+            $Config = Get-RepoConfig -Lang $Lang
+            $TargetRepoPath = Join-Path $PluginClientLibsDir $Config.Name
+            $SourceRepoPath = Join-Path $PluginSource (Join-Path "client_libs" $Config.Name)
+            $RepoUrl = $Config.Url
 
-        if (Test-Path -LiteralPath $SourceRepoPath) {
-            Write-Host "Adding $($Config.Name) to plugin client_libs from $SourceRepoPath..."
-            if (Test-Path -LiteralPath $TargetRepoPath) {
-                Remove-Item -Recurse -Force -LiteralPath $TargetRepoPath
+            if (Test-Path -LiteralPath $SourceRepoPath) {
+                Write-Host "Adding $($Config.Name) to plugin client_libs from $SourceRepoPath..."
+                if (Test-Path -LiteralPath $TargetRepoPath) {
+                    Remove-Item -Recurse -Force -LiteralPath $TargetRepoPath
+                }
+                Copy-Item -Recurse -Force -LiteralPath $SourceRepoPath -Destination $TargetRepoPath
+                Remove-Item -Force -LiteralPath (Join-Path $TargetRepoPath "google-ads.yaml") -ErrorAction SilentlyContinue
             }
-            Copy-Item -Recurse -Force -LiteralPath $SourceRepoPath -Destination $TargetRepoPath
-            Remove-Item -Force -LiteralPath (Join-Path $TargetRepoPath "google-ads.yaml") -ErrorAction SilentlyContinue
-        }
-        else {
-            Write-Host "Cloning $RepoUrl into $TargetRepoPath..."
-            git -c core.longpaths=true clone --depth 1 $RepoUrl $TargetRepoPath
-            if ($LASTEXITCODE -ne 0) {
-                Write-Error "ERROR: Failed to clone $RepoUrl"
-                exit 1
+            else {
+                Write-Host "Cloning $RepoUrl into $TargetRepoPath..."
+                git -c core.longpaths=true clone --depth 1 $RepoUrl $TargetRepoPath
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "ERROR: Failed to clone $RepoUrl"
+                    exit 1
+                }
+                Write-Host "Successfully cloned $($Config.Name)."
+                Remove-Item -Force -LiteralPath (Join-Path $TargetRepoPath "google-ads.yaml") -ErrorAction SilentlyContinue
             }
-            Write-Host "Successfully cloned $($Config.Name)."
-            Remove-Item -Force -LiteralPath (Join-Path $TargetRepoPath "google-ads.yaml") -ErrorAction SilentlyContinue
         }
     }
 }

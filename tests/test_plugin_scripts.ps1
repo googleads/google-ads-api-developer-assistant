@@ -163,6 +163,49 @@ try {
     }
     Write-Host "PASS: update.ps1 -Type claude -Php added client library successfully."
 
+    # Test 10: install.ps1 -Type agy -Link creates symbolic link at AgyPluginDir
+    Write-Host "Test 10: install.ps1 -Type agy -Link creates symbolic link at AgyPluginDir"
+    if (Test-Path -LiteralPath $AgyPluginDir) {
+        Remove-Item -Recurse -Force -LiteralPath $AgyPluginDir
+    }
+    & "$ProjectRoot\install.ps1" -Type agy -Link *>&1 | Out-Null
+    $LinkItem = Get-Item -LiteralPath $AgyPluginDir -Force
+    if (-not (($LinkItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $LinkItem.LinkType)) {
+        Write-Error "FAIL: install.ps1 -Type agy -Link did not create a symbolic link at $AgyPluginDir"
+        exit 1
+    }
+    if (-not (Test-Path (Join-Path $AgyPluginDir "plugin.json"))) {
+        Write-Error "FAIL: plugin.json missing via symlink at $AgyPluginDir"
+        exit 1
+    }
+    Write-Host "PASS: install.ps1 -Type agy -Link successfully installed symlinked plugin."
+
+    # Test 11: update.ps1 -Type agy preserves symbolic link
+    Write-Host "Test 11: update.ps1 -Type agy preserves symbolic link"
+    & "$ProjectRoot\update.ps1" -Type agy *>&1 | Out-Null
+    $LinkItemAfter = Get-Item -LiteralPath $AgyPluginDir -Force
+    if (-not (($LinkItemAfter.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $LinkItemAfter.LinkType)) {
+        Write-Error "FAIL: update.ps1 -Type agy broke symbolic link at $AgyPluginDir"
+        exit 1
+    }
+    Write-Host "PASS: update.ps1 -Type agy preserved symbolic link."
+
+    # Test 12: global script execution from arbitrary directory using GOOGLE_ADS_ASSISTANT_DIR
+    Write-Host "Test 12: global script execution from arbitrary directory using GOOGLE_ADS_ASSISTANT_DIR"
+    $env:GOOGLE_ADS_ASSISTANT_DIR = $AgyPluginDir
+    Push-Location $TestHome
+    try {
+        $VersionOutput = (python "$env:GOOGLE_ADS_ASSISTANT_DIR\skills\ext-version\scripts\get_extension_version.py" | Out-String).Trim()
+        if ($VersionOutput -ne "4.1.0") {
+            Write-Error "FAIL: expected version 4.1.0, got: '$VersionOutput'"
+            exit 1
+        }
+    }
+    finally {
+        Pop-Location
+    }
+    Write-Host "PASS: global script execution succeeded from outside directory."
+
     Write-Host "=== All PowerShell Tests Passed Successfully! ==="
 }
 finally {

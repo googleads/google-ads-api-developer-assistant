@@ -1,6 +1,6 @@
 {
   "display_name": "Google Ads API Assistant A2A Sidecar",
-  "description": "Background A2A sidecar listening for Claude task requests to validate GAQL, inspect objects, format code, and troubleshoot conversions.",
+  "description": "Background A2A sidecar listening for task requests to validate GAQL, inspect objects, format code, troubleshoot conversions, and execute HITL-verified mutations.",
   "command": "python3",
   "args": ["server.py"],
   "restart_policy": "always",

@@ -14,7 +14,7 @@ Launches an interactive, conversational guide explaining the principles, workflo
    - Present information in small, progressive steps.
 
 2. **Topic Outline**:
-   1. Core Principles & Constraints (NO MUTATE policy, versioning)
+   1. Core Principles & Constraints (4-Step HITL Mutation Guard, versioning)
    2. Campaign Creation (Code Generation Workflow)
    3. Shared Sets (Exclusion Lists)
    4. Code Quality & Standards (Ruff, typing, error handling)

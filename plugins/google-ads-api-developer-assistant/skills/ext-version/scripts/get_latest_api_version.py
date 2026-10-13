@@ -41,6 +41,9 @@ def update_assistant_config_api_version(
             os.path.abspath(
                 os.path.join(script_dir, "../../../../../config/assistant_config")
             ),
+            os.path.expanduser(
+                "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/assistant_config"
+            ),
         ]
 
     updated_paths: List[str] = []
@@ -77,6 +80,19 @@ def update_assistant_config_api_version(
                     exec_mutates_str = m_em.group(1).lower()
             except OSError:
                 pass
+
+        if cid == "12345678":
+            for legacy_name in ("customer_id", "customer_id.txt"):
+                legacy_file = os.path.join(cfg_parent, legacy_name)
+                if os.path.isfile(legacy_file):
+                    try:
+                        with open(legacy_file, "r", encoding="utf-8") as lf:
+                            legacy_cid = lf.read().strip().strip("'\"")
+                        if legacy_cid and legacy_cid != "12345678":
+                            cid = legacy_cid
+                            break
+                    except OSError:
+                        pass
 
         try:
             with open(norm_path, "w", encoding="utf-8") as f:
@@ -124,6 +140,10 @@ def detect_latest_api_version(
                 script_dir,
                 "../../../client_libs/google-ads-python/google/ads/googleads",
             )
+        ),
+        # Global plugin installation directory
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python/google/ads/googleads"
         ),
     ]
 

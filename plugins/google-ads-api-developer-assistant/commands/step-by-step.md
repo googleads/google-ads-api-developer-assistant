@@ -16,4 +16,4 @@ Deconstructs complex Google Ads API development processes into sequential phases
    - **Phase Breakdown**: Split the workflow into logical phases (Discovery, Preparation, Execution, Verification).
    - **Prerequisites**: Note required permissions, credentials, and target API version.
    - **GAQL & Code**: Provide validated GAQL queries and Python code snippets for each phase.
-   - **Read-Only / Mutate Safety**: Note any mutate operations requiring manual review and execution.
+   - **Read-Only / Mutate Safety**: For any write/mutate operations, enforce the 4-Step HITL Mutation Verification & Consequence Disclosure Protocol (`execute-mutation` skill).

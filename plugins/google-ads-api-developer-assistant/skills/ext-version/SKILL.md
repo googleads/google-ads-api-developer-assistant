@@ -12,11 +12,11 @@ Use this skill to retrieve the version of the Google Ads API Developer Assistant
 1. **Execution:** Run the version extraction script in python environment:
 
     ```bash
-    python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/ext-version/scripts/get_extension_version.py"
+    python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/ext-version/scripts/get_extension_version.py"
     ```
 
 2. **Output Handling:**
-    * The script will print the version string (e.g., `4.0.0`) to `stdout`.
+    * The script will print the version string (e.g., `4.1.0`) to `stdout`.
     * If `plugin.json` is missing or invalid, it will print an error to `stderr` and exit with code `1`.
 
 ## When to Use

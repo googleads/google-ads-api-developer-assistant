@@ -92,16 +92,7 @@ Set `customer_id` in `config/assistant_config` (TOML format, e.g., `customer_id 
 The active API version is stored in `config/assistant_config` (`api_version = "v25"`). On installation, update, or when running `get_latest_api_version.py` / `sync_client_libs.py`, the assistant automatically discovers the latest stable release and updates `api_version` in `config/assistant_config` while preserving your `customer_id` and `execute_mutates` settings.
 
 ### How do I provide context from my existing application codebase?
-You can supply your project directory to the update script using the `--context_dir` flag:
-* **Linux/macOS:**
-  ```bash
-  ./update.sh agy --context_dir /path/to/your/codebase
-  ```
-* **Windows (PowerShell):**
-  ```powershell
-  .\update.ps1 -Type agy -ContextPath "C:\path\to\your\codebase"
-  ```
-This allows the Assistant to include your application architecture and conventions in its reasoning when generating code examples in your chosen language.
+Run your Antigravity (`agy`) or Claude Code (`claude`) session directly inside your application codebase directory (with the plugin installed globally via `./install.sh agy` or `./install.sh claude`), or reference your application files in your prompt. The Assistant's `PreInvocation` and `PreToolUse` hooks automatically resolve global plugin skills while preserving your local workspace context and `./config/assistant_config` overrides.
 
 ---
 
@@ -121,7 +112,7 @@ This allows the Assistant to include your application architecture and conventio
 ### Can I mutate data (create/update/delete) using the Assistant?
 By default, live mutations are **disabled** (`execute_mutates = false` in `config/assistant_config`), meaning the Assistant can generate mutation scripts and run safe `validate_only=True` dry-runs (`--dry-run`), but any live `--execute` call is blocked at both the `PreToolUse` hook and the execution runner.
 
-To enable live mutations, set `execute_mutates = true` in `config/assistant_config` (or run `python3 config/config_init.py --key execute_mutates --value true`). When enabled, every mutation must pass the mandatory **4-Step Human-in-the-Loop (HITL) Verification & Consequence Disclosure Protocol**:
+To enable live mutations, set `execute_mutates = true` in `config/assistant_config` (or run `python3 config/config_init.py --execute-mutates true`). When enabled, every mutation must pass the mandatory **4-Step Human-in-the-Loop (HITL) Verification & Consequence Disclosure Protocol**:
 1. **Step 1 — GAQL Before-State Lookup:** Queries current resource settings and 30-day spend/conversions to determine blast radius.
 2. **Step 2 — Live API Dry-Run (`validate_only=True`):** Executes `--dry-run` via `run_mutation.py`, binds the script SHA-256 and serialized protobuf RPC payload SHA-256 into `saved/data/last_dry_run.json`, and prints the **Mutation & Consequence Verification Card**.
 3. **Step 3 — Consequence Disclosure & User Confirmation:** Discloses the `Before -> After` state delta, reversibility, and financial/serving consequences, then waits for your approval.

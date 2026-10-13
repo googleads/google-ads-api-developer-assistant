@@ -16,5 +16,5 @@ Before presenting or running any GAQL query, pass this 4-step sequence:
    - **Segment Renames:** In v23+, `segments.hour` was renamed to `segments.hour_of_day`.
 4. **Runtime Dry Run:** Execute API dry-run search request against target customer ID:
    ```bash
-   python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/validate-gaql/scripts/validate_gaql.py" --query "<query>" --customer_id "<customer_id>" --api_version "<api_version>"
+   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/validate-gaql/scripts/validate_gaql.py" --query "<query>" --customer_id "<customer_id>" --api_version "<api_version>"
    ```

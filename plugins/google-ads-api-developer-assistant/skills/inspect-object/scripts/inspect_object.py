@@ -18,6 +18,7 @@ import argparse
 import difflib
 import glob
 import importlib.metadata
+import json
 import os
 import re
 import sys
@@ -65,7 +66,6 @@ def check_version_parity() -> None:
     candidates = [
         os.path.abspath(os.path.join(script_dir, "../../../client_libs/google-ads-python")),
         os.path.abspath(os.path.join(script_dir, "../../../../client_libs/google-ads-python")),
-        os.path.expanduser("~/.gemini/config/plugins/google_ads_assistant_plugin/client_libs/google-ads-python"),
         os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python"),
         os.path.abspath("client_libs/google-ads-python"),
     ]
@@ -108,6 +108,11 @@ def check_version_parity() -> None:
             )
 
 
+_CLASS_DEF_RE = re.compile(r"^class\s+([A-Za-z0-9_]+)\b", re.MULTILINE)
+_NON_ALNUM_RE = re.compile(r"[^a-zA-Z0-9]")
+_AVAILABLE_TYPES_CACHE: Dict[Tuple[str, float], Dict[str, str]] = {}
+
+
 def get_available_types(api_version: str) -> Dict[str, str]:
     """Finds all available message and enum type names and their file paths."""
     version_clean = api_version.lower()
@@ -128,19 +133,59 @@ def get_available_types(api_version: str) -> Dict[str, str]:
         return type_map
 
     v_dir = os.path.join(base_dir, "google", "ads", "googleads", version_clean)
+    try:
+        dir_mtime = round(os.path.getmtime(v_dir), 3)
+    except OSError:
+        dir_mtime = 0.0
+
+    cache_key = (v_dir, dir_mtime)
+    if cache_key in _AVAILABLE_TYPES_CACHE:
+        return dict(_AVAILABLE_TYPES_CACHE[cache_key])
+
+    import tempfile
+
+    disk_cache_path = os.path.join(
+        tempfile.gettempdir(), f"gads_assistant_types_{version_clean}.json"
+    )
+    if os.path.isfile(disk_cache_path):
+        try:
+            with open(disk_cache_path, "r", encoding="utf-8") as cf:
+                cached_payload = json.load(cf)
+            if (
+                isinstance(cached_payload, dict)
+                and cached_payload.get("v_dir") == v_dir
+                and cached_payload.get("mtime") == dir_mtime
+                and isinstance(cached_payload.get("types"), dict)
+                and cached_payload["types"]
+            ):
+                sample_file = next(iter(cached_payload["types"].values()))
+                if os.path.isfile(sample_file):
+                    _AVAILABLE_TYPES_CACHE[cache_key] = cached_payload["types"]
+                    return dict(cached_payload["types"])
+        except Exception:
+            pass
+
     for py_file in glob.glob(os.path.join(v_dir, "**/types/*.py"), recursive=True):
         if py_file.endswith("__init__.py"):
             continue
         try:
             with open(py_file, "r", encoding="utf-8") as f:
                 content = f.read()
-                classes = re.findall(r"class\s+([A-Za-z0-9_]+)\b", content)
-                for cls in classes:
+                for cls in _CLASS_DEF_RE.findall(content):
                     if cls not in type_map:
                         type_map[cls] = py_file
         except Exception:
             continue
-    return type_map
+
+    if type_map:
+        _AVAILABLE_TYPES_CACHE[cache_key] = type_map
+        try:
+            with open(disk_cache_path, "w", encoding="utf-8") as cf:
+                json.dump({"v_dir": v_dir, "mtime": dir_mtime, "types": type_map}, cf)
+        except Exception:
+            pass
+
+    return dict(type_map)
 
 
 def resolve_type_name(
@@ -163,8 +208,8 @@ def resolve_type_name(
         return lower_map[target.lower()], []
 
     # 3. Normalized match: strip underscores, hyphens, and spaces
-    norm_input = re.sub(r"[^a-zA-Z0-9]", "", target.lower())
-    norm_map = {re.sub(r"[^a-zA-Z0-9]", "", k.lower()): k for k in available_types}
+    norm_input = _NON_ALNUM_RE.sub("", target.lower())
+    norm_map = {_NON_ALNUM_RE.sub("", k.lower()): k for k in available_types}
     if norm_input in norm_map:
         return norm_map[norm_input], []
 

@@ -22,13 +22,13 @@ When a user invokes `/assistant-tutorial` or requests this tutorial:
 ## Tutorial Content Reference
 
 ### Topic 1: Core Principles & Constraints
-- **The "NO MUTATE" Read-Only Policy:** The Assistant cannot execute mutate operations (such as create, update, or delete) directly. Instead, it provides the code for the mutate in the `~/saved/code/` directory, which the user can run themselves or incorporate into their codebase.
+- **4-Step HITL Mutation Guard (`execute_mutates`):** By default, live mutations are disabled (`execute_mutates = false` in `config/assistant_config`), and generated code is saved in `saved/code/`. When enabled (`execute_mutates = true`), every write operation must pass the mandatory 4-Step Human-in-the-Loop (HITL) Verification & Consequence Disclosure Protocol (GAQL before-state lookup, `validate_only=True` dry-run receipt in `saved/data/last_dry_run.json`, explicit consequence disclosure, and `PreToolUse` hook-gated execution logged to `saved/logs/mutation_audit.jsonl`).
 - **API Versioning:** All code and GAQL queries target the confirmed version in `config/assistant_config`.
 
-### Topic 2: Campaign Creation (Code Generation Workflow)
-- Explain the generation & execution workflow.
-- Show standard template structures.
-- **NO MUTATE Execution Warning:** Remind the user that the Assistant is designed for read-only operations and cannot execute campaign creation mutate code directly.
+### Topic 2: Campaign Creation (Code Generation & HITL Mutation Workflow)
+- Explain the generation & 4-Step HITL verification workflow.
+- Show standard template structures supporting `--dry-run` (`validate_only=True`) and `--execute`.
+- **HITL Safety & Consequence Disclosure:** Remind the user that live mutations require `execute_mutates = true` in `config/assistant_config`, a verified `validate_only=True` dry-run receipt, and explicit user confirmation of financial and serving consequences.
 
 ### Topic 3: Shared Sets (Exclusion Lists)
 - Explain `SharedSet` (reusable keyword/placement exclusion folders), `SharedCriterion` (items), and `CampaignSharedSet` (connector).

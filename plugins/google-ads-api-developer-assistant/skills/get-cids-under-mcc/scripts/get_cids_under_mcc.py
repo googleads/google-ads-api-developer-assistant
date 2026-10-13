@@ -186,7 +186,7 @@ def main() -> None:
         return
 
     if args.save_csv:
-        csv_dir = os.path.expanduser(os.path.join("~", "saved", "data"))
+        csv_dir = os.path.abspath(os.path.join("saved", "data"))
         os.makedirs(csv_dir, exist_ok=True)
         csv_path = os.path.join(csv_dir, f"cids_under_mcc_{clean_id}.csv")
 

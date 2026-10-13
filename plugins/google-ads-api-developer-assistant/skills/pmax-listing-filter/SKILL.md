@@ -9,5 +9,5 @@ description: Validates or generates commands to configure Asset Group URL expans
 2. **Correct Scoping:** Do not falsely claim webpage URL contains filters are unsupported at the Asset Group level. Avoid recommending campaign-level exclusions when Asset Group-level exclusions are requested.
 3. **Execution Script:**
    ```bash
-   python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py" --customer_id "<customer_id>" --asset_group_id "<asset_group_id>" --api_version "<api_version>"
+   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py" --customer_id "<customer_id>" --asset_group_id "<asset_group_id>" --url_exclusion "<url_exclusion>" --api_version "<api_version>"
    ```

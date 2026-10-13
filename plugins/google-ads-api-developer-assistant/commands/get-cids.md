@@ -26,4 +26,4 @@ Retrieves the complete account hierarchy and child CIDs under a Google Ads Manag
 3. **Output Format**:
    - Total number of child accounts found.
    - Hierarchical list with depth level, CID, descriptive name, and account type (client vs. sub-manager).
-   - If saved to CSV, provide the file path in `~/saved/data/`.
+   - If saved to CSV, provide the file path in `saved/data/`.

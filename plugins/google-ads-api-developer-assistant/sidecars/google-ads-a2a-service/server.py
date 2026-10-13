@@ -52,12 +52,9 @@ def get_effective_api_version(payload: dict = None) -> str:
         os.path.join(base_dir, "../../../../config/assistant_config"),
         # Current working directory
         os.path.abspath("config/assistant_config"),
-        # Standard plugin and project locations in user home
+        # Standard plugin location in user home
         os.path.expanduser(
             "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/assistant_config"
-        ),
-        os.path.expanduser(
-            "~/.gemini/config/plugins/google_ads_assistant_plugin/config/assistant_config"
         ),
     ]
 
@@ -84,6 +81,9 @@ def get_effective_api_version(payload: dict = None) -> str:
         os.path.join(base_dir, "../../client_libs/google-ads-python/google/ads/googleads"),
         os.path.join(base_dir, "../../../../client_libs/google-ads-python/google/ads/googleads"),
         os.path.abspath("client_libs/google-ads-python/google/ads/googleads"),
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python/google/ads/googleads"
+        ),
     ]
 
     for lib_path in candidate_lib_paths:
@@ -143,8 +143,14 @@ def get_effective_api_version(payload: dict = None) -> str:
     )
 
 
+_CACHED_PLUGIN_VERSION = None
+
+
 def get_plugin_version() -> str:
     """Dynamically resolves the assistant/plugin version from plugin.json."""
+    global _CACHED_PLUGIN_VERSION
+    if _CACHED_PLUGIN_VERSION is not None:
+        return _CACHED_PLUGIN_VERSION
     try:
         cur = os.path.dirname(os.path.abspath(__file__))
         while cur and cur != os.path.dirname(cur):
@@ -153,11 +159,12 @@ def get_plugin_version() -> str:
                 with open(candidate, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     if "version" in data:
-                        return str(data["version"])
+                        _CACHED_PLUGIN_VERSION = str(data["version"])
+                        return _CACHED_PLUGIN_VERSION
             cur = os.path.dirname(cur)
     except Exception:
         pass
-    return "4.0.0"
+    return "4.1.0"
 
 
 class A2AHandler(BaseHTTPRequestHandler):

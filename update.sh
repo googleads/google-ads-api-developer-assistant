@@ -218,6 +218,18 @@ detect_and_seed_api_version() {
           exec_mutates="${existing_em}"
         fi
       fi
+      if [[ "${cid}" == "12345678" ]]; then
+        for legacy_file in "${target_config_dir}/customer_id" "${target_config_dir}/customer_id.txt" "${PROJECT_DIR_ABS}/config/customer_id" "${PROJECT_DIR_ABS}/config/customer_id.txt"; do
+          if [[ -f "${legacy_file}" ]]; then
+            local legacy_cid=""
+            legacy_cid=$(head -n 1 "${legacy_file}" 2>/dev/null | sed -E 's/^[[:space:]"'\'']+|[[:space:]"'\'']+$//g' || true)
+            if [[ -n "${legacy_cid}" && "${legacy_cid}" != "12345678" ]]; then
+              cid="${legacy_cid}"
+              break
+            fi
+          fi
+        done
+      fi
       cat <<EOF > "${cfg_file}"
 api_version = "v${latest_v}"
 customer_id = "${cid}"
@@ -251,8 +263,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Backup config/assistant_config if it exists
-for cfg_file in assistant_config; do
+# Backup config/assistant_config and legacy customer_id files if they exist
+for cfg_file in assistant_config customer_id customer_id.txt; do
   if [[ -f "${PROJECT_DIR_ABS}/config/${cfg_file}" ]]; then
     cp "${PROJECT_DIR_ABS}/config/${cfg_file}" "${TEMP_CONFIG_DIR}/${cfg_file}"
   fi
@@ -261,7 +273,7 @@ done
 if ! git pull; then
   err "ERROR: Failed to update google-ads-api-developer-assistant repository."
   # Restore config files if backup exists
-  for cfg_file in assistant_config; do
+  for cfg_file in assistant_config customer_id customer_id.txt; do
     if [[ -f "${TEMP_CONFIG_DIR}/${cfg_file}" ]]; then
       cp "${TEMP_CONFIG_DIR}/${cfg_file}" "${PROJECT_DIR_ABS}/config/${cfg_file}"
     fi
@@ -270,7 +282,7 @@ if ! git pull; then
 fi
 
 # Restore config files
-for cfg_file in assistant_config; do
+for cfg_file in assistant_config customer_id customer_id.txt; do
   if [[ -f "${TEMP_CONFIG_DIR}/${cfg_file}" ]]; then
     cp "${TEMP_CONFIG_DIR}/${cfg_file}" "${PROJECT_DIR_ABS}/config/${cfg_file}"
   fi

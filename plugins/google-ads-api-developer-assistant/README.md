@@ -291,7 +291,7 @@ python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py \
   --api_version v25 \
   --print_cids
 
-# Export to CSV under ~/saved/data/
+# Export to CSV under saved/data/
 python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py \
   --customer_id 1234567890 \
   --api_version v25 \
@@ -324,8 +324,7 @@ Generate listing filter exclusion trees for PMax asset groups:
 python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py \
   --customer_id 1234567890 \
   --asset_group_id 987654321 \
-  --url_condition "CONTAINS" \
-  --url_value "example.com/excluded-category" \
+  --url_exclusion "example.com/excluded-category" \
   --api_version v25
 ```
 
@@ -358,7 +357,7 @@ python3 sidecars/google-ads-a2a-service/server.py
 
 The daemon listens on port `8900` (or the port defined by `ANTIGRAVITY_SIDECAR_WEB_PORT`):
 - `GET /health`: Health check endpoint.
-- `POST /v1/a2a/tasks`: Handles JSON-RPC style task payloads for `GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, and `TROUBLESHOOT_CONVERSIONS`.
+- `POST /v1/a2a/tasks`: Handles JSON-RPC style task payloads for `GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION`, and `EXECUTE_MUTATION`.
 
 ### Model Context Protocol (MCP)
 
@@ -389,7 +388,7 @@ When running this plugin across different agent runtimes, keep the following pla
 
 - **Virtual Environments**: In custom IDE environments, ensure `google-ads` and `ruff` are installed in the active environment used by the host agent.
 - **Interactive UI Modals**: In Antigravity environments, interactive questions render as modal selections; in standard Claude Desktop / CLI sessions, questions are presented directly in conversation text.
-- **Directory Layouts**: Generated code and reports are saved to `~/saved/code/` and `~/saved/data/`.
+- **Directory Layouts**: Generated code, CSV exports, diagnostic reports/receipts, and mutation audit logs are saved to `saved/code/`, `saved/csv/`, `saved/data/`, and `saved/logs/`.
 
 For comprehensive details on runtime adaptations, refer to [migration.md](migration.md).
 
@@ -397,4 +396,4 @@ For comprehensive details on runtime adaptations, refer to [migration.md](migrat
 
 ## 📄 License
 
-This project is licensed under the Apache License 2.0. See the [LICENSE](client_libs/google-ads-python/LICENSE) file for details.
+This project is licensed under the Apache License 2.0. See the [LICENSE](../../LICENSE) file for details.

@@ -9,13 +9,17 @@ import sys
 from typing import Any, Dict, Optional, Tuple
 
 
+_CACHED_VERSION: Optional[str] = None
+
+
 def get_version(ext_version_script: Optional[str] = None) -> str:
     """Retrieves the assistant/extension version automatically.
 
     Discovers the version by:
-    1. Executing get_extension_version.py if specified or found in candidate locations.
-    2. Reading plugin.json or agent.json manifest files directly.
-    3. Falling back to 'Unknown' if not found.
+    1. Executing ext_version_script if explicitly specified.
+    2. Reading plugin.json or agent.json manifest files directly (cached in-memory).
+    3. Executing get_extension_version.py if found in candidate locations.
+    4. Falling back to 'Unknown' if not found.
 
     Args:
         ext_version_script: Optional path to an extension version script.
@@ -23,29 +27,15 @@ def get_version(ext_version_script: Optional[str] = None) -> str:
     Returns:
         str: The detected version string or 'Unknown'.
     """
+    global _CACHED_VERSION
+    if ext_version_script is None and _CACHED_VERSION is not None:
+        return _CACHED_VERSION
+
     this_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # 1. If an explicit script path is given or found, try executing it
-    candidate_scripts = []
+    # 1. If an explicit script path is given, execute it first
     if ext_version_script:
-        candidate_scripts.append(ext_version_script)
-
-    candidate_scripts.extend([
-        os.path.join(
-            this_dir,
-            "../plugins/google-ads-api-developer-assistant/skills/ext-version/scripts/get_extension_version.py",
-        ),
-        os.path.join(
-            this_dir,
-            "../.gemini/skills/ext_version/scripts/get_extension_version.py",
-        ),
-        os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/skills/ext-version/scripts/get_extension_version.py"
-        ),
-    ])
-
-    for script in candidate_scripts:
-        script_path = os.path.normpath(script)
+        script_path = os.path.normpath(ext_version_script)
         if os.path.isfile(script_path):
             try:
                 result = subprocess.run(
@@ -60,7 +50,7 @@ def get_version(ext_version_script: Optional[str] = None) -> str:
             except Exception:
                 pass
 
-    # 2. Check candidate plugin.json / agent.json files directly
+    # 2. Check candidate plugin.json / agent.json files directly in-process (fast path)
     candidate_manifests = [
         os.path.join(
             this_dir,
@@ -73,7 +63,6 @@ def get_version(ext_version_script: Optional[str] = None) -> str:
         ),
     ]
 
-    # Also search upwards for plugin.json or agent.json
     curr = this_dir
     while curr and curr != os.path.dirname(curr):
         for fname in ("plugin.json", "agent.json"):
@@ -88,9 +77,45 @@ def get_version(ext_version_script: Optional[str] = None) -> str:
                     data = json.load(f)
                     ver = data.get("version")
                     if ver:
-                        return str(ver).strip()
+                        resolved = str(ver).strip()
+                        if ext_version_script is None:
+                            _CACHED_VERSION = resolved
+                        return resolved
             except Exception:
                 continue
+
+    # 3. Fallback to candidate version scripts if manifest files were not found
+    candidate_scripts = [
+        os.path.join(
+            this_dir,
+            "../plugins/google-ads-api-developer-assistant/skills/ext-version/scripts/get_extension_version.py",
+        ),
+        os.path.join(
+            this_dir,
+            "../.gemini/skills/ext_version/scripts/get_extension_version.py",
+        ),
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/skills/ext-version/scripts/get_extension_version.py"
+        ),
+    ]
+
+    for script in candidate_scripts:
+        script_path = os.path.normpath(script)
+        if os.path.isfile(script_path):
+            try:
+                result = subprocess.run(
+                    [sys.executable, script_path],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                ver = result.stdout.strip()
+                if ver and ver not in ("Unknown", "Version not found"):
+                    if ext_version_script is None:
+                        _CACHED_VERSION = ver
+                    return ver
+            except Exception:
+                pass
 
     return "Unknown"
 
@@ -481,18 +506,29 @@ def sync_and_set_config_kv(
             pass
 
     # Clean up any dummy google-ads.yaml in client_libs to avoid discovery ambiguity
-    import glob
-    for root_dir in [
+    for root_dir in (
         os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs"),
         os.path.abspath("plugins/google-ads-api-developer-assistant/client_libs"),
         os.path.abspath("client_libs"),
-    ]:
+    ):
         if os.path.isdir(root_dir):
-            for candidate in glob.glob(os.path.join(root_dir, "**/google-ads.yaml"), recursive=True):
+            root_candidate = os.path.join(root_dir, "google-ads.yaml")
+            if os.path.isfile(root_candidate):
                 try:
-                    os.remove(candidate)
+                    os.remove(root_candidate)
                 except OSError:
                     pass
+            try:
+                for entry in os.scandir(root_dir):
+                    if entry.is_dir(follow_symlinks=False):
+                        sub_candidate = os.path.join(entry.path, "google-ads.yaml")
+                        if os.path.isfile(sub_candidate):
+                            try:
+                                os.remove(sub_candidate)
+                            except OSError:
+                                pass
+            except OSError:
+                pass
 
     return target_yaml
 
@@ -707,6 +743,35 @@ def read_assistant_config(config_dir: Optional[str] = None) -> Dict[str, Any]:
     return {}
 
 
+def _read_legacy_config_dir(d: str) -> Dict[str, str]:
+    """Reads legacy v4.0.0 single-value config files (customer_id, customer_id.txt, api_version.txt)."""
+    legacy: Dict[str, str] = {}
+    for legacy_name in ("customer_id", "customer_id.txt"):
+        legacy_file = os.path.join(d, legacy_name)
+        if os.path.isfile(legacy_file):
+            try:
+                with open(legacy_file, "r", encoding="utf-8") as f:
+                    content = f.read().strip().strip("'\"")
+                if content:
+                    legacy["customer_id"] = content
+                    break
+            except OSError:
+                pass
+
+    legacy_ver_file = os.path.join(d, "api_version.txt")
+    if os.path.isfile(legacy_ver_file):
+        try:
+            with open(legacy_ver_file, "r", encoding="utf-8") as f:
+                ver_content = f.read().strip().strip("'\"")
+            if ver_content:
+                if not ver_content.startswith("v") and ver_content.isdigit():
+                    ver_content = f"v{ver_content}"
+                legacy["api_version"] = ver_content
+        except OSError:
+            pass
+    return legacy
+
+
 def write_assistant_config(
     updates: Optional[Dict[str, Any]] = None,
     config_dir: Optional[str] = None,
@@ -739,6 +804,21 @@ def write_assistant_config(
                         break
                 except OSError:
                     continue
+
+    # Migrate legacy v4.0.0 customer_id / api_version.txt if not yet customized
+    legacy_dirs = [os.path.abspath(config_dir)] + [
+        os.path.dirname(p) for p in get_assistant_config_paths(config_dir=config_dir)
+    ]
+    for ldir in legacy_dirs:
+        legacy_vals = _read_legacy_config_dir(ldir)
+        if (
+            "customer_id" in legacy_vals
+            and legacy_vals["customer_id"] != DEFAULT_CUSTOMER_ID
+            and current_data.get("customer_id", DEFAULT_CUSTOMER_ID) == DEFAULT_CUSTOMER_ID
+        ):
+            current_data["customer_id"] = legacy_vals["customer_id"]
+        if "api_version" in legacy_vals and not current_data.get("api_version"):
+            current_data["api_version"] = legacy_vals["api_version"]
 
     if updates:
         current_data.update(updates)
@@ -843,32 +923,36 @@ def get_configured_customer_id(config_dir: Optional[str] = None) -> Optional[str
         if norm_d not in seen_dirs:
             seen_dirs.append(norm_d)
 
+    fallback_default_cid: Optional[str] = None
     for d in seen_dirs:
+        toml_cid = ""
         cfg_file = os.path.join(d, ASSISTANT_CONFIG_FILENAME)
         if os.path.isfile(cfg_file):
             try:
                 with open(cfg_file, "r", encoding="utf-8") as f:
                     cfg = parse_assistant_config(f.read())
-                cid = str(cfg.get("customer_id", "")).strip()
-                if cid:
-                    return cid
+                toml_cid = str(cfg.get("customer_id", "")).strip()
             except OSError:
                 pass
-        for legacy_name in ("customer_id", "customer_id.txt"):
-            legacy_file = os.path.join(d, legacy_name)
-            if os.path.isfile(legacy_file):
-                try:
-                    with open(legacy_file, "r", encoding="utf-8") as f:
-                        content = f.read().strip()
-                    if content:
-                        return content
-                except OSError:
-                    pass
-    return None
+
+        if toml_cid and toml_cid != DEFAULT_CUSTOMER_ID:
+            return toml_cid
+
+        legacy_vals = _read_legacy_config_dir(d)
+        legacy_cid = legacy_vals.get("customer_id", "")
+        if legacy_cid and legacy_cid != DEFAULT_CUSTOMER_ID:
+            return legacy_cid
+
+        if toml_cid and fallback_default_cid is None:
+            fallback_default_cid = toml_cid
+        elif legacy_cid and fallback_default_cid is None:
+            fallback_default_cid = legacy_cid
+
+    return fallback_default_cid
 
 
 def get_configured_api_version(config_dir: Optional[str] = None) -> Optional[str]:
-    """Reads api_version from config/assistant_config."""
+    """Reads api_version from config/assistant_config (with fallback to legacy api_version.txt)."""
     for candidate in get_assistant_config_paths(config_dir=config_dir):
         if os.path.isfile(candidate):
             try:
@@ -879,6 +963,9 @@ def get_configured_api_version(config_dir: Optional[str] = None) -> Optional[str
                     return ver
             except OSError:
                 continue
+        legacy_vals = _read_legacy_config_dir(os.path.dirname(candidate))
+        if "api_version" in legacy_vals:
+            return legacy_vals["api_version"]
     return None
 
 
@@ -1137,6 +1224,39 @@ def _verify_dry_run_receipt_for_hook(
     return True, prompt_reason, receipt
 
 
+_TEST_OR_LINTER_CMD_RE = re.compile(
+    r"(?:^|&&|\|\||;)\s*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:[\w./-]+/)?(?:pytest|ruff|mypy|flake8)\b|"
+    r"\bpython3?\s+-m\s+(?:pytest|ruff|mypy|flake8)\b"
+)
+_SCRIPT_ARG_RE = re.compile(
+    r"--script(?:=|\s+)(?:'([^']+)'|\"([^\"]+)\"|([^\s'\"]+))"
+)
+_PY_FILE_ARG_RE = re.compile(
+    r"(?:'([^']+\.py)'|\"([^\"]+\.py)\"|([^\s'\"]+\.py))"
+)
+_COMMENT_LINE_RE = re.compile(r"(?m)^\s*#.*$")
+_VALIDATE_ONLY_TRUE_RE = re.compile(r"validate_only\s*=\s*True")
+_VALIDATE_ONLY_FALSE_RE = re.compile(r"validate_only\s*=\s*False")
+_LOAD_FROM_STORAGE_EMPTY_RE = re.compile(
+    r"GoogleAdsClient\.load_from_storage\(\s*(?:None)?\s*\)"
+)
+_LOAD_FROM_STORAGE_VER_RE = re.compile(
+    r"GoogleAdsClient\.load_from_storage\(\s*(?!path\s*=)(version\s*=[^)]+)\)"
+)
+_EXPANDUSER_YAML_RE = re.compile(
+    r"os\.path\.expanduser\(\s*['\"][^'\"]*google-ads\.yaml['\"]\s*\)"
+)
+_QUOTED_HOME_YAML_RE = re.compile(
+    r"(['\"])(?:~|/home/[^/'\"]+|client_libs/[^/'\"]+)/google-ads\.yaml\1"
+)
+_BARE_HOME_YAML_RE = re.compile(
+    r"(?:~/google-ads\.yaml|/home/[^/\s'\"]+/google-ads\.yaml|client_libs/[^/\s'\"]+/google-ads\.yaml)"
+)
+_SKILL_REL_PATH_RE = re.compile(
+    r"\bskills/[a-zA-Z0-9_\-]+/(?:scripts|references)/[a-zA-Z0-9_\-\.]+"
+)
+
+
 def evaluate_mutation_guard(
     cmd: str,
     hook_context: Optional[Dict[str, Any]] = None,
@@ -1146,11 +1266,7 @@ def evaluate_mutation_guard(
         return "allow", None
 
     # Ignore test suites and linters when invoked as the runner command or module
-    if re.search(
-        r"(?:^|&&|\|\||;)\s*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:[\w./-]+/)?(?:pytest|ruff|mypy|flake8)\b|"
-        r"\bpython3?\s+-m\s+(?:pytest|ruff|mypy|flake8)\b",
-        cmd,
-    ):
+    if _TEST_OR_LINTER_CMD_RE.search(cmd):
         return "allow", None
 
     # 1. Explicit invocation of skills/execute-mutation/scripts/run_mutation.py
@@ -1165,9 +1281,7 @@ def evaluate_mutation_guard(
                     "(execute_mutates = false in config/assistant_config). Set 'execute_mutates = true' in "
                     "config/assistant_config to enable live Google Ads API mutations.",
                 )
-            script_match = re.search(
-                r"--script(?:=|\s+)(?:'([^']+)'|\"([^\"]+)\"|([^\s'\"]+))", cmd
-            )
+            script_match = _SCRIPT_ARG_RE.search(cmd)
             target_script = None
             if script_match:
                 target_script = (
@@ -1182,9 +1296,7 @@ def evaluate_mutation_guard(
             return ("force_ask", message) if ok else ("deny", message)
 
     # 2. Direct execution of a .py script or python -c snippet
-    script_candidates = re.findall(
-        r"(?:'([^']+\.py)'|\"([^\"]+\.py)\"|([^\s'\"]+\.py))", cmd
-    )
+    script_candidates = _PY_FILE_ARG_RE.findall(cmd)
     py_files: list[str] = []
     for grp in script_candidates:
         candidate = grp[0] or grp[1] or grp[2]
@@ -1203,7 +1315,7 @@ def evaluate_mutation_guard(
                 pass
 
     combined_code = "\n".join(code_blobs)
-    uncommented_code = re.sub(r"(?m)^\s*#.*$", "", combined_code)
+    uncommented_code = _COMMENT_LINE_RE.sub("", combined_code)
 
     if not MUTATION_CALL_PATTERN.search(uncommented_code):
         return "allow", None
@@ -1215,12 +1327,8 @@ def evaluate_mutation_guard(
     ) and "--execute" not in cmd
     explicit_execute_flag = "--execute" in cmd
 
-    has_validate_only_true = bool(
-        re.search(r"validate_only\s*=\s*True", uncommented_code)
-    )
-    has_validate_only_false = bool(
-        re.search(r"validate_only\s*=\s*False", uncommented_code)
-    )
+    has_validate_only_true = bool(_VALIDATE_ONLY_TRUE_RE.search(uncommented_code))
+    has_validate_only_false = bool(_VALIDATE_ONLY_FALSE_RE.search(uncommented_code))
 
     if explicit_dry_run_flag or (
         has_validate_only_true
@@ -1317,32 +1425,27 @@ def handle_hook() -> None:
                 plugin_root = os.path.abspath(env_dir)
 
             # Case A: load_from_storage() or load_from_storage(None)
-            updated_cmd = re.sub(
-                r"GoogleAdsClient\.load_from_storage\(\s*(?:None)?\s*\)",
+            updated_cmd = _LOAD_FROM_STORAGE_EMPTY_RE.sub(
                 'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml")',
                 updated_cmd,
             )
             # Case B: load_from_storage(version=...) where path is not provided
-            updated_cmd = re.sub(
-                r"GoogleAdsClient\.load_from_storage\(\s*(?!path\s*=)(version\s*=[^)]+)\)",
+            updated_cmd = _LOAD_FROM_STORAGE_VER_RE.sub(
                 r'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", \1)',
                 updated_cmd,
             )
             # Case C: os.path.expanduser('~/google-ads.yaml') or similar
-            updated_cmd = re.sub(
-                r"os\.path\.expanduser\(\s*['\"][^'\"]*google-ads\.yaml['\"]\s*\)",
+            updated_cmd = _EXPANDUSER_YAML_RE.sub(
                 r'"config/google-ads.yaml"',
                 updated_cmd,
             )
             # Case D: Any string literal pointing to ~/google-ads.yaml, /home/.../google-ads.yaml, or client_libs/.../google-ads.yaml
-            updated_cmd = re.sub(
-                r"(['\"])(?:~|/home/[^/'\"]+|client_libs/[^/'\"]+)/google-ads\.yaml\1",
+            updated_cmd = _QUOTED_HOME_YAML_RE.sub(
                 r'"config/google-ads.yaml"',
                 updated_cmd,
             )
             # Case E: General fallback for any remaining ~/google-ads.yaml or /home/.../google-ads.yaml
-            updated_cmd = re.sub(
-                r"(?:~/google-ads\.yaml|/home/[^/\s'\"]+/google-ads\.yaml|client_libs/[^/\s'\"]+/google-ads\.yaml)",
+            updated_cmd = _BARE_HOME_YAML_RE.sub(
                 "config/google-ads.yaml",
                 updated_cmd,
             )
@@ -1361,8 +1464,7 @@ def handle_hook() -> None:
                     return alt_target
                 return rel_path
 
-            updated_cmd = re.sub(
-                r"\bskills/[a-zA-Z0-9_\-]+/(?:scripts|references)/[a-zA-Z0-9_\-\.]+",
+            updated_cmd = _SKILL_REL_PATH_RE.sub(
                 _resolve_skill_path,
                 updated_cmd,
             )

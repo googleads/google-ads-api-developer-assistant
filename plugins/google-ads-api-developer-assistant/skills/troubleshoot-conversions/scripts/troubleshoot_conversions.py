@@ -102,7 +102,7 @@ def troubleshoot_conversions(
     epoch = int(time.time())
     if not output_dir:
         output_dir = os.environ.get(
-            "CONVERSION_OUTPUT_DIR", os.path.expanduser(os.path.join("~", "saved", "data"))
+            "CONVERSION_OUTPUT_DIR", os.path.abspath(os.path.join("saved", "data"))
         )
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, f"conversion_troubleshooting_report_{epoch}.txt")

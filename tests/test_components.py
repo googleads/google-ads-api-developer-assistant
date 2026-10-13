@@ -1031,6 +1031,36 @@ class TestSidecarA2A:
         assert 'login_customer_id: "7778889990"' in out_yaml.read_text(encoding="utf-8")
         assert not dummy_lib_yaml.exists()
 
+    def test_legacy_v400_config_migration_and_precedence_over_placeholder(self, tmp_path, monkeypatch):
+        import config.config_init as cfg_init
+
+        work_dir = tmp_path / "workspace_v400"
+        cfg_dir = work_dir / "config"
+        cfg_dir.mkdir(parents=True)
+        monkeypatch.chdir(work_dir)
+
+        # Simulate v4.0.0 legacy files (customer_id and api_version.txt)
+        (cfg_dir / "customer_id").write_text("9998887776\n", encoding="utf-8")
+        (cfg_dir / "api_version.txt").write_text("v24\n", encoding="utf-8")
+
+        # 1. Before assistant_config exists, getters should resolve from v4.0.0 files
+        assert cfg_init.get_configured_customer_id(config_dir=str(cfg_dir)) == "9998887776"
+        assert cfg_init.get_configured_api_version(config_dir=str(cfg_dir)) == "v24"
+
+        # 2. Even if assistant_config is seeded with the default 12345678 placeholder,
+        # legacy customer_id != 12345678 must not be shadowed
+        (cfg_dir / "assistant_config").write_text(
+            'api_version = "v25"\ncustomer_id = "12345678"\nexecute_mutates = false\n',
+            encoding="utf-8",
+        )
+        assert cfg_init.get_configured_customer_id(config_dir=str(cfg_dir)) == "9998887776"
+
+        # 3. Calling write_assistant_config migrates the legacy customer_id into assistant_config
+        cfg_init.write_assistant_config({"api_version": "v25"}, config_dir=str(cfg_dir))
+        parsed = cfg_init.read_assistant_config(config_dir=str(cfg_dir))
+        assert parsed["customer_id"] == "9998887776"
+        assert parsed["api_version"] == "v25"
+
 
 class TestAdditionalSkillCoverage:
     """Tests for edge cases in validate_gaql, sync_client_libs, and troubleshoot_conversions."""

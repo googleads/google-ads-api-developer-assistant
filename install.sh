@@ -394,6 +394,18 @@ detect_and_seed_api_version() {
           exec_mutates="${existing_em}"
         fi
       fi
+      if [[ "${cid}" == "12345678" ]]; then
+        for legacy_file in "${target_config_dir}/customer_id" "${target_config_dir}/customer_id.txt" "${PROJECT_DIR_ABS}/config/customer_id" "${PROJECT_DIR_ABS}/config/customer_id.txt"; do
+          if [[ -f "${legacy_file}" ]]; then
+            local legacy_cid=""
+            legacy_cid=$(head -n 1 "${legacy_file}" 2>/dev/null | sed -E 's/^[[:space:]"'\'']+|[[:space:]"'\'']+$//g' || true)
+            if [[ -n "${legacy_cid}" && "${legacy_cid}" != "12345678" ]]; then
+              cid="${legacy_cid}"
+              break
+            fi
+          fi
+        done
+      fi
       cat <<EOF > "${cfg_file}"
 api_version = "v${latest_v}"
 customer_id = "${cid}"

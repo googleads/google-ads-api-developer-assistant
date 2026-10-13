@@ -1,8 +1,47 @@
-# Google Ads API Developer Assistant v4.0.0
+# Google Ads API Developer Assistant v4.1.0
 
-v4.0.0 is a major release of the Google Ads API Developer Assistant transitioning to multi-platform plugin support for both **Antigravity** (`agy`) and **Claude Code** (`claude`).
+v4.1.0 is the latest release of the Google Ads API Developer Assistant featuring multi-platform plugin support for both **Antigravity** (`agy`) and **Claude Code** (`claude`), unified TOML configuration (`config/assistant_config`), and the 4-Step HITL Mutation Verification & Consequence Disclosure Protocol.
 
-If you are upgrading from a previous version (v2.x or v3.x), follow these steps:
+## Upgrade from 4.0.0 to 4.1.0
+
+Upgrading from `v4.0.0` to `v4.1.0` is an in-place update. Your existing credentials (`~/google-ads.yaml`) and `v4.0.0` configuration files (`config/customer_id`, `config/customer_id.txt`, and `config/api_version.txt`) are preserved and automatically migrated into `config/assistant_config`.
+
+1. **Run the Update Script for Your Platform:**
+   From the root of your `google-ads-api-developer-assistant` repository, run:
+   * **Antigravity (`agy`) — Linux / macOS:**
+     ```bash
+     ./update.sh agy
+     ```
+   * **Claude Code (`claude`) — Linux / macOS:**
+     ```bash
+     ./update.sh claude
+     ```
+   * **Antigravity (`agy`) — Windows (PowerShell):**
+     ```powershell
+     .\update.ps1 -Type agy
+     ```
+   * **Claude Code (`claude`) — Windows (PowerShell):**
+     ```powershell
+     .\update.ps1 -Type claude
+     ```
+   *(Optional)* Add `--all` (or `-All` on Windows) to update all cloned client libraries at the same time, or run `./install.sh agy --link` (`.\install.ps1 -Type agy -Link` on Windows) to convert your Antigravity plugin installation into a live symlink to the repository.
+
+2. **Verify Migrated Settings in `config/assistant_config`:**
+   The update script automatically creates `config/assistant_config` (TOML), migrating any custom `customer_id` from `config/customer_id` (or `config/customer_id.txt`) and detecting the latest `api_version`:
+   ```toml
+   api_version = "v25"
+   customer_id = "1234567890"
+   execute_mutates = false
+   ```
+   *(Optional)* Once `config/assistant_config` is created, you may remove legacy `config/customer_id`, `config/customer_id.txt`, and `config/api_version.txt` files.
+
+3. **Reload Your Host Session:**
+   * **Antigravity (`agy`):** Restart your Antigravity session.
+   * **Claude Code (`claude`):** Run `/reload-plugins` in your active session or restart `claude`.
+
+---
+
+If you are upgrading from an older version (v2.x or v3.x), follow these steps:
 
 ## 1. Backup Custom Data
 Copy any custom code or saved output to a secure location outside the repository:

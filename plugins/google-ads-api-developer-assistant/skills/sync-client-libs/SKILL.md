@@ -15,17 +15,17 @@ The client library sync tool inspects each codebase under `client_libs/` (e.g., 
 
 ### Check / Dry-Run (No modifications)
 ```bash
-python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/sync-client-libs/scripts/sync_client_libs.py" --check_only
+python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/sync-client-libs/scripts/sync_client_libs.py" --check_only
 ```
 
 ### Automated Update
 ```bash
-python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/sync-client-libs/scripts/sync_client_libs.py"
+python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/sync-client-libs/scripts/sync_client_libs.py"
 ```
 
 ### Output Structured JSON
 ```bash
-python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/sync-client-libs/scripts/sync_client_libs.py" --json
+python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/sync-client-libs/scripts/sync_client_libs.py" --json
 ```
 
 ### Options Reference

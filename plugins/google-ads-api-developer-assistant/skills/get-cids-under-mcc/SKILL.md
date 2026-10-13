@@ -15,17 +15,17 @@ Use this skill to retrieve the hierarchy of child accounts under a Google Ads Ma
 
     * **To get a summary count only:**
         ```bash
-        python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id> --api_version <api_version>
+        python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id> --api_version <api_version>
         ```
 
     * **To print the detailed list to console:**
         ```bash
-        python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id> --api_version <api_version> --print_cids
+        python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id> --api_version <api_version> --print_cids
         ```
 
-    * **To save the list to a CSV file (saved in `~/saved/data/`):**
+    * **To save the list to a CSV file (saved in `saved/data/`):**
         ```bash
-        python3 "${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id> --api_version <api_version> --save_csv
+        python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id> --api_version <api_version> --save_csv
         ```
 
 3. **Output Processing:**

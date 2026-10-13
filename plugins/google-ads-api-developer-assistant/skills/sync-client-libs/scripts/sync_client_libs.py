@@ -100,6 +100,10 @@ def discover_client_libs_dir(explicit_path: Optional[str] = None) -> str:
         # Relative to project root
         os.path.abspath("plugins/google-ads-api-developer-assistant/client_libs"),
         os.path.abspath("client_libs"),
+        # Global plugin installation directory
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs"
+        ),
     ]
 
     for candidate in candidates:
@@ -658,6 +662,8 @@ def process_client_libs(
     include_assistant: bool = True,
 ) -> list[dict[str, Any]]:
     """Discovers, verifies, and updates all codebases in client_libs_dir and the assistant."""
+    import concurrent.futures
+
     results: list[dict[str, Any]] = []
 
     # 1. Check Assistant repository if enabled and not filtering for a specific client lib
@@ -670,17 +676,40 @@ def process_client_libs(
         return results
 
     entries = sorted(os.listdir(client_libs_dir))
+    valid_libs: list[tuple[str, str, str]] = []
     for entry in entries:
         lib_path = os.path.join(client_libs_dir, entry)
         if not os.path.isdir(lib_path):
             continue
-
         if target_library and entry != target_library:
             continue
-
         repo_slug = get_repo_slug(entry, lib_path)
+        valid_libs.append((entry, lib_path, repo_slug))
+
+    # Prefetch GitHub release metadata concurrently when multiple libraries are checked
+    prefetched_releases: dict[str, tuple[Optional[str], Optional[str]]] = {}
+    if len(valid_libs) > 1:
+        unique_slugs = list(dict.fromkeys(slug for _, _, slug in valid_libs))
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(6, len(unique_slugs))
+        ) as executor:
+            future_to_slug = {
+                executor.submit(fetch_github_latest_release, slug): slug
+                for slug in unique_slugs
+            }
+            for future in concurrent.futures.as_completed(future_to_slug):
+                slug = future_to_slug[future]
+                try:
+                    prefetched_releases[slug] = future.result()
+                except Exception:
+                    prefetched_releases[slug] = (None, None)
+
+    for entry, lib_path, repo_slug in valid_libs:
         installed_version = detect_installed_version(entry, lib_path)
-        github_tag, tarball_url = fetch_github_latest_release(repo_slug)
+        if repo_slug in prefetched_releases:
+            github_tag, tarball_url = prefetched_releases[repo_slug]
+        else:
+            github_tag, tarball_url = fetch_github_latest_release(repo_slug)
         github_version = github_tag.lstrip("v") if github_tag else None
 
         needs_update = is_update_needed(installed_version, github_version) or force

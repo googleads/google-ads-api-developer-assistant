@@ -116,6 +116,23 @@ function Set-LatestApiVersion {
                     $ExecMutates = $Matches[1].ToLower()
                 }
             }
+            if ($Cid -eq "12345678") {
+                $LegacyCandidates = @(
+                    (Join-Path $TargetConfigDir "customer_id"),
+                    (Join-Path $TargetConfigDir "customer_id.txt"),
+                    (Join-Path (Join-Path $ProjectDirAbs "config") "customer_id"),
+                    (Join-Path (Join-Path $ProjectDirAbs "config") "customer_id.txt")
+                )
+                foreach ($LegacyFile in $LegacyCandidates) {
+                    if ($LegacyFile -and (Test-Path -LiteralPath $LegacyFile)) {
+                        $LegacyCid = (Get-Content -LiteralPath $LegacyFile -Raw).Trim().Trim("`"'")
+                        if ($LegacyCid -and $LegacyCid -ne "12345678") {
+                            $Cid = $LegacyCid
+                            break
+                        }
+                    }
+                }
+            }
             $TomlContent = "api_version = `"$Latest`"`ncustomer_id = `"$Cid`"`nexecute_mutates = $ExecMutates`n"
             Set-Content -Path $CfgFile -Value $TomlContent -NoNewline
             Write-Host "Configured API version $Latest in $CfgFile"
@@ -152,7 +169,7 @@ $TempConfigDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::New
 New-Item -ItemType Directory -Force -Path $TempConfigDir | Out-Null
 
 try {
-    $CfgFiles = @("assistant_config")
+    $CfgFiles = @("assistant_config", "customer_id", "customer_id.txt")
     foreach ($CfgFile in $CfgFiles) {
         $SrcCfg = Join-Path $ConfigDir $CfgFile
         if (Test-Path -LiteralPath $SrcCfg) {
@@ -277,7 +294,19 @@ Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $Pr
 # --- Antigravity Specific Sync ---
 if ($Type.ToLower() -eq "agy") {
     $ParentPluginDir = Split-Path $AgyPluginTargetDir
-    if (-not (Test-Path -LiteralPath $AgyPluginTargetDir)) {
+    $IsSymlink = $false
+    if (Test-Path -LiteralPath $AgyPluginTargetDir) {
+        $TargetItem = Get-Item -LiteralPath $AgyPluginTargetDir -Force
+        if (($TargetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $TargetItem.LinkType) {
+            $IsSymlink = $true
+        }
+    }
+
+    if ($IsSymlink) {
+        Write-Host "Antigravity plugin directory at $AgyPluginTargetDir is a symlink to this repository."
+        Write-Host "Repository updates apply directly to the plugin without copying."
+    }
+    elseif (-not (Test-Path -LiteralPath $AgyPluginTargetDir)) {
         Write-Host "Plugin not yet installed at $AgyPluginTargetDir. Installing for agy..."
         if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
             New-Item -ItemType Directory -Force -Path $ParentPluginDir | Out-Null
@@ -298,7 +327,7 @@ if ($Type.ToLower() -eq "agy") {
         New-Item -ItemType Directory -Force -Path $TargetClientLibs | Out-Null
     }
 
-    if (Test-Path -LiteralPath $PluginSourceClientLibs) {
+    if ((-not $IsSymlink) -and (Test-Path -LiteralPath $PluginSourceClientLibs)) {
         foreach ($LibDir in Get-ChildItem -LiteralPath $PluginSourceClientLibs -Directory) {
             $TargetLibPath = Join-Path $TargetClientLibs $LibDir.Name
             if (-not (Test-Path -LiteralPath $TargetLibPath)) {
