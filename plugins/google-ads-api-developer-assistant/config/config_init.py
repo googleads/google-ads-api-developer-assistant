@@ -1520,18 +1520,17 @@ def handle_hook() -> None:
             args = {}
         cmd = args.get("CommandLine") or args.get("command") or ""
 
+        is_claude = "tool_input" in input_data or bool(os.environ.get("CLAUDE_CODE"))
         decision, reason = evaluate_mutation_guard(cmd, hook_context=input_data)
         if decision == "deny":
-            print(
-                json.dumps(
-                    {
-                        "decision": "deny",
-                        "permissionDecision": "deny",
-                        "reason": reason,
-                        "permissionDecisionReason": reason,
-                    }
-                )
-            )
+            deny_payload: Dict[str, Any] = {
+                "decision": "deny",
+                "reason": reason,
+            }
+            if is_claude:
+                deny_payload["permissionDecision"] = "deny"
+                deny_payload["permissionDecisionReason"] = reason
+            print(json.dumps(deny_payload))
             return
 
         needs_interception = any(
@@ -1627,10 +1626,12 @@ def handle_hook() -> None:
 
         response_payload: Dict[str, Any] = {"decision": decision}
         if decision == "force_ask":
-            response_payload["permissionDecision"] = "ask"
+            if is_claude:
+                response_payload["permissionDecision"] = "ask"
+                if reason:
+                    response_payload["permissionDecisionReason"] = reason
             if reason:
                 response_payload["reason"] = reason
-                response_payload["permissionDecisionReason"] = reason
         if overwrite:
             response_payload["overwrite"] = overwrite
 

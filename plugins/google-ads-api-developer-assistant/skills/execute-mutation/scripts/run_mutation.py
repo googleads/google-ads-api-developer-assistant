@@ -624,6 +624,19 @@ def _run_target_script_with_interception(
         except Exception:
             expected_hashes = []
 
+    script_dir = os.path.dirname(os.path.abspath(script_path))
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+
+    for p in list(sys.path):
+        if p and os.path.isdir(os.path.join(p, "google")):
+            current_paths = getattr(sys.modules.get("google"), "__path__", [])
+            if p not in current_paths:
+                for m in list(sys.modules.keys()):
+                    if m == "google" or m.startswith("google."):
+                        sys.modules.pop(m, None)
+            break
+
     try:
         from google.ads.googleads.client import GoogleAdsClient
 
@@ -643,10 +656,6 @@ def _run_target_script_with_interception(
         GoogleAdsClient.get_service = _hooked_get_service  # type: ignore[method-assign]
     except Exception:
         pass
-
-    script_dir = os.path.dirname(os.path.abspath(script_path))
-    if script_dir not in sys.path:
-        sys.path.insert(0, script_dir)
 
     sys.argv = [script_path, *script_args]
     try:

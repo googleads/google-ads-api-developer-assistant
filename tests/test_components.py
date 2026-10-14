@@ -717,6 +717,20 @@ class TestSidecarA2A:
         assert args[0] == 200
         assert args[1]["status"] == "healthy"
 
+    def test_get_plugin_version_fallback_and_env_override(self, monkeypatch):
+        monkeypatch.setattr(server, "_CACHED_PLUGIN_VERSION", None)
+        monkeypatch.setenv("GOOGLE_ADS_PLUGIN_VERSION", "9.9.9-custom")
+        assert server.get_plugin_version() == "9.9.9-custom"
+
+        monkeypatch.setattr(server, "_CACHED_PLUGIN_VERSION", None)
+        monkeypatch.delenv("GOOGLE_ADS_PLUGIN_VERSION", raising=False)
+        monkeypatch.delenv("GOOGLE_ADS_ASSISTANT_VERSION", raising=False)
+        with patch("os.path.isfile", return_value=False), patch(
+            "config.config_init.get_version", return_value="Unknown"
+        ):
+            assert server.get_plugin_version() == server.UNKNOWN_PLUGIN_VERSION
+            assert server.get_plugin_version() == "Unknown"
+
     def test_sidecar_unsupported_intent(self):
         handler = server.A2AHandler.__new__(server.A2AHandler)
         handler.headers = {"Content-Length": "50"}

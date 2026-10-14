@@ -143,28 +143,74 @@ def get_effective_api_version(payload: dict = None) -> str:
     )
 
 
-_CACHED_PLUGIN_VERSION = None
+_CACHED_PLUGIN_VERSION: str | None = None
+UNKNOWN_PLUGIN_VERSION = "Unknown"
+_VERSION_MANIFEST_FILES = ("plugin.json", "agent.json")
 
 
 def get_plugin_version() -> str:
-    """Dynamically resolves the assistant/plugin version from plugin.json."""
+    """Dynamically resolves the assistant/plugin version from environment, manifests, or config_init.
+
+    Resolution hierarchy:
+    1. In-memory cache (_CACHED_PLUGIN_VERSION).
+    2. Environment variable override (GOOGLE_ADS_PLUGIN_VERSION / GOOGLE_ADS_ASSISTANT_VERSION).
+    3. Ancestor and global plugin manifests (plugin.json, agent.json).
+    4. Shared config_init.get_version() helper.
+    5. Fallback constant UNKNOWN_PLUGIN_VERSION ('Unknown').
+    """
     global _CACHED_PLUGIN_VERSION
     if _CACHED_PLUGIN_VERSION is not None:
         return _CACHED_PLUGIN_VERSION
-    try:
-        cur = os.path.dirname(os.path.abspath(__file__))
-        while cur and cur != os.path.dirname(cur):
-            candidate = os.path.join(cur, "plugin.json")
+
+    env_ver = (
+        os.environ.get("GOOGLE_ADS_PLUGIN_VERSION")
+        or os.environ.get("GOOGLE_ADS_ASSISTANT_VERSION")
+        or ""
+    ).strip()
+    if env_ver:
+        _CACHED_PLUGIN_VERSION = env_ver
+        return _CACHED_PLUGIN_VERSION
+
+    candidate_dirs: list[str] = []
+    cur = os.path.dirname(os.path.abspath(__file__))
+    while cur and cur != os.path.dirname(cur):
+        candidate_dirs.append(cur)
+        cur = os.path.dirname(cur)
+
+    for env_root_key in ("CLAUDE_PLUGIN_ROOT", "GOOGLE_ADS_ASSISTANT_DIR"):
+        env_root = os.environ.get(env_root_key, "").strip()
+        if env_root:
+            candidate_dirs.append(os.path.abspath(env_root))
+
+    candidate_dirs.append(
+        os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant")
+    )
+
+    for directory in candidate_dirs:
+        for manifest_name in _VERSION_MANIFEST_FILES:
+            candidate = os.path.join(directory, manifest_name)
             if os.path.isfile(candidate):
-                with open(candidate, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if "version" in data:
-                        _CACHED_PLUGIN_VERSION = str(data["version"])
+                try:
+                    with open(candidate, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    ver = str(data.get("version", "")).strip()
+                    if ver:
+                        _CACHED_PLUGIN_VERSION = ver
                         return _CACHED_PLUGIN_VERSION
-            cur = os.path.dirname(cur)
+                except Exception:
+                    continue
+
+    try:
+        from config.config_init import get_version
+
+        resolved = get_version()
+        if resolved and resolved != UNKNOWN_PLUGIN_VERSION:
+            _CACHED_PLUGIN_VERSION = resolved
+            return _CACHED_PLUGIN_VERSION
     except Exception:
         pass
-    return "4.1.0"
+
+    return UNKNOWN_PLUGIN_VERSION
 
 
 class A2AHandler(BaseHTTPRequestHandler):
