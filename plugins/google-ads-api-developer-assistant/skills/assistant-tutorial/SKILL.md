@@ -13,9 +13,10 @@ description: An interactive tutorial on how to use the Google Ads API Developer 
 When a user invokes `/assistant-tutorial` or requests this tutorial:
 1. **NO MD SYNOPSIS FILES:** You MUST NOT write any markdown files or artifacts summarizing the tutorial.
 2. **ALWAYS INTERACTIVE:** You MUST run this tutorial as an interactive, conversational experience.
-3. **TOPIC SELECTION:** Start by asking the user which specific topic they want to learn about first using an interactive question or message.
+3. **TOPIC SELECTION:** Start by asking the user which specific topic they want to learn about first using an interactive question or message. Do NOT recommend a specific topic or pre-select an option with "(Recommended)".
 4. **PROGRESSIVE DISCLOSURE:** Present information in small, manageable pieces. Ask checking questions or prompt the user to proceed before moving on to the next step.
-5. **EXPLAIN ANSWER OPTION:** Whenever you pose an interactive check question or quiz to the user, include a choice/option that allows them to ask the Assistant to answer and explain the answer.
+5. **NEVER RECOMMEND AN ANSWER:** When presenting checking questions, quizzes, or multiple-choice questions to the user during the tutorial, you MUST NOT recommend an answer, hint at or reveal the correct option in advance, or mark any option with "(Recommended)". Present all choices completely neutrally so the user can test their knowledge independently.
+6. **EXPLAIN ANSWER OPTION:** Whenever you pose an interactive check question or quiz to the user, include a neutral choice/option that allows them to ask the Assistant to reveal and explain the answer.
 
 ---
 

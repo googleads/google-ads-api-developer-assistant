@@ -33,4 +33,5 @@ Launches an interactive, conversational guide explaining the principles, workflo
 
 3. **Check Questions & Explanations**:
    - After explaining a topic, prompt the user to continue or quiz their understanding.
+   - Do NOT recommend an answer, hint at the solution, or mark any choice with `(Recommended)` when presenting check questions or quizzes; present all choices neutrally so the user can answer independently.
    - Always allow the user to request an explanation if needed.
