@@ -293,6 +293,78 @@ def parse_properties_config(path: str) -> Dict[str, str]:
     return data
 
 
+def parse_dotnet_config(path: str) -> Dict[str, str]:
+    """Parses a .NET config file (App.config XML or appsettings.json) for Google Ads."""
+    data: Dict[str, str] = {}
+    mapping = {
+        "developertoken": "developer_token",
+        "oauth2clientid": "client_id",
+        "clientid": "client_id",
+        "oauth2clientsecret": "client_secret",
+        "clientsecret": "client_secret",
+        "oauth2refreshtoken": "refresh_token",
+        "refreshtoken": "refresh_token",
+        "logincustomerid": "login_customer_id",
+        "oauth2secretsjsonpath": "json_key_file_path",
+        "jsonkeyfilepath": "json_key_file_path",
+        "oauth2prnemail": "impersonated_email",
+        "impersonatedemail": "impersonated_email",
+    }
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        stripped = content.lstrip()
+        # 1. Try JSON format (appsettings.json)
+        if stripped.startswith("{"):
+            try:
+                parsed_json = json.loads(content)
+                if isinstance(parsed_json, dict):
+                    sections = [parsed_json]
+                    for sec_key in ("GoogleAdsApi", "GoogleAds", "googleAdsApi"):
+                        if isinstance(parsed_json.get(sec_key), dict):
+                            sections.insert(0, parsed_json[sec_key])
+                    for section in sections:
+                        for k, v in section.items():
+                            norm_k = str(k).strip().lower()
+                            if norm_k in mapping and v is not None and not isinstance(v, (dict, list)):
+                                data[mapping[norm_k]] = str(v).strip()
+                    if data:
+                        return data
+            except Exception:
+                pass
+
+        # 2. Try XML format (App.config / Web.config <add key="..." value="..." />)
+        add_tag_pattern = re.compile(
+            r"<add\b[^>]*?\bkey\s*=\s*(['\"])(.*?)\1[^>]*?\bvalue\s*=\s*(['\"])(.*?)\3"
+            r"|<add\b[^>]*?\bvalue\s*=\s*(['\"])(.*?)\5[^>]*?\bkey\s*=\s*(['\"])(.*?)\7",
+            re.IGNORECASE | re.DOTALL,
+        )
+        for match in add_tag_pattern.finditer(content):
+            if match.group(2) is not None:
+                raw_k, raw_v = match.group(2), match.group(4)
+            else:
+                raw_k, raw_v = match.group(8), match.group(6)
+            norm_k = raw_k.strip().lower()
+            if norm_k in mapping:
+                data[mapping[norm_k]] = raw_v.strip()
+
+        # 3. Fallback to key: value / key = value lines if not XML/JSON
+        if not data:
+            for raw_line in content.splitlines():
+                line = raw_line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                kv_match = re.match(r"^([A-Za-z0-9_.]+)\s*[:=]\s*(.+)$", line)
+                if kv_match:
+                    norm_k = kv_match.group(1).strip().split(".")[-1].lower()
+                    if norm_k in mapping:
+                        data[mapping[norm_k]] = kv_match.group(2).strip(" \"'\n")
+    except Exception as e:
+        print(f"Error parsing .NET config: {e}", file=sys.stderr)
+    return data
+
+
 def copy_and_append_version(
     home_config: str,
     target_config: str,
@@ -347,6 +419,46 @@ def copy_and_append_version(
             else:
                 separator = "" if content.endswith("\n") else "\n"
                 new_content = f"{content}{separator}{line}\n"
+        elif lang in ("DotNet", ".NET"):
+            stripped = content.lstrip()
+            if stripped.startswith("{"):
+                try:
+                    parsed_json = json.loads(content)
+                    if isinstance(parsed_json, dict):
+                        if isinstance(parsed_json.get("GoogleAdsApi"), dict):
+                            parsed_json["GoogleAdsApi"]["ads_assistant"] = version
+                        else:
+                            parsed_json["ads_assistant"] = version
+                        new_content = json.dumps(parsed_json, indent=2) + "\n"
+                    else:
+                        new_content = content
+                except Exception:
+                    separator = "" if content.endswith("\n") else "\n"
+                    new_content = f"{content}{separator}ads_assistant: {version}\n"
+            elif "<" in content:
+                xml_key_pattern = r'(<add\b[^>]*?\bkey\s*=\s*[\'"]ads_assistant[\'"][^>]*?\bvalue\s*=\s*[\'"])(.*?)([\'"])'
+                if re.search(xml_key_pattern, content, flags=re.IGNORECASE):
+                    new_content = re.sub(
+                        xml_key_pattern,
+                        rf"\g<1>{version}\g<3>",
+                        content,
+                        flags=re.IGNORECASE,
+                    )
+                else:
+                    xml_entry = f'    <add key="ads_assistant" value="{version}"/>\n'
+                    closing_tag_match = re.search(
+                        r"(?i)(</(?:GoogleAdsApi|appSettings|configuration)>)",
+                        content,
+                    )
+                    if closing_tag_match:
+                        idx = closing_tag_match.start(1)
+                        new_content = content[:idx] + xml_entry + content[idx:]
+                    else:
+                        separator = "" if content.endswith("\n") else "\n"
+                        new_content = f"{content}{separator}{xml_entry}"
+            else:
+                separator = "" if content.endswith("\n") else "\n"
+                new_content = f"{content}{separator}ads_assistant: {version}\n"
         else:
             separator = "" if content.endswith("\n") else "\n"
             new_content = f"{content}{separator}ads_assistant: {version}\n"
@@ -373,7 +485,7 @@ def sync_and_set_config_kv(
     """Copies ~/google-ads.yaml to config/google-ads.yaml and ensures key: value is set.
 
     Preserves existing comments and YAML formatting. Appends the extension version
-    using copy_and_append_version. Falls back to PHP, Ruby, or Java configuration
+    using copy_and_append_version. Falls back to PHP, Ruby, Java, or .NET configuration
     files if source_yaml is not found.
     """
     if not config_dir:
@@ -393,9 +505,33 @@ def sync_and_set_config_kv(
     target_yaml = os.path.join(config_dir, "google-ads.yaml")
     src = os.path.expanduser(source_yaml)
 
-    # 1. Read source YAML and construct own copy in config directory
+    # 1. Read source config and construct own copy in config directory
     if os.path.isfile(src):
-        copy_and_append_version(src, target_yaml, version=version, lang="YAML")
+        src_base = os.path.basename(src).lower()
+        if src_base.endswith(".ini"):
+            copy_and_append_version(
+                src, os.path.join(config_dir, os.path.basename(src)), version=version, lang="PHP"
+            )
+            write_yaml_config(parse_ini_config(src), target_path=target_yaml, version=version)
+        elif src_base.endswith(".rb"):
+            copy_and_append_version(
+                src, os.path.join(config_dir, os.path.basename(src)), version=version, lang="Ruby"
+            )
+            write_yaml_config(parse_ruby_config(src), target_path=target_yaml, version=version)
+        elif src_base.endswith(".properties"):
+            copy_and_append_version(
+                src, os.path.join(config_dir, os.path.basename(src)), version=version, lang="Java"
+            )
+            write_yaml_config(parse_properties_config(src), target_path=target_yaml, version=version)
+        elif src_base in ("app.config", "web.config", "appsettings.json") or src_base.endswith(
+            (".config", ".xml", ".json")
+        ):
+            copy_and_append_version(
+                src, os.path.join(config_dir, os.path.basename(src)), version=version, lang="DotNet"
+            )
+            write_yaml_config(parse_dotnet_config(src), target_path=target_yaml, version=version)
+        else:
+            copy_and_append_version(src, target_yaml, version=version, lang="YAML")
     elif not os.path.isfile(target_yaml):
         # Try fallbacks from the same directory as source_yaml
         home_dir = os.path.dirname(src)
@@ -403,6 +539,8 @@ def sync_and_set_config_kv(
             ("PHP", "google_ads_php.ini", parse_ini_config),
             ("Ruby", "google_ads_config.rb", parse_ruby_config),
             ("Java", "ads.properties", parse_properties_config),
+            ("DotNet", "App.config", parse_dotnet_config),
+            ("DotNet", "appsettings.json", parse_dotnet_config),
         ]
         found_fallback = False
         for lang_name, filename, parser in fallbacks:

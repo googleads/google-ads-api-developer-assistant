@@ -916,6 +916,56 @@ class TestSidecarA2A:
         assert data["refresh_token"] == "java_refresh_token"
         assert data["login_customer_id"] == "9988776655"
 
+    def test_parse_dotnet_config_app_config(self, tmp_path):
+        from config.config_init import parse_dotnet_config
+
+        app_cfg = tmp_path / "App.config"
+        app_cfg.write_text(
+            "<configuration>\n"
+            "  <GoogleAdsApi>\n"
+            '    <add key="DeveloperToken" value="dotnet_dev_token"/>\n'
+            '    <add key="OAuth2ClientId" value="dotnet_client_id"/>\n'
+            '    <add key="OAuth2ClientSecret" value="dotnet_client_secret"/>\n'
+            '    <add key="OAuth2RefreshToken" value="dotnet_refresh_token"/>\n'
+            '    <add key="LoginCustomerId" value="1231231234"/>\n'
+            "  </GoogleAdsApi>\n"
+            "</configuration>\n"
+        )
+        data = parse_dotnet_config(str(app_cfg))
+        assert data["developer_token"] == "dotnet_dev_token"
+        assert data["client_id"] == "dotnet_client_id"
+        assert data["client_secret"] == "dotnet_client_secret"
+        assert data["refresh_token"] == "dotnet_refresh_token"
+        assert data["login_customer_id"] == "1231231234"
+
+    def test_parse_dotnet_config_appsettings_json(self, tmp_path):
+        from config.config_init import parse_dotnet_config
+
+        json_cfg = tmp_path / "appsettings.json"
+        json_cfg.write_text(
+            json.dumps(
+                {
+                    "GoogleAdsApi": {
+                        "DeveloperToken": "json_dev_token",
+                        "OAuth2ClientId": "json_client_id",
+                        "OAuth2ClientSecret": "json_client_secret",
+                        "OAuth2RefreshToken": "json_refresh_token",
+                        "LoginCustomerId": "4321432143",
+                        "OAuth2SecretsJsonPath": "/path/to/sa.json",
+                        "OAuth2PrnEmail": "impersonated@example.com",
+                    }
+                }
+            )
+        )
+        data = parse_dotnet_config(str(json_cfg))
+        assert data["developer_token"] == "json_dev_token"
+        assert data["client_id"] == "json_client_id"
+        assert data["client_secret"] == "json_client_secret"
+        assert data["refresh_token"] == "json_refresh_token"
+        assert data["login_customer_id"] == "4321432143"
+        assert data["json_key_file_path"] == "/path/to/sa.json"
+        assert data["impersonated_email"] == "impersonated@example.com"
+
     def test_copy_and_append_version(self, tmp_path):
         from config.config_init import copy_and_append_version
 
@@ -931,6 +981,26 @@ class TestSidecarA2A:
         assert 'ads_assistant = "1.2.3"' in content
         if sys.platform != "win32":
             assert oct(os.stat(str(dst)).st_mode & 0o777) == "0o600"
+
+    def test_copy_and_append_version_dotnet(self, tmp_path):
+        from config.config_init import copy_and_append_version
+
+        src_xml = tmp_path / "App.config"
+        src_xml.write_text(
+            "<configuration>\n  <GoogleAdsApi>\n"
+            '    <add key="DeveloperToken" value="tok"/>\n'
+            "  </GoogleAdsApi>\n</configuration>\n"
+        )
+        dst_xml = tmp_path / "copied_App.config"
+        assert copy_and_append_version(str(src_xml), str(dst_xml), version="4.1.0", lang="DotNet")
+        assert '<add key="ads_assistant" value="4.1.0"/>' in dst_xml.read_text()
+
+        src_json = tmp_path / "appsettings.json"
+        src_json.write_text('{"GoogleAdsApi": {"DeveloperToken": "tok"}}\n')
+        dst_json = tmp_path / "copied_appsettings.json"
+        assert copy_and_append_version(str(src_json), str(dst_json), version="4.1.0", lang="DotNet")
+        parsed_json = json.loads(dst_json.read_text())
+        assert parsed_json["GoogleAdsApi"]["ads_assistant"] == "4.1.0"
 
     def test_sync_and_set_config_kv_fallback_php(self, tmp_path):
         from config.config_init import sync_and_set_config_kv
@@ -957,6 +1027,35 @@ class TestSidecarA2A:
         assert "developer_token: fallback_token" in content
         assert "client_id: fallback_cid" in content
         assert "ads_assistant:" in content
+
+    def test_sync_and_set_config_kv_fallback_dotnet(self, tmp_path):
+        from config.config_init import sync_and_set_config_kv
+
+        # No source.yaml, but App.config exists in home_dir
+        home_dir = tmp_path / "home_dotnet"
+        home_dir.mkdir()
+        dotnet_file = home_dir / "App.config"
+        dotnet_file.write_text(
+            "<configuration>\n  <GoogleAdsApi>\n"
+            '    <add key="DeveloperToken" value="dotnet_fallback_tok"/>\n'
+            '    <add key="OAuth2ClientId" value="dotnet_fallback_cid"/>\n'
+            '    <add key="OAuth2ClientSecret" value="dotnet_fallback_sec"/>\n'
+            '    <add key="OAuth2RefreshToken" value="dotnet_fallback_ref"/>\n'
+            "  </GoogleAdsApi>\n</configuration>\n"
+        )
+        dest_dir = tmp_path / "config_dotnet"
+
+        res_path = sync_and_set_config_kv(
+            source_yaml=str(home_dir / "google-ads.yaml"),
+            config_dir=str(dest_dir),
+        )
+
+        assert os.path.isfile(res_path)
+        content = open(res_path).read()
+        assert "developer_token: dotnet_fallback_tok" in content
+        assert "client_id: dotnet_fallback_cid" in content
+        assert "ads_assistant:" in content
+        assert (dest_dir / "App.config").is_file()
 
     def test_sync_and_set_config_kv_reconstructs_from_home_on_new_session(self, tmp_path):
         from config.config_init import sync_and_set_config_kv
