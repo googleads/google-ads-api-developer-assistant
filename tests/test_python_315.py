@@ -23,7 +23,6 @@ Python 3.15.0, including:
 5. A2A service sidecar capabilities and dynamic version discovery under Python 3.15.0.
 """
 
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -51,9 +50,8 @@ class TestPython315Runtime:
         # In Python 3.15 / setuptools 84+, pkg_resources is absent from standard environments
         try:
             import pkg_resources  # noqa: F401
-            has_pkg_resources = True
         except ModuleNotFoundError:
-            has_pkg_resources = False
+            pass
 
         # Verify that inspect_object does not import pkg_resources
         sys.path.insert(0, str(SKILLS_DIR / "inspect-object" / "scripts"))
