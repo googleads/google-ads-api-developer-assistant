@@ -170,7 +170,7 @@ function Test-PythonEnvironment {
         $CmdInfo = Get-Command $Cmd -ErrorAction SilentlyContinue
         if ($CmdInfo) {
             try {
-                $VerOutput = & $Cmd -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"); sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
+                $VerOutput = & $Cmd -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"); sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>$null
                 if ($LASTEXITCODE -eq 0) {
                     Write-Host "Found Python $VerOutput ($($CmdInfo.Source))"
                     return $true
@@ -184,14 +184,14 @@ function Test-PythonEnvironment {
         }
     }
 
-    Write-Error "ERROR: Python 3.10 or higher is required."
+    Write-Error "ERROR: Python 3.11 or higher is required."
     if ($FoundVersion) {
         Write-Error "Incompatible Python version detected: $FoundVersion ($FoundPath)."
     }
     else {
         Write-Error "No Python interpreter was found on PATH."
     }
-    Write-Error "Please install Python 3.10 or later and ensure it is available in your PATH."
+    Write-Error "Please install Python 3.11 or later and ensure it is available in your PATH."
     Write-Error "Visit https://www.python.org/downloads/ for installation instructions."
     return $false
 }

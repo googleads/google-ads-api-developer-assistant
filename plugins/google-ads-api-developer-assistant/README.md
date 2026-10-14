@@ -2,7 +2,7 @@
 
 [![Plugin Version](https://img.shields.io/badge/version-4.1.0-blue.svg)](plugin.json)
 [![Target Runtimes](https://img.shields.io/badge/runtimes-Antigravity%20%7C%20Claude%20Desktop%20%7C%20Claude%20Code-brightgreen.svg)](plugin.json)
-[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](rules/google_ads_rules.md)
+[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](rules/google_ads_rules.md)
 
 An agentic developer assistant plugin for the **Google Ads API**. This plugin equips AI assistants in **Antigravity (agy)**, **Claude Desktop**, and **Claude Code CLI** with deep domain intelligence, executable diagnostic tools, static analysis pipelines, Protobuf object inspectors, conversion validators, and strict HITL API mutation guardrails.
 
@@ -194,7 +194,7 @@ All write/mutation requests follow a strict two-gate defense-in-depth architectu
 
 ### 1. Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - Install required Python packages:
   ```bash
   pip install google-ads ruff pytest

@@ -112,7 +112,7 @@ By default, Python is strictly used for all code generation and execution across
 3.  A configured credentials file in your home directory if using Python (`google-ads.yaml`), PHP (`google_ads_php.ini`), or Ruby (`google_ads_config.rb`).
 4.  Antigravity or Claude Code environment configured.
 5.  A local clone of each client library for the languages you want to use. `install.sh` (Linux/macOS) or `install.ps1` (Windows) can set this up for you.
-6.  Python >= 3.10 installed and available on your system PATH. This is required for executing the default generated Python code directly.
+6.  Python >= 3.11 installed and available on your system PATH. This is required for executing the default generated Python code directly.
 
 ## Setup
 

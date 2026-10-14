@@ -155,7 +155,7 @@ In Claude Code, use dedicated explanation slash commands:
 ## Troubleshooting & Prerequisites
 
 ### What are the system requirements?
-1. **Python:** Python >= 3.10 installed and available on your system `PATH`.
+1. **Python:** Python >= 3.11 installed and available on your system `PATH`.
 2. **Platform CLI:** Antigravity CLI (`agy` / `antigravity`) or Claude Code CLI (`claude` with Node.js >= 18).
 3. **Google Ads API Access:** A developer token and configured credentials in `$HOME`.
 

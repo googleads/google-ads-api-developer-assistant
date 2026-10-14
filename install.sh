@@ -204,7 +204,7 @@ check_python() {
   local py_cmd=""
   for cmd in python3 python; do
     if command -v "${cmd}" &>/dev/null; then
-      if "${cmd}" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' &>/dev/null; then
+      if "${cmd}" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' &>/dev/null; then
         py_cmd="${cmd}"
         break
       fi
@@ -229,13 +229,13 @@ check_python() {
     fi
   done
 
-  err "ERROR: Python 3.10 or higher is required."
+  err "ERROR: Python 3.11 or higher is required."
   if [[ -n "${found_ver}" ]]; then
     err "Incompatible Python version detected: ${found_ver}."
   else
     err "No Python interpreter was found on PATH."
   fi
-  err "Please install Python 3.10 or later and ensure it is available in your PATH."
+  err "Please install Python 3.11 or later and ensure it is available in your PATH."
   err "See: https://www.python.org/downloads/"
   return 1
 }

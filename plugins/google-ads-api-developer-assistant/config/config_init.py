@@ -763,7 +763,7 @@ def parse_assistant_config(raw_text: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 2. Line-by-line fallback parser for Python 3.10 or loose key=value syntax
+    # 2. Line-by-line fallback parser for loose key=value syntax
     if not data:
         for raw_line in raw_text.splitlines():
             line = raw_line.split("#", 1)[0].strip()

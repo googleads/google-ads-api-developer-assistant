@@ -7,10 +7,9 @@ name = "google-ads-api-developer-assistant"
 version = "4.1.0"
 description = "Antigravity and Claude Code developer assistant plugin for the Google Ads API"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -33,7 +32,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 extend-exclude = [
     "plugins/google-ads-api-developer-assistant/client_libs",
     "client_libs",

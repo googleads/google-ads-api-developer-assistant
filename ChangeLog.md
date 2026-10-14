@@ -2,6 +2,12 @@
 
 ## 4.1.0
 
+- **Python Runtime Support & Baseline Modernization (Python >= 3.11):**
+  - Removed support for Python 3.10 across the project and bumped the minimum required Python runtime to Python >= 3.11 (`requires-python = ">=3.11"` in `pyproject.toml`).
+  - Updated package classifiers in `pyproject.toml` and set Ruff linting target version to `target-version = "py311"`.
+  - Updated GitHub Actions CI test matrix (`.github/workflows/ci.yml`) to run across Python 3.11 through 3.15, dropping Python 3.10 on both Linux and Windows runners.
+  - Updated host environment runtime checks in `install.sh` and `install.ps1` to require Python >= 3.11.
+  - Updated documentation across `README.md`, `plugins/google-ads-api-developer-assistant/README.md`, and `FAQ.md` to document the minimum Python >= 3.11 requirement.
 - **Global Plugin Availability & Symlink Installation (`--link`, `GOOGLE_ADS_ASSISTANT_DIR`):**
   - Added `--link` / `--symlink` support to `install.sh` (`./install.sh agy --link`) and `-Link` support to `install.ps1` (`.\install.ps1 -Type agy -Link`) to symlink `~/.gemini/config/plugins/google-ads-api-developer-assistant` directly to `plugins/google-ads-api-developer-assistant` in the repository, and updated `update.sh` and `update.ps1` to detect and preserve symlinked plugin directories.
   - Updated `handle_hook()` in `config/config_init.py` to export `GOOGLE_ADS_ASSISTANT_DIR` and automatically rewrite relative `skills/<skill>/(scripts|references)/<file>` paths to the active plugin root when commands are invoked from workspaces outside the repository.
