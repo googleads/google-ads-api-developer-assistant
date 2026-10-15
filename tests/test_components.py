@@ -1606,5 +1606,66 @@ class TestPerformanceRegressions:
         elapsed = time.perf_counter() - start
         assert elapsed < 0.10, f"evaluate_mutation_guard() hot path regressed: {elapsed:.4f}s for 500 calls"
 
+    def test_detect_system_package_version(self, monkeypatch):
+        # Test detection via importlib.metadata
+        monkeypatch.setattr("importlib.metadata.version", lambda pkg: "25.0.0")
+        v, site_dirs = sync_client_libs.detect_system_package_version("google-ads")
+        assert v == "25.0.0"
+        assert isinstance(site_dirs, list)
+
+    def test_check_system_package_parity(self, monkeypatch):
+        monkeypatch.setattr(
+            sync_client_libs,
+            "detect_system_package_version",
+            lambda pkg: ("25.0.0", ["/fake/site-packages"]),
+        )
+        # Test match
+        res_match = sync_client_libs.check_system_package_parity(
+            package_name="google-ads", target_version="25.0.0"
+        )
+        assert res_match["matches"] is True
+        assert res_match["system_version"] == "25.0.0"
+
+        # Test mismatch
+        res_mismatch = sync_client_libs.check_system_package_parity(
+            package_name="google-ads", target_version="34.0.0"
+        )
+        assert res_mismatch["matches"] is False
+        assert res_mismatch["system_version"] == "25.0.0"
+        assert res_mismatch["target_version"] == "34.0.0"
+
+    def test_upgrade_system_package(self, monkeypatch):
+        def fake_run(cmd, **kwargs):
+            class FakeRes:
+                returncode = 0
+                stdout = "Successfully installed google-ads-34.0.0"
+            return FakeRes()
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        success = sync_client_libs.upgrade_system_package("google-ads", "34.0.0")
+        assert success is True
+
+    def test_sync_client_libs_system_version_alert(self, capsys):
+        results = [
+            {
+                "codebase": "google-ads-python",
+                "repo_slug": "googleads/google-ads-python",
+                "installed_version": "31.2.0",
+                "github_version": "34.0.0",
+                "status": "OUTDATED",
+                "updated": False,
+                "system_version": "22.0.0",
+                "system_site_dirs": ["/fake/site-packages"],
+                "system_version_matches": False,
+            }
+        ]
+        sync_client_libs.print_table(results)
+        captured = capsys.readouterr().out
+        assert "ALERT: Python system site-directory version mismatch!" in captured
+        assert "22.0.0" in captured
+        assert "34.0.0" in captured
+        assert "/fake/site-packages" in captured
+
+
 
 

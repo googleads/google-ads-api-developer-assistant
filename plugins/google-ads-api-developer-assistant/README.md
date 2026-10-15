@@ -330,13 +330,16 @@ python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py \
 
 ### Client Libraries Discovery & Upstream GitHub Sync
 
-Automatically inspect and synchronize all client libraries in `client_libs/` with latest GitHub releases:
+Automatically inspect and synchronize all client libraries in `client_libs/` with latest GitHub releases and verify system site-packages parity:
 ```bash
-# Check versions without updating (dry-run)
+# Check versions and system site-packages parity without updating (dry-run)
 python3 skills/sync-client-libs/scripts/sync_client_libs.py --check_only
 
 # Automatically sync outdated client libraries to latest GitHub releases
 python3 skills/sync-client-libs/scripts/sync_client_libs.py
+
+# Upgrade system site-packages package (google-ads) to latest release
+python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system
 
 # Output structured JSON
 python3 skills/sync-client-libs/scripts/sync_client_libs.py --json

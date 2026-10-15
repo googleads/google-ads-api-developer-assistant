@@ -2,6 +2,13 @@
 
 ## 4.1.0
 
+- **System Site-Directory Version Parity & Interactive Upgrade Protocol:**
+  - Added system site-directory package inspection (`detect_system_package_version`, `check_system_package_parity`, `upgrade_system_package`) to `skills/sync-client-libs/scripts/sync_client_libs.py` to detect `google-ads` in Python system site-packages (`site.getsitepackages()` and `importlib.metadata.version('google-ads')`).
+  - Added automatic version parity checking against latest upstream GitHub/PyPI releases in `process_client_libs` with structured metadata (`system_version`, `system_site_dirs`, `system_version_matches`) in CLI and JSON outputs (`--json`).
+  - Added prominent CLI alert reporting in `print_table` when the system site-directory version does not match the upstream release.
+  - Implemented `--upgrade_system` CLI flag in `sync_client_libs.py` to upgrade the system package via `pip` upon confirmation.
+  - Updated agent behavioral rules in `rules/google_ads_rules.md` (Section 1.0 item 2, Section 1.2, and Section 4.1), skill instructions in `skills/sync-client-libs/SKILL.md`, and Claude Code slash command in `commands/sync-client-libs.md` mandating that whenever a new version of the python client library or `google-ads` is discovered, the assistant must check the system site-directory, alert the user to any mismatch, prompt the user for confirmation to upgrade, and update it upon confirmation.
+  - Added unit test suite in `tests/test_components.py` covering system package detection, parity validation, pip upgrade execution, and alert rendering (expanding total passed tests to 129).
 - **Python Runtime Support & Baseline Modernization (Python >= 3.11):**
   - Removed support for Python 3.10 across the project and bumped the minimum required Python runtime to Python >= 3.11 (`requires-python = ">=3.11"` in `pyproject.toml`).
   - Updated package classifiers in `pyproject.toml` and set Ruff linting target version to `target-version = "py311"`.

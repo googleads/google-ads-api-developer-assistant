@@ -288,14 +288,15 @@ To update the repository, assistant plugin, and all configured client libraries 
 The Assistant relies on local client library sources (`client_libs/google-ads-python`) as the primary **source of truth** for Protobuf schemas, resource definitions, and enum descriptors, while executing queries and generated code through the installed `google-ads` Python package in your environment.
 
 To prevent silent schema discrepancies, missing fields, or descriptor errors:
-* **Automated Parity Checks:** Tool scripts (such as `inspect_object.py`) automatically compare the installed environment package version (`importlib.metadata.version('google-ads')`) against the local `client_libs/google-ads-python` version metadata (`pyproject.toml` / `ChangeLog`).
+* **Automated Parity Checks:** Tool scripts (such as `inspect_object.py` and `sync_client_libs.py`) automatically compare the installed environment package version (`importlib.metadata.version('google-ads')`) against the local `client_libs/google-ads-python` version metadata (`pyproject.toml` / `ChangeLog`) and upstream GitHub releases.
+* **System Site-Directory Parity & Upgrades:** When discovering a newer upstream release of `google-ads` or the Python client library, the sync tool automatically inspects the Python system site-packages directory (`site.getsitepackages()`). If the versions do not match, Gemini alerts you with an explicit warning and asks if you would like Gemini to upgrade the system version. Upon your confirmation, Gemini executes the upgrade (`pip install --upgrade google-ads` or `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system`).
 * **Warning Directives:** If a version mismatch is detected, the Assistant and inspection tools output an explicit warning banner:
   ```text
   WARNING: Installed google-ads package version (<installed_version>) does not match client_libs/google-ads-python version (<client_libs_version>) used for protobuf inspection. Schema inspection or API calls may encounter field discrepancies.
   ```
 * **Resolving Mismatches:**
   * Synchronize client libraries to latest: `/sync-client-libs` (or prompt *"Sync client libraries"*).
-  * Upgrade the runtime Python package: `pip install --upgrade google-ads` (or within virtualenv: `source .venv/bin/activate && pip install --upgrade google-ads`).
+  * Upgrade the runtime Python package: `pip install --upgrade google-ads` (or run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system`).
   * Perform a complete update: `./update.sh agy --all` or `./update.sh claude --all`.
 
 
