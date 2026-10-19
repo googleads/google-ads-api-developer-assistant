@@ -234,14 +234,21 @@ Set the environment variable:
 export GOOGLE_ADS_CONFIGURATION_FILE_PATH="config/google-ads.yaml"
 ```
 
-### 4. Assistant Configuration (`config/assistant_config`)
+### 4. Assistant Configuration (`config/assistant_config`) & Startup Synchronization
 
 Configure your API version, default Customer ID, and mutate switch in `config/assistant_config` (TOML format):
 ```toml
-api_version = "v25"
+api_version = "v26"
 customer_id = "12345678"
 execute_mutates = false
 ```
+
+At session startup in Antigravity (`agy`) or Claude Code CLI (`claude`), the `PreInvocation` hook (`python3 config/config_init.py --hook`) normalizes credentials into `config/google-ads.yaml` (`0600` permissions), advances `api_version` in `config/assistant_config` across `client_libs/google-ads-python` and `google.ads.googleads.__path__`, and runs the **5-Step Client Library & API Version Verification Workflow**:
+1. **Check Python Site-Directory Version:** Inspects the version of `google-ads` installed in the Python site directory (`site.getsitepackages()`, `importlib.metadata.version("google-ads")`).
+2. **Check Latest GitHub Release:** Queries the latest release version of the client library on GitHub (`googleads/google-ads-python/releases/latest`).
+3. **Prompt User When Site Version `<` GitHub Version:** If the site directory (or `client_libs/google-ads-python`) has a version `<` the GitHub version, prompts the user and asks if they want to upgrade to the latest version on GitHub.
+4. **If the User Replies `Yes` (`sync_client_libs.py --upgrade_system`):** Installs the latest version of `google-ads` from `pypi.org` into the site directory, installs/synchronizes the latest version of the client library into the site directory, updates `client_libs/google-ads-python` in the Assistant directory structure, updates `api_version` in `config/assistant_config` (and `config/api_version.txt` if present) to the latest version, and prints the results table to the screen.
+5. **If the User Replies `No` (`sync_client_libs.py --check_only`):** Presents a comparison table with the latest versions on GitHub versus what is installed on the system.
 
 ---
 
@@ -391,7 +398,7 @@ When running this plugin across different agent runtimes, keep the following pla
 
 - **Virtual Environments**: In custom IDE environments, ensure `google-ads` and `ruff` are installed in the active environment used by the host agent.
 - **Interactive UI Modals**: In Antigravity environments, interactive questions render as modal selections; in standard Claude Desktop / CLI sessions, questions are presented directly in conversation text.
-- **Directory Layouts**: Generated code, CSV exports, diagnostic reports/receipts, and mutation audit logs are saved to `saved/code/`, `saved/csv/`, `saved/data/`, and `saved/logs/`.
+- **Directory Layouts**: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called `saved` (e.g. `./saved/` or `./saved/code/`). Generated code, CSV exports, diagnostic reports/receipts, and mutation audit logs are saved to `saved/code/`, `saved/csv/`, `saved/data/`, and `saved/logs/`.
 
 For comprehensive details on runtime adaptations, refer to [migration.md](migration.md).
 

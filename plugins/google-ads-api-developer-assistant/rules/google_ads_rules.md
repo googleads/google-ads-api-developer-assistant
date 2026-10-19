@@ -12,9 +12,12 @@
 #### 1.0. Protocol: "Validate Before Act & Interactive Sync"
 **ABSOLUTE FIRST ACTION:**
 1. **API Version & Cache Validation:** Check if `config/assistant_config` exists and contains a valid `api_version`. If it does, automatically load it and use it without prompting the user. If it does not exist or is empty, identify the latest stable API version by inspecting the version directories in `client_libs/google-ads-python/google/ads/googleads/v*` (or running `python3 skills/ext-version/scripts/get_latest_api_version.py`), present it to the user for confirmation, and write it to `config/assistant_config` (`api_version = "<version>"`). Only fall back to web release notes if local client library discovery is unavailable. For all subsequent operations, use this cached version and DO NOT prompt the user again.
-2. **Client Library & Package Update Check (Blocking Prompt):** At session startup or whenever discovering client library updates, check for upstream PyPI and GitHub releases across installed environment packages (`google-ads`), the **Assistant repository**, and installed **client libraries** (`client_libs/`) in check-only mode (`python3 skills/sync-client-libs/scripts/sync_client_libs.py --check_only --json`).
-   - **System Site-Directory Parity Mandate:** When you discover that there is a new version of the python client library or `google-ads`, check the versions in the system site-directory (e.g., via `site.getsitepackages()` and `importlib.metadata.version('google-ads')`) and alert the user if they do not match. Ask the user if they would like Gemini to upgrade the system version, and if they reply yes, update it for them (`python3 -m pip install --upgrade google-ads` or `sync_client_libs.py --upgrade_system`).
-   - If any client library, package, or the assistant is outdated, trigger a prompt to the user with the available update(s) and ask if they would like to upgrade. If confirmed, perform the update and refresh `api_version` in `config/assistant_config` before proceeding; if declined, proceed with current installed versions.
+2. **5-Step Client Library & Site-Directory Synchronization Protocol:** At session startup or whenever checking for client library updates, follow this exact 5-step sequence:
+   - **Step 1:** Check the version of `google-ads` installed in the Python site directory (`site.getsitepackages()`, `importlib.metadata.version('google-ads')`) and in `client_libs/google-ads-python`.
+   - **Step 2:** Check the latest version of the client library on GitHub (`googleads/google-ads-python`).
+   - **Step 3:** If the site directory (or `client_libs/google-ads-python`) has a version `<` the GitHub version, prompt the user and ask if they want to upgrade to the latest version on GitHub.
+   - **Step 4:** If the user replies **yes**, run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system` to install the latest version of `google-ads` from `pypi.org` into the site directory, install the latest version of the client library into the site directory, update to the latest version of the client library in the Assistant directory structure (`client_libs/google-ads-python`), update `api_version` in `config/assistant_config` (and `config/api_version.txt` if present) to the latest version, and print the results to the screen.
+   - **Step 5:** If the user replies **no**, run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --check_only` and present a table comparing the latest versions on GitHub versus what the user has installed on the system.
 3. **Session Configuration Initialization (Mandatory):** At session startup, `config/config_init.py` is executed to construct `config/google-ads.yaml` in the active plugin or workspace `config/` directory (e.g., `~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml` or `config/google-ads.yaml`) and set `GOOGLE_ADS_CONFIGURATION_FILE_PATH`. All subsequent client initializations and API operations must strictly use `config/google-ads.yaml` and never the user's home directory copy.
    - **FORBIDDEN:** Never run Python code or bash commands that print, test, or reference `google-ads.yaml` in the user's home directory (e.g., `~/google-ads.yaml`, `$HOME/google-ads.yaml`, or `os.path.expanduser('~/google-ads.yaml')`).
    - **FORBIDDEN:** Never call `GoogleAdsClient.load_from_storage()` without passing `path="config/google-ads.yaml"`.
@@ -37,6 +40,7 @@
 - **NO RESOURCE PREFIXES IN METADATA:** In `GoogleAdsFieldService` queries, use bare field names (`name`, `category`), NOT prefixed names (`google_ads_field.name`).
 - **CLIENT LIBS & RUNTIME VERSION MISMATCH WARNING:** When discovering a new version of the python client library or `google-ads`, check the versions in the system site-directory. If the installed version of `google-ads` in the system site-directory does not match the latest release or `client_libs/google-ads-python`, immediately alert the user to the mismatch. Ask the user if they would like Gemini to upgrade the system version, and if they reply yes, update it for them.
 - **DEFAULT TO PYTHON FOR EXECUTION:** Always use Python to execute code and run tasks even if other language client libraries (PHP, Ruby, Java, C#/.NET) or files are present. Only switch to generating or executing in another language if the user explicitly requests it.
+- **RUNNABLE CODE STORAGE MANDATE (`saved/`):** When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called `saved` (e.g. `./saved/` or `./saved/code/`). Never save runnable scripts outside the current working directory's `saved/` sub-directory.
 
 #### 1.3. Versioning Fallback & User Override
 If the user provides or overrides an API version, treat user input as the ultimate source of truth, cache it in `config/assistant_config` (`api_version = "<version>"`), and use it automatically for subsequent tasks.
@@ -49,7 +53,7 @@ If the user provides or overrides an API version, treat user input as the ultima
 - **Config:** `config/` (Target config files: `assistant_config` in TOML format with `api_version`, `customer_id`, and `execute_mutates`, plus `google-ads.yaml`).
 - **Client Libraries (Source of Truth):** `client_libs/google-ads-python/` (Contains official Google Ads Python client library source, `.proto` definitions, and example scripts under `client_libs/google-ads-python/examples/`).
 - **Scripts:** `api_examples/` (Modifiable scripts).
-- **Generated Code:** `saved/code/` (All generated or modified scripts).
+- **Generated Code:** `saved/code/` or `saved/` (All runnable scripts saved for later execution MUST be stored in the current working directory within `saved/`).
 - **Reports & Output:** `saved/data/` (All report and data outputs).
 
 #### 2.2. Configuration Protocol
@@ -76,11 +80,12 @@ Before presenting or executing ANY GAQL query, pass this sequence:
 
 #### 3.2. Code Generation Protocol (Python)
 Python is the mandatory default language for all code generation and execution across the assistant. The assistant must only generate or run code in other supported languages (PHP, Ruby, Java, C#/.NET) if explicitly instructed by the user. Every Python script generated MUST follow this automated linting pipeline:
-1. Write code to a temporary file (e.g., `saved/code/tmp_lint.py`).
-2. Run `ruff check --fix saved/code/tmp_lint.py`.
-3. Read the fixed code and finalize write to target location in `saved/code/`.
-4. Include explicit type annotations for parameters, returns, and variables.
-5. Wrap API calls in `GoogleAdsException` handlers to suppress noisy gRPC internal stack traces:
+1. **Target Directory Mandate:** When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called `saved` (e.g., `./saved/<script_name>.py` or `./saved/code/<script_name>.py`). Ensure the `saved` sub-directory exists before writing.
+2. Write code to a temporary file (e.g., `saved/code/tmp_lint.py` or `saved/tmp_lint.py`).
+3. Run `ruff check --fix saved/code/tmp_lint.py`.
+4. Read the fixed code and finalize write to target location in `saved/` (or `saved/code/`).
+5. Include explicit type annotations for parameters, returns, and variables.
+6. Wrap API calls in `GoogleAdsException` handlers to suppress noisy gRPC internal stack traces:
    ```python
    try:
        # API Call

@@ -9,6 +9,10 @@
   - Implemented `--upgrade_system` CLI flag in `sync_client_libs.py` to upgrade the system package via `pip` upon confirmation.
   - Updated agent behavioral rules in `rules/google_ads_rules.md` (Section 1.0 item 2, Section 1.2, and Section 4.1), skill instructions in `skills/sync-client-libs/SKILL.md`, and Claude Code slash command in `commands/sync-client-libs.md` mandating that whenever a new version of the python client library or `google-ads` is discovered, the assistant must check the system site-directory, alert the user to any mismatch, prompt the user for confirmation to upgrade, and update it upon confirmation.
   - Added unit test suite in `tests/test_components.py` covering system package detection, parity validation, pip upgrade execution, and alert rendering (expanding total passed tests to 129).
+- **Runnable Code Storage Mandate (`saved/` Sub-Directory):**
+  - Mandated that whenever asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called `saved` (e.g., `./saved/` or `./saved/code/`).
+  - Updated `rules/google_ads_rules.md` (Hard Constraints Section 1.2, Project Structure Section 2.1, and Code Generation Protocol Section 3.2).
+  - Integrated the mandate into the `PreInvocation` hook prompt injection in `config/config_init.py` (`handle_hook`).
 - **Python Runtime Support & Baseline Modernization (Python >= 3.11):**
   - Removed support for Python 3.10 across the project and bumped the minimum required Python runtime to Python >= 3.11 (`requires-python = ">=3.11"` in `pyproject.toml`).
   - Updated package classifiers in `pyproject.toml` and set Ruff linting target version to `target-version = "py311"`.

@@ -217,11 +217,14 @@ You can update `config/assistant_config` either by editing the TOML file directl
 # Set default Customer ID in config/assistant_config and sync config/google-ads.yaml
 python3 config/config_init.py --key customer_id --value 1234567890
 
-# Automatically detect the latest API version from client_libs and update config/assistant_config
+# Automatically detect the latest API version across client_libs and site-packages and update config/assistant_config
 python3 config/config_init.py --key api_version
 
 # Lock a specific API version in config/assistant_config
-python3 config/config_init.py --key api_version --value v25
+python3 config/config_init.py --key api_version --value v26
+
+# Synchronize client_libs and api_version synchronously from the CLI
+python3 config/config_init.py --sync-client-libs
 
 # Enable or disable live mutations in config/assistant_config
 python3 config/config_init.py --execute-mutates true
@@ -246,14 +249,30 @@ python3 config/config_init.py --execute-mutates false
 
 ## Stay in sync
 
-The Assistant includes automated synchronization tools to ensure your local client libraries, protobuf definitions, and API version metadata remain aligned with upstream releases on GitHub.
+The Assistant includes automated synchronization tools to ensure your runtime credentials, `config/assistant_config`, local client libraries (`client_libs/`), Protobuf definitions, and system `google-ads` package remain aligned.
 
-### 1. Update Check & Confirmation at Session Startup
-Whenever an assistant session starts in Antigravity or Claude Code, the assistant executes an automated **"Validate Before Act & Interactive Sync"** directive:
-* It checks both the **Assistant repository itself** and local **client libraries** (`client_libs/`) against the latest upstream GitHub releases in check-only mode (`--check_only`).
-* If newer assistant releases or client library updates are detected, the assistant prompts you with the available updates and asks for confirmation before downloading:
-  > *"New updates are available on GitHub (e.g., google-ads-api-developer-assistant 4.1.0, google-ads-python 25.1.0 -> 26.0.0). Would you like to upgrade now?"*
-* If you confirm, it automatically synchronizes the codebases and refreshes `api_version` in `config/assistant_config`. If you decline, it proceeds with your currently installed versions.
+### 1. What Synchronizes at Session Startup (`config/config_init.py`)
+
+When you start a CLI session in Antigravity (`agy`) or Claude Code (`claude`), the `PreInvocation` lifecycle hook in [`hooks.json`](plugins/google-ads-api-developer-assistant/hooks.json) executes `python3 config/config_init.py --hook` to synchronize credentials and run a **5-Step Client Library & API Version Verification Workflow**:
+
+| Startup Step | Execution Mode | What Happens Under the Hood | What Is Modified |
+| :--- | :--- | :--- | :--- |
+| **Credential Normalization & `api_version` Discovery** (`sync_and_set_config_kv` & `detect_latest_api_version`) | **Automatic** (Every session start) | Reads your `$HOME` config (`~/google-ads.yaml`, `~/google_ads_php.ini`, `~/google_ads_config.rb`, `~/ads.properties`, or `.NET` `App.config` / `appsettings.json`), writes `config/google-ads.yaml` (`0600` permissions) with `use_proto_plus: True` and `ads_assistant: <version>`, exports `GOOGLE_ADS_CONFIGURATION_FILE_PATH`, scans `v<N>` subdirectories across both `client_libs/google-ads-python` and `google.ads.googleads.__path__` in Python `site-packages`, and auto-advances `api_version` in `config/assistant_config` when a newer version is installed. | `config/google-ads.yaml` and `config/assistant_config` (Never modifies your `$HOME` config) |
+| **Step 1 — Check Python Site-Directory Version** (`check_python_client_lib_parity` / `detect_system_package_version`) | **Automatic** (Read-only check) | Inspects your active Python environment's site-packages directory (`site.getsitepackages()`, `importlib.metadata.version("google-ads")`) and local `client_libs/google-ads-python/pyproject.toml` to determine the currently installed `google-ads` package and client library versions. | None (Read-only inspection) |
+| **Step 2 — Check Latest GitHub Release** (`fetch_latest_github_python_version` / `fetch_github_latest_release`) | **Automatic** (Read-only check, 1-hour cache) | Queries the GitHub Releases API (`googleads/google-ads-python/releases/latest`, cached in `$TMPDIR/gads_assistant_github_release.json` for 1 hour) to identify the latest upstream client library version on GitHub. | `$TMPDIR/gads_assistant_github_release.json` |
+| **Step 3 — Prompt User When Site Version `<` GitHub Version** (`handle_hook` $\rightarrow$ `PreInvocation`) | **Interactive Prompt** (When `site_version < github_version`) | If the version of `google-ads` installed in your Python site directory (or `client_libs/google-ads-python` in the Assistant directory) is older (`<`) than the latest release on GitHub, the Assistant pauses and prompts you to ask whether you want to upgrade to the latest version on GitHub. | None (Waits for your `yes` / `no` response) |
+| **Step 4 — If You Reply `Yes`: Full Site & Assistant Upgrade** (`sync_client_libs.py --upgrade_system`) | **On User Confirmation (`Yes`)** | 1. Installs the latest version of `google-ads` from `pypi.org` (`--index-url https://pypi.org/simple`) into the Python site directory.<br>2. Installs/synchronizes the latest version of the client library into the site directory.<br>3. Updates `client_libs/google-ads-python` in the Assistant directory structure to the latest GitHub release.<br>4. Updates `api_version` in `config/assistant_config` (and legacy `config/api_version.txt` if present) to the latest `v<N>` version.<br>5. Prints the synchronization results table to the screen. | Python `site-packages`, `client_libs/google-ads-python`, and `config/assistant_config` (`api_version`) |
+| **Step 5 — If You Reply `No`: Version Comparison Table** (`sync_client_libs.py --check_only`) | **On User Decline (`No`)** | Leaves your Python site directory and `client_libs/` untouched and prints a comparison table showing the latest versions on GitHub/PyPI versus the versions currently installed on your system. | None (Read-only report) |
+
+> **Want to run the full synchronization directly from your terminal?**
+> You can execute the check or upgrade at any time outside a chat prompt:
+> ```bash
+> # Check installed site-packages and client_libs versions vs. GitHub (Step 5 table)
+> python3 plugins/google-ads-api-developer-assistant/skills/sync-client-libs/scripts/sync_client_libs.py --check_only
+>
+> # Upgrade site-packages from pypi.org, update Assistant client_libs, and refresh api_version (Step 4)
+> python3 plugins/google-ads-api-developer-assistant/skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system
+> ```
 
 ### 2. Requesting Synchronization During a Session
 You can check for updates or trigger synchronization at any time while in an active session:
@@ -314,6 +333,10 @@ To prevent silent schema discrepancies, missing fields, or descriptor errors:
     *   `config/assistant_config`: Unified TOML configuration file storing `api_version`, `customer_id`, and `execute_mutates`.
     *   `config/config_init.py`: Session initializer and `PreInvocation` / `PreToolUse` lifecycle hook handler.
     *   `config/google-ads.yaml`: Generated runtime Google Ads API credentials file (`0600` permissions).
+*   `saved/`: Working directory storage for artifacts and runnable scripts:
+    *   `saved/` (or `saved/code/`): Runnable Python code saved for later execution (mandatory target sub-directory).
+    *   `saved/data/`: GAQL validation cache, CSV exports, diagnostic reports, and mutation dry-run receipts.
+    *   `saved/logs/`: Append-only audit logs (`mutation_audit.jsonl`).
 
 ## Plugin Architecture
 

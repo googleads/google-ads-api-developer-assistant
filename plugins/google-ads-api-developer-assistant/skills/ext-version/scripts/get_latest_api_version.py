@@ -108,6 +108,23 @@ def update_assistant_config_api_version(
     return updated_paths
 
 
+def _extract_version_dirs(base_dir: str) -> List[str]:
+    """Returns sorted v<N> directory names inside base_dir."""
+    if not base_dir or not os.path.isdir(base_dir):
+        return []
+    try:
+        v_dirs = [
+            d
+            for d in os.listdir(base_dir)
+            if os.path.isdir(os.path.join(base_dir, d))
+            and re.match(r"^v\d+$", d)
+        ]
+        v_dirs.sort(key=lambda x: int(x[1:]))
+        return v_dirs
+    except OSError:
+        return []
+
+
 def detect_latest_api_version(
     update_config: bool = False,
     config_dir: Optional[str] = None,
@@ -119,6 +136,7 @@ def detect_latest_api_version(
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     detected: Optional[str] = None
+    discovered_versions: List[str] = []
 
     # 1. Search candidate directories for client_libs/google-ads-python/google/ads/googleads
     candidate_paths = [
@@ -148,36 +166,40 @@ def detect_latest_api_version(
     ]
 
     for candidate in candidate_paths:
-        if os.path.isdir(candidate):
-            try:
-                version_dirs = [
-                    d
-                    for d in os.listdir(candidate)
-                    if os.path.isdir(os.path.join(candidate, d))
-                    and re.match(r"^v\d+$", d)
-                ]
-                if version_dirs:
-                    version_dirs.sort(key=lambda x: int(x[1:]))
-                    detected = version_dirs[-1]
-                    break
-            except OSError:
-                continue
+        version_dirs = _extract_version_dirs(candidate)
+        if version_dirs:
+            discovered_versions.append(version_dirs[-1])
+            break
 
-    # 2. Inspect installed python package if available
-    if not detected:
-        try:
-            import google.ads.googleads  # type: ignore
+    # 2. Inspect installed python package if available (checking both attributes and package __path__)
+    try:
+        import importlib
 
-            installed_versions = [
-                attr
-                for attr in dir(google.ads.googleads)
-                if re.match(r"^v\d+$", attr)
-            ]
-            if installed_versions:
-                installed_versions.sort(key=lambda x: int(x[1:]))
-                detected = installed_versions[-1]
-        except Exception:
-            pass
+        gads_mod = importlib.import_module("google.ads.googleads")
+
+        installed_versions: List[str] = [
+            attr
+            for attr in dir(gads_mod)
+            if re.match(r"^v\d+$", attr)
+        ]
+        pkg_paths: List[str] = []
+        raw_path = getattr(gads_mod, "__path__", None)
+        if raw_path:
+            pkg_paths.extend(list(raw_path))
+        pkg_file = getattr(gads_mod, "__file__", None)
+        if pkg_file:
+            pkg_paths.append(os.path.dirname(pkg_file))
+        for pkg_dir in pkg_paths:
+            installed_versions.extend(_extract_version_dirs(pkg_dir))
+        if installed_versions:
+            installed_versions.sort(key=lambda x: int(x[1:]))
+            discovered_versions.append(installed_versions[-1])
+    except Exception:
+        pass
+
+    if discovered_versions:
+        discovered_versions.sort(key=lambda x: int(x[1:]))
+        detected = discovered_versions[-1]
 
     # 3. Fallback to default version if no local library found
     final_version = detected or "v25"

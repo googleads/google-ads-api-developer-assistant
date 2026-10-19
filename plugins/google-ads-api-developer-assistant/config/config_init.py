@@ -626,6 +626,18 @@ def sync_and_set_config_kv(
                 config_dir=config_dir,
             )
 
+    # Automatically advance api_version in assistant_config when a newer API version is detected
+    if key != "api_version":
+        latest_ver = detect_latest_api_version()
+        current_cfg = read_assistant_config(config_dir=config_dir)
+        current_ver = str(current_cfg.get("api_version", "")).strip()
+        if not current_ver or (
+            re.match(r"^v\d+$", current_ver)
+            and re.match(r"^v\d+$", latest_ver)
+            and int(latest_ver[1:]) > int(current_ver[1:])
+        ):
+            write_assistant_config({"api_version": latest_ver}, config_dir=config_dir)
+
     # 4. Set environment variable for the Google Ads Python client
     os.environ["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = target_yaml
 
@@ -686,8 +698,24 @@ DEFAULT_CUSTOMER_ID = "12345678"
 DEFAULT_EXECUTE_MUTATES = False
 
 
+def _extract_version_dirs(base_dir: str) -> list[str]:
+    """Returns sorted v<N> directory names inside base_dir."""
+    if not base_dir or not os.path.isdir(base_dir):
+        return []
+    try:
+        v_dirs = [
+            d
+            for d in os.listdir(base_dir)
+            if os.path.isdir(os.path.join(base_dir, d)) and re.match(r"^v\d+$", d)
+        ]
+        v_dirs.sort(key=lambda x: int(x[1:]))
+        return v_dirs
+    except OSError:
+        return []
+
+
 def detect_latest_api_version() -> str:
-    """Detects the latest Google Ads API version from local client_libs or package metadata."""
+    """Detects the latest Google Ads API version across local client_libs and installed google.ads.googleads."""
     this_dir = os.path.dirname(os.path.abspath(__file__))
     candidate_paths = [
         os.path.abspath("client_libs/google-ads-python/google/ads/googleads"),
@@ -710,34 +738,312 @@ def detect_latest_api_version() -> str:
             "~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python/google/ads/googleads"
         ),
     ]
+    discovered_versions: list[str] = []
     for candidate in candidate_paths:
-        if os.path.isdir(candidate):
-            try:
-                v_dirs = [
-                    d
-                    for d in os.listdir(candidate)
-                    if os.path.isdir(os.path.join(candidate, d))
-                    and re.match(r"^v\d+$", d)
-                ]
-                if v_dirs:
-                    v_dirs.sort(key=lambda x: int(x[1:]))
-                    return v_dirs[-1]
-            except OSError:
-                continue
+        v_dirs = _extract_version_dirs(candidate)
+        if v_dirs:
+            discovered_versions.append(v_dirs[-1])
+            break
 
     try:
-        import google.ads.googleads  # type: ignore
+        import importlib
 
-        installed_versions = [
-            attr for attr in dir(google.ads.googleads) if re.match(r"^v\d+$", attr)
+        gads_mod = importlib.import_module("google.ads.googleads")
+
+        pkg_versions: list[str] = [
+            attr for attr in dir(gads_mod) if re.match(r"^v\d+$", attr)
         ]
-        if installed_versions:
-            installed_versions.sort(key=lambda x: int(x[1:]))
-            return installed_versions[-1]
+        pkg_paths: list[str] = []
+        raw_path = getattr(gads_mod, "__path__", None)
+        if raw_path:
+            pkg_paths.extend(list(raw_path))
+        pkg_file = getattr(gads_mod, "__file__", None)
+        if pkg_file:
+            pkg_paths.append(os.path.dirname(pkg_file))
+        for pkg_dir in pkg_paths:
+            pkg_versions.extend(_extract_version_dirs(pkg_dir))
+        if pkg_versions:
+            pkg_versions.sort(key=lambda x: int(x[1:]))
+            discovered_versions.append(pkg_versions[-1])
     except Exception:
         pass
 
+    if discovered_versions:
+        discovered_versions.sort(key=lambda x: int(x[1:]))
+        return discovered_versions[-1]
+
     return DEFAULT_API_VERSION
+
+
+def _parse_semver_tuple(ver_str: Optional[str]) -> Tuple[int, ...]:
+    """Parses a version string like '34.0.0' or 'v34.0.0' into an integer tuple."""
+    if not ver_str:
+        return (0,)
+    clean = re.sub(r"^[^\d]*", "", str(ver_str).strip())
+    parts: list[int] = []
+    for token in re.split(r"[.\-_+]", clean):
+        digits = re.findall(r"\d+", token)
+        if digits:
+            parts.append(int(digits[0]))
+    return tuple(parts) if parts else (0,)
+
+
+def _is_version_less_than(
+    installed_ver: Optional[str], latest_ver: Optional[str]
+) -> bool:
+    """Returns True if installed_ver is missing or strictly older than latest_ver."""
+    if not latest_ver:
+        return False
+    if not installed_ver:
+        return True
+    return _parse_semver_tuple(installed_ver) < _parse_semver_tuple(latest_ver)
+
+
+def fetch_latest_github_python_version(
+    ttl_seconds: int = 3600,
+    force: bool = False,
+) -> Optional[str]:
+    """Fetches and caches the latest release version of googleads/google-ads-python on GitHub."""
+    import tempfile
+    import time
+    import urllib.request
+
+    cache_file = os.path.join(
+        tempfile.gettempdir(), "gads_assistant_github_release.json"
+    )
+    now = time.time()
+    if not force and os.path.isfile(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            ts = float(cached.get("timestamp", 0.0))
+            ver = str(cached.get("github_version") or "").strip().lstrip("v")
+            if ver and (now - ts) < ttl_seconds:
+                return ver
+        except Exception:
+            pass
+
+    url = "https://api.github.com/repos/googleads/google-ads-python/releases/latest"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "google-ads-api-developer-assistant",
+            "Accept": "application/vnd.github.v3+json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        tag_name = str(data.get("tag_name") or "").strip().lstrip("v")
+        if tag_name:
+            try:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump({"timestamp": now, "github_version": tag_name}, f)
+            except OSError:
+                pass
+            return tag_name
+    except Exception:
+        pass
+    return None
+
+
+def check_python_client_lib_parity(
+    check_github: bool = False,
+    force_github: bool = False,
+) -> Dict[str, Any]:
+    """Compares Python site-directory google-ads, local client_libs/google-ads-python, and GitHub latest version."""
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate_libs = [
+        os.path.abspath("client_libs/google-ads-python"),
+        os.path.abspath(
+            "plugins/google-ads-api-developer-assistant/client_libs/google-ads-python"
+        ),
+        os.path.abspath(os.path.join(this_dir, "../client_libs/google-ads-python")),
+        os.path.abspath(
+            os.path.join(
+                this_dir,
+                "../plugins/google-ads-api-developer-assistant/client_libs/google-ads-python",
+            )
+        ),
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python"
+        ),
+    ]
+
+    local_version: Optional[str] = None
+    local_path: Optional[str] = None
+    for lib_dir in candidate_libs:
+        pyproject = os.path.join(lib_dir, "pyproject.toml")
+        if os.path.isfile(pyproject):
+            try:
+                with open(pyproject, "r", encoding="utf-8") as f:
+                    m = re.search(r'version\s*=\s*["\']([^"\']+)["\']', f.read())
+                if m:
+                    local_version = m.group(1).strip().lstrip("v")
+                    local_path = lib_dir
+                    break
+            except OSError:
+                continue
+
+    site_directories: list[str] = []
+    try:
+        import site
+
+        if hasattr(site, "getsitepackages"):
+            site_directories.extend(site.getsitepackages())
+        if hasattr(site, "getusersitepackages"):
+            site_directories.append(site.getusersitepackages())
+    except Exception:
+        pass
+
+    system_version: Optional[str] = None
+    try:
+        import importlib.metadata
+
+        system_version = importlib.metadata.version("google-ads").strip().lstrip("v")
+    except Exception:
+        pass
+
+    matches = bool(
+        local_version and system_version and local_version == system_version
+    )
+    result: Dict[str, Any] = {
+        "local_version": local_version,
+        "local_path": local_path,
+        "system_version": system_version,
+        "site_directories": site_directories,
+        "matches": matches,
+    }
+    if check_github:
+        github_version = fetch_latest_github_python_version(force=force_github)
+        site_lt_github = _is_version_less_than(system_version, github_version)
+        local_lt_github = _is_version_less_than(local_version, github_version)
+        result["github_version"] = github_version
+        result["site_version_less_than_github"] = site_lt_github
+        result["local_version_less_than_github"] = local_lt_github
+        result["upgrade_prompt_required"] = bool(site_lt_github or local_lt_github)
+    return result
+
+
+def _find_sync_client_libs_script() -> Optional[str]:
+    """Locates skills/sync-client-libs/scripts/sync_client_libs.py."""
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.abspath("skills/sync-client-libs/scripts/sync_client_libs.py"),
+        os.path.abspath(
+            "plugins/google-ads-api-developer-assistant/skills/sync-client-libs/scripts/sync_client_libs.py"
+        ),
+        os.path.join(this_dir, "../skills/sync-client-libs/scripts/sync_client_libs.py"),
+        os.path.join(
+            this_dir,
+            "../plugins/google-ads-api-developer-assistant/skills/sync-client-libs/scripts/sync_client_libs.py",
+        ),
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/skills/sync-client-libs/scripts/sync_client_libs.py"
+        ),
+    ]
+    for path in candidates:
+        norm = os.path.normpath(path)
+        if os.path.isfile(norm):
+            return norm
+    return None
+
+
+def ensure_client_libs_synced(
+    async_in_background: bool = True,
+    force: bool = False,
+    ttl_seconds: int = 3600,
+    config_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Ensures client_libs and api_version are synchronized at session startup.
+
+    Triggers sync_client_libs.py when:
+    - force is True,
+    - local client_libs/google-ads-python version does not match system google-ads version, or
+    - the startup sync stamp in tempdir is missing or older than ttl_seconds.
+    """
+    import tempfile
+    import time
+
+    parity = check_python_client_lib_parity()
+    script_path = _find_sync_client_libs_script()
+    if not script_path:
+        return {
+            "triggered": False,
+            "reason": "sync_client_libs.py not found",
+            "parity": parity,
+        }
+
+    stamp_file = os.path.join(tempfile.gettempdir(), "gads_assistant_last_sync.json")
+    now = time.time()
+    stamp_expired = True
+    if not force and os.path.isfile(stamp_file):
+        try:
+            with open(stamp_file, "r", encoding="utf-8") as f:
+                stamp_data = json.load(f)
+            last_ts = float(stamp_data.get("timestamp", 0.0))
+            if (now - last_ts) < ttl_seconds:
+                stamp_expired = False
+        except Exception:
+            stamp_expired = True
+
+    mismatch = bool(
+        parity.get("local_version")
+        and parity.get("system_version")
+        and not parity.get("matches")
+    )
+    if not force and not mismatch and not stamp_expired:
+        return {
+            "triggered": False,
+            "reason": "up_to_date_within_ttl",
+            "parity": parity,
+        }
+
+    try:
+        with open(stamp_file, "w", encoding="utf-8") as f:
+            json.dump({"timestamp": now, "mismatch": mismatch}, f)
+    except OSError:
+        pass
+
+    cmd = [sys.executable, script_path, "--json"]
+    if async_in_background:
+        try:
+            subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return {
+                "triggered": True,
+                "mode": "background",
+                "reason": "version_mismatch" if mismatch else "startup_ttl_sync",
+                "parity": parity,
+            }
+        except Exception as exc:
+            return {
+                "triggered": False,
+                "reason": f"background_spawn_error: {exc}",
+                "parity": parity,
+            }
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=120)
+        latest_ver = sync_api_version(config_dir=config_dir)
+        return {
+            "triggered": True,
+            "mode": "synchronous",
+            "returncode": res.returncode,
+            "api_version": latest_ver,
+            "parity": check_python_client_lib_parity(),
+        }
+    except Exception as exc:
+        return {
+            "triggered": False,
+            "reason": f"sync_run_error: {exc}",
+            "parity": parity,
+        }
 
 
 def sync_api_version(config_dir: Optional[str] = None) -> str:
@@ -1638,12 +1944,17 @@ def handle_hook() -> None:
         print(json.dumps(response_payload))
         return
 
-    # 2. PreInvocation hook (model prompt injection)
+    # 2. PreInvocation hook (model prompt injection & 5-step startup client_libs version check)
+    parity_info: Dict[str, Any] = check_python_client_lib_parity(
+        check_github=not bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    )
+
+    active_api_version = get_configured_api_version() or detect_latest_api_version()
     mutates_enabled = is_execute_mutates_enabled()
     mutates_state_str = "execute_mutates = true" if mutates_enabled else "execute_mutates = false"
     msg = (
         f"CRITICAL GOOGLE ADS CONFIGURATION & HITL MUTATION NOTICE:\n"
-        f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml).\n"
+        f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml), with active api_version = \"{active_api_version}\".\n"
         f"   All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
         f"2. HITL MUTATION VERIFICATION & AUDIT MANDATE ({mutates_state_str} in config/assistant_config): "
         f"Live mutations are currently {'ENABLED' if mutates_enabled else 'DISABLED (set execute_mutates = true in config/assistant_config to enable)'}. "
@@ -1651,8 +1962,24 @@ def handle_hook() -> None:
         f"   (a) Ensure execute_mutates = true is configured in config/assistant_config,\n"
         f"   (b) Query current resource state via GAQL,\n"
         f"   (c) Execute a validate_only=True dry-run via skills/execute-mutation/scripts/run_mutation.py --dry-run to generate saved/data/last_dry_run.json,\n"
-        f"   (d) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute (which appends to saved/logs/mutation_audit.jsonl)."
+        f"   (d) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute (which appends to saved/logs/mutation_audit.jsonl).\n"
+        f"3. RUNNABLE CODE STORAGE MANDATE: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called 'saved' (e.g., ./saved/ or ./saved/code/)."
     )
+    if parity_info.get("upgrade_prompt_required"):
+        sys_ver = parity_info.get("system_version") or "NOT INSTALLED"
+        loc_ver = parity_info.get("local_version") or "NOT INSTALLED"
+        gh_ver = parity_info.get("github_version") or "UNKNOWN"
+        site_dirs = parity_info.get("site_directories") or []
+        primary_site = site_dirs[0] if site_dirs else "system site-packages"
+        msg += (
+            f"\n4. CLIENT LIBRARY & SITE-DIRECTORY UPGRADE PROMPT REQUIRED:\n"
+            f"   - Installed google-ads version in Python site directory ({primary_site}): {sys_ver}\n"
+            f"   - Installed client_libs/google-ads-python version in Assistant directory: {loc_ver}\n"
+            f"   - Latest release on GitHub (googleads/google-ads-python): {gh_ver}\n"
+            f"   Because the installed version is older than the latest version on GitHub ({gh_ver}), you MUST prompt the user and ask if they want to upgrade to the latest version on GitHub ({gh_ver}):\n"
+            f"   - If the user replies YES: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system` to install the latest version of google-ads from pypi.org into the site directory, install the latest version of the client library into the site directory, update client_libs/google-ads-python in the Assistant directory structure, update api_version in config/assistant_config (and config/api_version.txt if present) to the latest version, and print the results to the screen.\n"
+            f"   - If the user replies NO: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --check_only` and present a comparison table of the latest versions on GitHub versus what the user has installed on the system."
+        )
     print(
         json.dumps(
             {
@@ -1688,6 +2015,11 @@ def main() -> None:
     parser.add_argument("--config-dir", default=None, help="Target directory for config")
     parser.add_argument("--source-yaml", default="~/google-ads.yaml", help="Source configuration file")
     parser.add_argument("--hook", action="store_true", help="Run in Jetski lifecycle hook mode")
+    parser.add_argument(
+        "--sync-client-libs",
+        action="store_true",
+        help="Synchronize client_libs and api_version synchronously during initialization",
+    )
 
     args = parser.parse_args()
 
@@ -1707,6 +2039,12 @@ def main() -> None:
             config_dir=args.config_dir,
             source_yaml=args.source_yaml,
         )
+        if args.sync_client_libs:
+            ensure_client_libs_synced(
+                async_in_background=False,
+                force=True,
+                config_dir=args.config_dir,
+            )
         print(f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{config_path}"', file=sys.stdout)
         print(f"[config_init] Successfully initialized {config_path}", file=sys.stderr)
     except Exception as e:

@@ -614,6 +614,112 @@ class TestExtVersion:
             ver = get_latest_api_version.detect_latest_api_version()
             assert ver == "v25"
 
+    def test_detect_latest_api_version_prefers_newer_system_pkg_over_stale_client_libs(
+        self, tmp_path, monkeypatch
+    ):
+        from config import config_init
+
+        stale_libs = tmp_path / "stale_libs" / "google" / "ads" / "googleads"
+        (stale_libs / "v24").mkdir(parents=True)
+        (stale_libs / "v25").mkdir(parents=True)
+
+        newer_pkg = tmp_path / "site_pkg" / "google" / "ads" / "googleads"
+        (newer_pkg / "v25").mkdir(parents=True)
+        (newer_pkg / "v27").mkdir(parents=True)
+
+        fake_mod = MagicMock()
+        fake_mod.__path__ = [str(newer_pkg)]
+        fake_mod.__file__ = str(newer_pkg / "__init__.py")
+
+        with patch("os.path.abspath", return_value=str(stale_libs)), \
+             patch("os.path.expanduser", return_value=str(stale_libs)), \
+             patch.dict("sys.modules", {"google.ads.googleads": fake_mod}):
+            assert config_init.detect_latest_api_version() == "v27"
+            assert get_latest_api_version.detect_latest_api_version() == "v27"
+
+    def test_sync_and_set_config_kv_auto_advances_stale_api_version_in_assistant_config(
+        self, tmp_path, monkeypatch
+    ):
+        from config import config_init
+
+        src_yaml = tmp_path / "home_google_ads.yaml"
+        src_yaml.write_text('developer_token: "tok"\n', encoding="utf-8")
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir(parents=True)
+        cfg_file = cfg_dir / "assistant_config"
+        cfg_file.write_text(
+            'api_version = "v24"\ncustomer_id = "1112223334"\nexecute_mutates = true\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(config_init, "detect_latest_api_version", lambda: "v26")
+        config_init.sync_and_set_config_kv(
+            source_yaml=str(src_yaml),
+            config_dir=str(cfg_dir),
+        )
+        parsed = config_init.parse_assistant_config(cfg_file.read_text(encoding="utf-8"))
+        assert parsed["api_version"] == "v26"
+        assert parsed["customer_id"] == "1112223334"
+        assert parsed["execute_mutates"] is True
+
+    def test_ensure_client_libs_synced_triggers_on_mismatch(self, tmp_path, monkeypatch):
+        import tempfile
+        from config import config_init
+
+        fake_script = tmp_path / "sync_client_libs.py"
+        fake_script.write_text("print('{}')\n", encoding="utf-8")
+        monkeypatch.setattr(config_init, "_find_sync_client_libs_script", lambda: str(fake_script))
+        monkeypatch.setattr(
+            config_init,
+            "check_python_client_lib_parity",
+            lambda: {
+                "local_version": "31.2.0",
+                "local_path": str(tmp_path),
+                "system_version": "34.0.0",
+                "matches": False,
+            },
+        )
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+
+        spawned = []
+        monkeypatch.setattr(
+            config_init.subprocess,
+            "Popen",
+            lambda cmd, **kw: spawned.append(cmd),
+        )
+        res = config_init.ensure_client_libs_synced(async_in_background=True)
+        assert res["triggered"] is True
+        assert res["mode"] == "background"
+        assert res["reason"] == "version_mismatch"
+        assert len(spawned) == 1
+
+    def test_check_python_client_lib_parity_with_github_comparison(self, tmp_path, monkeypatch):
+        from config import config_init
+
+        lib_dir = tmp_path / "client_libs" / "google-ads-python"
+        lib_dir.mkdir(parents=True)
+        (lib_dir / "pyproject.toml").write_text('version = "31.2.0"\n', encoding="utf-8")
+
+        monkeypatch.setattr("os.path.abspath", lambda p: str(lib_dir) if "google-ads-python" in p else p)
+        monkeypatch.setattr("os.path.expanduser", lambda p: str(lib_dir) if "google-ads-python" in p else p)
+        monkeypatch.setattr("importlib.metadata.version", lambda pkg: "31.2.0")
+        monkeypatch.setattr(config_init, "fetch_latest_github_python_version", lambda force=False: "34.0.0")
+
+        parity = config_init.check_python_client_lib_parity(check_github=True)
+        assert parity["system_version"] == "31.2.0"
+        assert parity["local_version"] == "31.2.0"
+        assert parity["github_version"] == "34.0.0"
+        assert parity["site_version_less_than_github"] is True
+        assert parity["local_version_less_than_github"] is True
+        assert parity["upgrade_prompt_required"] is True
+
+        monkeypatch.setattr("importlib.metadata.version", lambda pkg: "34.0.0")
+        (lib_dir / "pyproject.toml").write_text('version = "34.0.0"\n', encoding="utf-8")
+        parity_up_to_date = config_init.check_python_client_lib_parity(check_github=True)
+        assert parity_up_to_date["site_version_less_than_github"] is False
+        assert parity_up_to_date["local_version_less_than_github"] is False
+        assert parity_up_to_date["upgrade_prompt_required"] is False
+
     def test_get_extension_version_plugin_json(self, tmp_path, capsys):
         plugin_file = tmp_path / "plugin.json"
         plugin_file.write_text(json.dumps({"version": "4.0.0"}), encoding="utf-8")

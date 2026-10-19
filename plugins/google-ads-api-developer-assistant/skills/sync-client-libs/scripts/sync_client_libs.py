@@ -497,12 +497,11 @@ def sync_directories(source_dir: str, target_dir: str) -> bool:
         return False
 
 
-def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
-    """Inspects updated google-ads-python library and refreshes api_version in config/assistant_config."""
+def detect_lib_api_version(lib_path: str) -> Optional[str]:
+    """Detects the highest v<N> API version directory in a google-ads-python codebase."""
     python_root = os.path.join(lib_path, "google/ads/googleads")
     if not os.path.isdir(python_root):
         return None
-
     try:
         v_dirs = [
             d
@@ -511,10 +510,19 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
         ]
         if not v_dirs:
             return None
-
         v_dirs.sort(key=lambda x: int(x[1:]))
-        latest_v = v_dirs[-1]
+        return v_dirs[-1]
+    except OSError:
+        return None
 
+
+def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
+    """Inspects updated google-ads-python library and refreshes api_version in config/assistant_config."""
+    latest_v = detect_lib_api_version(lib_path)
+    if not latest_v:
+        return None
+
+    try:
         # Candidate config locations
         raw_targets = [
             os.path.abspath("config/assistant_config"),
@@ -564,6 +572,13 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
                         f'customer_id = "{cid}"\n'
                         f"execute_mutates = {exec_mutates_str}\n"
                     )
+                legacy_ver_txt = os.path.join(cfg_dir, "api_version.txt")
+                if os.path.isfile(legacy_ver_txt):
+                    try:
+                        with open(legacy_ver_txt, "w", encoding="utf-8") as lf:
+                            lf.write(f"{latest_v}\n")
+                    except OSError:
+                        pass
 
         return latest_v
     except Exception:
@@ -645,16 +660,39 @@ def check_system_package_parity(
 def upgrade_system_package(
     package_name: str = "google-ads",
     target_version: Optional[str] = None,
+    lib_path: Optional[str] = None,
 ) -> bool:
-    """Upgrades the package in the Python system environment using pip."""
-    cmd = [sys.executable, "-m", "pip", "install", "--upgrade"]
+    """Upgrades the package from pypi.org (and optional local client_libs path) into the Python site directory."""
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--index-url",
+        "https://pypi.org/simple",
+    ]
     if target_version:
         cmd.append(f"{package_name}=={target_version}")
     else:
         cmd.append(package_name)
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        return res.returncode == 0
+        ok = res.returncode == 0
+        if (
+            not ok
+            and lib_path
+            and os.path.isdir(lib_path)
+            and os.path.isfile(os.path.join(lib_path, "pyproject.toml"))
+        ):
+            local_res = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--upgrade", lib_path],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            ok = local_res.returncode == 0
+        return ok
     except Exception as ex:
         print(f"Error upgrading {package_name}: {ex}", file=sys.stderr)
         return False
@@ -835,30 +873,44 @@ def process_client_libs(
         system_version: Optional[str] = None
         system_site_dirs: list[str] = []
         system_version_matches: Optional[bool] = None
+        site_version_less_than_github: Optional[bool] = None
+        latest_api_version: Optional[str] = None
 
         if entry == "google-ads-python":
             sys_v, s_dirs = detect_system_package_version("google-ads")
             system_version = sys_v
             system_site_dirs = s_dirs
             ref_v = github_version or installed_version
+            site_version_less_than_github = is_update_needed(sys_v, ref_v)
             if ref_v and sys_v:
                 system_version_matches = (
-                    sys_v.lstrip("v").strip() == ref_v.lstrip("v").strip()
+                    not site_version_less_than_github
+                    and sys_v.lstrip("v").strip() == ref_v.lstrip("v").strip()
                 )
             elif not sys_v:
                 system_version_matches = False
             else:
                 system_version_matches = True
 
-            if upgrade_system and not system_version_matches and not check_only:
-                upgraded = upgrade_system_package("google-ads", github_version)
+            if upgrade_system and (not system_version_matches or site_version_less_than_github or force) and not check_only:
+                upgraded = upgrade_system_package(
+                    "google-ads",
+                    github_version,
+                    lib_path=lib_path,
+                )
                 if upgraded:
                     sys_v, _ = detect_system_package_version("google-ads")
                     system_version = sys_v
+                    site_version_less_than_github = is_update_needed(sys_v, ref_v)
                     if ref_v and sys_v:
                         system_version_matches = (
-                            sys_v.lstrip("v").strip() == ref_v.lstrip("v").strip()
+                            not site_version_less_than_github
+                            and sys_v.lstrip("v").strip() == ref_v.lstrip("v").strip()
                         )
+            if not check_only:
+                latest_api_version = update_api_version_cache_if_needed(lib_path)
+            else:
+                latest_api_version = detect_lib_api_version(lib_path)
 
         res_item: dict[str, Any] = {
             "codebase": entry,
@@ -873,6 +925,9 @@ def process_client_libs(
             res_item["system_version"] = system_version
             res_item["system_site_dirs"] = system_site_dirs
             res_item["system_version_matches"] = system_version_matches
+            res_item["site_version_less_than_github"] = site_version_less_than_github
+            if latest_api_version:
+                res_item["api_version"] = latest_api_version
 
         results.append(res_item)
 
@@ -882,14 +937,14 @@ def process_client_libs(
 def print_table(results: list[dict[str, Any]]) -> None:
     """Formats and prints summary table of discovery and update results."""
     print("\nGoogle Ads Client Libraries Discovery & Sync Report")
-    print("=" * 80)
-    fmt = "{:<20} {:<24} {:<18} {:<18} {:<12}"
+    print("=" * 96)
+    fmt = "{:<32} {:<26} {:<14} {:<14} {:<12}"
     print(
         fmt.format(
-            "Codebase", "Repository", "Installed", "GitHub Release", "Status"
+            "Codebase / Component", "Repository / Source", "Installed", "GitHub Release", "Status"
         )
     )
-    print("-" * 80)
+    print("-" * 96)
     for r in results:
         codebase = str(r.get("codebase", ""))
         repo = str(r.get("repo_slug", ""))
@@ -897,7 +952,34 @@ def print_table(results: list[dict[str, Any]]) -> None:
         gh = str(r.get("github_version") or "UNKNOWN")
         st = str(r.get("status", ""))
         print(fmt.format(codebase, repo, inst, gh, st))
-    print("=" * 80)
+        if codebase == "google-ads-python" and "system_version" in r:
+            sys_v = str(r.get("system_version") or "NOT INSTALLED")
+            sys_st = (
+                "UP_TO_DATE"
+                if r.get("system_version_matches")
+                else ("OUTDATED" if r.get("site_version_less_than_github") else "MISMATCH")
+            )
+            print(
+                fmt.format(
+                    "google-ads (site-packages)",
+                    "pypi.org/project/google-ads",
+                    sys_v,
+                    gh,
+                    sys_st,
+                )
+            )
+            if r.get("api_version"):
+                api_v = str(r.get("api_version"))
+                print(
+                    fmt.format(
+                        "api_version (assistant_config)",
+                        "config/assistant_config",
+                        api_v,
+                        api_v,
+                        "ACTIVE",
+                    )
+                )
+    print("=" * 96)
 
     for r in results:
         if r.get("codebase") == "google-ads-python" and "system_version" in r:
@@ -905,6 +987,7 @@ def print_table(results: list[dict[str, Any]]) -> None:
             tgt_v = r.get("github_version") or r.get("installed_version")
             dirs = r.get("system_site_dirs") or []
             primary_dir = dirs[0] if dirs else "system site-packages"
+            api_ver = r.get("api_version")
             if r.get("system_version_matches") is False:
                 print("\n" + "!" * 80)
                 print("ALERT: Python system site-directory version mismatch!")
@@ -915,8 +998,9 @@ def print_table(results: list[dict[str, Any]]) -> None:
                 print("  Action: Gemini should alert the user and ask if they would like to upgrade.")
                 print("!" * 80)
             elif r.get("system_version_matches") is True:
+                api_suffix = f" (active api_version = {api_ver})" if api_ver else ""
                 print(
-                    f"\n[OK] System site-directory package 'google-ads' ({sys_v}) matches upstream release."
+                    f"\n[OK] System site-directory package 'google-ads' ({sys_v} in {primary_dir}) matches upstream release ({tgt_v}){api_suffix}."
                 )
 
 
