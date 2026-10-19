@@ -2,11 +2,11 @@
 
 ## 4.1.0
 
-- **System Site-Directory & Client Library Version Parity Protocol (Startup Table & PyPI Check):**
+- **System Site-Directory & Client Library Version Parity Protocol (First Prompt Execution & Display):**
   - Added PyPI release querying (`fetch_latest_pypi_python_version` against `https://pypi.org/pypi/google-ads/json`) in `config/config_init.py` and `skills/sync-client-libs/scripts/sync_client_libs.py`.
   - Added `determine_api_version()`, `format_parity_table_markdown()`, and `format_parity_table_text()` in `config/config_init.py` to check: (1) `google-ads` in site directory against `pypi.org`, (2) `google-ads-python` in `client_libs/` against GitHub, and (3) determine active Google Ads API version based on (1) and (2).
-  - Added `"SessionStart"` lifecycle hook in `hooks.json` alongside `"PreInvocation"`. At session startup (before the first prompt is entered), `config_init.py --hook` prints the formatted parity table to `sys.stderr` for terminal sessions, and injects the parity table and mandatory first-turn directive into the agent's context.
-  - Mandated that the assistant present the 3-component parity table at the beginning of the first response and, if any component is not the latest version, ask the user if they want to update them before proceeding.
+  - Executed parity checking automatically upon the first prompt entered in the session via `PreInvocation` in `hooks.json`. The hook injects the comparison table into the agent's context, and the assistant renders the table at the very top of its first response.
+  - Mandated that the assistant present the 3-component parity table at the beginning of the first response and, if any component is not the latest version, ask the user if they want to update them before proceeding. On subsequent turns, the table is not re-displayed.
   - Added system site-directory package inspection (`detect_system_package_version`, `check_system_package_parity`, `upgrade_system_package`) to `skills/sync-client-libs/scripts/sync_client_libs.py` to detect `google-ads` in Python system site-packages (`site.getsitepackages()` and `importlib.metadata.version('google-ads')`).
   - Added automatic version parity checking against latest upstream GitHub/PyPI releases in `process_client_libs` with structured metadata (`system_version`, `system_site_dirs`, `system_version_matches`, `pypi_version`, `site_version_less_than_pypi`) in CLI and JSON outputs (`--json`).
   - Added prominent CLI alert reporting in `print_table` when the system site-directory version does not match the upstream release.

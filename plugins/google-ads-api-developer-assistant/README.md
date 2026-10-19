@@ -243,11 +243,11 @@ customer_id = "12345678"
 execute_mutates = false
 ```
 
-When an Antigravity (`agy`) session starts and the plugin is loaded (before the first prompt is processed), or in Claude Code CLI (`claude`), the `SessionStart` / `PreInvocation` hook (`python3 config/config_init.py --hook`) normalizes credentials into `config/google-ads.yaml` (`0600` permissions), advances `api_version` in `config/assistant_config`, and executes the **5-Step Client Library & API Version Verification Workflow**:
+When the user enters their first prompt in an Antigravity (`agy`) session, or in Claude Code CLI (`claude`), the `PreInvocation` hook (`python3 config/config_init.py --hook`) normalizes credentials into `config/google-ads.yaml` (`0600` permissions), advances `api_version` in `config/assistant_config`, and executes the **5-Step Client Library & API Version Verification Workflow**:
 1. **Check Python Site-Directory Version Against PyPI:** Inspects the version of `google-ads` installed in the Python site directory (`site.getsitepackages()`, `importlib.metadata.version("google-ads")`) against `pypi.org` (`https://pypi.org/pypi/google-ads/json`).
 2. **Check Latest GitHub Release:** Queries the latest release version of the client library on GitHub (`googleads/google-ads-python/releases/latest`).
 3. **Determine Active Google Ads API Version:** Determines the Google Ads API version to use based on (1) and (2).
-4. **Present Results in a Formatted Table:** Displays the 3-component parity report table to the user.
+4. **Present Results in a Formatted Table:** Displays the 3-component parity report table at the very top of the first response to the user.
 5. **Prompt User When Any Version Outdated:** If any component is not the latest version, asks the user if they want to update them before proceeding:
    - **If the User Replies `Yes` (`sync_client_libs.py --upgrade_system`):** Installs the latest version of `google-ads` from `pypi.org` into the site directory, installs the latest version of the client library into the site directory, updates `client_libs/google-ads-python` in the Assistant directory structure, updates `api_version` in `config/assistant_config` (and `config/api_version.txt` if present) to the latest version, and prints the results table to the screen.
    - **If the User Replies `No` (`sync_client_libs.py --check_only`):** Retains currently installed versions and proceeds.

@@ -793,19 +793,17 @@ class TestExtVersion:
         monkeypatch.setattr(config_init, "fetch_latest_github_python_version", lambda force=False: "34.0.0")
         monkeypatch.setattr(config_init, "fetch_latest_pypi_python_version", lambda **kw: "34.0.0")
 
-        # 1. Test SessionStart (empty payload on stdin)
+        # 1. Test SessionStart / First prompt (empty payload on stdin -> defaults to is_first_prompt=True)
         monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
         config_init.handle_hook()
         captured = capsys.readouterr()
-        # Verify stderr has the formatted report
-        assert "Google Ads API Version & Parity Verification Report" in captured.err
-        # Verify stdout has ephemeralMessage in injectSteps
         data = json.loads(captured.out)
         assert "injectSteps" in data
         assert "ephemeralMessage" in data["injectSteps"][0]
         assert "Parity Table:" in data["injectSteps"][0]["ephemeralMessage"]
+        assert "MANDATORY FIRST-PROMPT DIRECTIVE:" in data["injectSteps"][0]["ephemeralMessage"]
 
-        # 2. Test PreInvocation (invocationNum present)
+        # 2. Test PreInvocation first prompt (invocationNum == 1)
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"invocationNum": 1})))
         config_init.handle_hook()
         captured2 = capsys.readouterr()
@@ -813,6 +811,17 @@ class TestExtVersion:
         assert "injectSteps" in data2
         assert "ephemeralMessage" in data2["injectSteps"][0]
         assert "Parity Table:" in data2["injectSteps"][0]["ephemeralMessage"]
+        assert "MANDATORY FIRST-PROMPT DIRECTIVE:" in data2["injectSteps"][0]["ephemeralMessage"]
+
+        # 3. Test PreInvocation subsequent turn (invocationNum == 2) -> omits table and mandatory display directive
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"invocationNum": 2})))
+        config_init.handle_hook()
+        captured3 = capsys.readouterr()
+        data3 = json.loads(captured3.out)
+        assert "injectSteps" in data3
+        assert "ephemeralMessage" in data3["injectSteps"][0]
+        assert "Parity Table:" not in data3["injectSteps"][0]["ephemeralMessage"]
+        assert "ACTIVE API CONFIGURATION:" in data3["injectSteps"][0]["ephemeralMessage"]
 
     def test_get_extension_version_plugin_json(self, tmp_path, capsys):
         plugin_file = tmp_path / "plugin.json"

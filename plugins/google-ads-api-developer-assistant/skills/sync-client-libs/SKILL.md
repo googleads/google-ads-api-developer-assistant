@@ -41,7 +41,7 @@ python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/
 
 ## 5-Step System Site-Directory & Client Library Upgrade Protocol
 
-When the `agy` session starts and the plugin is loaded (before the first prompt is processed), or when checking for client library updates, follow this exact 5-step workflow:
+When the user enters their first prompt in the `agy` session, or when checking for client library updates, follow this exact 5-step workflow:
 1. **Check Site-Directory Version Against PyPI:** Inspect the Python site-packages directory (`site.getsitepackages()` and `importlib.metadata.version("google-ads")`) to detect the installed runtime version of `google-ads`, and check the latest release on `pypi.org` (`https://pypi.org/pypi/google-ads/json`).
 2. **Check Latest GitHub Version:** Fetch the latest release tag of the client library on GitHub (`googleads/google-ads-python/releases/latest`).
 3. **Determine Active API Version:** Determine the Google Ads API version to use based on what is found in steps 1 and 2.

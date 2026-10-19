@@ -2148,69 +2148,68 @@ def handle_hook() -> None:
         print(json.dumps(response_payload))
         return
 
-    # 2. SessionStart / PreInvocation hook (model prompt injection & startup client_libs parity check)
-    parity_info: Dict[str, Any] = check_python_client_lib_parity(
-        check_github=not bool(os.environ.get("PYTEST_CURRENT_TEST")),
-        check_pypi=not bool(os.environ.get("PYTEST_CURRENT_TEST")),
-    )
+    # 2. PreInvocation hook (model prompt injection & first-prompt parity check)
+    invocation_num = input_data.get("invocationNum", 1)
+    is_first_prompt = (invocation_num == 1) or ("invocationNum" not in input_data)
 
-    active_api_version = (
-        parity_info.get("api_version")
-        or get_configured_api_version()
-        or detect_latest_api_version()
-    )
     mutates_enabled = is_execute_mutates_enabled()
     mutates_state_str = "execute_mutates = true" if mutates_enabled else "execute_mutates = false"
 
-    table_text = parity_info.get("table_text") or format_parity_table_text(
-        parity_info, active_api_version
-    )
-    table_markdown = parity_info.get("table_markdown") or format_parity_table_markdown(
-        parity_info, active_api_version
-    )
-
-    try:
-        with open("/dev/tty", "w") as tty:
-            tty.write("\n" + table_text + "\n\n")
-            tty.flush()
-    except Exception:
-        pass
-
-    try:
-        sys.stderr.write(table_text + "\n")
-        sys.stderr.flush()
-    except Exception:
-        pass
-
-    msg = (
-        f"CRITICAL GOOGLE ADS CONFIGURATION & HITL MUTATION NOTICE:\n"
-        f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml), with active api_version = \"{active_api_version}\".\n"
-        f"   All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
-        f"2. HITL MUTATION VERIFICATION & AUDIT MANDATE ({mutates_state_str} in config/assistant_config): "
-        f"Live mutations are currently {'ENABLED' if mutates_enabled else 'DISABLED (set execute_mutates = true in config/assistant_config to enable)'}. "
-        f"Before executing ANY live Google Ads mutation, you MUST:\n"
-        f"   (a) Ensure execute_mutates = true is configured in config/assistant_config,\n"
-        f"   (b) Query current resource state via GAQL,\n"
-        f"   (c) Execute a validate_only=True dry-run via skills/execute-mutation/scripts/run_mutation.py --dry-run to generate saved/data/last_dry_run.json,\n"
-        f"   (d) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute (which appends to saved/logs/mutation_audit.jsonl).\n"
-        f"3. RUNNABLE CODE STORAGE MANDATE: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called 'saved' (e.g., ./saved/ or ./saved/code/).\n"
-        f"4. STARTUP CLIENT LIBRARY & SITE-DIRECTORY PARITY VERIFICATION (MANDATORY BEFORE FIRST PROMPT):\n"
-        f"   - (1) google-ads in site directory vs pypi.org: Installed = {parity_info.get('system_version') or 'NOT INSTALLED'}, Latest PyPI = {parity_info.get('pypi_version') or 'UNKNOWN'}\n"
-        f"   - (2) client_libs/google-ads-python vs GitHub: Local = {parity_info.get('local_version') or 'NOT INSTALLED'}, Latest GitHub = {parity_info.get('github_version') or 'UNKNOWN'}\n"
-        f"   - (3) Determined Google Ads API Version to use: {active_api_version}\n\n"
-        f"   Parity Table:\n{table_markdown}\n\n"
-        f"   MANDATORY FIRST-TURN DIRECTIVE:\n"
-        f"   You MUST present this version verification table to the user at the start of your first response in the session.\n"
-    )
-    if parity_info.get("upgrade_prompt_required"):
-        msg += (
-            f"   Because one or more components are not the latest version, you MUST ask the user if they want to update them before proceeding:\n"
-            f"   - If the user replies YES: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system` to install the latest version of google-ads from pypi.org into the site directory, install the latest version of the client library into the site directory, update client_libs/google-ads-python in the Assistant directory structure, update api_version in config/assistant_config (and config/api_version.txt if present) to the latest version, and print the results to the screen.\n"
-            f"   - If the user replies NO: proceed using the currently active versions."
+    if is_first_prompt:
+        parity_info: Dict[str, Any] = check_python_client_lib_parity(
+            check_github=not bool(os.environ.get("PYTEST_CURRENT_TEST")),
+            check_pypi=not bool(os.environ.get("PYTEST_CURRENT_TEST")),
         )
+
+        active_api_version = (
+            parity_info.get("api_version")
+            or get_configured_api_version()
+            or detect_latest_api_version()
+        )
+        table_markdown = parity_info.get("table_markdown") or format_parity_table_markdown(
+            parity_info, active_api_version
+        )
+
+        msg = (
+            f"CRITICAL GOOGLE ADS CONFIGURATION & HITL MUTATION NOTICE:\n"
+            f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml), with active api_version = \"{active_api_version}\".\n"
+            f"   All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
+            f"2. HITL MUTATION VERIFICATION & AUDIT MANDATE ({mutates_state_str} in config/assistant_config): "
+            f"Live mutations are currently {'ENABLED' if mutates_enabled else 'DISABLED (set execute_mutates = true in config/assistant_config to enable)'}. "
+            f"Before executing ANY live Google Ads mutation, you MUST:\n"
+            f"   (a) Ensure execute_mutates = true is configured in config/assistant_config,\n"
+            f"   (b) Query current resource state via GAQL,\n"
+            f"   (c) Execute a validate_only=True dry-run via skills/execute-mutation/scripts/run_mutation.py --dry-run to generate saved/data/last_dry_run.json,\n"
+            f"   (d) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute (which appends to saved/logs/mutation_audit.jsonl).\n"
+            f"3. RUNNABLE CODE STORAGE MANDATE: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called 'saved' (e.g., ./saved/ or ./saved/code/).\n"
+            f"4. STARTUP CLIENT LIBRARY & SITE-DIRECTORY PARITY VERIFICATION (FIRST PROMPT ENTRY):\n"
+            f"   - (1) google-ads in site directory vs pypi.org: Installed = {parity_info.get('system_version') or 'NOT INSTALLED'}, Latest PyPI = {parity_info.get('pypi_version') or 'UNKNOWN'}\n"
+            f"   - (2) client_libs/google-ads-python vs GitHub: Local = {parity_info.get('local_version') or 'NOT INSTALLED'}, Latest GitHub = {parity_info.get('github_version') or 'UNKNOWN'}\n"
+            f"   - (3) Determined Google Ads API Version to use: {active_api_version}\n\n"
+            f"   Parity Table:\n{table_markdown}\n\n"
+            f"   MANDATORY FIRST-PROMPT DIRECTIVE:\n"
+            f"   Because the user has entered their first prompt in this session, you MUST present this version verification table to the user at the very beginning of your response.\n"
+        )
+        if parity_info.get("upgrade_prompt_required"):
+            msg += (
+                f"   Because one or more components are not the latest version, you MUST ask the user if they want to update them before proceeding:\n"
+                f"   - If the user replies YES: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system` to install the latest version of google-ads from pypi.org into the site directory, install the latest version of the client library into the site directory, update client_libs/google-ads-python in the Assistant directory structure, update api_version in config/assistant_config (and config/api_version.txt if present) to the latest version, and print the results to the screen.\n"
+                f"   - If the user replies NO: proceed using the currently active versions."
+            )
+        else:
+            msg += (
+                f"   All Google Ads components are up to date and match the latest upstream releases. State this, confirm active API version, and proceed directly to answer the user's prompt."
+            )
     else:
-        msg += (
-            f"   All Google Ads components are up to date and match the latest upstream releases."
+        active_api_version = get_configured_api_version() or detect_latest_api_version()
+        msg = (
+            f"CRITICAL GOOGLE ADS CONFIGURATION & HITL MUTATION NOTICE:\n"
+            f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml), with active api_version = \"{active_api_version}\".\n"
+            f"   All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
+            f"2. HITL MUTATION VERIFICATION & AUDIT MANDATE ({mutates_state_str} in config/assistant_config): "
+            f"Live mutations are currently {'ENABLED' if mutates_enabled else 'DISABLED (set execute_mutates = true in config/assistant_config to enable)'}.\n"
+            f"3. RUNNABLE CODE STORAGE MANDATE: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called 'saved' (e.g., ./saved/ or ./saved/code/).\n"
+            f"4. ACTIVE API CONFIGURATION: Active Google Ads API version: \"{active_api_version}\". Parity verification was completed on the first prompt."
         )
 
     response_payload = {
