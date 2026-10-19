@@ -19,7 +19,9 @@
   - Updated GitHub Actions CI test matrix (`.github/workflows/ci.yml`) to run across Python 3.11 through 3.15, dropping Python 3.10 on both Linux and Windows runners.
   - Updated host environment runtime checks in `install.sh` and `install.ps1` to require Python >= 3.11.
   - Updated documentation across `README.md`, `plugins/google-ads-api-developer-assistant/README.md`, and `FAQ.md` to document the minimum Python >= 3.11 requirement.
-- **Global Plugin Availability & Symlink Installation (`--link`, `GOOGLE_ADS_ASSISTANT_DIR`):**
+- **Global Plugin Availability, Direct Customer ID Pre-Seeding & Config Path Resolution:**
+  - Added `--cid` / `--customer-id` flag to `install.sh` (`./install.sh agy --cid <id>`) and `-CustomerId` / `-Cid` to `install.ps1` (`.\install.ps1 -Type agy -Cid <id>`) to directly pre-seed default `customer_id` into `assistant_config` at install time.
+  - Updated documentation across `README.md`, `FAQ.md`, and `skills/execute-mutation/SKILL.md` to document the plugin source path `plugins/google-ads-api-developer-assistant/config/config_init.py` and global plugin path `~/.gemini/config/plugins/...` for post-install CLI configuration.
   - Added `--link` / `--symlink` support to `install.sh` (`./install.sh agy --link`) and `-Link` support to `install.ps1` (`.\install.ps1 -Type agy -Link`) to symlink `~/.gemini/config/plugins/google-ads-api-developer-assistant` directly to `plugins/google-ads-api-developer-assistant` in the repository, and updated `update.sh` and `update.ps1` to detect and preserve symlinked plugin directories.
   - Updated `handle_hook()` in `config/config_init.py` to export `GOOGLE_ADS_ASSISTANT_DIR` and automatically rewrite relative `skills/<skill>/(scripts|references)/<file>` paths to the active plugin root when commands are invoked from workspaces outside the repository.
   - Updated skill definitions (`skills/*/SKILL.md`) and Claude Code slash commands (`commands/*.md`) to resolve script paths via `${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}` so skill scripts are globally executable from any working directory.

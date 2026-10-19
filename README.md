@@ -212,23 +212,26 @@ execute_mutates = false
 | **`customer_id`** | `string` | `"12345678"` | Default Google Ads Customer ID (10-digit account ID without dashes) used when a prompt does not explicitly specify a CID (e.g., *"Get my campaigns"*). |
 | **`execute_mutates`** | `boolean` | `false` | Controls whether live Google Ads API write/mutate operations (`--execute` / `validate_only=False`) are permitted through the 4-Step HITL protocol. |
 
-You can update `config/assistant_config` either by editing the TOML file directly or via the `config/config_init.py` CLI:
+You can configure `customer_id` during installation (`./install.sh agy --cid 1234567890`), edit `config/assistant_config` directly, or run `config_init.py`:
 ```bash
-# Set default Customer ID in config/assistant_config and sync config/google-ads.yaml
-python3 config/config_init.py --key customer_id --value 1234567890
+# Set default Customer ID in config/assistant_config and sync config/google-ads.yaml (from repo root)
+python3 plugins/google-ads-api-developer-assistant/config/config_init.py --key customer_id --value 1234567890
+
+# Or via the installed Antigravity plugin:
+python3 ~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py --key customer_id --value 1234567890
 
 # Automatically detect the latest API version across client_libs and site-packages and update config/assistant_config
-python3 config/config_init.py --key api_version
+python3 plugins/google-ads-api-developer-assistant/config/config_init.py --key api_version
 
 # Lock a specific API version in config/assistant_config
-python3 config/config_init.py --key api_version --value v26
+python3 plugins/google-ads-api-developer-assistant/config/config_init.py --key api_version --value v26
 
 # Synchronize client_libs and api_version synchronously from the CLI
-python3 config/config_init.py --sync-client-libs
+python3 plugins/google-ads-api-developer-assistant/config/config_init.py --sync-client-libs
 
 # Enable or disable live mutations in config/assistant_config
-python3 config/config_init.py --execute-mutates true
-python3 config/config_init.py --execute-mutates false
+python3 plugins/google-ads-api-developer-assistant/config/config_init.py --execute-mutates true
+python3 plugins/google-ads-api-developer-assistant/config/config_init.py --execute-mutates false
 ```
 
 ## Usage
@@ -369,11 +372,11 @@ You can control this setting in either of two ways:
    ```
 2. **Use the `config_init.py` CLI flag:**
    ```bash
-   # Enable live mutations in config/assistant_config
-   python3 config/config_init.py --execute-mutates true
+   # Enable live mutations in config/assistant_config (from repo root)
+   python3 plugins/google-ads-api-developer-assistant/config/config_init.py --execute-mutates true
 
    # Disable live mutations (default)
-   python3 config/config_init.py --execute-mutates false
+   python3 plugins/google-ads-api-developer-assistant/config/config_init.py --execute-mutates false
    ```
 
 **Configuration File Precedence:**

@@ -65,7 +65,7 @@ Evaluate and articulate the exact consequences of the requested change across th
 
 1. After `--dry-run` succeeds, present the **Mutation & Consequence Verification Card** output to the user and ask for explicit confirmation (`ask_question` in `agy` or an explicit confirmation prompt in `Claude Code CLI`).
 2. **Wait for the user's response.** Do NOT invoke `--execute` in the same turn as `--dry-run`.
-3. Verify that `config/assistant_config` contains `execute_mutates = true` (or update it via `python3 config/config_init.py --execute-mutates true` if the user explicitly requests enabling mutations). Once confirmed by the user, execute the live mutation:
+3. Verify that `config/assistant_config` contains `execute_mutates = true` (or update it via `python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/config/config_init.py" --execute-mutates true` if the user explicitly requests enabling mutations). Once confirmed by the user, execute the live mutation:
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
      --script saved/code/<mutation_name>.py \

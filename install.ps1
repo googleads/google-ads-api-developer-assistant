@@ -49,7 +49,11 @@ param(
     [switch]$Ruby,
     [switch]$Java,
     [switch]$Dotnet,
-    [switch]$All
+    [switch]$All,
+
+    [Parameter(Mandatory=$false, HelpMessage="Default Google Ads Customer ID (e.g. 1234567890)")]
+    [Alias("cid")]
+    [string]$CustomerId = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -132,7 +136,9 @@ function Set-LatestApiVersion {
                     $ExecMutates = $Matches[1].ToLower()
                 }
             }
-            if ($Cid -eq "12345678") {
+            if ($CustomerId) {
+                $Cid = $CustomerId.Trim().Trim("`"'").Replace("-", "")
+            } elseif ($Cid -eq "12345678") {
                 $PluginConfigDir = Join-Path (Join-Path $ProjectDirAbs "plugins\google-ads-api-developer-assistant") "config"
                 $LegacyCandidates = @(
                     (Join-Path $TargetConfigDir "customer_id"),

@@ -74,6 +74,7 @@ INSTALL_RUBY=false
 INSTALL_JAVA=false
 INSTALL_DOTNET=false
 ANY_SELECTED=false
+CUSTOMER_ID=""
 
 # --- Help Function ---
 usage() {
@@ -89,6 +90,7 @@ usage() {
   echo "    --type TYPE                Target platform ('agy' or 'claude')"
   echo "    --agy                      Install for Antigravity (shorthand for --type agy)"
   echo "    --claude                   Install for Claude Code (shorthand for --type claude)"
+  echo "    --cid, --customer-id CID   Default Google Ads Customer ID (e.g. 1234567890)"
   echo "    --all                      Include all client libraries (Python, PHP, Ruby, Java, .NET)"
   echo "    --php                      Include google-ads-php client library"
   echo "    --ruby                     Include google-ads-ruby client library"
@@ -144,6 +146,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --claude|--claudecode)
       TYPE="claude"
+      shift
+      ;;
+    --cid|--customer-id|--customer_id)
+      if [[ $# -lt 2 ]]; then
+        err "ERROR: $1 requires an argument."
+        exit 1
+      fi
+      CUSTOMER_ID="$2"
+      shift 2
+      ;;
+    --cid=*|--customer-id=*|--customer_id=*)
+      CUSTOMER_ID="${1#*=}"
       shift
       ;;
     --all)
@@ -419,7 +433,9 @@ detect_and_seed_api_version() {
           exec_mutates="${existing_em}"
         fi
       fi
-      if [[ "${cid}" == "12345678" ]]; then
+      if [[ -n "${CUSTOMER_ID}" ]]; then
+        cid=$(echo "${CUSTOMER_ID}" | sed -E 's/^[[:space:]"'\'']+|[[:space:]"'\'']+$//g; s/-//g')
+      elif [[ "${cid}" == "12345678" ]]; then
         for legacy_file in "${target_config_dir}/customer_id" "${target_config_dir}/customer_id.txt" "${PLUGIN_SOURCE_DIR}/config/customer_id" "${PLUGIN_SOURCE_DIR}/config/customer_id.txt"; do
           if [[ -f "${legacy_file}" ]]; then
             local legacy_cid=""
