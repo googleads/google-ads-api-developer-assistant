@@ -1772,6 +1772,65 @@ class TestPerformanceRegressions:
         assert "34.0.0" in captured
         assert "/fake/site-packages" in captured
 
+    def test_update_codebase_via_git_preserves_branch_on_tag_checkout(self, tmp_path):
+        import subprocess
+
+        remote_repo = tmp_path / "remote_repo.git"
+        subprocess.run(["git", "init", "--bare", "-b", "main", str(remote_repo)], check=True)
+
+        seed_repo = tmp_path / "seed_repo"
+        subprocess.run(["git", "clone", str(remote_repo), str(seed_repo)], check=True)
+        subprocess.run(["git", "-C", str(seed_repo), "config", "user.email", "test@example.com"], check=True)
+        subprocess.run(["git", "-C", str(seed_repo), "config", "user.name", "Test User"], check=True)
+
+        (seed_repo / "composer.json").write_text('{"version": "35.1.0"}\n', encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed_repo), "add", "composer.json"], check=True)
+        subprocess.run(["git", "-C", str(seed_repo), "commit", "-m", "v35.1.0"], check=True)
+        subprocess.run(["git", "-C", str(seed_repo), "tag", "v35.1.0"], check=True)
+        subprocess.run(["git", "-C", str(seed_repo), "push", "-u", "origin", "main", "--tags"], check=True)
+
+        local_clone = tmp_path / "google-ads-php"
+        subprocess.run(["git", "clone", str(remote_repo), str(local_clone)], check=True)
+
+        # Advance remote with v35.2.0 tag
+        (seed_repo / "composer.json").write_text('{"version": "35.2.0"}\n', encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed_repo), "add", "composer.json"], check=True)
+        subprocess.run(["git", "-C", str(seed_repo), "commit", "-m", "v35.2.0"], check=True)
+        subprocess.run(["git", "-C", str(seed_repo), "tag", "v35.2.0"], check=True)
+        subprocess.run(["git", "-C", str(seed_repo), "push", "origin", "main", "--tags"], check=True)
+
+        # Put local_clone into detached HEAD first to simulate prior detached tag state
+        subprocess.run(["git", "-C", str(local_clone), "checkout", "v35.1.0"], check=True)
+        detached_check = subprocess.run(
+            ["git", "-C", str(local_clone), "symbolic-ref", "-q", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert detached_check.returncode != 0
+
+        ok = sync_client_libs.update_codebase_via_git(str(local_clone), "v35.2.0")
+        assert ok is True
+
+        # Verify HEAD is back on branch 'main' (not detached) and subsequent git pull succeeds
+        branch_check = subprocess.run(
+            ["git", "-C", str(local_clone), "symbolic-ref", "-q", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert branch_check.returncode == 0
+        assert branch_check.stdout.strip() == "main"
+
+        pull_check = subprocess.run(
+            ["git", "-C", str(local_clone), "pull"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert pull_check.returncode == 0
+
+
 
 
 

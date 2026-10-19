@@ -90,6 +90,49 @@ function Get-RepoName {
 }
 
 
+function Update-GitRepo {
+    param([string]$RepoDir)
+    Push-Location $RepoDir
+    try {
+        $CurrentBranch = git symbolic-ref -q --short HEAD 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($CurrentBranch)) {
+            $DefaultBranch = $null
+            $OriginHead = git symbolic-ref -q --short refs/remotes/origin/HEAD 2>$null
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($OriginHead)) {
+                $DefaultBranch = $OriginHead -replace '^origin/', ''
+            }
+            if ([string]::IsNullOrWhiteSpace($DefaultBranch)) {
+                foreach ($Candidate in @("main", "master")) {
+                    git show-ref --verify --quiet "refs/heads/$Candidate" 2>$null
+                    if ($LASTEXITCODE -eq 0) {
+                        $DefaultBranch = $Candidate
+                        break
+                    }
+                    git show-ref --verify --quiet "refs/remotes/origin/$Candidate" 2>$null
+                    if ($LASTEXITCODE -eq 0) {
+                        $DefaultBranch = $Candidate
+                        break
+                    }
+                }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($DefaultBranch)) {
+                git show-ref --verify --quiet "refs/heads/$DefaultBranch" 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    git checkout $DefaultBranch 2>$null | Out-Null
+                } else {
+                    git checkout -B $DefaultBranch "origin/$DefaultBranch" 2>$null | Out-Null
+                }
+                git branch --set-upstream-to="origin/$DefaultBranch" $DefaultBranch 2>$null | Out-Null
+            }
+        }
+        git pull
+        return ($LASTEXITCODE -eq 0)
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Set-LatestApiVersion {
     param(
         [string]$SearchDir,
@@ -268,10 +311,8 @@ if ($IncludeDirs.Count -eq 0) {
         if (-not (Test-Path -LiteralPath (Join-Path $AbsLibPath ".git"))) { continue }
 
         Write-Host "Updating repository at: $AbsLibPath..."
-        Push-Location $AbsLibPath
         try {
-            git pull
-            if ($LASTEXITCODE -eq 0) {
+            if (Update-GitRepo -RepoDir $AbsLibPath) {
                 Write-Host "Successfully updated $(Split-Path $AbsLibPath -Leaf)."
             } else {
                 Write-Warning "WARN: Failed to update $(Split-Path $AbsLibPath -Leaf). Continuing..."
@@ -279,9 +320,6 @@ if ($IncludeDirs.Count -eq 0) {
         }
         catch {
             Write-Warning "WARN: Failed to update $(Split-Path $AbsLibPath -Leaf). Continuing..."
-        }
-        finally {
-            Pop-Location
         }
         Remove-Item -Force -LiteralPath (Join-Path $AbsLibPath "google-ads.yaml") -ErrorAction SilentlyContinue
     }
@@ -345,10 +383,8 @@ if ($Type.ToLower() -eq "agy") {
                 $SourcePath = Join-Path $PluginSourceClientLibs $Dir.Name
                 if ((-not (Test-Path -LiteralPath $SourcePath)) -or ((Get-Item $Dir.FullName).FullName -ne (Get-Item $SourcePath).FullName)) {
                     Write-Host "Updating repository at: $($Dir.FullName)..."
-                    Push-Location $Dir.FullName
                     try {
-                        git pull
-                        if ($LASTEXITCODE -eq 0) {
+                        if (Update-GitRepo -RepoDir $Dir.FullName) {
                             Write-Host "Successfully updated $($Dir.Name)."
                         } else {
                             Write-Warning "WARN: Failed to update $($Dir.Name) in target directory. Continuing..."
@@ -356,9 +392,6 @@ if ($Type.ToLower() -eq "agy") {
                     }
                     catch {
                         Write-Warning "WARN: Failed to update $($Dir.Name) in target directory. Continuing..."
-                    }
-                    finally {
-                        Pop-Location
                     }
                 }
                 Remove-Item -Force -LiteralPath (Join-Path $Dir.FullName "google-ads.yaml") -ErrorAction SilentlyContinue

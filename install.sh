@@ -338,6 +338,35 @@ is_enabled() {
   esac
 }
 
+# Helper to safely update a git repository even if HEAD is detached (e.g., checked out at a release tag)
+update_git_repo() {
+  local repo_dir="$1"
+  (
+    cd "${repo_dir}"
+    if ! git symbolic-ref -q HEAD >/dev/null 2>&1; then
+      local default_branch=""
+      default_branch=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' || true)
+      if [[ -z "${default_branch}" ]]; then
+        for candidate in main master; do
+          if git show-ref --verify --quiet "refs/heads/${candidate}" || git show-ref --verify --quiet "refs/remotes/origin/${candidate}"; then
+            default_branch="${candidate}"
+            break
+          fi
+        done
+      fi
+      if [[ -n "${default_branch}" ]]; then
+        if git show-ref --verify --quiet "refs/heads/${default_branch}"; then
+          git checkout "${default_branch}" >/dev/null 2>&1 || true
+        else
+          git checkout -B "${default_branch}" "origin/${default_branch}" >/dev/null 2>&1 || true
+        fi
+        git branch --set-upstream-to="origin/${default_branch}" "${default_branch}" >/dev/null 2>&1 || true
+      fi
+    fi
+    git pull
+  )
+}
+
 # --- Clone/Update Repositories ---
 clone_or_update() {
   local repo_url="$1"
@@ -351,7 +380,7 @@ clone_or_update() {
     echo "Managing repository ${repo_name} in ${clone_path}"
     if [[ -d "${clone_path}/.git" ]]; then
       echo "Directory ${clone_path} already exists. Updating..."
-      if ! (cd "${clone_path}" && git pull); then
+      if ! update_git_repo "${clone_path}"; then
         echo "WARN: Failed to update ${repo_name}. Continuing..."
       else
         echo "Successfully updated ${repo_name}."
