@@ -49,8 +49,7 @@ param(
     [switch]$Ruby,
     [switch]$Java,
     [switch]$Dotnet,
-    [switch]$All,
-    [switch]$Link
+    [switch]$All
 )
 
 $ErrorActionPreference = "Stop"
@@ -134,11 +133,12 @@ function Set-LatestApiVersion {
                 }
             }
             if ($Cid -eq "12345678") {
+                $PluginConfigDir = Join-Path (Join-Path $ProjectDirAbs "plugins\google-ads-api-developer-assistant") "config"
                 $LegacyCandidates = @(
                     (Join-Path $TargetConfigDir "customer_id"),
                     (Join-Path $TargetConfigDir "customer_id.txt"),
-                    (Join-Path (Join-Path $ProjectDirAbs "config") "customer_id"),
-                    (Join-Path (Join-Path $ProjectDirAbs "config") "customer_id.txt")
+                    (Join-Path $PluginConfigDir "customer_id"),
+                    (Join-Path $PluginConfigDir "customer_id.txt")
                 )
                 foreach ($LegacyFile in $LegacyCandidates) {
                     if ($LegacyFile -and (Test-Path -LiteralPath $LegacyFile)) {
@@ -288,71 +288,17 @@ if (-not (Test-Path -LiteralPath $PluginSource)) {
     exit 1
 }
 
-if ($Type.ToLower() -eq "claude" -or $Type.ToLower() -eq "claudecode") {
-    Write-Host "Preparing Claude Code plugin files at $PluginSource..."
-    $PluginSourceClientLibs = Join-Path $PluginSource "client_libs"
-    if (-not (Test-Path -LiteralPath $PluginSourceClientLibs)) {
-        New-Item -ItemType Directory -Force -Path $PluginSourceClientLibs | Out-Null
+function Install-PluginCopy {
+    param([string]$TargetPluginDir)
+    $ParentPluginDir = Split-Path $TargetPluginDir
+    if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
+        New-Item -ItemType Directory -Force -Path $ParentPluginDir | Out-Null
     }
-
-    $AllLangs = @("python", "php", "ruby", "java", "dotnet")
-    foreach ($Lang in $AllLangs) {
-        if (Test-Enabled -Lang $Lang) {
-            $Config = Get-RepoConfig -Lang $Lang
-            $TargetRepoPath = Join-Path $PluginSourceClientLibs $Config.Name
-            $RepoUrl = $Config.Url
-
-            if (-not (Test-Path -LiteralPath $TargetRepoPath)) {
-                Write-Host "Cloning $RepoUrl into $TargetRepoPath..."
-                git -c core.longpaths=true clone --depth 1 $RepoUrl $TargetRepoPath
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Error "ERROR: Failed to clone $RepoUrl"
-                    exit 1
-                }
-                Write-Host "Successfully cloned $($Config.Name)."
-                Remove-Item -Force -LiteralPath (Join-Path $TargetRepoPath "google-ads.yaml") -ErrorAction SilentlyContinue
-            }
-        }
+    if (Test-Path -LiteralPath $TargetPluginDir) {
+        Remove-Item -Recurse -Force -LiteralPath $TargetPluginDir
     }
-
-    $PluginPythonDir = Join-Path $PluginSource "client_libs\google-ads-python\google\ads\googleads"
-    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $PluginSource "config")
-    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
-
-    Write-Host "Registering marketplace in Claude Code..."
-    claude plugin marketplace add $ProjectDirAbs
-
-    Write-Host "Installing plugin in Claude Code..."
-    claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
-
-    Write-Host "Plugin installation for claude complete."
-    Write-Host ""
-    Write-Host "In your Claude Code session, run /reload-plugins to activate the plugin."
-    exit 0
-}
-
-# Antigravity installation
-$UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-$TargetPluginDir = Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant"
-$ParentPluginDir = Split-Path $TargetPluginDir
-
-Write-Host "Installing plugin for agy into: $TargetPluginDir"
-if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
-    New-Item -ItemType Directory -Force -Path $ParentPluginDir | Out-Null
-}
-
-if (Test-Path -LiteralPath $TargetPluginDir) {
-    Remove-Item -Recurse -Force -LiteralPath $TargetPluginDir
-}
-
-if ($Link) {
-    Write-Host "Creating symbolic link: $TargetPluginDir -> $PluginSource"
-    New-Item -ItemType SymbolicLink -Path $TargetPluginDir -Target $PluginSource | Out-Null
-}
-else {
     Copy-Item -Recurse -Force -LiteralPath $PluginSource -Destination $TargetPluginDir
 
-    # Add any additional selected client libraries to plugin structure
     $PluginClientLibsDir = Join-Path $TargetPluginDir "client_libs"
     if (-not (Test-Path -LiteralPath $PluginClientLibsDir)) {
         New-Item -ItemType Directory -Force -Path $PluginClientLibsDir | Out-Null
@@ -386,12 +332,43 @@ else {
             }
         }
     }
+
+    $PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
+    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
 }
 
-# Pre-seed latest API version in plugin and project config
-$PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
-Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
-Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
+$UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+
+if ($Type.ToLower() -eq "claude" -or $Type.ToLower() -eq "claudecode") {
+    $ClaudeMarketplaceDir = Join-Path $UserHome ".claude\plugins\google-ads-assistant-local"
+    $ClaudePluginTargetDir = Join-Path $ClaudeMarketplaceDir "plugins\google-ads-api-developer-assistant"
+    $ClaudeManifestDir = Join-Path $ClaudeMarketplaceDir ".claude-plugin"
+
+    Write-Host "Installing standalone Claude Code plugin into: $ClaudePluginTargetDir"
+    if (-not (Test-Path -LiteralPath $ClaudeManifestDir)) {
+        New-Item -ItemType Directory -Force -Path $ClaudeManifestDir | Out-Null
+    }
+    Copy-Item -Force -LiteralPath (Join-Path $ProjectDirAbs ".claude-plugin\marketplace.json") -Destination (Join-Path $ClaudeManifestDir "marketplace.json")
+
+    Install-PluginCopy -TargetPluginDir $ClaudePluginTargetDir
+
+    Write-Host "Registering marketplace in Claude Code..."
+    claude plugin marketplace add $ClaudeMarketplaceDir
+
+    Write-Host "Installing plugin in Claude Code..."
+    claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
+
+    Write-Host "Plugin installation for claude complete."
+    Write-Host ""
+    Write-Host "In your Claude Code session, run /reload-plugins to activate the plugin."
+    exit 0
+}
+
+# Antigravity installation
+$TargetPluginDir = Join-Path $UserHome ".gemini\config\plugins\google-ads-api-developer-assistant"
+
+Write-Host "Installing plugin for agy into: $TargetPluginDir"
+Install-PluginCopy -TargetPluginDir $TargetPluginDir
 
 Write-Host "Plugin installation for agy complete."
 Write-Host ""

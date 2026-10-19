@@ -63,6 +63,8 @@ get_repo_name() {
 }
 
 readonly PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+readonly CLAUDE_MARKETPLACE_DIR="${HOME}/.claude/plugins/google-ads-assistant-local"
+readonly CLAUDE_PLUGIN_TARGET_DIR="${CLAUDE_MARKETPLACE_DIR}/plugins/google-ads-api-developer-assistant"
 
 # --- Defaults ---
 TYPE=""
@@ -71,7 +73,6 @@ INSTALL_PHP=false
 INSTALL_RUBY=false
 INSTALL_JAVA=false
 INSTALL_DOTNET=false
-INSTALL_LINK=false
 ANY_SELECTED=false
 
 # --- Help Function ---
@@ -88,7 +89,6 @@ usage() {
   echo "    --type TYPE                Target platform ('agy' or 'claude')"
   echo "    --agy                      Install for Antigravity (shorthand for --type agy)"
   echo "    --claude                   Install for Claude Code (shorthand for --type claude)"
-  echo "    --link, --symlink          Symlink plugin repository into ~/.gemini/config/plugins (for agy)"
   echo "    --all                      Include all client libraries (Python, PHP, Ruby, Java, .NET)"
   echo "    --php                      Include google-ads-php client library"
   echo "    --ruby                     Include google-ads-ruby client library"
@@ -144,10 +144,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --claude|--claudecode)
       TYPE="claude"
-      shift
-      ;;
-    --link|--symlink)
-      INSTALL_LINK=true
       shift
       ;;
     --all)
@@ -424,7 +420,7 @@ detect_and_seed_api_version() {
         fi
       fi
       if [[ "${cid}" == "12345678" ]]; then
-        for legacy_file in "${target_config_dir}/customer_id" "${target_config_dir}/customer_id.txt" "${PROJECT_DIR_ABS}/config/customer_id" "${PROJECT_DIR_ABS}/config/customer_id.txt"; do
+        for legacy_file in "${target_config_dir}/customer_id" "${target_config_dir}/customer_id.txt" "${PLUGIN_SOURCE_DIR}/config/customer_id" "${PLUGIN_SOURCE_DIR}/config/customer_id.txt"; do
           if [[ -f "${legacy_file}" ]]; then
             local legacy_cid=""
             legacy_cid=$(head -n 1 "${legacy_file}" 2>/dev/null | sed -E 's/^[[:space:]"'\'']+|[[:space:]"'\'']+$//g' || true)
@@ -462,92 +458,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ "${TYPE}" == "claude" ]]; then
-  echo "Preparing Claude Code plugin files at ${PLUGIN_SOURCE_DIR}..."
-  mkdir -p "${PLUGIN_SOURCE_DIR}/client_libs"
-
-  # Add all enabled client libraries (including Python by default) to plugin source structure
-  for lang in python php ruby java dotnet; do
-    if is_enabled "$lang"; then
-      repo_name=$(get_repo_name "$lang")
-      target_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
-      url=$(get_repo_url "$lang")
-      log_file="${TEMP_LOG_DIR}/install_${lang}.log"
-
-      if [[ ! -d "${target_lib_path}" ]]; then
-        echo "Cloning ${repo_name} into plugin client_libs..."
-        clone_or_update "$url" "${target_lib_path}" "${log_file}"
-        if [[ -f "${log_file}" ]]; then
-          cat "${log_file}"
-        fi
-        rm -f "${target_lib_path}/google-ads.yaml"
-      fi
-    fi
-  done
-
-  # Pre-seed latest API version
-  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_SOURCE_DIR}/config"
-  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
-
-  echo "Registering marketplace in Claude Code..."
-  claude plugin marketplace add ${PROJECT_DIR_ABS}
-
-  echo "Installing plugin in Claude Code..."
-  claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
-
-  echo "Plugin installation for claude complete."
-  echo ""
-  echo "In your Claude Code session, run /reload-plugins to activate the plugin."
-  exit 0
-fi
-
-# Antigravity installation
-echo "Installing plugin for agy into: ${PLUGIN_TARGET_DIR}"
-mkdir -p "$(dirname "${PLUGIN_TARGET_DIR}")"
-
-if [[ "${INSTALL_LINK}" == "true" ]]; then
-  echo "Symlinking repository plugin directory to ${PLUGIN_TARGET_DIR}..."
-  mkdir -p "${PLUGIN_SOURCE_DIR}/client_libs"
+install_plugin_copy() {
+  local target_dir="$1"
+  rm -rf "${target_dir}"
+  mkdir -p "$(dirname "${target_dir}")"
+  cp -r "${PLUGIN_SOURCE_DIR}" "${target_dir}"
+  mkdir -p "${target_dir}/client_libs"
 
   for lang in python php ruby java dotnet; do
     if is_enabled "$lang"; then
+      local repo_name
       repo_name=$(get_repo_name "$lang")
-      target_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
+      local target_lib_path="${target_dir}/client_libs/${repo_name}"
+      local source_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
+      local url
       url=$(get_repo_url "$lang")
-      log_file="${TEMP_LOG_DIR}/install_${lang}.log"
-
-      if [[ ! -d "${target_lib_path}" ]]; then
-        echo "Cloning ${repo_name} into repository client_libs..."
-        clone_or_update "$url" "${target_lib_path}" "${log_file}"
-        if [[ -f "${log_file}" ]]; then
-          cat "${log_file}"
-        fi
-        rm -f "${target_lib_path}/google-ads.yaml"
-      fi
-    fi
-  done
-
-  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_SOURCE_DIR}/config"
-  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
-
-  rm -rf "${PLUGIN_TARGET_DIR}"
-  ln -sfn "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
-  echo "Created symlink: ${PLUGIN_TARGET_DIR} -> ${PLUGIN_SOURCE_DIR}"
-else
-  rm -rf "${PLUGIN_TARGET_DIR}"
-  cp -r "${PLUGIN_SOURCE_DIR}" "${PLUGIN_TARGET_DIR}"
-
-  # Ensure plugin client_libs directory exists
-  mkdir -p "${PLUGIN_TARGET_DIR}/client_libs"
-
-  # Add all enabled client libraries (including Python by default) to plugin structure
-  for lang in python php ruby java dotnet; do
-    if is_enabled "$lang"; then
-      repo_name=$(get_repo_name "$lang")
-      target_lib_path="${PLUGIN_TARGET_DIR}/client_libs/${repo_name}"
-      source_lib_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
-      url=$(get_repo_url "$lang")
-      log_file="${TEMP_LOG_DIR}/install_${lang}.log"
+      local log_file="${TEMP_LOG_DIR}/install_${lang}.log"
 
       if [[ -d "${source_lib_path}" ]]; then
         echo "Adding ${repo_name} to plugin client_libs from local repository..."
@@ -564,10 +490,32 @@ else
     fi
   done
 
-  # Pre-seed latest API version in plugin and project config
-  detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_TARGET_DIR}/config"
-  detect_and_seed_api_version "${PLUGIN_TARGET_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
+  detect_and_seed_api_version "${target_dir}/client_libs/google-ads-python/google/ads/googleads" "${target_dir}/config"
+}
+
+if [[ "${TYPE}" == "claude" ]]; then
+  echo "Installing standalone Claude Code plugin into: ${CLAUDE_PLUGIN_TARGET_DIR}"
+  mkdir -p "${CLAUDE_MARKETPLACE_DIR}/.claude-plugin"
+  cp "${PROJECT_DIR_ABS}/.claude-plugin/marketplace.json" "${CLAUDE_MARKETPLACE_DIR}/.claude-plugin/marketplace.json"
+
+  install_plugin_copy "${CLAUDE_PLUGIN_TARGET_DIR}"
+
+  echo "Registering marketplace in Claude Code..."
+  claude plugin marketplace add "${CLAUDE_MARKETPLACE_DIR}"
+
+  echo "Installing plugin in Claude Code..."
+  claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
+
+  echo "Plugin installation for claude complete."
+  echo "Active plugin location: ${CLAUDE_PLUGIN_TARGET_DIR}"
+  echo ""
+  echo "In your Claude Code session, run /reload-plugins to activate the plugin."
+  exit 0
 fi
+
+# Antigravity installation
+echo "Installing plugin for agy into: ${PLUGIN_TARGET_DIR}"
+install_plugin_copy "${PLUGIN_TARGET_DIR}"
 
 echo "Plugin installation for agy complete."
 echo "Active plugin location: ${PLUGIN_TARGET_DIR}"

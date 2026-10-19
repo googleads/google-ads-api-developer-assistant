@@ -17,6 +17,8 @@ cleanup() {
 trap cleanup EXIT
 
 AGY_PLUGIN_DIR="${TEST_HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+CLAUDE_MARKETPLACE_DIR="${TEST_HOME}/.claude/plugins/google-ads-assistant-local"
+CLAUDE_PLUGIN_DIR="${CLAUDE_MARKETPLACE_DIR}/plugins/google-ads-api-developer-assistant"
 
 # Create mock claude CLI in TEST_HOME/bin
 mkdir -p "${TEST_HOME}/bin"
@@ -59,17 +61,25 @@ if [[ ! -f "${AGY_PLUGIN_DIR}/config/assistant_config" ]]; then
 fi
 echo "PASS: Antigravity plugin successfully installed."
 
-echo "Test 4: install.sh claude executes claude CLI marketplace add and install commands"
+echo "Test 4: install.sh claude installs standalone copy and executes claude CLI marketplace commands"
 output=$("${PROJECT_ROOT}/install.sh" claude)
-if ! echo "$output" | grep -q "plugin marketplace add"; then
-  echo "FAIL: install.sh claude did not execute marketplace add"
+if ! echo "$output" | grep -q "plugin marketplace add ${CLAUDE_MARKETPLACE_DIR}"; then
+  echo "FAIL: install.sh claude did not register standalone marketplace directory ${CLAUDE_MARKETPLACE_DIR}"
   exit 1
 fi
 if ! echo "$output" | grep -q "plugin install google-ads-api-developer-assistant@google-ads-assistant-local"; then
   echo "FAIL: install.sh claude did not execute plugin install"
   exit 1
 fi
-echo "PASS: install.sh claude executed Claude Code marketplace commands."
+if [[ ! -f "${CLAUDE_PLUGIN_DIR}/plugin.json" ]]; then
+  echo "FAIL: plugin.json missing in standalone Claude plugin dir ${CLAUDE_PLUGIN_DIR}"
+  exit 1
+fi
+if [[ ! -f "${CLAUDE_MARKETPLACE_DIR}/.claude-plugin/marketplace.json" ]]; then
+  echo "FAIL: marketplace.json missing in ${CLAUDE_MARKETPLACE_DIR}/.claude-plugin"
+  exit 1
+fi
+echo "PASS: install.sh claude installed standalone copy and executed Claude Code marketplace commands."
 
 echo "Test 5: update.sh requires type argument ('agy' or 'claude')"
 if "${PROJECT_ROOT}/update.sh" 2>/dev/null; then
@@ -94,42 +104,46 @@ if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
 fi
 echo "PASS: update.sh agy executed successfully."
 
-echo "Test 8: update.sh claude updates Claude Code plugin in repository"
+echo "Test 8: update.sh claude updates standalone Claude Code plugin"
 "${PROJECT_ROOT}/update.sh" claude
-if [[ ! -f "${PROJECT_ROOT}/plugins/google-ads-api-developer-assistant/plugin.json" ]]; then
-  echo "FAIL: plugin.json missing in repository plugin after update"
+if [[ ! -f "${CLAUDE_PLUGIN_DIR}/plugin.json" ]]; then
+  echo "FAIL: plugin.json missing in standalone Claude plugin after update"
   exit 1
 fi
 echo "PASS: update.sh claude executed successfully."
 
-echo "Test 9: update.sh claude --php adds google-ads-php to repository plugin client_libs"
+echo "Test 9: update.sh claude --php adds google-ads-php to standalone Claude plugin client_libs"
 "${PROJECT_ROOT}/update.sh" claude --php
-if [[ ! -d "${PROJECT_ROOT}/plugins/google-ads-api-developer-assistant/client_libs/google-ads-php" ]]; then
-  echo "FAIL: google-ads-php missing from repository plugin client_libs"
+if [[ ! -d "${CLAUDE_PLUGIN_DIR}/client_libs/google-ads-php" ]]; then
+  echo "FAIL: google-ads-php missing from standalone Claude plugin client_libs"
   exit 1
 fi
 echo "PASS: update.sh claude --php added client library successfully."
 
-echo "Test 10: install.sh agy --link creates symbolic link at AGY_PLUGIN_DIR"
+echo "Test 10: install.sh agy rejects --link option (always installs standalone copy)"
+if "${PROJECT_ROOT}/install.sh" agy --link 2>/dev/null; then
+  echo "FAIL: install.sh agy --link should fail because symlinking to repo is disabled"
+  exit 1
+fi
+if [[ -L "${AGY_PLUGIN_DIR}" ]]; then
+  echo "FAIL: ${AGY_PLUGIN_DIR} must not be a symbolic link"
+  exit 1
+fi
+echo "PASS: install.sh agy rejects --link and enforces standalone copy."
+
+echo "Test 11: update.sh agy migrates any legacy symbolic link to a standalone directory copy"
 rm -rf "${AGY_PLUGIN_DIR}"
-"${PROJECT_ROOT}/install.sh" agy --link
-if [[ ! -L "${AGY_PLUGIN_DIR}" ]]; then
-  echo "FAIL: install.sh agy --link did not create a symbolic link at ${AGY_PLUGIN_DIR}"
+ln -sfn "${PROJECT_ROOT}/plugins/google-ads-api-developer-assistant" "${AGY_PLUGIN_DIR}"
+"${PROJECT_ROOT}/update.sh" agy
+if [[ -L "${AGY_PLUGIN_DIR}" || ! -d "${AGY_PLUGIN_DIR}" ]]; then
+  echo "FAIL: update.sh agy did not replace legacy symlink at ${AGY_PLUGIN_DIR} with a real directory"
   exit 1
 fi
 if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
-  echo "FAIL: plugin.json missing via symlink at ${AGY_PLUGIN_DIR}"
+  echo "FAIL: plugin.json missing in migrated standalone directory ${AGY_PLUGIN_DIR}"
   exit 1
 fi
-echo "PASS: install.sh agy --link successfully installed symlinked plugin."
-
-echo "Test 11: update.sh agy preserves symbolic link"
-"${PROJECT_ROOT}/update.sh" agy
-if [[ ! -L "${AGY_PLUGIN_DIR}" ]]; then
-  echo "FAIL: update.sh agy broke symbolic link at ${AGY_PLUGIN_DIR}"
-  exit 1
-fi
-echo "PASS: update.sh agy preserved symbolic link."
+echo "PASS: update.sh agy migrated legacy symbolic link to standalone copy."
 
 echo "Test 12: global script execution from arbitrary directory using GOOGLE_ADS_ASSISTANT_DIR"
 export GOOGLE_ADS_ASSISTANT_DIR="${AGY_PLUGIN_DIR}"

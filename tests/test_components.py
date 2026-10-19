@@ -25,6 +25,7 @@ import pytest
 PLUGIN_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../plugins/google-ads-api-developer-assistant")
 )
+sys.path.insert(0, PLUGIN_ROOT)
 sys.path.insert(0, os.path.join(PLUGIN_ROOT, "skills/inspect-object/scripts"))
 sys.path.insert(0, os.path.join(PLUGIN_ROOT, "skills/validate-gaql/scripts"))
 sys.path.insert(0, os.path.join(PLUGIN_ROOT, "skills/get-cids-under-mcc/scripts"))
@@ -1443,22 +1444,35 @@ class TestAdditionalSkillCoverage:
 class TestPluginIntegrity:
     """Verifies plugin structural integrity, config_init parity, and absence of host-specific paths."""
 
-    def test_config_init_parity(self):
+    def test_config_init_single_source_of_truth_and_sitecustomize(self, tmp_path, monkeypatch):
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        root_cfg = os.path.join(repo_root, "config", "config_init.py")
-        plugin_cfg = os.path.join(
+        root_cfg_dir = os.path.join(repo_root, "config")
+        plugin_cfg_dir = os.path.join(
             repo_root,
             "plugins",
             "google-ads-api-developer-assistant",
             "config",
-            "config_init.py",
         )
-        with open(root_cfg, "r", encoding="utf-8") as f1, open(
-            plugin_cfg, "r", encoding="utf-8"
-        ) as f2:
-            assert f1.read() == f2.read(), (
-                "config/config_init.py and plugins/.../config/config_init.py must remain identical"
-            )
+        assert not os.path.exists(root_cfg_dir), (
+            "Top-level <repo>/config/ should not exist; plugins/google-ads-api-developer-assistant/config/ is the single source of truth"
+        )
+        assert os.path.isfile(os.path.join(plugin_cfg_dir, "config_init.py"))
+        assert os.path.isfile(os.path.join(plugin_cfg_dir, "sitecustomize.py"))
+        assert os.path.isfile(os.path.join(plugin_cfg_dir, "assistant_config"))
+
+        import config.sitecustomize as sc
+
+        fake_yaml = tmp_path / "installed_plugin_google_ads.yaml"
+        fake_yaml.write_text('developer_token: "shim_test_token"\n', encoding="utf-8")
+        empty_workspace = tmp_path / "empty_workspace"
+        empty_workspace.mkdir()
+
+        monkeypatch.chdir(empty_workspace)
+        monkeypatch.setenv("GOOGLE_ADS_CONFIGURATION_FILE_PATH", str(fake_yaml))
+        monkeypatch.setenv("_GOOGLE_ADS_TEST_SITECUSTOMIZE", "1")
+
+        resolved = sc._resolve_assistant_config_file("config/google-ads.yaml", "rb")
+        assert resolved == str(fake_yaml)
 
     def test_no_host_specific_hardcoded_paths_in_rules_and_docs(self):
         import glob

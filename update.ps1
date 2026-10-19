@@ -160,11 +160,12 @@ function Set-LatestApiVersion {
                 }
             }
             if ($Cid -eq "12345678") {
+                $PluginConfigDir = Join-Path (Join-Path $ProjectDirAbs "plugins\google-ads-api-developer-assistant") "config"
                 $LegacyCandidates = @(
                     (Join-Path $TargetConfigDir "customer_id"),
                     (Join-Path $TargetConfigDir "customer_id.txt"),
-                    (Join-Path (Join-Path $ProjectDirAbs "config") "customer_id"),
-                    (Join-Path (Join-Path $ProjectDirAbs "config") "customer_id.txt")
+                    (Join-Path $PluginConfigDir "customer_id"),
+                    (Join-Path $PluginConfigDir "customer_id.txt")
                 )
                 foreach ($LegacyFile in $LegacyCandidates) {
                     if ($LegacyFile -and (Test-Path -LiteralPath $LegacyFile)) {
@@ -207,7 +208,7 @@ Write-Host "Detected project root: $ProjectDirAbs"
 # --- Update Assistant Repo ---
 Write-Host "Updating google-ads-api-developer-assistant repository..."
 
-$ConfigDir = Join-Path $ProjectDirAbs "config"
+$ConfigDir = Join-Path (Join-Path $ProjectDirAbs "plugins\google-ads-api-developer-assistant") "config"
 $TempConfigDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Force -Path $TempConfigDir | Out-Null
 
@@ -327,45 +328,53 @@ if ($IncludeDirs.Count -eq 0) {
 
 $PluginPythonDir = Join-Path $PluginSourceDir "client_libs\google-ads-python\google\ads\googleads"
 Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $PluginSourceDir "config")
-Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $ProjectDirAbs "config")
 
-# --- Antigravity Specific Sync ---
-if ($Type.ToLower() -eq "agy") {
-    $ParentPluginDir = Split-Path $AgyPluginTargetDir
+function Sync-InstalledPluginDir {
+    param([string]$TargetPluginDir)
+    $ParentPluginDir = Split-Path $TargetPluginDir
     $IsSymlink = $false
-    if (Test-Path -LiteralPath $AgyPluginTargetDir) {
-        $TargetItem = Get-Item -LiteralPath $AgyPluginTargetDir -Force
+    if (Test-Path -LiteralPath $TargetPluginDir) {
+        $TargetItem = Get-Item -LiteralPath $TargetPluginDir -Force
         if (($TargetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $TargetItem.LinkType) {
             $IsSymlink = $true
         }
     }
 
     if ($IsSymlink) {
-        Write-Host "Antigravity plugin directory at $AgyPluginTargetDir is a symlink to this repository."
-        Write-Host "Repository updates apply directly to the plugin without copying."
+        Write-Host "Replacing legacy symlink at $TargetPluginDir with standalone plugin copy..."
+        Remove-Item -Force -LiteralPath $TargetPluginDir
     }
-    elseif (-not (Test-Path -LiteralPath $AgyPluginTargetDir)) {
-        Write-Host "Plugin not yet installed at $AgyPluginTargetDir. Installing for agy..."
+
+    if (-not (Test-Path -LiteralPath $TargetPluginDir)) {
+        Write-Host "Plugin not yet installed at $TargetPluginDir. Installing standalone copy..."
         if (-not (Test-Path -LiteralPath $ParentPluginDir)) {
             New-Item -ItemType Directory -Force -Path $ParentPluginDir | Out-Null
         }
-        Copy-Item -Recurse -Force -LiteralPath $PluginSourceDir -Destination $AgyPluginTargetDir
+        Copy-Item -Recurse -Force -LiteralPath $PluginSourceDir -Destination $TargetPluginDir
     }
     else {
-        Write-Host "Syncing plugin files to $AgyPluginTargetDir..."
+        Write-Host "Syncing plugin files to $TargetPluginDir..."
+        $TargetCfgFile = Join-Path (Join-Path $TargetPluginDir "config") "assistant_config"
+        $BackupCfgContent = $null
+        if (Test-Path -LiteralPath $TargetCfgFile) {
+            $BackupCfgContent = Get-Content -LiteralPath $TargetCfgFile -Raw
+        }
         Get-ChildItem -LiteralPath $PluginSourceDir -Force | ForEach-Object {
             if ($_.Name -ne "client_libs") {
-                Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination (Join-Path $AgyPluginTargetDir $_.Name)
+                Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination (Join-Path $TargetPluginDir $_.Name)
             }
+        }
+        if ($BackupCfgContent) {
+            Set-Content -Path $TargetCfgFile -Value $BackupCfgContent -NoNewline
         }
     }
 
-    $TargetClientLibs = Join-Path $AgyPluginTargetDir "client_libs"
+    $TargetClientLibs = Join-Path $TargetPluginDir "client_libs"
     if (-not (Test-Path -LiteralPath $TargetClientLibs)) {
         New-Item -ItemType Directory -Force -Path $TargetClientLibs | Out-Null
     }
 
-    if ((-not $IsSymlink) -and (Test-Path -LiteralPath $PluginSourceClientLibs)) {
+    if (Test-Path -LiteralPath $PluginSourceClientLibs) {
         foreach ($LibDir in Get-ChildItem -LiteralPath $PluginSourceClientLibs -Directory) {
             $TargetLibPath = Join-Path $TargetClientLibs $LibDir.Name
             if (-not (Test-Path -LiteralPath $TargetLibPath)) {
@@ -376,30 +385,41 @@ if ($Type.ToLower() -eq "agy") {
         }
     }
 
-    # Also update any existing client libraries in Antigravity target directory if they are distinct git clones
     if (Test-Path -LiteralPath $TargetClientLibs) {
         foreach ($Dir in Get-ChildItem -LiteralPath $TargetClientLibs -Directory) {
             if (Test-Path -LiteralPath (Join-Path $Dir.FullName ".git")) {
-                $SourcePath = Join-Path $PluginSourceClientLibs $Dir.Name
-                if ((-not (Test-Path -LiteralPath $SourcePath)) -or ((Get-Item $Dir.FullName).FullName -ne (Get-Item $SourcePath).FullName)) {
-                    Write-Host "Updating repository at: $($Dir.FullName)..."
-                    try {
-                        if (Update-GitRepo -RepoDir $Dir.FullName) {
-                            Write-Host "Successfully updated $($Dir.Name)."
-                        } else {
-                            Write-Warning "WARN: Failed to update $($Dir.Name) in target directory. Continuing..."
-                        }
-                    }
-                    catch {
+                Write-Host "Updating repository at: $($Dir.FullName)..."
+                try {
+                    if (Update-GitRepo -RepoDir $Dir.FullName) {
+                        Write-Host "Successfully updated $($Dir.Name)."
+                    } else {
                         Write-Warning "WARN: Failed to update $($Dir.Name) in target directory. Continuing..."
                     }
+                }
+                catch {
+                    Write-Warning "WARN: Failed to update $($Dir.Name) in target directory. Continuing..."
                 }
                 Remove-Item -Force -LiteralPath (Join-Path $Dir.FullName "google-ads.yaml") -ErrorAction SilentlyContinue
             }
         }
     }
 
-    Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $AgyPluginTargetDir "config")
+    $TargetPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
+    Set-LatestApiVersion -SearchDir $TargetPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
+}
+
+if ($Type.ToLower() -eq "agy") {
+    Sync-InstalledPluginDir -TargetPluginDir $AgyPluginTargetDir
+}
+elseif ($Type.ToLower() -eq "claude" -or $Type.ToLower() -eq "claudecode") {
+    $ClaudeMarketplaceDir = Join-Path $UserHome ".claude\plugins\google-ads-assistant-local"
+    $ClaudePluginTargetDir = Join-Path $ClaudeMarketplaceDir "plugins\google-ads-api-developer-assistant"
+    $ClaudeManifestDir = Join-Path $ClaudeMarketplaceDir ".claude-plugin"
+    if (-not (Test-Path -LiteralPath $ClaudeManifestDir)) {
+        New-Item -ItemType Directory -Force -Path $ClaudeManifestDir | Out-Null
+    }
+    Copy-Item -Force -LiteralPath (Join-Path $ProjectDirAbs ".claude-plugin\marketplace.json") -Destination (Join-Path $ClaudeManifestDir "marketplace.json")
+    Sync-InstalledPluginDir -TargetPluginDir $ClaudePluginTargetDir
 }
 
 Write-Host "Plugin update for $Type complete."

@@ -27,6 +27,8 @@ err() {
 }
 
 readonly AGY_PLUGIN_TARGET_DIR="${HOME}/.gemini/config/plugins/google-ads-api-developer-assistant"
+readonly CLAUDE_MARKETPLACE_DIR="${HOME}/.claude/plugins/google-ads-assistant-local"
+readonly CLAUDE_PLUGIN_TARGET_DIR="${CLAUDE_MARKETPLACE_DIR}/plugins/google-ads-api-developer-assistant"
 
 # --- Defaults ---
 TYPE=""
@@ -248,7 +250,7 @@ detect_and_seed_api_version() {
         fi
       fi
       if [[ "${cid}" == "12345678" ]]; then
-        for legacy_file in "${target_config_dir}/customer_id" "${target_config_dir}/customer_id.txt" "${PROJECT_DIR_ABS}/config/customer_id" "${PROJECT_DIR_ABS}/config/customer_id.txt"; do
+        for legacy_file in "${target_config_dir}/customer_id" "${target_config_dir}/customer_id.txt" "${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant/config/customer_id" "${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant/config/customer_id.txt"; do
           if [[ -f "${legacy_file}" ]]; then
             local legacy_cid=""
             legacy_cid=$(head -n 1 "${legacy_file}" 2>/dev/null | sed -E 's/^[[:space:]"'\'']+|[[:space:]"'\'']+$//g' || true)
@@ -286,6 +288,7 @@ echo "Detected project root: ${PROJECT_DIR_ABS}"
 # --- Update Assistant Repo ---
 echo "Updating google-ads-api-developer-assistant..."
 
+PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant"
 TEMP_CONFIG_DIR=$(mktemp -d)
 cleanup() {
   rm -rf "${TEMP_CONFIG_DIR}"
@@ -294,8 +297,8 @@ trap cleanup EXIT
 
 # Backup config/assistant_config and legacy customer_id files if they exist
 for cfg_file in assistant_config customer_id customer_id.txt; do
-  if [[ -f "${PROJECT_DIR_ABS}/config/${cfg_file}" ]]; then
-    cp "${PROJECT_DIR_ABS}/config/${cfg_file}" "${TEMP_CONFIG_DIR}/${cfg_file}"
+  if [[ -f "${PLUGIN_SOURCE_DIR}/config/${cfg_file}" ]]; then
+    cp "${PLUGIN_SOURCE_DIR}/config/${cfg_file}" "${TEMP_CONFIG_DIR}/${cfg_file}"
   fi
 done
 
@@ -304,7 +307,7 @@ if ! git pull; then
   # Restore config files if backup exists
   for cfg_file in assistant_config customer_id customer_id.txt; do
     if [[ -f "${TEMP_CONFIG_DIR}/${cfg_file}" ]]; then
-      cp "${TEMP_CONFIG_DIR}/${cfg_file}" "${PROJECT_DIR_ABS}/config/${cfg_file}"
+      cp "${TEMP_CONFIG_DIR}/${cfg_file}" "${PLUGIN_SOURCE_DIR}/config/${cfg_file}"
     fi
   done
   exit 1
@@ -313,14 +316,13 @@ fi
 # Restore config files
 for cfg_file in assistant_config customer_id customer_id.txt; do
   if [[ -f "${TEMP_CONFIG_DIR}/${cfg_file}" ]]; then
-    cp "${TEMP_CONFIG_DIR}/${cfg_file}" "${PROJECT_DIR_ABS}/config/${cfg_file}"
+    cp "${TEMP_CONFIG_DIR}/${cfg_file}" "${PLUGIN_SOURCE_DIR}/config/${cfg_file}"
   fi
 done
 
 echo "Successfully updated repository."
 
 # --- Update Plugin Installation & Client Libraries ---
-PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant"
 mkdir -p "${PLUGIN_SOURCE_DIR}/client_libs"
 
 # Handle specific library additions in repository plugin source
@@ -357,39 +359,51 @@ if [[ -d "${PLUGIN_SOURCE_DIR}/client_libs" ]]; then
   done
 fi
 
-# Pre-seed latest API version in repository plugin and project config
+# Pre-seed latest API version in repository plugin config
 detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PLUGIN_SOURCE_DIR}/config"
-detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${PROJECT_DIR_ABS}/config"
 
-# --- Antigravity Specific Sync ---
-if [[ "${TYPE}" == "agy" ]]; then
-  if [[ -L "${AGY_PLUGIN_TARGET_DIR}" ]]; then
-    echo "Antigravity plugin directory at ${AGY_PLUGIN_TARGET_DIR} is a symlink to this repository."
-    echo "Repository updates apply directly to the plugin without copying."
-  elif [[ ! -d "${AGY_PLUGIN_TARGET_DIR}" ]]; then
-    echo "Plugin not yet installed at ${AGY_PLUGIN_TARGET_DIR}. Installing for agy..."
-    mkdir -p "$(dirname "${AGY_PLUGIN_TARGET_DIR}")"
-    cp -r "${PLUGIN_SOURCE_DIR}" "${AGY_PLUGIN_TARGET_DIR}"
+sync_installed_plugin_dir() {
+  local target_plugin_dir="$1"
+  local platform_label="$2"
+
+  if [[ -L "${target_plugin_dir}" ]]; then
+    echo "Replacing legacy symlink at ${target_plugin_dir} with standalone plugin copy..."
+    rm -f "${target_plugin_dir}"
+  fi
+
+  if [[ ! -d "${target_plugin_dir}" ]]; then
+    echo "Plugin not yet installed at ${target_plugin_dir}. Installing standalone copy for ${platform_label}..."
+    mkdir -p "$(dirname "${target_plugin_dir}")"
+    cp -r "${PLUGIN_SOURCE_DIR}" "${target_plugin_dir}"
   else
-    echo "Syncing plugin files to ${AGY_PLUGIN_TARGET_DIR}..."
+    echo "Syncing plugin files to ${target_plugin_dir}..."
+    local existing_cfg_backup="${TEMP_CONFIG_DIR}/target_assistant_config"
+    if [[ -f "${target_plugin_dir}/config/assistant_config" ]]; then
+      cp "${target_plugin_dir}/config/assistant_config" "${existing_cfg_backup}"
+    fi
     for item in "${PLUGIN_SOURCE_DIR}"/*; do
       if [[ -e "${item}" ]]; then
+        local item_name
         item_name=$(basename "${item}")
         if [[ "${item_name}" != "client_libs" ]]; then
-          cp -r "${item}" "${AGY_PLUGIN_TARGET_DIR}/"
+          cp -r "${item}" "${target_plugin_dir}/"
         fi
       fi
     done
+    if [[ -f "${existing_cfg_backup}" ]]; then
+      cp "${existing_cfg_backup}" "${target_plugin_dir}/config/assistant_config"
+    fi
   fi
 
-  AGY_CLIENT_LIBS="${AGY_PLUGIN_TARGET_DIR}/client_libs"
-  mkdir -p "${AGY_CLIENT_LIBS}"
+  local target_client_libs="${target_plugin_dir}/client_libs"
+  mkdir -p "${target_client_libs}"
 
   if [[ -d "${PLUGIN_SOURCE_DIR}/client_libs" ]]; then
     for lib_dir in "${PLUGIN_SOURCE_DIR}/client_libs"/*; do
       if [[ -d "${lib_dir}" ]]; then
+        local lib_name
         lib_name=$(basename "${lib_dir}")
-        target_lib_path="${AGY_CLIENT_LIBS}/${lib_name}"
+        local target_lib_path="${target_client_libs}/${lib_name}"
         if [[ ! -d "${target_lib_path}" ]]; then
           echo "Copying ${lib_name} to ${target_lib_path}..."
           cp -r "${lib_dir}" "${target_lib_path}"
@@ -399,26 +413,31 @@ if [[ "${TYPE}" == "agy" ]]; then
     done
   fi
 
-  # Also update any existing client libraries in Antigravity target directory if they are distinct git clones
-  if [[ -d "${AGY_CLIENT_LIBS}" ]]; then
-    for dir in "${AGY_CLIENT_LIBS}"/*; do
+  if [[ -d "${target_client_libs}" ]]; then
+    for dir in "${target_client_libs}"/*; do
       if [[ -d "${dir}/.git" ]]; then
+        local repo_name
         repo_name=$(basename "${dir}")
-        source_path="${PLUGIN_SOURCE_DIR}/client_libs/${repo_name}"
-        if [[ ! -d "${source_path}" || "$(cd "${dir}" && pwd)" != "$(cd "${source_path}" 2>/dev/null && pwd)" ]]; then
-          echo "Updating repository at: ${dir}..."
-          if ! update_git_repo "${dir}"; then
-            echo "WARN: Failed to update ${repo_name} in target directory. Continuing..." >&2
-          else
-            echo "Successfully updated $(basename "${dir}")."
-          fi
-          rm -f "${dir}/google-ads.yaml"
+        echo "Updating repository at: ${dir}..."
+        if ! update_git_repo "${dir}"; then
+          echo "WARN: Failed to update ${repo_name} in target directory. Continuing..." >&2
+        else
+          echo "Successfully updated ${repo_name}."
         fi
+        rm -f "${dir}/google-ads.yaml"
       fi
     done
   fi
 
-  detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/google/ads/googleads" "${AGY_PLUGIN_TARGET_DIR}/config"
+  detect_and_seed_api_version "${target_plugin_dir}/client_libs/google-ads-python/google/ads/googleads" "${target_plugin_dir}/config"
+}
+
+if [[ "${TYPE}" == "agy" ]]; then
+  sync_installed_plugin_dir "${AGY_PLUGIN_TARGET_DIR}" "agy"
+elif [[ "${TYPE}" == "claude" ]]; then
+  mkdir -p "${CLAUDE_MARKETPLACE_DIR}/.claude-plugin"
+  cp "${PROJECT_DIR_ABS}/.claude-plugin/marketplace.json" "${CLAUDE_MARKETPLACE_DIR}/.claude-plugin/marketplace.json"
+  sync_installed_plugin_dir "${CLAUDE_PLUGIN_TARGET_DIR}" "claude"
 fi
 
 echo "Plugin update for ${TYPE} complete."

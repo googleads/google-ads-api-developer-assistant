@@ -63,7 +63,7 @@ class TestPython315Runtime:
 
     def test_python_315_native_tomllib_integration(self, tmp_path):
         """Verifies native tomllib integration in config_init.py under Python 3.15."""
-        sys.path.insert(0, str(REPO_ROOT / "config"))
+        sys.path.insert(0, str(PLUGIN_ROOT / "config"))
         import config_init as cfg_init
 
         # Python 3.15 provides tomllib in the standard library
@@ -96,7 +96,6 @@ class TestPython315SubprocessCLI:
     """Verifies that all skill scripts and services execute cleanly in Python 3.15 subprocesses."""
 
     CLI_SCRIPTS = [
-        REPO_ROOT / "config" / "config_init.py",
         PLUGIN_ROOT / "config" / "config_init.py",
         SKILLS_DIR / "validate-gaql" / "scripts" / "validate_gaql.py",
         SKILLS_DIR / "inspect-object" / "scripts" / "inspect_object.py",

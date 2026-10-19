@@ -7,6 +7,14 @@ import sys
 from typing import Any
 import pytest
 
+sys.path.insert(
+    0,
+    str(
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+    ),
+)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config.config_init import evaluate_mutation_guard
 
@@ -1527,7 +1535,6 @@ def test_execute_mutates_config_defaults_to_false_and_blocks_live_mutations(
     monkeypatch.delenv("GOOGLE_ADS_EXECUTE_MUTATES", raising=False)
 
     repo_root = Path(__file__).resolve().parent.parent
-    root_assistant_cfg = repo_root / "config" / "assistant_config"
     plugin_assistant_cfg = (
         repo_root
         / "plugins"
@@ -1535,22 +1542,15 @@ def test_execute_mutates_config_defaults_to_false_and_blocks_live_mutations(
         / "config"
         / "assistant_config"
     )
-    assert root_assistant_cfg.is_file()
+    assert not (repo_root / "config").exists()
     assert plugin_assistant_cfg.is_file()
-    assert not (repo_root / "config" / "api_version.txt").exists()
-    assert not (repo_root / "config" / "customer_id").exists()
-    assert not (repo_root / "config" / "execute_mutates").exists()
 
-    root_parsed = config_init.parse_assistant_config(
-        root_assistant_cfg.read_text(encoding="utf-8")
-    )
     plugin_parsed = config_init.parse_assistant_config(
         plugin_assistant_cfg.read_text(encoding="utf-8")
     )
-    assert root_parsed["execute_mutates"] is False
     assert plugin_parsed["execute_mutates"] is False
-    assert "api_version" in root_parsed
-    assert "customer_id" in root_parsed
+    assert "api_version" in plugin_parsed
+    assert "customer_id" in plugin_parsed
 
     # Default state must be False
     assert config_init.is_execute_mutates_enabled() is False
