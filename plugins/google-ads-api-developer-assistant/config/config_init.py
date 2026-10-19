@@ -2170,6 +2170,13 @@ def handle_hook() -> None:
     )
 
     try:
+        with open("/dev/tty", "w") as tty:
+            tty.write("\n" + table_text + "\n\n")
+            tty.flush()
+    except Exception:
+        pass
+
+    try:
         sys.stderr.write(table_text + "\n")
         sys.stderr.flush()
     except Exception:
