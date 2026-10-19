@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 config/config_init.py --hook",
+            "command": "python3 -c \"import os,runpy,sys; sys.argv=['config_init.py','--hook']; p=next((f for f in ['config/config_init.py', os.path.join(os.environ.get('CLAUDE_PLUGIN_ROOT',''),'config/config_init.py'), os.path.join(os.environ.get('GOOGLE_ADS_ASSISTANT_DIR',''),'config/config_init.py'), os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'), os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py'), 'plugins/google-ads-api-developer-assistant/config/config_init.py'] if os.path.isfile(f)), None); runpy.run_path(p, run_name='__main__') if p else None\"",
             "timeout": 15
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 config/config_init.py --hook",
+            "command": "python3 -c \"import os,runpy,sys; sys.argv=['config_init.py','--hook']; p=next((f for f in ['config/config_init.py', os.path.join(os.environ.get('CLAUDE_PLUGIN_ROOT',''),'config/config_init.py'), os.path.join(os.environ.get('GOOGLE_ADS_ASSISTANT_DIR',''),'config/config_init.py'), os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'), os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py'), 'plugins/google-ads-api-developer-assistant/config/config_init.py'] if os.path.isfile(f)), None); runpy.run_path(p, run_name='__main__') if p else None\"",
             "timeout": 15
           }
         ]
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 config/config_init.py --hook",
+            "command": "python3 -c \"import os,runpy,sys; sys.argv=['config_init.py','--hook']; p=next((f for f in ['config/config_init.py', os.path.join(os.environ.get('CLAUDE_PLUGIN_ROOT',''),'config/config_init.py'), os.path.join(os.environ.get('GOOGLE_ADS_ASSISTANT_DIR',''),'config/config_init.py'), os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'), os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py'), 'plugins/google-ads-api-developer-assistant/config/config_init.py'] if os.path.isfile(f)), None); runpy.run_path(p, run_name='__main__') if p else None\"",
             "timeout": 15
           }
         ]
@@ -35,7 +35,7 @@
     "PreInvocation": [
       {
         "type": "command",
-        "command": "python3 config/config_init.py --hook",
+        "command": "python3 -c \"import os,runpy,sys; sys.argv=['config_init.py','--hook']; p=next((f for f in ['config/config_init.py', os.path.join(os.environ.get('CLAUDE_PLUGIN_ROOT',''),'config/config_init.py'), os.path.join(os.environ.get('GOOGLE_ADS_ASSISTANT_DIR',''),'config/config_init.py'), os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'), os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py'), 'plugins/google-ads-api-developer-assistant/config/config_init.py'] if os.path.isfile(f)), None); runpy.run_path(p, run_name='__main__') if p else None\"",
         "timeout": 15
       }
     ]

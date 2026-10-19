@@ -501,10 +501,13 @@ if [[ "${TYPE}" == "claude" ]]; then
   install_plugin_copy "${CLAUDE_PLUGIN_TARGET_DIR}"
 
   echo "Registering marketplace in Claude Code..."
-  claude plugin marketplace add "${CLAUDE_MARKETPLACE_DIR}"
+  (
+    cd "${CLAUDE_PLUGIN_TARGET_DIR}"
+    claude plugin marketplace add "${CLAUDE_MARKETPLACE_DIR}"
 
-  echo "Installing plugin in Claude Code..."
-  claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
+    echo "Installing plugin in Claude Code..."
+    claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
+  )
 
   echo "Plugin installation for claude complete."
   echo "Active plugin location: ${CLAUDE_PLUGIN_TARGET_DIR}"

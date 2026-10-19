@@ -353,10 +353,16 @@ if ($Type.ToLower() -eq "claude" -or $Type.ToLower() -eq "claudecode") {
     Install-PluginCopy -TargetPluginDir $ClaudePluginTargetDir
 
     Write-Host "Registering marketplace in Claude Code..."
-    claude plugin marketplace add $ClaudeMarketplaceDir
+    Push-Location -LiteralPath $ClaudePluginTargetDir
+    try {
+        claude plugin marketplace add $ClaudeMarketplaceDir
 
-    Write-Host "Installing plugin in Claude Code..."
-    claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
+        Write-Host "Installing plugin in Claude Code..."
+        claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
+    }
+    finally {
+        Pop-Location
+    }
 
     Write-Host "Plugin installation for claude complete."
     Write-Host ""

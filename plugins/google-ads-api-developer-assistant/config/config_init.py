@@ -1678,7 +1678,7 @@ _BARE_HOME_YAML_RE = re.compile(
     r"(?:~/google-ads\.yaml|/home/[^/\s'\"]+/google-ads\.yaml|client_libs/[^/\s'\"]+/google-ads\.yaml)"
 )
 _SKILL_REL_PATH_RE = re.compile(
-    r"\bskills/[a-zA-Z0-9_\-]+/(?:scripts|references)/[a-zA-Z0-9_\-\.]+"
+    r"\b(?:skills/[a-zA-Z0-9_\-]+/(?:scripts|references)/[a-zA-Z0-9_\-\.]+|config/config_init\.py)\b"
 )
 
 
@@ -1841,10 +1841,16 @@ def handle_hook() -> None:
             global_plugin_dir = os.path.expanduser(
                 "~/.gemini/config/plugins/google-ads-api-developer-assistant"
             )
-            if not os.path.isdir(os.path.join(plugin_root, "skills")) and os.path.isdir(global_plugin_dir):
-                plugin_root = global_plugin_dir
+            claude_plugin_dir = os.path.expanduser(
+                "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"
+            )
+            if not os.path.isdir(os.path.join(plugin_root, "skills")):
+                if os.path.isdir(global_plugin_dir):
+                    plugin_root = global_plugin_dir
+                elif os.path.isdir(claude_plugin_dir):
+                    plugin_root = claude_plugin_dir
 
-            env_dir = os.environ.get("GOOGLE_ADS_ASSISTANT_DIR")
+            env_dir = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.environ.get("GOOGLE_ADS_ASSISTANT_DIR")
             if env_dir and os.path.isdir(env_dir):
                 plugin_root = os.path.abspath(env_dir)
 
@@ -1874,18 +1880,16 @@ def handle_hook() -> None:
                 updated_cmd,
             )
 
-            # Case F: skills/<skill_name>/(scripts|references)/<file> path resolution
-            # When invoked in workspaces outside the repository, resolve relative skills/ paths to plugin_root
+            # Case F: skills/<skill_name>/(scripts|references)/<file> and config/config_init.py path resolution
+            # When invoked in workspaces outside the plugin root, resolve relative paths to plugin_root
             def _resolve_skill_path(match: re.Match) -> str:
                 rel_path = match.group(0)
                 if os.path.exists(rel_path):
                     return rel_path
-                target = os.path.join(plugin_root, rel_path)
-                if os.path.exists(target):
-                    return target
-                alt_target = os.path.join(global_plugin_dir, rel_path)
-                if os.path.exists(alt_target):
-                    return alt_target
+                for candidate_root in (plugin_root, global_plugin_dir, claude_plugin_dir):
+                    target = os.path.join(candidate_root, rel_path)
+                    if os.path.exists(target):
+                        return target
                 return rel_path
 
             updated_cmd = _SKILL_REL_PATH_RE.sub(
