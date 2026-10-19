@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Optional
@@ -718,6 +719,52 @@ def detect_system_package_version(
     return None, site_dirs
 
 
+def fetch_latest_pypi_python_version(
+    package_name: str = "google-ads",
+    ttl_seconds: int = 3600,
+    force: bool = False,
+) -> Optional[str]:
+    """Fetches and caches the latest release version of a package from pypi.org."""
+    cache_file = os.path.join(
+        tempfile.gettempdir(),
+        f"gads_assistant_pypi_{package_name.replace('-', '_')}_release.json",
+    )
+    now = time.time()
+    if not force and os.path.isfile(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            ts = float(cached.get("timestamp", 0.0))
+            ver = str(cached.get("pypi_version") or "").strip().lstrip("v")
+            if ver and (now - ts) < ttl_seconds:
+                return ver
+        except Exception:
+            pass
+
+    url = f"https://pypi.org/pypi/{package_name}/json"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "google-ads-api-developer-assistant",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        ver = str(data.get("info", {}).get("version") or "").strip().lstrip("v")
+        if ver:
+            try:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump({"timestamp": now, "pypi_version": ver}, f)
+            except OSError:
+                pass
+            return ver
+    except Exception:
+        pass
+    return None
+
+
 def check_system_package_parity(
     package_name: str = "google-ads",
     target_version: Optional[str] = None,
@@ -975,31 +1022,35 @@ def process_client_libs(
             system_version = sys_v
             system_site_dirs = s_dirs
             ref_v = github_version or installed_version
+            pypi_version = fetch_latest_pypi_python_version("google-ads")
+            target_pypi_v = pypi_version or ref_v
+            site_version_less_than_pypi = is_update_needed(sys_v, target_pypi_v)
             site_version_less_than_github = is_update_needed(sys_v, ref_v)
-            if ref_v and sys_v:
+            if target_pypi_v and sys_v:
                 system_version_matches = (
-                    not site_version_less_than_github
-                    and sys_v.lstrip("v").strip() == ref_v.lstrip("v").strip()
+                    not site_version_less_than_pypi
+                    and sys_v.lstrip("v").strip() == target_pypi_v.lstrip("v").strip()
                 )
             elif not sys_v:
                 system_version_matches = False
             else:
                 system_version_matches = True
 
-            if upgrade_system and (not system_version_matches or site_version_less_than_github or force) and not check_only:
+            if upgrade_system and (not system_version_matches or site_version_less_than_pypi or force) and not check_only:
                 upgraded = upgrade_system_package(
                     "google-ads",
-                    github_version,
+                    target_pypi_v,
                     lib_path=lib_path,
                 )
                 if upgraded:
                     sys_v, _ = detect_system_package_version("google-ads")
                     system_version = sys_v
+                    site_version_less_than_pypi = is_update_needed(sys_v, target_pypi_v)
                     site_version_less_than_github = is_update_needed(sys_v, ref_v)
-                    if ref_v and sys_v:
+                    if target_pypi_v and sys_v:
                         system_version_matches = (
-                            not site_version_less_than_github
-                            and sys_v.lstrip("v").strip() == ref_v.lstrip("v").strip()
+                            not site_version_less_than_pypi
+                            and sys_v.lstrip("v").strip() == target_pypi_v.lstrip("v").strip()
                         )
             if not check_only:
                 latest_api_version = update_api_version_cache_if_needed(lib_path)
@@ -1020,6 +1071,8 @@ def process_client_libs(
             res_item["system_site_dirs"] = system_site_dirs
             res_item["system_version_matches"] = system_version_matches
             res_item["site_version_less_than_github"] = site_version_less_than_github
+            res_item["pypi_version"] = pypi_version
+            res_item["site_version_less_than_pypi"] = site_version_less_than_pypi
             if latest_api_version:
                 res_item["api_version"] = latest_api_version
 
@@ -1048,17 +1101,21 @@ def print_table(results: list[dict[str, Any]]) -> None:
         print(fmt.format(codebase, repo, inst, gh, st))
         if codebase == "google-ads-python" and "system_version" in r:
             sys_v = str(r.get("system_version") or "NOT INSTALLED")
+            pypi_v = str(r.get("pypi_version") or r.get("github_version") or "UNKNOWN")
+            is_outdated = r.get("site_version_less_than_pypi")
+            if is_outdated is None:
+                is_outdated = r.get("site_version_less_than_github")
             sys_st = (
                 "UP_TO_DATE"
                 if r.get("system_version_matches")
-                else ("OUTDATED" if r.get("site_version_less_than_github") else "MISMATCH")
+                else ("OUTDATED" if is_outdated else "MISMATCH")
             )
             print(
                 fmt.format(
                     "google-ads (site-packages)",
                     "pypi.org/project/google-ads",
                     sys_v,
-                    gh,
+                    pypi_v,
                     sys_st,
                 )
             )
@@ -1066,8 +1123,8 @@ def print_table(results: list[dict[str, Any]]) -> None:
                 api_v = str(r.get("api_version"))
                 print(
                     fmt.format(
-                        "api_version (assistant_config)",
-                        "config/assistant_config",
+                        "Google Ads API Version",
+                        "Determined from (1) & (2)",
                         api_v,
                         api_v,
                         "ACTIVE",
@@ -1078,7 +1135,7 @@ def print_table(results: list[dict[str, Any]]) -> None:
     for r in results:
         if r.get("codebase") == "google-ads-python" and "system_version" in r:
             sys_v = r.get("system_version")
-            tgt_v = r.get("github_version") or r.get("installed_version")
+            tgt_v = r.get("pypi_version") or r.get("github_version") or r.get("installed_version")
             dirs = r.get("system_site_dirs") or []
             primary_dir = dirs[0] if dirs else "system site-packages"
             api_ver = r.get("api_version")

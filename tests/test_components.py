@@ -721,6 +721,99 @@ class TestExtVersion:
         assert parity_up_to_date["local_version_less_than_github"] is False
         assert parity_up_to_date["upgrade_prompt_required"] is False
 
+    def test_fetch_latest_pypi_python_version(self, monkeypatch, tmp_path):
+        from config import config_init
+        import io
+        import urllib.request
+
+        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+
+        class FakeHTTPResponse:
+            def __init__(self, data: bytes):
+                self._io = io.BytesIO(data)
+
+            def read(self):
+                return self._io.read()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        fake_json = json.dumps({"info": {"version": "34.0.0"}}).encode("utf-8")
+        monkeypatch.setattr(
+            urllib.request,
+            "urlopen",
+            lambda req, **kwargs: FakeHTTPResponse(fake_json),
+        )
+
+        v = config_init.fetch_latest_pypi_python_version(force=True)
+        assert v == "34.0.0"
+
+    def test_determine_api_version(self, tmp_path, monkeypatch):
+        from config import config_init
+
+        # If configured in assistant_config, that takes precedence
+        cfg_file = tmp_path / "assistant_config"
+        cfg_file.write_text('api_version = "v26"\n', encoding="utf-8")
+        v = config_init.determine_api_version(config_dir=str(tmp_path))
+        assert v == "v26"
+
+    def test_check_python_client_lib_parity_pypi_and_table(self, tmp_path, monkeypatch):
+        from config import config_init
+
+        lib_dir = tmp_path / "client_libs" / "google-ads-python"
+        lib_dir.mkdir(parents=True)
+        (lib_dir / "pyproject.toml").write_text('version = "31.2.0"\n', encoding="utf-8")
+
+        monkeypatch.setattr("os.path.abspath", lambda p: str(lib_dir) if "google-ads-python" in p else p)
+        monkeypatch.setattr("os.path.expanduser", lambda p: str(lib_dir) if "google-ads-python" in p else p)
+        monkeypatch.setattr("importlib.metadata.version", lambda pkg: "31.2.0")
+        monkeypatch.setattr(config_init, "fetch_latest_github_python_version", lambda force=False: "34.0.0")
+        monkeypatch.setattr(config_init, "fetch_latest_pypi_python_version", lambda **kw: "34.0.0")
+
+        parity = config_init.check_python_client_lib_parity(check_github=True, check_pypi=True)
+        assert parity["system_version"] == "31.2.0"
+        assert parity["pypi_version"] == "34.0.0"
+        assert parity["local_version"] == "31.2.0"
+        assert parity["github_version"] == "34.0.0"
+        assert parity["site_version_less_than_pypi"] is True
+        assert parity["local_version_less_than_github"] is True
+        assert parity["upgrade_prompt_required"] is True
+        assert "| Component / Library |" in parity["table_markdown"]
+        assert "pypi.org/project/google-ads" in parity["table_markdown"]
+        assert "Google Ads API Version" in parity["table_markdown"]
+        assert "Google Ads API Version & Parity Verification Report" in parity["table_text"]
+
+    def test_handle_hook_session_start_and_preinvocation(self, tmp_path, monkeypatch, capsys):
+        from config import config_init
+        import io
+
+        monkeypatch.setattr(config_init, "fetch_latest_github_python_version", lambda force=False: "34.0.0")
+        monkeypatch.setattr(config_init, "fetch_latest_pypi_python_version", lambda **kw: "34.0.0")
+
+        # 1. Test SessionStart (empty payload on stdin)
+        monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
+        config_init.handle_hook()
+        captured = capsys.readouterr()
+        # Verify stderr has the formatted report
+        assert "Google Ads API Version & Parity Verification Report" in captured.err
+        # Verify stdout has ephemeralMessage in injectSteps
+        data = json.loads(captured.out)
+        assert "injectSteps" in data
+        assert "ephemeralMessage" in data["injectSteps"][0]
+        assert "Parity Table:" in data["injectSteps"][0]["ephemeralMessage"]
+
+        # 2. Test PreInvocation (invocationNum present)
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"invocationNum": 1})))
+        config_init.handle_hook()
+        captured2 = capsys.readouterr()
+        data2 = json.loads(captured2.out)
+        assert "injectSteps" in data2
+        assert "ephemeralMessage" in data2["injectSteps"][0]
+        assert "Parity Table:" in data2["injectSteps"][0]["ephemeralMessage"]
+
     def test_get_extension_version_plugin_json(self, tmp_path, capsys):
         plugin_file = tmp_path / "plugin.json"
         plugin_file.write_text(json.dumps({"version": "4.0.0"}), encoding="utf-8")

@@ -2,13 +2,17 @@
 
 ## 4.1.0
 
-- **System Site-Directory Version Parity & Interactive Upgrade Protocol:**
+- **System Site-Directory & Client Library Version Parity Protocol (Startup Table & PyPI Check):**
+  - Added PyPI release querying (`fetch_latest_pypi_python_version` against `https://pypi.org/pypi/google-ads/json`) in `config/config_init.py` and `skills/sync-client-libs/scripts/sync_client_libs.py`.
+  - Added `determine_api_version()`, `format_parity_table_markdown()`, and `format_parity_table_text()` in `config/config_init.py` to check: (1) `google-ads` in site directory against `pypi.org`, (2) `google-ads-python` in `client_libs/` against GitHub, and (3) determine active Google Ads API version based on (1) and (2).
+  - Added `"SessionStart"` lifecycle hook in `hooks.json` alongside `"PreInvocation"`. At session startup (before the first prompt is entered), `config_init.py --hook` prints the formatted parity table to `sys.stderr` for terminal sessions, and injects the parity table and mandatory first-turn directive into the agent's context.
+  - Mandated that the assistant present the 3-component parity table at the beginning of the first response and, if any component is not the latest version, ask the user if they want to update them before proceeding.
   - Added system site-directory package inspection (`detect_system_package_version`, `check_system_package_parity`, `upgrade_system_package`) to `skills/sync-client-libs/scripts/sync_client_libs.py` to detect `google-ads` in Python system site-packages (`site.getsitepackages()` and `importlib.metadata.version('google-ads')`).
-  - Added automatic version parity checking against latest upstream GitHub/PyPI releases in `process_client_libs` with structured metadata (`system_version`, `system_site_dirs`, `system_version_matches`) in CLI and JSON outputs (`--json`).
+  - Added automatic version parity checking against latest upstream GitHub/PyPI releases in `process_client_libs` with structured metadata (`system_version`, `system_site_dirs`, `system_version_matches`, `pypi_version`, `site_version_less_than_pypi`) in CLI and JSON outputs (`--json`).
   - Added prominent CLI alert reporting in `print_table` when the system site-directory version does not match the upstream release.
   - Implemented `--upgrade_system` CLI flag in `sync_client_libs.py` to upgrade the system package via `pip` upon confirmation.
-  - Updated agent behavioral rules in `rules/google_ads_rules.md` (Section 1.0 item 2, Section 1.2, and Section 4.1), skill instructions in `skills/sync-client-libs/SKILL.md`, and Claude Code slash command in `commands/sync-client-libs.md` mandating that whenever a new version of the python client library or `google-ads` is discovered, the assistant must check the system site-directory, alert the user to any mismatch, prompt the user for confirmation to upgrade, and update it upon confirmation.
-  - Added unit test suite in `tests/test_components.py` covering system package detection, parity validation, pip upgrade execution, and alert rendering (expanding total passed tests to 129).
+  - Updated agent behavioral rules in `rules/google_ads_rules.md` (Section 1.0 item 2, Section 1.2, and Section 4.1), skill instructions in `skills/sync-client-libs/SKILL.md`, and Claude Code slash command in `commands/sync-client-libs.md`.
+  - Added unit test suite in `tests/test_components.py` covering PyPI release fetching, API version determination, SessionStart/PreInvocation hook injection, system package detection, parity validation, pip upgrade execution, and alert rendering (expanding total passed tests to 137).
 - **Runnable Code Storage Mandate (`saved/` Sub-Directory):**
   - Mandated that whenever asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called `saved` (e.g., `./saved/` or `./saved/code/`).
   - Updated `rules/google_ads_rules.md` (Hard Constraints Section 1.2, Project Structure Section 2.1, and Code Generation Protocol Section 3.2).

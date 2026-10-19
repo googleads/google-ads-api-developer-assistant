@@ -791,6 +791,56 @@ def _is_version_less_than(
     return _parse_semver_tuple(installed_ver) < _parse_semver_tuple(latest_ver)
 
 
+def fetch_latest_pypi_python_version(
+    package_name: str = "google-ads",
+    ttl_seconds: int = 3600,
+    force: bool = False,
+) -> Optional[str]:
+    """Fetches and caches the latest release version of a package from pypi.org."""
+    import tempfile
+    import time
+    import urllib.request
+
+    cache_file = os.path.join(
+        tempfile.gettempdir(),
+        f"gads_assistant_pypi_{package_name.replace('-', '_')}_release.json",
+    )
+    now = time.time()
+    if not force and os.path.isfile(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            ts = float(cached.get("timestamp", 0.0))
+            ver = str(cached.get("pypi_version") or "").strip().lstrip("v")
+            if ver and (now - ts) < ttl_seconds:
+                return ver
+        except Exception:
+            pass
+
+    url = f"https://pypi.org/pypi/{package_name}/json"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "google-ads-api-developer-assistant",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        ver = str(data.get("info", {}).get("version") or "").strip().lstrip("v")
+        if ver:
+            try:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump({"timestamp": now, "pypi_version": ver}, f)
+            except OSError:
+                pass
+            return ver
+    except Exception:
+        pass
+    return None
+
+
 def fetch_latest_github_python_version(
     ttl_seconds: int = 3600,
     force: bool = False,
@@ -839,11 +889,142 @@ def fetch_latest_github_python_version(
     return None
 
 
+def determine_api_version(
+    system_version: Optional[str] = None,
+    local_version: Optional[str] = None,
+    config_dir: Optional[str] = None,
+) -> str:
+    """Determines the Google Ads API version to use based on site-directory (1) and client_libs (2)."""
+    configured_ver = get_configured_api_version(config_dir=config_dir)
+    detected_ver = detect_latest_api_version()
+    if configured_ver:
+        return configured_ver
+    return detected_ver or DEFAULT_API_VERSION
+
+
+def format_parity_table_markdown(
+    parity_info: Dict[str, Any], api_version: str
+) -> str:
+    """Formats 3-component Google Ads version comparison table in GitHub Markdown."""
+    sys_ver = parity_info.get("system_version") or "NOT INSTALLED"
+    pypi_ver = (
+        parity_info.get("pypi_version")
+        or parity_info.get("github_version")
+        or "UNKNOWN"
+    )
+    loc_ver = parity_info.get("local_version") or "NOT INSTALLED"
+    gh_ver = parity_info.get("github_version") or "UNKNOWN"
+
+    sys_status = (
+        "UP_TO_DATE"
+        if not parity_info.get("site_version_less_than_pypi")
+        and sys_ver != "NOT INSTALLED"
+        else ("OUTDATED" if sys_ver != "NOT INSTALLED" else "NOT INSTALLED")
+    )
+    loc_status = (
+        "UP_TO_DATE"
+        if not parity_info.get("local_version_less_than_github")
+        and loc_ver != "NOT INSTALLED"
+        else ("OUTDATED" if loc_ver != "NOT INSTALLED" else "NOT INSTALLED")
+    )
+
+    lines = [
+        "| Component / Library | Installed / Local Version | Upstream Source | Upstream Release Version | Status |",
+        "| :--- | :--- | :--- | :--- | :--- |",
+        f"| `google-ads` (Python Site-Directory) | `{sys_ver}` | `pypi.org/project/google-ads` | `{pypi_ver}` | **{sys_status}** |",
+        f"| `google-ads-python` (`client_libs/`) | `{loc_ver}` | `github.com/googleads/google-ads-python` | `{gh_ver}` | **{loc_status}** |",
+        f"| Google Ads API Version (Selected) | `{api_version}` | Determined from (1) & (2) | `{api_version}` | **ACTIVE** |",
+    ]
+    return "\n".join(lines)
+
+
+def format_parity_table_text(
+    parity_info: Dict[str, Any], api_version: str
+) -> str:
+    """Formats 3-component Google Ads version comparison report for terminal display."""
+    sys_ver = parity_info.get("system_version") or "NOT INSTALLED"
+    pypi_ver = (
+        parity_info.get("pypi_version")
+        or parity_info.get("github_version")
+        or "UNKNOWN"
+    )
+    loc_ver = parity_info.get("local_version") or "NOT INSTALLED"
+    gh_ver = parity_info.get("github_version") or "UNKNOWN"
+
+    sys_status = (
+        "UP_TO_DATE"
+        if not parity_info.get("site_version_less_than_pypi")
+        and sys_ver != "NOT INSTALLED"
+        else ("OUTDATED" if sys_ver != "NOT INSTALLED" else "NOT INSTALLED")
+    )
+    loc_status = (
+        "UP_TO_DATE"
+        if not parity_info.get("local_version_less_than_github")
+        and loc_ver != "NOT INSTALLED"
+        else ("OUTDATED" if loc_ver != "NOT INSTALLED" else "NOT INSTALLED")
+    )
+
+    fmt = "{:<36} {:<18} {:<38} {:<16} {:<12}"
+    header = fmt.format(
+        "Component / Library",
+        "Installed / Local",
+        "Upstream Source",
+        "Latest Release",
+        "Status",
+    )
+    div = "-" * len(header)
+    eq_div = "=" * len(header)
+
+    lines = [
+        "",
+        eq_div,
+        "Google Ads API Version & Parity Verification Report",
+        eq_div,
+        header,
+        div,
+        fmt.format(
+            "google-ads (site-packages)",
+            sys_ver,
+            "pypi.org/project/google-ads",
+            pypi_ver,
+            sys_status,
+        ),
+        fmt.format(
+            "google-ads-python (client_libs)",
+            loc_ver,
+            "googleads/google-ads-python",
+            gh_ver,
+            loc_status,
+        ),
+        fmt.format(
+            "Google Ads API Version",
+            api_version,
+            "Determined from (1) & (2)",
+            api_version,
+            "ACTIVE",
+        ),
+        eq_div,
+    ]
+    if parity_info.get("upgrade_prompt_required"):
+        lines.extend([
+            "",
+            "ALERT: One or more Google Ads components are not the latest version!",
+            "Would you like to update them?",
+            "  - To update: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system`",
+            "  - To skip:   continue with currently installed versions.",
+            "",
+        ])
+    return "\n".join(lines)
+
+
 def check_python_client_lib_parity(
     check_github: bool = False,
     force_github: bool = False,
+    check_pypi: Optional[bool] = None,
+    force_pypi: bool = False,
+    config_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compares Python site-directory google-ads, local client_libs/google-ads-python, and GitHub latest version."""
+    """Compares Python site-directory google-ads vs pypi.org, client_libs vs GitHub, and determines API version."""
     this_dir = os.path.dirname(os.path.abspath(__file__))
     candidate_libs = [
         os.path.abspath("client_libs/google-ads-python"),
@@ -900,14 +1081,46 @@ def check_python_client_lib_parity(
         "site_directories": site_directories,
         "matches": matches,
     }
+
+    if check_pypi is None:
+        check_pypi = check_github
+
+    github_version: Optional[str] = None
     if check_github:
         github_version = fetch_latest_github_python_version(force=force_github)
-        site_lt_github = _is_version_less_than(system_version, github_version)
-        local_lt_github = _is_version_less_than(local_version, github_version)
         result["github_version"] = github_version
-        result["site_version_less_than_github"] = site_lt_github
-        result["local_version_less_than_github"] = local_lt_github
-        result["upgrade_prompt_required"] = bool(site_lt_github or local_lt_github)
+
+    pypi_version: Optional[str] = None
+    if check_pypi:
+        pypi_version = fetch_latest_pypi_python_version(force=force_pypi)
+        if not pypi_version and github_version:
+            pypi_version = github_version
+        result["pypi_version"] = pypi_version
+
+    site_lt_pypi = _is_version_less_than(system_version, pypi_version)
+    site_lt_github = _is_version_less_than(system_version, github_version)
+    local_lt_github = _is_version_less_than(local_version, github_version)
+
+    result["site_version_less_than_pypi"] = site_lt_pypi
+    result["site_version_less_than_github"] = site_lt_github
+    result["local_version_less_than_github"] = local_lt_github
+
+    api_version = determine_api_version(
+        system_version=system_version,
+        local_version=local_version,
+        config_dir=config_dir,
+    )
+    result["api_version"] = api_version
+
+    if check_github or check_pypi:
+        result["upgrade_prompt_required"] = bool(
+            site_lt_pypi or local_lt_github or site_lt_github
+        )
+    else:
+        result["upgrade_prompt_required"] = False
+
+    result["table_markdown"] = format_parity_table_markdown(result, api_version)
+    result["table_text"] = format_parity_table_text(result, api_version)
     return result
 
 
@@ -1935,14 +2148,33 @@ def handle_hook() -> None:
         print(json.dumps(response_payload))
         return
 
-    # 2. PreInvocation hook (model prompt injection & 5-step startup client_libs version check)
+    # 2. SessionStart / PreInvocation hook (model prompt injection & startup client_libs parity check)
     parity_info: Dict[str, Any] = check_python_client_lib_parity(
-        check_github=not bool(os.environ.get("PYTEST_CURRENT_TEST"))
+        check_github=not bool(os.environ.get("PYTEST_CURRENT_TEST")),
+        check_pypi=not bool(os.environ.get("PYTEST_CURRENT_TEST")),
     )
 
-    active_api_version = get_configured_api_version() or detect_latest_api_version()
+    active_api_version = (
+        parity_info.get("api_version")
+        or get_configured_api_version()
+        or detect_latest_api_version()
+    )
     mutates_enabled = is_execute_mutates_enabled()
     mutates_state_str = "execute_mutates = true" if mutates_enabled else "execute_mutates = false"
+
+    table_text = parity_info.get("table_text") or format_parity_table_text(
+        parity_info, active_api_version
+    )
+    table_markdown = parity_info.get("table_markdown") or format_parity_table_markdown(
+        parity_info, active_api_version
+    )
+
+    try:
+        sys.stderr.write(table_text + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
     msg = (
         f"CRITICAL GOOGLE ADS CONFIGURATION & HITL MUTATION NOTICE:\n"
         f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml), with active api_version = \"{active_api_version}\".\n"
@@ -1954,34 +2186,34 @@ def handle_hook() -> None:
         f"   (b) Query current resource state via GAQL,\n"
         f"   (c) Execute a validate_only=True dry-run via skills/execute-mutation/scripts/run_mutation.py --dry-run to generate saved/data/last_dry_run.json,\n"
         f"   (d) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute (which appends to saved/logs/mutation_audit.jsonl).\n"
-        f"3. RUNNABLE CODE STORAGE MANDATE: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called 'saved' (e.g., ./saved/ or ./saved/code/)."
+        f"3. RUNNABLE CODE STORAGE MANDATE: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called 'saved' (e.g., ./saved/ or ./saved/code/).\n"
+        f"4. STARTUP CLIENT LIBRARY & SITE-DIRECTORY PARITY VERIFICATION (MANDATORY BEFORE FIRST PROMPT):\n"
+        f"   - (1) google-ads in site directory vs pypi.org: Installed = {parity_info.get('system_version') or 'NOT INSTALLED'}, Latest PyPI = {parity_info.get('pypi_version') or 'UNKNOWN'}\n"
+        f"   - (2) client_libs/google-ads-python vs GitHub: Local = {parity_info.get('local_version') or 'NOT INSTALLED'}, Latest GitHub = {parity_info.get('github_version') or 'UNKNOWN'}\n"
+        f"   - (3) Determined Google Ads API Version to use: {active_api_version}\n\n"
+        f"   Parity Table:\n{table_markdown}\n\n"
+        f"   MANDATORY FIRST-TURN DIRECTIVE:\n"
+        f"   You MUST present this version verification table to the user at the start of your first response in the session.\n"
     )
     if parity_info.get("upgrade_prompt_required"):
-        sys_ver = parity_info.get("system_version") or "NOT INSTALLED"
-        loc_ver = parity_info.get("local_version") or "NOT INSTALLED"
-        gh_ver = parity_info.get("github_version") or "UNKNOWN"
-        site_dirs = parity_info.get("site_directories") or []
-        primary_site = site_dirs[0] if site_dirs else "system site-packages"
         msg += (
-            f"\n4. CLIENT LIBRARY & SITE-DIRECTORY UPGRADE PROMPT REQUIRED:\n"
-            f"   - Installed google-ads version in Python site directory ({primary_site}): {sys_ver}\n"
-            f"   - Installed client_libs/google-ads-python version in Assistant directory: {loc_ver}\n"
-            f"   - Latest release on GitHub (googleads/google-ads-python): {gh_ver}\n"
-            f"   Because the installed version is older than the latest version on GitHub ({gh_ver}), you MUST prompt the user and ask if they want to upgrade to the latest version on GitHub ({gh_ver}):\n"
+            f"   Because one or more components are not the latest version, you MUST ask the user if they want to update them before proceeding:\n"
             f"   - If the user replies YES: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system` to install the latest version of google-ads from pypi.org into the site directory, install the latest version of the client library into the site directory, update client_libs/google-ads-python in the Assistant directory structure, update api_version in config/assistant_config (and config/api_version.txt if present) to the latest version, and print the results to the screen.\n"
-            f"   - If the user replies NO: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --check_only` and present a comparison table of the latest versions on GitHub versus what the user has installed on the system."
+            f"   - If the user replies NO: proceed using the currently active versions."
         )
-    print(
-        json.dumps(
+    else:
+        msg += (
+            f"   All Google Ads components are up to date and match the latest upstream releases."
+        )
+
+    response_payload = {
+        "injectSteps": [
             {
-                "injectSteps": [
-                    {
-                        "ephemeralMessage": msg,
-                    }
-                ]
+                "ephemeralMessage": msg,
             }
-        )
-    )
+        ]
+    }
+    print(json.dumps(response_payload))
 
 
 def main() -> None:

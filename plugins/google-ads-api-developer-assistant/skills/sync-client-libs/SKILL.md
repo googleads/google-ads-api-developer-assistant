@@ -41,12 +41,14 @@ python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/
 
 ## 5-Step System Site-Directory & Client Library Upgrade Protocol
 
-At session startup or when checking for client library updates, follow this exact 5-step workflow:
-1. **Check Site-Directory Version:** Inspect the Python site-packages directory (`site.getsitepackages()` and `importlib.metadata.version("google-ads")`) to detect the installed runtime version of `google-ads`.
+When the `agy` session starts and the plugin is loaded (before the first prompt is processed), or when checking for client library updates, follow this exact 5-step workflow:
+1. **Check Site-Directory Version Against PyPI:** Inspect the Python site-packages directory (`site.getsitepackages()` and `importlib.metadata.version("google-ads")`) to detect the installed runtime version of `google-ads`, and check the latest release on `pypi.org` (`https://pypi.org/pypi/google-ads/json`).
 2. **Check Latest GitHub Version:** Fetch the latest release tag of the client library on GitHub (`googleads/google-ads-python/releases/latest`).
-3. **Prompt User When Site Version `<` GitHub Version:** If the site directory (or `client_libs/google-ads-python`) has a version `<` the GitHub version, prompt the user and ask if they want to upgrade to the latest version on GitHub.
-4. **If User Replies `Yes` (`--upgrade_system`):** Run `sync_client_libs.py --upgrade_system` to install the latest version of `google-ads` from `pypi.org` into the site directory, install the latest version of the client library into the site directory, update `client_libs/google-ads-python` in the Assistant directory structure, update `api_version` in `config/assistant_config` (and `config/api_version.txt` if present) to the latest version, and print the results table to the screen.
-5. **If User Replies `No` (`--check_only`):** Run `sync_client_libs.py --check_only` and present a comparison table showing the latest versions on GitHub versus what the user has installed on the system.
+3. **Determine Active API Version:** Determine the Google Ads API version to use based on what is found in steps 1 and 2.
+4. **Present Results in a Table:** Present a formatted comparison table of (1), (2), and (3) to the user.
+5. **Prompt User When Any Version Outdated:** If any component is not the latest version, ask the user if they want to update them before proceeding:
+   - **If User Replies `Yes` (`--upgrade_system`):** Run `sync_client_libs.py --upgrade_system` to install the latest version of `google-ads` from `pypi.org` into the site directory, install the latest version of the client library into the site directory, update `client_libs/google-ads-python` in the Assistant directory structure, update `api_version` in `config/assistant_config` (and `config/api_version.txt` if present) to the latest version, and print the results table to the screen.
+   - **If User Replies `No` (`--check_only`):** Run `sync_client_libs.py --check_only` and continue with currently installed versions.
 
 ## Supported Ecosystems
 
