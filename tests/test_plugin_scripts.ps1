@@ -163,32 +163,54 @@ try {
     }
     Write-Host "PASS: update.ps1 -Type claude -Php added client library successfully."
 
-    # Test 10: install.ps1 -Type agy -Link creates symbolic link at AgyPluginDir
-    Write-Host "Test 10: install.ps1 -Type agy -Link creates symbolic link at AgyPluginDir"
+    # Test 10: install.ps1 -Type agy rejects -Link option (always installs standalone copy)
+    Write-Host "Test 10: install.ps1 -Type agy rejects -Link option (always installs standalone copy)"
+    $LinkFailed = $false
+    try {
+        & "$ProjectRoot\install.ps1" -Type agy -Link *>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $LinkFailed = $true
+        }
+    }
+    catch {
+        $LinkFailed = $true
+    }
+    if (-not $LinkFailed) {
+        Write-Error "FAIL: install.ps1 -Type agy -Link should fail because symlinking to repo is disabled"
+        exit 1
+    }
+    if (Test-Path -LiteralPath $AgyPluginDir) {
+        $AgyItem = Get-Item -LiteralPath $AgyPluginDir -Force
+        if (($AgyItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $AgyItem.LinkType) {
+            Write-Error "FAIL: $AgyPluginDir must not be a symbolic link"
+            exit 1
+        }
+    }
+    Write-Host "PASS: install.ps1 -Type agy rejects -Link and enforces standalone copy."
+
+    # Test 11: update.ps1 -Type agy migrates any legacy symbolic link to a standalone directory copy
+    Write-Host "Test 11: update.ps1 -Type agy migrates any legacy symbolic link to a standalone directory copy"
     if (Test-Path -LiteralPath $AgyPluginDir) {
         Remove-Item -Recurse -Force -LiteralPath $AgyPluginDir
     }
-    & "$ProjectRoot\install.ps1" -Type agy -Link *>&1 | Out-Null
-    $LinkItem = Get-Item -LiteralPath $AgyPluginDir -Force
-    if (-not (($LinkItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $LinkItem.LinkType)) {
-        Write-Error "FAIL: install.ps1 -Type agy -Link did not create a symbolic link at $AgyPluginDir"
+    $PluginSourceDir = Join-Path $ProjectRoot "plugins\google-ads-api-developer-assistant"
+    try {
+        New-Item -ItemType SymbolicLink -Path $AgyPluginDir -Target $PluginSourceDir -Force -ErrorAction Stop | Out-Null
+    }
+    catch {
+        New-Item -ItemType Junction -Path $AgyPluginDir -Target $PluginSourceDir -Force | Out-Null
+    }
+    & "$ProjectRoot\update.ps1" -Type agy *>&1 | Out-Null
+    $AgyItemAfter = Get-Item -LiteralPath $AgyPluginDir -Force
+    if (($AgyItemAfter.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $AgyItemAfter.LinkType) {
+        Write-Error "FAIL: update.ps1 -Type agy did not replace legacy symlink at $AgyPluginDir with a real directory"
         exit 1
     }
     if (-not (Test-Path (Join-Path $AgyPluginDir "plugin.json"))) {
-        Write-Error "FAIL: plugin.json missing via symlink at $AgyPluginDir"
+        Write-Error "FAIL: plugin.json missing in migrated standalone directory $AgyPluginDir"
         exit 1
     }
-    Write-Host "PASS: install.ps1 -Type agy -Link successfully installed symlinked plugin."
-
-    # Test 11: update.ps1 -Type agy preserves symbolic link
-    Write-Host "Test 11: update.ps1 -Type agy preserves symbolic link"
-    & "$ProjectRoot\update.ps1" -Type agy *>&1 | Out-Null
-    $LinkItemAfter = Get-Item -LiteralPath $AgyPluginDir -Force
-    if (-not (($LinkItemAfter.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $LinkItemAfter.LinkType)) {
-        Write-Error "FAIL: update.ps1 -Type agy broke symbolic link at $AgyPluginDir"
-        exit 1
-    }
-    Write-Host "PASS: update.ps1 -Type agy preserved symbolic link."
+    Write-Host "PASS: update.ps1 -Type agy migrated legacy symbolic link to standalone copy."
 
     # Test 12: global script execution from arbitrary directory using GOOGLE_ADS_ASSISTANT_DIR
     Write-Host "Test 12: global script execution from arbitrary directory using GOOGLE_ADS_ASSISTANT_DIR"

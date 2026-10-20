@@ -165,7 +165,6 @@ Run the installation script matching your platform:
     ./install.sh agy
     ```
     *Installs plugin globally to `~/.gemini/config/plugins/google-ads-api-developer-assistant`.*
-    *To symlink directly to your git checkout so `git pull` updates take effect immediately: `./install.sh agy --link`.*
     *To include additional client libraries: `./install.sh agy --php --ruby --dotnet`.*
 
 *   **Claude Code (Linux/macOS):**
@@ -180,7 +179,6 @@ Run the installation script matching your platform:
     .\install.ps1 -Type agy
     ```
     *Installs plugin globally to `%USERPROFILE%\.gemini\config\plugins\google-ads-api-developer-assistant`.*
-    *To symlink directly to your git checkout: `.\install.ps1 -Type agy -Link`.*
     *To include additional client libraries: `.\install.ps1 -Type agy -Php -Ruby -Dotnet`.*
 
 *   **Claude Code (Windows - PowerShell):**

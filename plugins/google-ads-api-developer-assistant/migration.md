@@ -119,7 +119,7 @@ google-ads-api-developer-assistant/
 
 ### Step 1: Run the Installer Script
 From the repository root, run `./install.sh` (Linux/macOS) or `.\install.ps1` (Windows):
-- **Antigravity / agy**: `./install.sh agy` (installs to `~/.gemini/config/plugins/google-ads-api-developer-assistant`, or use `./install.sh agy --link` to symlink directly to your git checkout).
+- **Antigravity / agy**: `./install.sh agy` (installs to `~/.gemini/config/plugins/google-ads-api-developer-assistant` as a standalone copy).
 - **Claude Code**: `./install.sh claude` (registers the local marketplace and installs `google-ads-api-developer-assistant`).
 
 ### Step 2: Configure Credentials

@@ -24,7 +24,7 @@ Upgrading from `v4.0.0` to `v4.1.0` is an in-place update. Your existing credent
      ```powershell
      .\update.ps1 -Type claude
      ```
-   *(Optional)* Add `--all` (or `-All` on Windows) to update all cloned client libraries at the same time, or run `./install.sh agy --link` (`.\install.ps1 -Type agy -Link` on Windows) to convert your Antigravity plugin installation into a live symlink to the repository.
+   *(Optional)* Add `--all` (or `-All` on Windows) to update all cloned client libraries at the same time.
 
 2. **Verify Migrated Settings in `config/assistant_config`:**
    The update script automatically creates `config/assistant_config` (TOML), migrating any custom `customer_id` from `config/customer_id` (or `config/customer_id.txt`) and detecting the latest `api_version`:
@@ -67,16 +67,12 @@ By default, the **Python** client library is included in the plugin. You can als
 * **Linux / macOS:**
   ```bash
   ./install.sh agy
-  # Or symlink directly to git checkout for live updates:
-  ./install.sh agy --link
   # Or include additional client libraries:
   ./install.sh agy --java --dotnet
   ```
 * **Windows (PowerShell):**
   ```powershell
   .\install.ps1 -Type agy
-  # Or symlink directly to git checkout:
-  .\install.ps1 -Type agy -Link
   # Or include additional client libraries:
   .\install.ps1 -Type agy -Java -Dotnet
   ```

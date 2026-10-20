@@ -188,6 +188,10 @@ while [[ $# -gt 0 ]]; do
       ANY_SELECTED=true
       shift
       ;;
+    --link|--symlink)
+      err "ERROR: --link is not supported. Antigravity plugin is always installed as a standalone copy."
+      exit 1
+      ;;
     *)
       err "ERROR: Unknown argument: $1"
       usage

@@ -53,10 +53,18 @@ param(
 
     [Parameter(Mandatory=$false, HelpMessage="Default Google Ads Customer ID (e.g. 1234567890)")]
     [Alias("cid")]
-    [string]$CustomerId = ""
+    [string]$CustomerId = "",
+
+    [Parameter(Mandatory=$false, HelpMessage="Legacy option: symlinking is not supported for agy; standalone directory copy is always used.")]
+    [switch]$Link
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Link) {
+    Write-Error "ERROR: -Link is not supported. Antigravity plugin is always installed as a standalone copy."
+    exit 1
+}
 
 if ([string]::IsNullOrWhiteSpace($Type)) {
     Write-Error "ERROR: Missing required -Type parameter ('agy' or 'claude')."

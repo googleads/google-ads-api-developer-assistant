@@ -99,4 +99,4 @@ When a user invokes `/assistant-tutorial` or requests this tutorial:
 
 ### Topic 16: Agent-to-Agent (A2A) Sidecar Service & Cross-Workspace Execution
 - **A2A HTTP Sidecar (`sidecars/google-ads-a2a-service/server.py`):** Background daemon listening on `ANTIGRAVITY_SIDECAR_WEB_PORT` (default port `8900`) supporting 6 structured task intents: `GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION`, and `EXECUTE_MUTATION`.
-- **Global & Symlinked Installation (`install.sh` / `update.sh`):** Installing for Antigravity (`./install.sh agy --link`) or Claude Code (`./install.sh claude`), optional language flags (`--php`, `--ruby`, `--java`, `--dotnet`, `--all`), and running assistant skills globally from any workspace.
+- **Global Plugin Installation (`install.sh` / `update.sh`):** Installing for Antigravity (`./install.sh agy`) or Claude Code (`./install.sh claude`), optional language flags (`--php`, `--ruby`, `--java`, `--dotnet`, `--all`), and running assistant skills globally from any workspace.
