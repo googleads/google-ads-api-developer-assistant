@@ -352,6 +352,22 @@ is_enabled() {
   esac
 }
 
+# Disable background git maintenance/gc to prevent transient .git/objects/maintenance.lock races during cp -r
+export GIT_CONFIG_PARAMETERS="'maintenance.auto=false' 'gc.auto=0' 'gc.autoDetach=false'"
+
+# Helper to safely copy a directory (including git repos) without failing on transient git lock files
+safe_copy_dir() {
+  local src="$1"
+  local dest="$2"
+  find "${src}" -type f \( -name "maintenance.lock" -o -name "gc.pid" -o -name "gc.log.lock" \) -path "*/.git/*" -delete 2>/dev/null || true
+  if ! cp -r "${src}" "${dest}" 2>/dev/null; then
+    sleep 1
+    rm -rf "${dest}"
+    find "${src}" -type f \( -name "maintenance.lock" -o -name "gc.pid" -o -name "gc.log.lock" \) -path "*/.git/*" -delete 2>/dev/null || true
+    cp -r "${src}" "${dest}"
+  fi
+}
+
 # Helper to safely update a git repository even if HEAD is detached (e.g., checked out at a release tag)
 update_git_repo() {
   local repo_dir="$1"
@@ -377,7 +393,7 @@ update_git_repo() {
         git branch --set-upstream-to="origin/${default_branch}" "${default_branch}" >/dev/null 2>&1 || true
       fi
     fi
-    git pull
+    git -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull
   )
 }
 
@@ -403,7 +419,7 @@ clone_or_update() {
        echo "WARN: Directory ${clone_path} exists but is not a git repo. Skipping."
     else
       echo "Cloning ${repo_url} into ${clone_path}"
-      if ! git clone "${repo_url}" "${clone_path}"; then
+      if ! git -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false clone --depth 1 "${repo_url}" "${clone_path}"; then
         err "ERROR: Failed to clone ${repo_url}"
         exit 1
       fi
@@ -482,7 +498,7 @@ install_plugin_copy() {
   local target_dir="$1"
   rm -rf "${target_dir}"
   mkdir -p "$(dirname "${target_dir}")"
-  cp -r "${PLUGIN_SOURCE_DIR}" "${target_dir}"
+  safe_copy_dir "${PLUGIN_SOURCE_DIR}" "${target_dir}"
   mkdir -p "${target_dir}/client_libs"
 
   for lang in python php ruby java dotnet; do
@@ -498,7 +514,7 @@ install_plugin_copy() {
       if [[ -d "${source_lib_path}" ]]; then
         echo "Adding ${repo_name} to plugin client_libs from local repository..."
         rm -rf "${target_lib_path}"
-        cp -r "${source_lib_path}" "${target_lib_path}"
+        safe_copy_dir "${source_lib_path}" "${target_lib_path}"
       else
         echo "Cloning ${repo_name} into plugin client_libs..."
         clone_or_update "$url" "${target_lib_path}" "${log_file}"

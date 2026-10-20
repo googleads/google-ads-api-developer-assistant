@@ -195,6 +195,22 @@ is_enabled() {
   esac
 }
 
+# Disable background git maintenance/gc to prevent transient .git/objects/maintenance.lock races during cp -r
+export GIT_CONFIG_PARAMETERS="'maintenance.auto=false' 'gc.auto=0' 'gc.autoDetach=false'"
+
+# Helper to safely copy a directory (including git repos) without failing on transient git lock files
+safe_copy_dir() {
+  local src="$1"
+  local dest="$2"
+  find "${src}" -type f \( -name "maintenance.lock" -o -name "gc.pid" -o -name "gc.log.lock" \) -path "*/.git/*" -delete 2>/dev/null || true
+  if ! cp -r "${src}" "${dest}" 2>/dev/null; then
+    sleep 1
+    rm -rf "${dest}"
+    find "${src}" -type f \( -name "maintenance.lock" -o -name "gc.pid" -o -name "gc.log.lock" \) -path "*/.git/*" -delete 2>/dev/null || true
+    cp -r "${src}" "${dest}"
+  fi
+}
+
 # Helper to safely update a git repository even if HEAD is detached (e.g., checked out at a release tag)
 update_git_repo() {
   local repo_dir="$1"
@@ -220,7 +236,7 @@ update_git_repo() {
         git branch --set-upstream-to="origin/${default_branch}" "${default_branch}" >/dev/null 2>&1 || true
       fi
     fi
-    git pull
+    git -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull
   )
 }
 
@@ -302,7 +318,7 @@ for cfg_file in assistant_config customer_id customer_id.txt; do
   fi
 done
 
-if ! git pull; then
+if ! git -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull; then
   err "ERROR: Failed to update google-ads-api-developer-assistant repository."
   # Restore config files if backup exists
   for cfg_file in assistant_config customer_id customer_id.txt; do
@@ -334,7 +350,7 @@ for lang in python php ruby java dotnet; do
 
     if [[ ! -d "${source_lib_path}" ]]; then
       echo "Library ${repo_name} not found in repository client_libs. Cloning into ${source_lib_path}..."
-      if ! git clone "${repo_url}" "${source_lib_path}"; then
+      if ! git -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false clone --depth 1 "${repo_url}" "${source_lib_path}"; then
         err "ERROR: Failed to clone ${repo_url}"
         exit 1
       fi
@@ -374,7 +390,7 @@ sync_installed_plugin_dir() {
   if [[ ! -d "${target_plugin_dir}" ]]; then
     echo "Plugin not yet installed at ${target_plugin_dir}. Installing standalone copy for ${platform_label}..."
     mkdir -p "$(dirname "${target_plugin_dir}")"
-    cp -r "${PLUGIN_SOURCE_DIR}" "${target_plugin_dir}"
+    safe_copy_dir "${PLUGIN_SOURCE_DIR}" "${target_plugin_dir}"
   else
     echo "Syncing plugin files to ${target_plugin_dir}..."
     local existing_cfg_backup="${TEMP_CONFIG_DIR}/target_assistant_config"
@@ -406,7 +422,7 @@ sync_installed_plugin_dir() {
         local target_lib_path="${target_client_libs}/${lib_name}"
         if [[ ! -d "${target_lib_path}" ]]; then
           echo "Copying ${lib_name} to ${target_lib_path}..."
-          cp -r "${lib_dir}" "${target_lib_path}"
+          safe_copy_dir "${lib_dir}" "${target_lib_path}"
           rm -f "${target_lib_path}/google-ads.yaml"
         fi
       fi

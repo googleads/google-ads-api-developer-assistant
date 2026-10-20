@@ -336,7 +336,7 @@ function Install-PluginCopy {
             }
             else {
                 Write-Host "Cloning $RepoUrl into $TargetRepoPath..."
-                git -c core.longpaths=true clone --depth 1 $RepoUrl $TargetRepoPath
+                git -c core.longpaths=true -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false clone --depth 1 $RepoUrl $TargetRepoPath
                 if ($LASTEXITCODE -ne 0) {
                     Write-Error "ERROR: Failed to clone $RepoUrl"
                     exit 1

@@ -125,7 +125,7 @@ function Update-GitRepo {
                 git branch --set-upstream-to="origin/$DefaultBranch" $DefaultBranch 2>$null | Out-Null
             }
         }
-        git pull
+        git -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull
         return ($LASTEXITCODE -eq 0)
     }
     finally {
@@ -185,6 +185,7 @@ function Set-LatestApiVersion {
 }
 
 $ErrorActionPreference = "Stop"
+$env:GIT_CONFIG_PARAMETERS = "'maintenance.auto=false' 'gc.auto=0' 'gc.autoDetach=false'"
 
 # --- Dependency Check ---
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -221,7 +222,7 @@ try {
         }
     }
 
-    git pull
+    git -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to update google-ads-api-developer-assistant repository."
     }
@@ -280,7 +281,7 @@ if ($SpecifiedLangs.Count -gt 0) {
 
         if (-not (Test-Path -LiteralPath $SourceLibPath)) {
             Write-Host "Library $RepoName not found in repository client_libs. Cloning into $SourceLibPath..."
-            git -c core.longpaths=true clone --depth 1 $RepoUrl $SourceLibPath
+            git -c core.longpaths=true -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false clone --depth 1 $RepoUrl $SourceLibPath
             if ($LASTEXITCODE -ne 0) {
                 Write-Error "ERROR: Failed to clone $RepoUrl"
                 exit 1
