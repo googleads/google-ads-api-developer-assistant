@@ -2192,13 +2192,13 @@ def handle_hook() -> None:
         )
         if parity_info.get("upgrade_prompt_required"):
             msg += (
-                f"   Because one or more components are not the latest version, you MUST ask the user if they want to update them before proceeding:\n"
-                f"   - If the user replies YES: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system` to install the latest version of google-ads from pypi.org into the site directory, install the latest version of the client library into the site directory, update client_libs/google-ads-python in the Assistant directory structure, update api_version in config/assistant_config (and config/api_version.txt if present) to the latest version, and print the results to the screen.\n"
-                f"   - If the user replies NO: proceed using the currently active versions."
+                "   Because one or more components are not the latest version, you MUST ask the user if they want to update them before proceeding:\n"
+                "   - If the user replies YES: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system` to install the latest version of google-ads from pypi.org into the site directory, install the latest version of the client library into the site directory, update client_libs/google-ads-python in the Assistant directory structure, update api_version in config/assistant_config (and config/api_version.txt if present) to the latest version, and print the results to the screen.\n"
+                "   - If the user replies NO: proceed using the currently active versions."
             )
         else:
             msg += (
-                f"   All Google Ads components are up to date and match the latest upstream releases. State this, confirm active API version, and proceed directly to answer the user's prompt."
+                "   All Google Ads components are up to date and match the latest upstream releases. State this, confirm active API version, and proceed directly to answer the user's prompt."
             )
     else:
         active_api_version = get_configured_api_version() or detect_latest_api_version()
