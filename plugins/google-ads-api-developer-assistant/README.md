@@ -200,7 +200,6 @@ cp -r google-ads-api-developer-assistant ~/.claude/plugins/marketplaces/
 Create a `google-ads.yaml` configuration file at `config/google-ads.yaml` (or `~/.config/google-ads/google-ads.yaml`):
 
 ```yaml
-developer_token: "INSERT_DEVELOPER_TOKEN"
 client_id: "INSERT_OAUTH_CLIENT_ID"
 client_secret: "INSERT_OAUTH_CLIENT_SECRET"
 refresh_token: "INSERT_REFRESH_TOKEN"

@@ -107,7 +107,6 @@ Copy `google_ads_assistant_plugin` to your agent configuration directory:
 ### Step 2: Configure Credentials
 Ensure your `google-ads.yaml` config file exists at `config/google-ads.yaml` or `~/google-ads.yaml`:
 ```yaml
-developer_token: "YOUR_DEVELOPER_TOKEN"
 client_id: "YOUR_OAUTH_CLIENT_ID"
 client_secret: "YOUR_OAUTH_CLIENT_SECRET"
 refresh_token: "YOUR_REFRESH_TOKEN"
