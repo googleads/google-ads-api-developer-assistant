@@ -1838,4 +1838,1149 @@ def test_security_hardening_direct_script_spoofing_executable_and_sidecar(
             os.remove(receipt_path)
 
 
+def test_financial_transaction_command_interception_matrix() -> None:
+    """Verifies evaluate_mutation_guard intercepts all financial-transaction write RPCs while allowing read-only financial lookups."""
+    run_mutation = _load_run_mutation_module()
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+    # All financial & spend-affecting write RPCs across billing, budgets, reservations,
+    # incentives, lead credits, bidding, conversion value restatements, and spend promotions
+    financial_write_calls = (
+        # Account billing & budgets
+        "billing_svc.mutate_billing_setup(request=req)",
+        "budget_proposal_svc.mutate_account_budget_proposal(request=req)",
+        "campaign_budget_svc.mutate_campaign_budgets(request=req)",
+        "customer_svc.create_customer_client(request=req)",
+        # Guaranteed spend, credits & incentives
+        "reservation_svc.book_campaigns(request=req)",
+        "incentive_svc.apply_incentive(request=req)",
+        "lsa_lead_svc.provide_lead_feedback(request=req)",
+        # Bidding, conversion value restatements & spend promotions
+        "bidding_svc.mutate_bidding_strategies(request=req)",
+        "seasonality_svc.mutate_bidding_seasonality_adjustments(request=req)",
+        "exclusion_svc.mutate_bidding_data_exclusions(request=req)",
+        "camp_mod_svc.mutate_campaign_bid_modifiers(request=req)",
+        "ag_mod_svc.mutate_ad_group_bid_modifiers(request=req)",
+        "val_rule_svc.mutate_conversion_value_rules(request=req)",
+        "val_rule_set_svc.mutate_conversion_value_rule_sets(request=req)",
+        "adj_upload_svc.upload_conversion_adjustments(request=req)",
+        "exp_svc.graduate_experiment(request=req)",
+        "exp_svc.promote_experiment(request=req)",
+        "exp_svc.schedule_experiment(request=req)",
+        "exp_svc.end_experiment(request=req)",
+        "draft_svc.promote_campaign_draft(request=req)",
+        "rec_svc.dismiss_recommendation(request=req)",
+        "ga_svc.mutate(customer_id='1234567890', mutate_operations=ops)",
+    )
+    for call_expr in financial_write_calls:
+        decision, reason = evaluate_mutation_guard(f'python3 -c "{call_expr}"')
+        assert decision == "deny", f"Expected 'deny' for financial write RPC: {call_expr}"
+        assert reason is not None and "BLOCKED BY HITL MUTATION GUARD" in reason
+
+    # Read-only financial queries, quotes, and forecasts must remain allowed
+    readonly_financial_calls = (
+        "invoice_svc.list_invoices(request=req)",
+        "payments_svc.list_payments_accounts(request=req)",
+        "reservation_svc.quote_campaigns(request=req)",
+        "incentive_svc.fetch_incentive(request=req)",
+        "suggest_svc.suggest_smart_campaign_budget_options(request=req)",
+        "ga_svc.search_stream(customer_id='1234567890', query='SELECT billing_setup.id FROM billing_setup')",
+    )
+    for ro_expr in readonly_financial_calls:
+        decision, reason = evaluate_mutation_guard(f'python3 -c "{ro_expr}"')
+        assert decision == "allow", f"Expected 'allow' for read-only financial call: {ro_expr}"
+        assert reason is None
+
+
+def test_non_validate_only_financial_rpcs_cannot_bypass_guard_with_validate_only_true(
+    tmp_path: Path,
+) -> None:
+    """Verifies non-validate_only-capable financial RPCs are denied even when validate_only=True appears in the script or command."""
+    run_mutation = _load_run_mutation_module()
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+    non_validate_only_financial_methods = (
+        ("BillingSetupService", "mutate_billing_setup"),
+        ("ReservationService", "book_campaigns"),
+        ("IncentiveService", "apply_incentive"),
+        ("LocalServicesLeadService", "provide_lead_feedback"),
+        ("RecommendationService", "apply_recommendation"),
+        ("RecommendationService", "dismiss_recommendation"),
+        ("BatchJobService", "mutate_batch_job"),
+        ("CustomerUserAccessService", "mutate_customer_user_access"),
+        ("UserDataService", "upload_user_data"),
+    )
+
+    for svc_name, method_name in non_validate_only_financial_methods:
+        # 1. Inline python3 -c spoofing validate_only=True
+        inline_cmd = (
+            f'python3 -c "validate_only = True; '
+            f"svc = client.get_service('{svc_name}'); "
+            f'svc.{method_name}(request=req)"'
+        )
+        decision, reason = evaluate_mutation_guard(inline_cmd)
+        assert decision == "deny", (
+            f"{svc_name}.{method_name} lacks validate_only support and must NOT bypass guard"
+        )
+        assert reason is not None and "BLOCKED BY HITL MUTATION GUARD" in reason
+
+        # 2. Direct script file containing validate_only=True alongside non-validate_only RPC
+        spoof_file = tmp_path / f"spoof_{method_name}.py"
+        spoof_file.write_text(
+            f"def run(client, req):\n"
+            f"    validate_only = True\n"
+            f"    svc = client.get_service('{svc_name}')\n"
+            f"    return svc.{method_name}(request=req)\n",
+            encoding="utf-8",
+        )
+        file_decision, file_reason = evaluate_mutation_guard(f"python3 {spoof_file}")
+        assert file_decision == "deny", (
+            f"Direct script calling {svc_name}.{method_name} must be denied even with validate_only=True"
+        )
+        assert file_reason is not None
+
+    # Contrast: validate_only-capable financial RPCs with explicit validate_only=True ARE allowed as direct dry-runs
+    validate_only_capable_financial_methods = (
+        ("AccountBudgetProposalService", "mutate_account_budget_proposal"),
+        ("CustomerService", "create_customer_client"),
+        ("BiddingStrategyService", "mutate_bidding_strategies"),
+        ("ConversionAdjustmentUploadService", "upload_conversion_adjustments"),
+        ("ConversionValueRuleService", "mutate_conversion_value_rules"),
+        ("ExperimentService", "graduate_experiment"),
+        ("ExperimentService", "end_experiment"),
+        ("CampaignDraftService", "promote_campaign_draft"),
+    )
+    for svc_name, method_name in validate_only_capable_financial_methods:
+        dry_file = tmp_path / f"dry_{method_name}.py"
+        dry_file.write_text(
+            f"def dry_run(client, req):\n"
+            f"    req.validate_only = True\n"
+            f"    svc = client.get_service('{svc_name}')\n"
+            f"    return svc.{method_name}(request=req)\n",
+            encoding="utf-8",
+        )
+        dry_decision, dry_reason = evaluate_mutation_guard(f"python3 {dry_file}")
+        assert dry_decision == "allow", (
+            f"Genuine validate_only=True dry-run for {svc_name}.{method_name} should be allowed"
+        )
+        assert dry_reason is None
+
+
+def test_financial_mutation_classification_and_mandatory_consequence_disclosures(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Verifies financial-transaction classification and mandatory monetary/spend/billing consequence disclosures across CLI, receipt verifier, PreToolUse hook, and A2A sidecar."""
+    import importlib.util
+    import json
+    import subprocess
+    import sys
+
+    run_mutation = _load_run_mutation_module()
+    audit_log_file = tmp_path / "financial_consequences_audit.jsonl"
+    monkeypatch.setenv("GOOGLE_ADS_MUTATION_AUDIT_LOG", str(audit_log_file))
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+    # 1. Classification checks: financial services, methods, nested financial payload fields, and summaries
+    assert run_mutation.is_financial_mutation(
+        operation_summary="BillingSetupService.mutate_billing_setup"
+    )
+    assert run_mutation.is_financial_mutation(
+        operation_summary="AccountBudgetProposalService.mutate_account_budget_proposal"
+    )
+    assert run_mutation.is_financial_mutation(
+        operation_summary="ReservationService.book_campaigns"
+    )
+    assert run_mutation.is_financial_mutation(
+        operation_summary="IncentiveService.apply_incentive"
+    )
+    assert run_mutation.is_financial_mutation(
+        operation_summary="LocalServicesLeadService.provide_lead_feedback"
+    )
+    assert run_mutation.is_financial_mutation(
+        operation_summary="ConversionAdjustmentUploadService.upload_conversion_adjustments"
+    )
+    assert run_mutation.is_financial_mutation(
+        operation_summary="CustomerService.create_customer_client"
+    )
+    assert run_mutation.is_financial_mutation(
+        operation_summary="ExperimentService.graduate_experiment"
+    )
+    assert run_mutation.is_financial_mutation(
+        operation_summary="CampaignDraftService.promote_campaign_draft"
+    )
+    # Atomic GoogleAdsService.mutate or AdGroupCriterion update detected as financial via nested payload fields
+    assert run_mutation.is_financial_mutation(
+        operation_summary="Update AdGroupCriterion 555",
+        rpc_calls=[
+            {
+                "service": "AdGroupCriterionService",
+                "method": "mutate_ad_group_criteria",
+                "request_payload": {
+                    "customer_id": "1234567890",
+                    "operations": [
+                        {
+                            "update": {
+                                "resource_name": "customers/1234567890/adGroupCriteria/11~555",
+                                "cpc_bid_micros": "3500000",
+                            }
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    assert run_mutation.is_financial_mutation(
+        operation_summary="Atomic cross-resource update",
+        rpc_calls=[
+            {
+                "service": "GoogleAdsService",
+                "method": "mutate",
+                "request_payload": {
+                    "customer_id": "1234567890",
+                    "mutate_operations": [
+                        {
+                            "bidding_strategy_operation": {
+                                "create": {
+                                    "name": "Target ROAS 400%",
+                                    "target_roas": {"target_roas": 4.0},
+                                }
+                            }
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+
+    # Non-financial operations must NOT be misclassified as financial transactions
+    assert not run_mutation.is_financial_mutation(
+        operation_summary="Pause Campaign 444",
+        before_state="ENABLED",
+        after_state="PAUSED",
+    )
+    assert not run_mutation.is_financial_mutation(
+        operation_summary="Remove keyword criterion",
+        before_state="ENABLED",
+        after_state="REMOVED",
+    )
+    assert not run_mutation.is_financial_mutation(
+        operation_summary="Create Responsive Search Ad",
+        before_state="None",
+        after_state="ENABLED",
+        rpc_calls=[
+            {
+                "service": "AdGroupAdService",
+                "method": "mutate_ad_group_ads",
+                "request_payload": {
+                    "customer_id": "1234567890",
+                    "operations": [{"create": {"status": "PAUSED"}}],
+                },
+            }
+        ],
+    )
+
+    # 2. write_dry_run_receipt rejects financial mutations lacking explicit monetary/spend/billing consequences
+    fin_script = tmp_path / "mutate_account_budget.py"
+    fin_script.write_text(
+        "def run(svc, req):\n"
+        "    req.validate_only = False\n"
+        "    return svc.mutate_account_budget_proposal(request=req)\n",
+        encoding="utf-8",
+    )
+    for vague_consequences in (
+        ["Updates account configuration"],
+        ["Applies requested API change immediately"],
+        ["Permanent update to customer 1234567890"],
+    ):
+        with pytest.raises(
+            ValueError,
+            match="Financial mutation requires explicit monetary, currency, spend, budget, billing, credit, or bidding impact disclosure",
+        ):
+            run_mutation.write_dry_run_receipt(
+                customer_id="1234567890",
+                operation_summary="AccountBudgetProposalService.mutate_account_budget_proposal",
+                before_state="Spending limit: $10,000.00",
+                after_state="Spending limit: $25,000.00",
+                consequences=vague_consequences,
+                reversibility="REVERSIBLE",
+                script_path=str(fin_script),
+            )
+
+    # 3. CLI --dry-run exits with code 2 and audits BLOCKED_FINANCIAL_CONSEQUENCE_MISSING when financial disclosure is omitted
+    runner_path = (
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "skills"
+        / "execute-mutation"
+        / "scripts"
+        / "run_mutation.py"
+    )
+    bad_cli = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(fin_script),
+            "--dry-run",
+            "--record-only",
+            "--customer-id",
+            "1234567890",
+            "--operation",
+            "BillingSetupService.mutate_billing_setup",
+            "--before",
+            "No active billing setup",
+            "--after",
+            "Active billing setup",
+            "--consequences",
+            "Updates account setup configuration",
+            "--reversibility",
+            "IRREVERSIBLE",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert bad_cli.returncode == 2
+    assert "Financial mutation requires explicit monetary" in bad_cli.stderr
+
+    # 4. A2A Sidecar PREPARE_MUTATION also rejects missing financial consequence disclosures and logs audit record
+    server_path = (
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "sidecars"
+        / "google-ads-a2a-service"
+        / "server.py"
+    )
+    spec = importlib.util.spec_from_file_location("sidecar_fin_test", server_path)
+    assert spec is not None and spec.loader is not None
+    sidecar_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sidecar_mod)
+    handler = object.__new__(sidecar_mod.A2AHandler)
+
+    bad_sidecar = handler.handle_prepare_mutation(
+        "task-fin-missing",
+        {
+            "customer_id": "1234567890",
+            "operation_summary": "IncentiveService.apply_incentive",
+            "before_state": "No incentive applied",
+            "after_state": "Incentive OFFER-999 applied",
+            "consequences": ["Applies requested change to account"],
+            "reversibility": "IRREVERSIBLE",
+            "script_path": str(fin_script),
+        },
+    )
+    assert bad_sidecar["status"] == "VALIDATION_FAILED"
+    assert "Financial mutation requires explicit monetary" in bad_sidecar["error"]
+
+    # 5. Explicit financial consequence disclosures succeed across receipt, Verification Card, and PreToolUse force_ask
+    good_receipt = run_mutation.write_dry_run_receipt(
+        customer_id="1234567890",
+        operation_summary="AccountBudgetProposalService.mutate_account_budget_proposal",
+        before_state="Account spending limit: $10,000.00 USD",
+        after_state="Account spending limit: $25,000.00 USD",
+        consequences=[
+            "Raises account billing spending limit by +$15,000.00 USD (+150%)",
+            "Authorizes up to $25,000.00 in billable ad charges on linked payments account",
+        ],
+        reversibility="REVERSIBLE",
+        script_path=str(fin_script),
+    )
+    assert good_receipt["is_financial_transaction"] is True
+    card_text = run_mutation.format_verification_card(good_receipt)
+    assert "Financial Txn : YES" in card_text
+
+    decision_ok, reason_ok = evaluate_mutation_guard(
+        f"python3 {runner_path} --script {fin_script} --execute"
+    )
+    assert decision_ok == "force_ask"
+    assert reason_ok is not None
+    assert "[FINANCIAL TRANSACTION]" in reason_ok
+    assert "+$15,000.00 USD" in reason_ok
+
+    # 6. Tampering with the receipt file on disk to replace financial consequences with vague text is caught by BOTH verifiers
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            with open(receipt_path, "r", encoding="utf-8") as f:
+                tampered_data = json.load(f)
+            tampered_data["consequences"] = ["Updates account configuration"]
+            with open(receipt_path, "w", encoding="utf-8") as f:
+                json.dump(tampered_data, f)
+
+    ok_verify, verify_msg, _ = run_mutation.load_and_verify_receipt(
+        script_path=str(fin_script)
+    )
+    assert ok_verify is False
+    assert "financial mutation is missing explicit monetary" in verify_msg
+
+    decision_tampered, reason_tampered = evaluate_mutation_guard(
+        f"python3 {runner_path} --script {fin_script} --execute"
+    )
+    assert decision_tampered == "deny"
+    assert (
+        reason_tampered is not None
+        and "financial mutation in saved/data/last_dry_run.json is missing explicit monetary"
+        in reason_tampered
+    )
+
+    entries = [
+        json.loads(line)
+        for line in audit_log_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [e["status"] for e in entries] == [
+        "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING",
+        "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING",
+    ]
+    assert all(e["request"]["is_financial_transaction"] is True for e in entries)
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+
+def test_rpc_interceptor_blocks_omitted_validate_only_and_non_validate_only_financial_rpcs(
+    monkeypatch: Any,
+) -> None:
+    """Verifies _wrap_service_for_audit blocks omitted validate_only payloads and non-validate_only financial RPCs during dry-run and when execute_mutates=false."""
+    run_mutation = _load_run_mutation_module()
+
+    class _FinancialMockService:
+        def __init__(self) -> None:
+            self.invocations: list[tuple[str, Any]] = []
+
+        # validate_only-capable financial RPCs
+        def mutate_account_budget_proposal(self, request: Any = None) -> dict[str, Any]:
+            self.invocations.append(("mutate_account_budget_proposal", request))
+            return {"result": {"resource_name": "customers/1234567890/accountBudgetProposals/77"}, "request_id": "req-abp"}
+
+        def upload_conversion_adjustments(self, request: Any = None) -> dict[str, Any]:
+            self.invocations.append(("upload_conversion_adjustments", request))
+            return {"results": [{"gclid_date_time_pair": {}}], "request_id": "req-adj"}
+
+        # Non-validate_only-capable financial RPCs
+        def mutate_billing_setup(self, request: Any = None) -> dict[str, Any]:
+            self.invocations.append(("mutate_billing_setup", request))
+            return {"result": {"resource_name": "customers/1234567890/billingSetups/88"}, "request_id": "req-bill"}
+
+        def book_campaigns(self, request: Any = None) -> dict[str, Any]:
+            self.invocations.append(("book_campaigns", request))
+            return {"result": {}, "request_id": "req-book"}
+
+        def apply_incentive(self, request: Any = None) -> dict[str, Any]:
+            self.invocations.append(("apply_incentive", request))
+            return {"coupon_code": "PROMO500", "request_id": "req-inc"}
+
+        def provide_lead_feedback(self, request: Any = None) -> dict[str, Any]:
+            self.invocations.append(("provide_lead_feedback", request))
+            return {"credit_issuance_decision": "SUCCESS_NOT_REACHED_THRESHOLD", "request_id": "req-lsa"}
+
+        def create_customer_client(self, request: Any = None) -> dict[str, Any]:
+            self.invocations.append(("create_customer_client", request))
+            return {"resource_name": "customers/9998887776", "request_id": "req-cust"}
+
+        # Read-only companion financial methods on ReservationService / IncentiveService
+        def quote_campaigns(self, request: Any = None) -> dict[str, Any]:
+            self.invocations.append(("quote_campaigns", request))
+            return {"quotes": [{"max_budget_micros": "12500000000"}]}
+
+        def fetch_incentive(self, request: Any = None) -> dict[str, Any]:
+            self.invocations.append(("fetch_incentive", request))
+            return {"incentive_offer": {"amount_micros": "500000000"}}
+
+    # --- Case 1: dry_run_mode=True (even with execute_mutates=true) ---
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates = true")
+    raw_dry = _FinancialMockService()
+    dry_captured: list[dict[str, Any]] = []
+    wrapped_dry = run_mutation._wrap_service_for_audit(
+        raw_dry,
+        "FinancialCompositeService",
+        dry_captured,
+        dry_run_mode=True,
+    )
+
+    # 1a. Read-only financial quotes/fetches pass unimpeded and are NOT captured as mutations
+    assert wrapped_dry.quote_campaigns(request={"customer_id": "1234567890"})["quotes"]
+    assert wrapped_dry.fetch_incentive(request={"country_code": "US"})["incentive_offer"]
+    assert len(dry_captured) == 0
+    assert len(raw_dry.invocations) == 2
+
+    # 1b. Omitted validate_only (e.g., Protobuf3 default False stripped by MessageToDict) MUST be blocked in dry-run
+    with pytest.raises(PermissionError, match="without validate_only=True"):
+        wrapped_dry.mutate_account_budget_proposal(
+            request={
+                "customer_id": "1234567890",
+                "operation": {
+                    "create": {"proposed_spending_limit_micros": "25000000000"}
+                },
+            }
+        )
+    assert dry_captured[-1]["status"] == "BLOCKED_MISSING_VALIDATE_ONLY"
+    assert len(raw_dry.invocations) == 2  # Underlying RPC was NOT called
+
+    # 1c. Explicit validate_only=False MUST be blocked in dry-run
+    with pytest.raises(PermissionError, match="without validate_only=True"):
+        wrapped_dry.upload_conversion_adjustments(
+            request={
+                "customer_id": "1234567890",
+                "validate_only": False,
+                "conversion_adjustments": [
+                    {"restatement_value": {"adjusted_value": 75.0, "currency_code": "USD"}}
+                ],
+            }
+        )
+    assert dry_captured[-1]["status"] == "BLOCKED_MISSING_VALIDATE_ONLY"
+    assert len(raw_dry.invocations) == 2
+
+    # 1d. Non-validate_only financial RPCs MUST be blocked in dry-run EVEN IF caller injects validate_only=True
+    for non_vo_method in (
+        "mutate_billing_setup",
+        "book_campaigns",
+        "apply_incentive",
+        "provide_lead_feedback",
+    ):
+        with pytest.raises(
+            PermissionError, match="does not support validate_only=True"
+        ):
+            getattr(wrapped_dry, non_vo_method)(
+                request={"customer_id": "1234567890", "validate_only": True}
+            )
+        assert dry_captured[-1]["method"] == non_vo_method
+        assert dry_captured[-1]["status"] == "BLOCKED_MISSING_VALIDATE_ONLY"
+    assert len(raw_dry.invocations) == 2  # Zero live financial RPCs escaped during dry-run!
+
+    # 1e. Genuine validate_only=True on validate_only-capable financial RPCs succeeds in dry-run
+    abp_res = wrapped_dry.mutate_account_budget_proposal(
+        request={
+            "customer_id": "1234567890",
+            "validate_only": True,
+            "operation": {
+                "create": {"proposed_spending_limit_micros": "25000000000"}
+            },
+        }
+    )
+    assert abp_res["request_id"] == "req-abp"
+    cust_res = wrapped_dry.create_customer_client(
+        request={
+            "customer_id": "1234567890",
+            "validate_only": True,
+            "customer_client": {"currency_code": "USD", "time_zone": "America/New_York"},
+        }
+    )
+    assert cust_res["request_id"] == "req-cust"
+    assert dry_captured[-1]["status"] == "SUCCESS"
+    assert len(raw_dry.invocations) == 4
+
+    # --- Case 2: execute_mutates = false (outside dry_run_mode) ---
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates = false")
+    raw_disabled = _FinancialMockService()
+    disabled_captured: list[dict[str, Any]] = []
+    wrapped_disabled = run_mutation._wrap_service_for_audit(
+        raw_disabled,
+        "FinancialCompositeService",
+        disabled_captured,
+        dry_run_mode=False,
+    )
+
+    # 2a. Omitted validate_only is blocked by BLOCKED_MUTATES_DISABLED
+    for vo_capable_method in ("mutate_account_budget_proposal", "create_customer_client"):
+        with pytest.raises(PermissionError, match="execute_mutates = false"):
+            getattr(wrapped_disabled, vo_capable_method)(
+                request={"customer_id": "1234567890"}
+            )
+        assert disabled_captured[-1]["status"] == "BLOCKED_MUTATES_DISABLED"
+    assert len(raw_disabled.invocations) == 0
+
+    # 2b. Non-validate_only financial RPCs are blocked by BLOCKED_MUTATES_DISABLED even if validate_only=True is injected
+    for non_vo_method in (
+        "mutate_billing_setup",
+        "book_campaigns",
+        "apply_incentive",
+        "provide_lead_feedback",
+    ):
+        with pytest.raises(PermissionError, match="execute_mutates = false"):
+            getattr(wrapped_disabled, non_vo_method)(
+                request={"customer_id": "1234567890", "validate_only": True}
+            )
+        assert disabled_captured[-1]["status"] == "BLOCKED_MUTATES_DISABLED"
+    assert len(raw_disabled.invocations) == 0
+
+
+def test_end_to_end_financial_transactions_preflight_and_atomic_sha256_workflows(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """End-to-end integration tests for:
+    1. Non-validate_only guaranteed-spend reservation workflow (quote_campaigns preflight -> book_campaigns live execution, plus blocking unguarded book_campaigns in --dry-run).
+    2. Atomic multi-RPC financial bundle (GoogleAdsService.mutate budget+ROAS strategy + ConversionAdjustmentUploadService restatement) with pre-RPC SHA-256 tamper protection on monetary values.
+    """
+    import json
+    import subprocess
+    import sys
+
+    run_mutation = _load_run_mutation_module()
+    audit_log_file = tmp_path / "e2e_financial_audit.jsonl"
+    monkeypatch.setenv("GOOGLE_ADS_MUTATION_AUDIT_LOG", str(audit_log_file))
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+    runner_path = (
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "skills"
+        / "execute-mutation"
+        / "scripts"
+        / "run_mutation.py"
+    )
+
+    # Create a fake google.ads.googleads.client module in tmp_path/fake_sdk so subprocesses
+    # test real GoogleAdsClient.get_service monkeypatching & pre-RPC interception end-to-end!
+    fake_sdk_root = tmp_path / "fake_sdk"
+    client_pkg = fake_sdk_root / "google" / "ads" / "googleads"
+    client_pkg.mkdir(parents=True)
+    (fake_sdk_root / "google" / "__init__.py").write_text("", encoding="utf-8")
+    (fake_sdk_root / "google" / "ads" / "__init__.py").write_text("", encoding="utf-8")
+    (client_pkg / "__init__.py").write_text("", encoding="utf-8")
+    invocation_log = tmp_path / "rpc_invocations.jsonl"
+    (client_pkg / "client.py").write_text(
+        "import json, os\n"
+        f"_LOG = {str(invocation_log)!r}\n"
+        "def _record(svc, method, req):\n"
+        "    with open(_LOG, 'a', encoding='utf-8') as f:\n"
+        "        f.write(json.dumps({'service': svc, 'method': method, 'request': req}) + '\\n')\n"
+        "class _ReservationService:\n"
+        "    def quote_campaigns(self, request=None):\n"
+        "        _record('ReservationService', 'quote_campaigns', request)\n"
+        "        return {'quotes': [{'campaign': 'customers/1234567890/campaigns/777', 'max_budget_micros': '12500000000'}]}\n"
+        "    def book_campaigns(self, request=None):\n"
+        "        _record('ReservationService', 'book_campaigns', request)\n"
+        "        return {'request_id': 'req-book-live-001', 'booked_campaigns': ['customers/1234567890/campaigns/777']}\n"
+        "class _GoogleAdsService:\n"
+        "    def mutate(self, request=None):\n"
+        "        _record('GoogleAdsService', 'mutate', request)\n"
+        "        vo = request.get('validate_only') if isinstance(request, dict) else False\n"
+        "        return {\n"
+        "            'request_id': 'req-ga-dry' if vo else 'req-ga-live',\n"
+        "            'mutate_operation_responses': [\n"
+        "                {'campaign_budget_result': {'resource_name': 'customers/1234567890/campaignBudgets/501'}},\n"
+        "                {'bidding_strategy_result': {'resource_name': 'customers/1234567890/biddingStrategies/601'}},\n"
+        "            ],\n"
+        "        }\n"
+        "class _ConversionAdjustmentUploadService:\n"
+        "    def upload_conversion_adjustments(self, request=None):\n"
+        "        _record('ConversionAdjustmentUploadService', 'upload_conversion_adjustments', request)\n"
+        "        vo = request.get('validate_only') if isinstance(request, dict) else False\n"
+        "        return {\n"
+        "            'request_id': 'req-adj-dry' if vo else 'req-adj-live',\n"
+        "            'results': [{'conversion_action': 'customers/1234567890/conversionActions/901'}],\n"
+        "        }\n"
+        "class GoogleAdsClient:\n"
+        "    @classmethod\n"
+        "    def load_from_storage(cls, path=None, version=None):\n"
+        "        return cls()\n"
+        "    def get_service(self, name, version=None):\n"
+        "        if name == 'ReservationService':\n"
+        "            return _ReservationService()\n"
+        "        if name == 'GoogleAdsService':\n"
+        "            return _GoogleAdsService()\n"
+        "        if name == 'ConversionAdjustmentUploadService':\n"
+        "            return _ConversionAdjustmentUploadService()\n"
+        "        raise ValueError(f'Unknown service {name}')\n",
+        encoding="utf-8",
+    )
+
+    sub_env = os.environ.copy()
+    existing_py_path = sub_env.get("PYTHONPATH", "")
+    sub_env["PYTHONPATH"] = (
+        f"{fake_sdk_root}{os.pathsep}{existing_py_path}"
+        if existing_py_path
+        else str(fake_sdk_root)
+    )
+    sub_env["GOOGLE_ADS_MUTATION_AUDIT_LOG"] = str(audit_log_file)
+    sub_env["GOOGLE_ADS_EXECUTE_MUTATES"] = "execute_mutates = true"
+
+    # =========================================================================
+    # WORKFLOW A: Non-validate_only ReservationService (quote_campaigns -> book_campaigns)
+    # =========================================================================
+    # A1. Unguarded script that mistakenly calls book_campaigns during --dry-run is BLOCKED BEFORE RPC!
+    unguarded_book_script = tmp_path / "unguarded_book.py"
+    unguarded_book_script.write_text(
+        "from google.ads.googleads.client import GoogleAdsClient\n"
+        "client = GoogleAdsClient.load_from_storage(path='config/google-ads.yaml')\n"
+        "svc = client.get_service('ReservationService')\n"
+        "svc.book_campaigns(request={'customer_id': '1234567890'})\n",
+        encoding="utf-8",
+    )
+    unguarded_proc = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(unguarded_book_script),
+            "--dry-run",
+            "--customer-id",
+            "1234567890",
+            "--operation",
+            "ReservationService.book_campaigns",
+            "--before",
+            "Unbooked reservation quote: $12,500.00 USD",
+            "--after",
+            "Booked guaranteed reservation: $12,500.00 USD",
+            "--consequences",
+            "Commits $12,500.00 USD guaranteed spend booking",
+            "--reversibility",
+            "IRREVERSIBLE",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=sub_env,
+    )
+    assert unguarded_proc.returncode != 0
+    assert "does not support validate_only=True" in unguarded_proc.stderr
+    assert not invocation_log.exists(), "book_campaigns must NEVER reach the transport during --dry-run!"
+
+    # A2. Proper preflighted script: runs quote_campaigns on --dry-run and book_campaigns only on --execute
+    proper_book_script = tmp_path / "proper_book_reservation.py"
+    proper_book_script.write_text(
+        "import argparse\n"
+        "from google.ads.googleads.client import GoogleAdsClient\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--customer-id', required=True)\n"
+        "parser.add_argument('--dry-run', action='store_true')\n"
+        "parser.add_argument('--execute', action='store_true')\n"
+        "args = parser.parse_args()\n"
+        "client = GoogleAdsClient.load_from_storage(path='config/google-ads.yaml')\n"
+        "svc = client.get_service('ReservationService')\n"
+        "if args.execute:\n"
+        "    resp = svc.book_campaigns(request={'customer_id': args.customer_id, 'campaigns': ['customers/1234567890/campaigns/777']})\n"
+        "    print('Booked:', resp['request_id'])\n"
+        "else:\n"
+        "    quote = svc.quote_campaigns(request={'customer_id': args.customer_id})\n"
+        "    print('Preflight quote verified:', quote['quotes'][0]['max_budget_micros'])\n",
+        encoding="utf-8",
+    )
+
+    dry_book_proc = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(proper_book_script),
+            "--dry-run",
+            "--customer-id",
+            "1234567890",
+            "--operation",
+            "ReservationService.book_campaigns",
+            "--before",
+            "Quoted reservation: $12,500.00 USD (unbooked)",
+            "--after",
+            "Booked reservation: $12,500.00 USD guaranteed spend",
+            "--consequences",
+            "Commits $12,500.00 USD guaranteed spend booking; Non-cancellable contractual billing commitment",
+            "--reversibility",
+            "IRREVERSIBLE",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=sub_env,
+    )
+    assert dry_book_proc.returncode == 0, dry_book_proc.stderr
+    assert "Financial Txn : YES" in dry_book_proc.stdout
+
+    invocations_after_dry = [
+        json.loads(line)
+        for line in invocation_log.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [c["method"] for c in invocations_after_dry] == ["quote_campaigns"]
+
+    exec_book_proc = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(proper_book_script),
+            "--execute",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=sub_env,
+    )
+    assert exec_book_proc.returncode == 0, exec_book_proc.stderr
+    assert "req-book-live-001" in exec_book_proc.stdout
+
+    # =========================================================================
+    # WORKFLOW B: Atomic Cross-Resource Financial Bundle + Conversion Value Restatement
+    #             with Pre-RPC Monetary Tamper Detection
+    # =========================================================================
+    tamper_env_file = tmp_path / "monetary_override.txt"
+    atomic_fin_script = tmp_path / "atomic_financial_bundle.py"
+    atomic_fin_script.write_text(
+        "import argparse, pathlib\n"
+        "from google.ads.googleads.client import GoogleAdsClient\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--customer-id', required=True)\n"
+        "parser.add_argument('--dry-run', action='store_true')\n"
+        "parser.add_argument('--execute', action='store_true')\n"
+        "args = parser.parse_args()\n"
+        "is_dry = not args.execute\n"
+        f"override_file = pathlib.Path({str(tamper_env_file)!r})\n"
+        "budget_micros = override_file.read_text(encoding='utf-8').strip() if override_file.exists() else '150000000'\n"
+        "client = GoogleAdsClient.load_from_storage(path='config/google-ads.yaml')\n"
+        "ga_svc = client.get_service('GoogleAdsService')\n"
+        "ga_svc.mutate(request={\n"
+        "    'customer_id': args.customer_id,\n"
+        "    'validate_only': is_dry,\n"
+        "    'mutate_operations': [\n"
+        "        {'campaign_budget_operation': {'create': {'amount_micros': budget_micros}}},\n"
+        "        {'bidding_strategy_operation': {'create': {'target_roas': {'target_roas': 3.5}}}},\n"
+        "    ],\n"
+        "})\n"
+        "adj_svc = client.get_service('ConversionAdjustmentUploadService')\n"
+        "adj_svc.upload_conversion_adjustments(request={\n"
+        "    'customer_id': args.customer_id,\n"
+        "    'validate_only': is_dry,\n"
+        "    'partial_failure': True,\n"
+        "    'conversion_adjustments': [\n"
+        "        {'adjustment_type': 'RESTATEMENT', 'restatement_value': {'adjusted_value': 85.50, 'currency_code': 'USD'}}\n"
+        "    ],\n"
+        "})\n"
+        "print('Atomic financial bundle completed, dry_run=', is_dry)\n",
+        encoding="utf-8",
+    )
+
+    dry_atomic = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(atomic_fin_script),
+            "--dry-run",
+            "--customer-id",
+            "1234567890",
+            "--operation",
+            "GoogleAdsService.mutate + ConversionAdjustmentUploadService.upload_conversion_adjustments",
+            "--before",
+            "No shared budget/ROAS portfolio; order conv value $140.00 USD",
+            "--after",
+            "New $150.00/day budget + 350% Target ROAS strategy; order conv restated to $85.50 USD",
+            "--consequences",
+            "Creates $150.00/day budget (~$4,560.00/month max spend exposure) with 350% Target ROAS bidding; Restates conversion value to $85.50 USD",
+            "--reversibility",
+            "REVERSIBLE",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=sub_env,
+    )
+    assert dry_atomic.returncode == 0, dry_atomic.stderr
+
+    # B1. Tamper monetary amount_micros at runtime (150_000_000 -> 950_000_000 micros) without modifying script bytes!
+    # Pre-RPC SHA-256 verification MUST catch the altered monetary amount BEFORE sending the live RPC!
+    tamper_env_file.write_text("950000000", encoding="utf-8")
+    inv_count_before_tamper = len(
+        invocation_log.read_text(encoding="utf-8").splitlines()
+    )
+    tampered_exec = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(atomic_fin_script),
+            "--execute",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=sub_env,
+    )
+    assert tampered_exec.returncode != 0
+    assert "BLOCKED_SHA256_MISMATCH" in tampered_exec.stderr or "SHA-256 mismatch" in tampered_exec.stderr
+    inv_count_after_tamper = len(
+        invocation_log.read_text(encoding="utf-8").splitlines()
+    )
+    assert inv_count_after_tamper == inv_count_before_tamper, (
+        "Altered monetary amount_micros must be blocked BEFORE any live RPC is sent!"
+    )
+
+    # B2. Remove runtime monetary tamper -> exact approved $150.00/day + $85.50 restatement executes cleanly!
+    tamper_env_file.unlink()
+    clean_exec = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(atomic_fin_script),
+            "--execute",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=sub_env,
+    )
+    assert clean_exec.returncode == 0, clean_exec.stderr
+    assert "Atomic financial bundle completed, dry_run= False" in clean_exec.stdout
+
+    audit_entries = [
+        json.loads(line)
+        for line in audit_log_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [e["status"] for e in audit_entries] == [
+        "BLOCKED_MISSING_VALIDATE_ONLY",
+        "DRY_RUN_PASSED",
+        "SUCCESS",
+        "DRY_RUN_PASSED",
+        "BLOCKED_SHA256_MISMATCH",
+        "SUCCESS",
+    ]
+    assert all(e["request"]["is_financial_transaction"] is True for e in audit_entries)
+    # Verify both Workflow A live book_campaigns and Workflow B live multi-RPC bundle have verified SHA-256 and request IDs
+    assert audit_entries[2]["request"]["request_sha256_verified"] is True
+    assert audit_entries[2]["response"]["google_ads_request_ids"] == ["req-book-live-001"]
+    assert audit_entries[5]["request"]["request_sha256_verified"] is True
+    assert audit_entries[5]["response"]["google_ads_request_ids"] == [
+        "req-ga-live",
+        "req-adj-live",
+    ]
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+
+def test_real_v26_financial_protobuf_requests_serialization_sha256_and_interception(
+    monkeypatch: Any,
+) -> None:
+    """Verifies real Google Ads API v26 protobuf request messages across financial services:
+    1. Exact descriptor parity for validate_only vs non-validate_only financial RPCs.
+    2. Protobuf3 default validate_only=False (omitted by to_dict / MessageToDict) is blocked in dry-run and when execute_mutates=false.
+    3. Canonical SHA-256 parity across validate_only=True and validate_only=False on real financial protos, plus monetary field tamper detection.
+    """
+    bundled_sdk = (
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "client_libs"
+        / "google-ads-python"
+    )
+    if not (bundled_sdk / "google" / "ads" / "googleads" / "v26").is_dir():
+        pytest.skip("Bundled Google Ads Python v26 SDK not present")
+
+    monkeypatch.syspath_prepend(str(bundled_sdk))
+    from google.ads.googleads.v26.services.types import (
+        account_budget_proposal_service,
+        ad_group_bid_modifier_service,
+        bidding_data_exclusion_service,
+        bidding_seasonality_adjustment_service,
+        bidding_strategy_service,
+        billing_setup_service,
+        campaign_bid_modifier_service,
+        campaign_budget_service,
+        campaign_draft_service,
+        conversion_adjustment_upload_service,
+        conversion_value_rule_service,
+        customer_service,
+        experiment_service,
+        google_ads_service,
+        incentive_service,
+        local_services_lead_service,
+        reservation_service,
+    )
+
+    run_mutation = _load_run_mutation_module()
+
+    # 1. Verify exact v26 protobuf descriptor parity with _NON_VALIDATE_ONLY_MUTATION_METHODS
+    proto_method_matrix = (
+        ("mutate_billing_setup", billing_setup_service.MutateBillingSetupRequest, False),
+        ("book_campaigns", reservation_service.BookCampaignsRequest, False),
+        ("apply_incentive", incentive_service.ApplyIncentiveRequest, False),
+        ("provide_lead_feedback", local_services_lead_service.ProvideLeadFeedbackRequest, False),
+        ("mutate_account_budget_proposal", account_budget_proposal_service.MutateAccountBudgetProposalRequest, True),
+        ("mutate_campaign_budgets", campaign_budget_service.MutateCampaignBudgetsRequest, True),
+        ("create_customer_client", customer_service.CreateCustomerClientRequest, True),
+        ("mutate_bidding_strategies", bidding_strategy_service.MutateBiddingStrategiesRequest, True),
+        ("mutate_bidding_seasonality_adjustments", bidding_seasonality_adjustment_service.MutateBiddingSeasonalityAdjustmentsRequest, True),
+        ("mutate_bidding_data_exclusions", bidding_data_exclusion_service.MutateBiddingDataExclusionsRequest, True),
+        ("mutate_campaign_bid_modifiers", campaign_bid_modifier_service.MutateCampaignBidModifiersRequest, True),
+        ("mutate_ad_group_bid_modifiers", ad_group_bid_modifier_service.MutateAdGroupBidModifiersRequest, True),
+        ("mutate_conversion_value_rules", conversion_value_rule_service.MutateConversionValueRulesRequest, True),
+        ("upload_conversion_adjustments", conversion_adjustment_upload_service.UploadConversionAdjustmentsRequest, True),
+        ("graduate_experiment", experiment_service.GraduateExperimentRequest, True),
+        ("promote_experiment", experiment_service.PromoteExperimentRequest, True),
+        ("schedule_experiment", experiment_service.ScheduleExperimentRequest, True),
+        ("end_experiment", experiment_service.EndExperimentRequest, True),
+        ("promote_campaign_draft", campaign_draft_service.PromoteCampaignDraftRequest, True),
+        ("mutate", google_ads_service.MutateGoogleAdsRequest, True),
+    )
+    for method_name, proto_cls, expected_has_vo in proto_method_matrix:
+        actual_has_vo = "validate_only" in proto_cls.meta.fields
+        assert actual_has_vo is expected_has_vo, (
+            f"v26 {proto_cls.__name__} validate_only support changed: expected {expected_has_vo}, got {actual_has_vo}"
+        )
+        assert (method_name not in run_mutation._NON_VALIDATE_ONLY_MUTATION_METHODS) is expected_has_vo
+
+    # 2. Construct real v26 financial protobuf requests and verify canonical SHA-256 & monetary tamper detection
+    # 2a. AccountBudgetProposal ($25,000.00 spending limit)
+    abp_dry = account_budget_proposal_service.MutateAccountBudgetProposalRequest()
+    abp_dry.customer_id = "1234567890"
+    abp_dry.validate_only = True
+    abp_dry.operation.create.billing_setup = "customers/1234567890/billingSetups/555"
+    abp_dry.operation.create.proposed_spending_limit_micros = 25_000_000_000
+
+    abp_live = account_budget_proposal_service.MutateAccountBudgetProposalRequest()
+    abp_live.customer_id = "1234567890"
+    abp_live.validate_only = False  # Proto3 default False (omitted in serialized dict)
+    abp_live.operation.create.billing_setup = "customers/1234567890/billingSetups/555"
+    abp_live.operation.create.proposed_spending_limit_micros = 25_000_000_000
+
+    abp_tampered = account_budget_proposal_service.MutateAccountBudgetProposalRequest()
+    abp_tampered.customer_id = "1234567890"
+    abp_tampered.validate_only = False
+    abp_tampered.operation.create.billing_setup = "customers/1234567890/billingSetups/555"
+    abp_tampered.operation.create.proposed_spending_limit_micros = 25_000_000_001
+
+    sha_abp_dry = run_mutation.compute_mutate_request_sha256(
+        "AccountBudgetProposalService", "mutate_account_budget_proposal", abp_dry
+    )
+    sha_abp_live = run_mutation.compute_mutate_request_sha256(
+        "AccountBudgetProposalService", "mutate_account_budget_proposal", abp_live
+    )
+    sha_abp_tampered = run_mutation.compute_mutate_request_sha256(
+        "AccountBudgetProposalService", "mutate_account_budget_proposal", abp_tampered
+    )
+    assert sha_abp_dry == sha_abp_live
+    assert sha_abp_dry != sha_abp_tampered
+
+    # 2b. ConversionAdjustmentUploadService restatement ($199.99 -> $49.99 USD)
+    adj_dry = conversion_adjustment_upload_service.UploadConversionAdjustmentsRequest()
+    adj_dry.customer_id = "1234567890"
+    adj_dry.partial_failure = True
+    adj_dry.validate_only = True
+    adj_item = conversion_adjustment_upload_service.ConversionAdjustment()
+    adj_item.conversion_action = "customers/1234567890/conversionActions/321"
+    adj_item.restatement_value.adjusted_value = 199.99
+    adj_item.restatement_value.currency_code = "USD"
+    adj_dry.conversion_adjustments.append(adj_item)
+
+    adj_live = conversion_adjustment_upload_service.UploadConversionAdjustmentsRequest()
+    adj_live.customer_id = "1234567890"
+    adj_live.partial_failure = True
+    adj_live.validate_only = False
+    adj_live.conversion_adjustments.append(adj_item)
+
+    adj_tampered = conversion_adjustment_upload_service.UploadConversionAdjustmentsRequest()
+    adj_tampered.customer_id = "1234567890"
+    adj_tampered.partial_failure = True
+    adj_tampered.validate_only = False
+    adj_item_diff = conversion_adjustment_upload_service.ConversionAdjustment()
+    adj_item_diff.conversion_action = "customers/1234567890/conversionActions/321"
+    adj_item_diff.restatement_value.adjusted_value = 49.99
+    adj_item_diff.restatement_value.currency_code = "USD"
+    adj_tampered.conversion_adjustments.append(adj_item_diff)
+
+    assert run_mutation.compute_mutate_request_sha256(
+        "ConversionAdjustmentUploadService", "upload_conversion_adjustments", adj_dry
+    ) == run_mutation.compute_mutate_request_sha256(
+        "ConversionAdjustmentUploadService", "upload_conversion_adjustments", adj_live
+    )
+    assert run_mutation.compute_mutate_request_sha256(
+        "ConversionAdjustmentUploadService", "upload_conversion_adjustments", adj_dry
+    ) != run_mutation.compute_mutate_request_sha256(
+        "ConversionAdjustmentUploadService", "upload_conversion_adjustments", adj_tampered
+    )
+
+    # 3. Real proto3 default validate_only=False (abp_live) and non-validate_only protos (BillingSetup, Incentive)
+    #    MUST be blocked in dry_run_mode=True and when execute_mutates=false!
+    billing_req = billing_setup_service.MutateBillingSetupRequest()
+    billing_req.customer_id = "1234567890"
+    billing_req.operation.create.payments_account = "paymentsAccounts/1111-2222-3333-4444"
+
+    incentive_req = incentive_service.ApplyIncentiveRequest()
+    incentive_req.customer_id = "1234567890"
+    incentive_req.selected_incentive_id = 777
+    incentive_req.country_code = "US"
+
+    class _ProtoCapturingService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def mutate_account_budget_proposal(self, request: Any = None) -> dict[str, Any]:
+            self.calls += 1
+            return {"request_id": "req-proto-abp"}
+
+        def mutate_billing_setup(self, request: Any = None) -> dict[str, Any]:
+            self.calls += 1
+            return {"request_id": "req-proto-bill"}
+
+        def apply_incentive(self, request: Any = None) -> dict[str, Any]:
+            self.calls += 1
+            return {"request_id": "req-proto-inc"}
+
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates = true")
+    proto_svc = _ProtoCapturingService()
+    proto_captured: list[dict[str, Any]] = []
+    wrapped_proto_dry = run_mutation._wrap_service_for_audit(
+        proto_svc,
+        "ProtoFinancialService",
+        proto_captured,
+        dry_run_mode=True,
+    )
+
+    # Proto3 validate_only=True succeeds in dry-run
+    assert wrapped_proto_dry.mutate_account_budget_proposal(request=abp_dry)["request_id"] == "req-proto-abp"
+    assert proto_svc.calls == 1
+    assert run_mutation.is_financial_mutation(rpc_calls=proto_captured) is True
+
+    # Proto3 default validate_only=False (both proto-plus Message and raw _pb MessageToDict)
+    # is BLOCKED BEFORE RPC in dry-run!
+    with pytest.raises(PermissionError, match="without validate_only=True"):
+        wrapped_proto_dry.mutate_account_budget_proposal(request=abp_live)
+    with pytest.raises(PermissionError, match="without validate_only=True"):
+        wrapped_proto_dry.mutate_account_budget_proposal(request=abp_live._pb)
+    assert proto_svc.calls == 1
+    assert proto_captured[-1]["status"] == "BLOCKED_MISSING_VALIDATE_ONLY"
+
+    # Real MutateBillingSetupRequest and ApplyIncentiveRequest are BLOCKED BEFORE RPC in dry-run!
+    with pytest.raises(PermissionError, match="does not support validate_only=True"):
+        wrapped_proto_dry.mutate_billing_setup(request=billing_req)
+    with pytest.raises(PermissionError, match="does not support validate_only=True"):
+        wrapped_proto_dry.apply_incentive(request=incentive_req)
+    assert proto_svc.calls == 1
+
+    # And when execute_mutates = false, proto3 default validate_only=False (both proto-plus and raw _pb)
+    # is BLOCKED BEFORE RPC!
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates = false")
+    proto_svc_disabled = _ProtoCapturingService()
+    disabled_proto_captured: list[dict[str, Any]] = []
+    wrapped_proto_disabled = run_mutation._wrap_service_for_audit(
+        proto_svc_disabled,
+        "ProtoFinancialService",
+        disabled_proto_captured,
+        dry_run_mode=False,
+    )
+    with pytest.raises(PermissionError, match="execute_mutates = false"):
+        wrapped_proto_disabled.mutate_account_budget_proposal(request=abp_live)
+    with pytest.raises(PermissionError, match="execute_mutates = false"):
+        wrapped_proto_disabled.mutate_account_budget_proposal(request=abp_live._pb)
+    assert proto_svc_disabled.calls == 0
+    assert disabled_proto_captured[-1]["status"] == "BLOCKED_MUTATES_DISABLED"
+
+
+
+
 

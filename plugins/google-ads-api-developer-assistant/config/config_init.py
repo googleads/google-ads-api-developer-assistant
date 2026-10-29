@@ -1624,9 +1624,203 @@ READONLY_SKILL_SCRIPTS = (
 )
 
 MUTATION_CALL_PATTERN = re.compile(
-    r"\.\s*(?:mutate(?:_[a-z0-9_]+)?|apply_recommendation|upload_click_conversions|"
-    r"upload_call_conversions|add_batch_job_operations|run_batch_job)\s*\("
+    r"\.\s*(?:mutate(?:_[a-z0-9_]+)?|apply_recommendation|dismiss_recommendation|"
+    r"upload_click_conversions|upload_call_conversions|upload_conversion_adjustments|"
+    r"upload_user_data|add_batch_job_operations|run_batch_job|book_campaigns|"
+    r"apply_incentive|provide_lead_feedback|create_customer_client|"
+    r"promote_campaign_draft|graduate_experiment|promote_experiment|"
+    r"schedule_experiment|end_experiment)\s*\("
 )
+
+_NON_VALIDATE_ONLY_CALL_RE = re.compile(
+    r"\.\s*(?:mutate_billing_setup|book_campaigns|apply_incentive|"
+    r"provide_lead_feedback|apply_recommendation|dismiss_recommendation|"
+    r"mutate_batch_job|add_batch_job_operations|run_batch_job|"
+    r"mutate_customer_user_access|mutate_customer_user_access_invitation|"
+    r"upload_user_data)\s*\("
+)
+
+_HOOK_FINANCIAL_SERVICES = frozenset({
+    "billingsetupservice",
+    "accountbudgetproposalservice",
+    "campaignbudgetservice",
+    "biddingstrategyservice",
+    "biddingseasonalityadjustmentservice",
+    "biddingdataexclusionservice",
+    "campaignbidmodifierservice",
+    "adgroupbidmodifierservice",
+    "conversionvalueruleservice",
+    "conversionvaluerulesetservice",
+    "conversionadjustmentuploadservice",
+    "reservationservice",
+    "incentiveservice",
+    "localservicesleadservice",
+})
+
+_HOOK_FINANCIAL_METHODS = frozenset({
+    "mutate_billing_setup",
+    "mutate_account_budget_proposal",
+    "mutate_campaign_budgets",
+    "mutate_bidding_strategies",
+    "mutate_bidding_seasonality_adjustments",
+    "mutate_bidding_data_exclusions",
+    "mutate_campaign_bid_modifiers",
+    "mutate_ad_group_bid_modifiers",
+    "mutate_conversion_value_rules",
+    "mutate_conversion_value_rule_sets",
+    "upload_conversion_adjustments",
+    "book_campaigns",
+    "apply_incentive",
+    "provide_lead_feedback",
+    "create_customer_client",
+    "graduate_experiment",
+    "promote_experiment",
+    "schedule_experiment",
+    "promote_campaign_draft",
+})
+
+_HOOK_FINANCIAL_PAYLOAD_KEYS = frozenset({
+    "amount_micros",
+    "total_amount_micros",
+    "recommended_budget_amount_micros",
+    "spending_limit_micros",
+    "proposed_spending_limit_micros",
+    "approved_spending_limit_micros",
+    "campaign_budget",
+    "campaign_budget_operation",
+    "account_budget_proposal",
+    "billing_setup",
+    "payments_account",
+    "payments_account_info",
+    "purchase_order_number",
+    "cpc_bid_micros",
+    "cpm_bid_micros",
+    "cpv_bid_micros",
+    "target_cpa_micros",
+    "target_cpm_micros",
+    "target_roas",
+    "cpc_bid_ceiling_micros",
+    "cpc_bid_floor_micros",
+    "percent_cpc_bid_micros",
+    "fixed_cpm_micros",
+    "target_spend_micros",
+    "bid_modifier",
+    "bidding_strategy",
+    "bidding_strategy_operation",
+    "campaign_bid_modifier_operation",
+    "ad_group_bid_modifier_operation",
+    "bidding_seasonality_adjustment_operation",
+    "bidding_data_exclusion_operation",
+    "seasonality_modifier",
+    "manual_cpc",
+    "manual_cpm",
+    "manual_cpv",
+    "maximize_conversions",
+    "maximize_conversion_value",
+    "target_cpa",
+    "target_impression_share",
+    "target_spend",
+    "conversion_value",
+    "adjusted_value",
+    "restatement_value",
+    "default_value",
+    "conversion_value_rule_operation",
+    "conversion_value_rule_set_operation",
+    "selected_incentive_id",
+    "credit_issuance_decision",
+    "report_charged_lead",
+})
+
+_HOOK_FINANCIAL_SUMMARY_RE = re.compile(
+    r"(?i)(?:"
+    r"billing[_\s]*setup|payments[_\s]*account|account[_\s]*budget|"
+    r"campaign[_\s]*budget|\bbudget(?:s|ing)?\b|"
+    r"bidding[_\s]*(?:strategy|strategies|seasonality|data[_\s]*exclusion)|"
+    r"bid[_\s]*modifier|\b(?:cpc|cpm|cpv|cpa)[_\s]*bid|target[_\s]*(?:cpa|roas|cpm|spend)|"
+    r"maximize[_\s]*conversion[_\s]*value|"
+    r"book[_\s]*campaigns|\breservation(?:s|service)?\b|"
+    r"apply[_\s]*incentive|\bincentive(?:s|service)?\b|"
+    r"provide[_\s]*lead[_\s]*feedback|lead[_\s]*credit|"
+    r"conversion[_\s]*value[_\s]*rule|upload[_\s]*conversion[_\s]*adjustments|"
+    r"restatement[_\s]*value|adjusted[_\s]*value|"
+    r"create[_\s]*customer[_\s]*client|"
+    r"(?:graduate|promote|schedule)[_\s]*experiment|promote[_\s]*campaign[_\s]*draft|"
+    r"(?:amount|bid|cpa|cpm|cpv|spend|spending_limit)[_\s]*micros|\bmicros\b|"
+    r"[$€£¥₹]\s*\d|\b(?:USD|EUR|GBP|JPY|CAD|AUD|CHF|INR|BRL|MXN)\s*\d"
+    r")"
+)
+
+_HOOK_FINANCIAL_CONSEQUENCE_RE = re.compile(
+    r"(?i)(?:"
+    r"[$€£¥₹]\s*\d|"
+    r"\b\d+(?:[.,]\d+)?\s*(?:%|percent|micros|/(?:day|mo|month|wk|week|yr|year))\b|"
+    r"\b(?:USD|EUR|GBP|JPY|CAD|AUD|CHF|INR|BRL|MXN)\b|"
+    r"\b(?:spend|spending|budget|budgets|billing|billable|billed|payment|payments|"
+    r"invoice|invoices|charge|charges|charged|cost|costs|monetary|financial|currency|"
+    r"price|pricing|fee|fees|credit|credits|credited|refund|incentive|coupon|voucher|"
+    r"promotional|booking|booked|guaranteed|reservation|commitment|"
+    r"bid|bids|bidding|cpc|cpm|cpv|cpa|roas|modifier|"
+    r"conversion\s+value|restatement|retraction|revenue)\b"
+    r")"
+)
+
+
+def _hook_payload_has_financial_fields(obj: Any, _depth: int = 0) -> bool:
+    """Recursively checks whether a serialized RPC payload contains financial fields."""
+    if _depth > 12:
+        return False
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).strip().lower() in _HOOK_FINANCIAL_PAYLOAD_KEYS and v not in (
+                None,
+                "",
+                [],
+                {},
+            ):
+                return True
+            if _hook_payload_has_financial_fields(v, _depth + 1):
+                return True
+    elif isinstance(obj, list):
+        for item in obj:
+            if _hook_payload_has_financial_fields(item, _depth + 1):
+                return True
+    return False
+
+
+def _is_financial_receipt_for_hook(receipt: Dict[str, Any]) -> bool:
+    """Returns True if a dry-run receipt represents a financial Google Ads API mutation."""
+    if receipt.get("is_financial_transaction") is True:
+        return True
+    dry_run_calls = receipt.get("dry_run_rpc_calls")
+    if isinstance(dry_run_calls, list):
+        for call in dry_run_calls:
+            if not isinstance(call, dict):
+                continue
+            svc = str(call.get("service", "")).strip().lower()
+            method = str(call.get("method", "")).strip().lower()
+            if svc in _HOOK_FINANCIAL_SERVICES or method in _HOOK_FINANCIAL_METHODS:
+                return True
+            if _hook_payload_has_financial_fields(call.get("request_payload")):
+                return True
+    combined_text = " | ".join(
+        str(receipt.get(field, "")).strip()
+        for field in ("operation_summary", "before_state", "after_state")
+        if str(receipt.get(field, "")).strip()
+    )
+    if combined_text and _HOOK_FINANCIAL_SUMMARY_RE.search(combined_text):
+        return True
+    return False
+
+
+def _has_financial_consequence_for_hook(consequences: Any) -> bool:
+    """Returns True if consequences include explicit financial/monetary impact disclosures."""
+    if not isinstance(consequences, list):
+        return False
+    for item in consequences:
+        text = str(item).strip()
+        if text and _HOOK_FINANCIAL_CONSEQUENCE_RE.search(text):
+            return True
+    return False
 
 
 def _normalize_request_for_hash(obj: Any) -> Any:
@@ -1732,6 +1926,16 @@ def _verify_dry_run_receipt_for_hook(
             False,
             "BLOCKED BY HITL MUTATION GUARD: Dry-run receipt in saved/data/last_dry_run.json is missing "
             "mandatory consequence disclosures.",
+            receipt,
+        )
+
+    is_financial_txn = _is_financial_receipt_for_hook(receipt)
+    if is_financial_txn and not _has_financial_consequence_for_hook(consequences):
+        return (
+            False,
+            "BLOCKED BY HITL MUTATION GUARD: Dry-run receipt for financial mutation in "
+            "saved/data/last_dry_run.json is missing explicit monetary, currency, spend, "
+            "budget, billing, credit, or bidding impact disclosure in consequences.",
             receipt,
         )
 
@@ -1850,8 +2054,9 @@ def _verify_dry_run_receipt_for_hook(
 
     consequences_formatted = "; ".join(str(c).strip() for c in consequences if str(c).strip())
     req_sha_display = str(receipt.get("request_sha256", "N/A"))
+    fin_badge = " [FINANCIAL TRANSACTION]" if is_financial_txn else ""
     prompt_reason = (
-        f"⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION [Customer ID: {receipt.get('customer_id', 'Unknown')}]\n"
+        f"⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION{fin_badge} [Customer ID: {receipt.get('customer_id', 'Unknown')}]\n"
         f"• Operation: {receipt.get('operation_summary', 'Unknown')}\n"
         f"• Change: {receipt.get('before_state', 'N/A')} -> {receipt.get('after_state', 'N/A')}\n"
         f"• Request SHA256: {req_sha_display}\n"
@@ -1960,16 +2165,20 @@ def evaluate_mutation_guard(
 
     # A Google Ads mutation method is present in the executed code.
     # For direct script or inline execution (outside run_mutation.py), require an explicit
-    # static validate_only=True and no validate_only=False or --execute flag; never trust
-    # a bare --dry-run CLI flag alone if the script itself lacks validate_only=True.
+    # static validate_only=True, no validate_only=False, no non-validate_only-capable RPC
+    # (e.g. mutate_billing_setup, book_campaigns, apply_incentive, provide_lead_feedback,
+    # create_customer_client, apply_recommendation, batch jobs), and no --execute flag;
+    # never trust a bare --dry-run CLI flag alone if the script itself lacks validate_only=True.
     explicit_execute_flag = "--execute" in cmd
 
     has_validate_only_true = bool(_VALIDATE_ONLY_TRUE_RE.search(uncommented_code))
     has_validate_only_false = bool(_VALIDATE_ONLY_FALSE_RE.search(uncommented_code))
+    has_non_validate_only_call = bool(_NON_VALIDATE_ONLY_CALL_RE.search(uncommented_code))
 
     if (
         has_validate_only_true
         and not has_validate_only_false
+        and not has_non_validate_only_call
         and not explicit_execute_flag
     ):
         return "allow", None

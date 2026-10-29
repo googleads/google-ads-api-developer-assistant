@@ -28,14 +28,169 @@ DEFAULT_MAX_RECEIPT_AGE_SECONDS = 1800  # 30 minutes
 _TRACE_ENV_VAR = "_GOOGLE_ADS_MUTATION_TRACE_FILE"
 _EXPECTED_HASHES_ENV_VAR = "_GOOGLE_ADS_EXPECTED_REQUEST_SHA256"
 _ENFORCE_HASH_ENV_VAR = "_GOOGLE_ADS_ENFORCE_REQUEST_SHA256"
+_DRY_RUN_MODE_ENV_VAR = "_GOOGLE_ADS_DRY_RUN_MODE"
 
 _MUTATION_METHOD_PREFIXES = (
     "mutate",
     "apply_recommendation",
+    "dismiss_recommendation",
     "upload_click_conversions",
     "upload_call_conversions",
+    "upload_conversion_adjustments",
+    "upload_user_data",
     "add_batch_job_operations",
     "run_batch_job",
+    "book_campaigns",
+    "apply_incentive",
+    "provide_lead_feedback",
+    "create_customer_client",
+    "promote_campaign_draft",
+    "graduate_experiment",
+    "promote_experiment",
+    "schedule_experiment",
+    "end_experiment",
+)
+
+# Google Ads API write RPCs whose request messages have NO `validate_only` field.
+# These methods execute live changes immediately if invoked and must never be sent
+# during `--dry-run` or allowed to bypass HITL checks via `validate_only=True`.
+_NON_VALIDATE_ONLY_MUTATION_METHODS = frozenset({
+    "mutate_billing_setup",
+    "book_campaigns",
+    "apply_incentive",
+    "provide_lead_feedback",
+    "apply_recommendation",
+    "dismiss_recommendation",
+    "mutate_batch_job",
+    "add_batch_job_operations",
+    "run_batch_job",
+    "mutate_customer_user_access",
+    "mutate_customer_user_access_invitation",
+    "upload_user_data",
+})
+
+_FINANCIAL_SERVICES = frozenset({
+    "billingsetupservice",
+    "accountbudgetproposalservice",
+    "campaignbudgetservice",
+    "biddingstrategyservice",
+    "biddingseasonalityadjustmentservice",
+    "biddingdataexclusionservice",
+    "campaignbidmodifierservice",
+    "adgroupbidmodifierservice",
+    "conversionvalueruleservice",
+    "conversionvaluerulesetservice",
+    "conversionadjustmentuploadservice",
+    "reservationservice",
+    "incentiveservice",
+    "localservicesleadservice",
+})
+
+_FINANCIAL_METHODS = frozenset({
+    "mutate_billing_setup",
+    "mutate_account_budget_proposal",
+    "mutate_campaign_budgets",
+    "mutate_bidding_strategies",
+    "mutate_bidding_seasonality_adjustments",
+    "mutate_bidding_data_exclusions",
+    "mutate_campaign_bid_modifiers",
+    "mutate_ad_group_bid_modifiers",
+    "mutate_conversion_value_rules",
+    "mutate_conversion_value_rule_sets",
+    "upload_conversion_adjustments",
+    "book_campaigns",
+    "apply_incentive",
+    "provide_lead_feedback",
+    "create_customer_client",
+    "graduate_experiment",
+    "promote_experiment",
+    "schedule_experiment",
+    "promote_campaign_draft",
+})
+
+_FINANCIAL_PAYLOAD_KEYS = frozenset({
+    "amount_micros",
+    "total_amount_micros",
+    "recommended_budget_amount_micros",
+    "spending_limit_micros",
+    "proposed_spending_limit_micros",
+    "approved_spending_limit_micros",
+    "campaign_budget",
+    "campaign_budget_operation",
+    "account_budget_proposal",
+    "billing_setup",
+    "payments_account",
+    "payments_account_info",
+    "purchase_order_number",
+    "cpc_bid_micros",
+    "cpm_bid_micros",
+    "cpv_bid_micros",
+    "target_cpa_micros",
+    "target_cpm_micros",
+    "target_roas",
+    "cpc_bid_ceiling_micros",
+    "cpc_bid_floor_micros",
+    "percent_cpc_bid_micros",
+    "fixed_cpm_micros",
+    "target_spend_micros",
+    "bid_modifier",
+    "bidding_strategy",
+    "bidding_strategy_operation",
+    "campaign_bid_modifier_operation",
+    "ad_group_bid_modifier_operation",
+    "bidding_seasonality_adjustment_operation",
+    "bidding_data_exclusion_operation",
+    "seasonality_modifier",
+    "manual_cpc",
+    "manual_cpm",
+    "manual_cpv",
+    "maximize_conversions",
+    "maximize_conversion_value",
+    "target_cpa",
+    "target_impression_share",
+    "target_spend",
+    "conversion_value",
+    "adjusted_value",
+    "restatement_value",
+    "default_value",
+    "conversion_value_rule_operation",
+    "conversion_value_rule_set_operation",
+    "selected_incentive_id",
+    "credit_issuance_decision",
+    "report_charged_lead",
+})
+
+_FINANCIAL_SUMMARY_RE = re.compile(
+    r"(?i)(?:"
+    r"billing[_\s]*setup|payments[_\s]*account|account[_\s]*budget|"
+    r"campaign[_\s]*budget|\bbudget(?:s|ing)?\b|"
+    r"bidding[_\s]*(?:strategy|strategies|seasonality|data[_\s]*exclusion)|"
+    r"bid[_\s]*modifier|\b(?:cpc|cpm|cpv|cpa)[_\s]*bid|target[_\s]*(?:cpa|roas|cpm|spend)|"
+    r"maximize[_\s]*conversion[_\s]*value|"
+    r"book[_\s]*campaigns|\breservation(?:s|service)?\b|"
+    r"apply[_\s]*incentive|\bincentive(?:s|service)?\b|"
+    r"provide[_\s]*lead[_\s]*feedback|lead[_\s]*credit|"
+    r"conversion[_\s]*value[_\s]*rule|upload[_\s]*conversion[_\s]*adjustments|"
+    r"restatement[_\s]*value|adjusted[_\s]*value|"
+    r"create[_\s]*customer[_\s]*client|"
+    r"(?:graduate|promote|schedule)[_\s]*experiment|promote[_\s]*campaign[_\s]*draft|"
+    r"(?:amount|bid|cpa|cpm|cpv|spend|spending_limit)[_\s]*micros|\bmicros\b|"
+    r"[$€£¥₹]\s*\d|\b(?:USD|EUR|GBP|JPY|CAD|AUD|CHF|INR|BRL|MXN)\s*\d"
+    r")"
+)
+
+_FINANCIAL_CONSEQUENCE_RE = re.compile(
+    r"(?i)(?:"
+    r"[$€£¥₹]\s*\d|"
+    r"\b\d+(?:[.,]\d+)?\s*(?:%|percent|micros|/(?:day|mo|month|wk|week|yr|year))\b|"
+    r"\b(?:USD|EUR|GBP|JPY|CAD|AUD|CHF|INR|BRL|MXN)\b|"
+    r"\b(?:spend|spending|budget|budgets|billing|billable|billed|payment|payments|"
+    r"invoice|invoices|charge|charges|charged|cost|costs|monetary|financial|currency|"
+    r"price|pricing|fee|fees|credit|credits|credited|refund|incentive|coupon|voucher|"
+    r"promotional|booking|booked|guaranteed|reservation|commitment|"
+    r"bid|bids|bidding|cpc|cpm|cpv|cpa|roas|modifier|"
+    r"conversion\s+value|restatement|retraction|revenue)\b"
+    r")"
 )
 
 _SENSITIVE_KEYS = frozenset({
@@ -45,6 +200,64 @@ _SENSITIVE_KEYS = frozenset({
     "private_key",
     "json_key",
 })
+
+
+def _payload_contains_financial_fields(obj: Any, _depth: int = 0) -> bool:
+    """Recursively checks whether a serialized RPC payload contains financial fields."""
+    if _depth > 12:
+        return False
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            key_lower = str(k).strip().lower()
+            if key_lower in _FINANCIAL_PAYLOAD_KEYS and v not in (None, "", [], {}):
+                return True
+            if _payload_contains_financial_fields(v, _depth + 1):
+                return True
+    elif isinstance(obj, list):
+        for item in obj:
+            if _payload_contains_financial_fields(item, _depth + 1):
+                return True
+    return False
+
+
+def is_financial_mutation(
+    operation_summary: str = "",
+    before_state: str = "",
+    after_state: str = "",
+    rpc_calls: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
+    """Determines whether a Google Ads API mutation involves a financial transaction.
+
+    Checks intercepted RPC services, methods, and request payload fields as well as
+    the operation summary and before/after state descriptions.
+    """
+    for call in rpc_calls or []:
+        if not isinstance(call, dict):
+            continue
+        svc = str(call.get("service", "")).strip().lower()
+        method = str(call.get("method", "")).strip().lower()
+        if svc in _FINANCIAL_SERVICES or method in _FINANCIAL_METHODS:
+            return True
+        if _payload_contains_financial_fields(call.get("request_payload")):
+            return True
+
+    combined_text = " | ".join(
+        part.strip()
+        for part in (operation_summary, before_state, after_state)
+        if part and str(part).strip()
+    )
+    if combined_text and _FINANCIAL_SUMMARY_RE.search(combined_text):
+        return True
+    return False
+
+
+def has_financial_consequence_disclosure(consequences: List[str]) -> bool:
+    """Returns True if at least one consequence explicitly discloses financial/monetary impact."""
+    for item in consequences or []:
+        text = str(item).strip()
+        if text and _FINANCIAL_CONSEQUENCE_RE.search(text):
+            return True
+    return False
 
 
 def compute_file_sha256(file_path: str) -> str:
@@ -382,6 +595,14 @@ def _serialize_rpc_object(obj: Any, _depth: int = 0) -> Any:
         "operations",
         "operation",
         "conversions",
+        "conversion_adjustments",
+        "selected_incentive_id",
+        "feedback_type",
+        "campaign_budget",
+        "experiment",
+        "campaign_draft",
+        "email_address",
+        "customer_client",
         "validate_only",
         "partial_failure",
         "response_content_type",
@@ -427,6 +648,7 @@ def _wrap_service_for_audit(
     captured_calls: List[Dict[str, Any]],
     expected_request_hashes: Optional[List[str]] = None,
     enforce_request_hash: bool = False,
+    dry_run_mode: bool = False,
 ) -> Any:
     """Wraps mutation methods on a GoogleAdsClient service instance to verify SHA-256 and record payloads."""
     should_enforce = enforce_request_hash or (expected_request_hashes is not None)
@@ -472,11 +694,56 @@ def _wrap_service_for_audit(
                     "request_payload": req_payload,
                 }
 
-                # Pre-RPC Mutates Config check: block live mutations if execute_mutates = false
-                is_live_rpc = (
-                    isinstance(req_payload, dict)
-                    and req_payload.get("validate_only") is False
-                ) or should_enforce
+                supports_validate_only = (
+                    m_name not in _NON_VALIDATE_ONLY_MUTATION_METHODS
+                )
+                payload_vo = (
+                    req_payload.get("validate_only")
+                    if isinstance(req_payload, dict)
+                    else None
+                )
+                is_validate_only_true = supports_validate_only and (
+                    payload_vo is True
+                    or (payload_vo is None and kwargs.get("validate_only") is True)
+                )
+
+                # Pre-RPC Dry-Run Guard: block any mutation call during --dry-run that lacks
+                # an explicit validate_only=True (including omitted validate_only or
+                # non-validate_only RPCs such as mutate_billing_setup, book_campaigns, apply_incentive).
+                if dry_run_mode and not is_validate_only_true:
+                    if not supports_validate_only:
+                        err_msg = (
+                            f"BLOCKED BEFORE RPC: {svc_name}.{m_name} does not support "
+                            f"validate_only=True dry-run requests and would execute a live "
+                            f"mutation immediately. Guard live calls behind '--execute' and "
+                            f"perform read-only preflight queries during '--dry-run'."
+                        )
+                    else:
+                        err_msg = (
+                            f"BLOCKED BEFORE RPC: Dry-run intercepted mutation call to "
+                            f"{svc_name}.{m_name} without validate_only=True "
+                            f"(observed validate_only={payload_vo!r}). All mutation RPCs executed "
+                            f"during '--dry-run' MUST explicitly set validate_only=True."
+                        )
+                    call_record.update({
+                        "received_at_iso": datetime.now(timezone.utc).isoformat(),
+                        "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                        "status": "BLOCKED_MISSING_VALIDATE_ONLY",
+                        "expected_request_sha256": None,
+                        "request_sha256_verified": False,
+                        "google_ads_request_id": None,
+                        "response_payload": {
+                            "exception_type": "PermissionError",
+                            "message": err_msg,
+                        },
+                        "error": err_msg,
+                    })
+                    captured_calls.append(call_record)
+                    raise PermissionError(err_msg)
+
+                # Pre-RPC Mutates Config check: block live mutations (including omitted validate_only
+                # or non-validate_only RPCs) if execute_mutates = false.
+                is_live_rpc = (not is_validate_only_true) or should_enforce
                 if is_live_rpc and not is_execute_mutates_enabled():
                     err_msg = (
                         f"BLOCKED BEFORE RPC: Mutate support is disabled by configuration "
@@ -614,6 +881,7 @@ def _run_target_script_with_interception(
     """Executes the target mutation script while intercepting GoogleAdsClient service calls."""
     captured_calls: List[Dict[str, Any]] = []
     enforce_hash = os.environ.get(_ENFORCE_HASH_ENV_VAR, "") == "1"
+    dry_run_mode = os.environ.get(_DRY_RUN_MODE_ENV_VAR, "") == "1"
     expected_hashes: Optional[List[str]] = None
     raw_expected = os.environ.get(_EXPECTED_HASHES_ENV_VAR, "").strip()
     if raw_expected:
@@ -651,6 +919,7 @@ def _run_target_script_with_interception(
                 captured_calls,
                 expected_request_hashes=expected_hashes,
                 enforce_request_hash=enforce_hash,
+                dry_run_mode=dry_run_mode,
             )
 
         GoogleAdsClient.get_service = _hooked_get_service  # type: ignore[method-assign]
@@ -674,6 +943,7 @@ def _execute_script_subprocess(
     script_args: List[str],
     expected_request_hashes: Optional[List[str]] = None,
     enforce_request_hash: bool = False,
+    dry_run_mode: bool = False,
 ) -> Tuple[subprocess.CompletedProcess[str], str, str, float, List[Dict[str, Any]]]:
     """Runs the mutation script in a subprocess with RPC audit interception and pre-RPC SHA-256 verification."""
     fd, trace_path = tempfile.mkstemp(prefix="ads_mutation_trace_", suffix=".json")
@@ -681,6 +951,10 @@ def _execute_script_subprocess(
 
     env = os.environ.copy()
     env[_TRACE_ENV_VAR] = trace_path
+    if dry_run_mode:
+        env[_DRY_RUN_MODE_ENV_VAR] = "1"
+    else:
+        env.pop(_DRY_RUN_MODE_ENV_VAR, None)
     if enforce_request_hash or expected_request_hashes is not None:
         env[_ENFORCE_HASH_ENV_VAR] = "1"
         env[_EXPECTED_HASHES_ENV_VAR] = json.dumps(expected_request_hashes or [])
@@ -804,15 +1078,19 @@ def append_mutation_audit_log(
     aggregate_request_sha256 = compute_aggregate_request_sha256(
         call_hashes, fallback_request_payload
     )
-    expected_receipt_sha256 = str(
-        receipt_data.get("request_sha256") or aggregate_request_sha256
-    )
+    receipt_has_rpc_hashes = bool(receipt_data.get("request_sha256_list"))
+    if calls and not receipt_has_rpc_hashes:
+        expected_receipt_sha256 = aggregate_request_sha256
+    else:
+        expected_receipt_sha256 = str(
+            receipt_data.get("request_sha256") or aggregate_request_sha256
+        )
     if calls:
         request_sha256_verified = all(
             bool(c.get("request_sha256_verified", True)) for c in calls
         ) and (
             phase != "EXECUTE"
-            or not receipt_data.get("request_sha256")
+            or not receipt_has_rpc_hashes
             or aggregate_request_sha256 == expected_receipt_sha256
         )
     else:
@@ -821,6 +1099,13 @@ def append_mutation_audit_log(
             or not receipt_data.get("request_sha256")
             or aggregate_request_sha256 == expected_receipt_sha256
         )
+
+    is_financial = bool(receipt_data.get("is_financial_transaction")) or is_financial_mutation(
+        operation_summary=operation_summary,
+        before_state=before_state,
+        after_state=after_state,
+        rpc_calls=calls,
+    )
 
     request_ids = [
         str(c["google_ads_request_id"])
@@ -834,6 +1119,8 @@ def append_mutation_audit_log(
         "DRY_RUN_FAILED",
         "BLOCKED_MUTATES_DISABLED",
         "BLOCKED_SHA256_MISMATCH",
+        "BLOCKED_MISSING_VALIDATE_ONLY",
+        "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING",
     ):
         error_summary = (
             "; ".join(rpc_errors)
@@ -851,6 +1138,7 @@ def append_mutation_audit_log(
             "sent_at_iso": effective_sent_at,
             "customer_id": str(customer_id).strip(),
             "validate_only": validate_only,
+            "is_financial_transaction": is_financial,
             "operation_summary": operation_summary.strip(),
             "script_path": script_path or "",
             "script_sha256": script_sha256,
@@ -881,6 +1169,7 @@ def append_mutation_audit_log(
             "dry_run_validated_at_iso": receipt_data.get("timestamp_iso"),
             "hook_prompted_at_iso": receipt_data.get("hook_prompted_at_iso"),
             "user_approved_at_iso": user_approved_at_iso,
+            "is_financial_transaction": is_financial,
             "before_state": before_state.strip(),
             "after_state": after_state.strip(),
             "consequences": [c.strip() for c in consequences if str(c).strip()],
@@ -973,6 +1262,19 @@ def write_dry_run_receipt(
         request_sha256_list.append(c_sha)
         normalized_calls.append(c_copy)
 
+    is_financial = is_financial_mutation(
+        operation_summary=operation_summary,
+        before_state=before_state,
+        after_state=after_state,
+        rpc_calls=normalized_calls,
+    )
+    if is_financial and not has_financial_consequence_disclosure(clean_consequences):
+        raise ValueError(
+            "Financial mutation requires explicit monetary, currency, spend, budget, "
+            "billing, credit, or bidding impact disclosure in --consequences "
+            f"(operation: '{operation_summary.strip()}')."
+        )
+
     fallback_req_meta = {
         "customer_id": str(customer_id).strip(),
         "operation_summary": operation_summary.strip(),
@@ -994,6 +1296,7 @@ def write_dry_run_receipt(
         "response_received_at_iso": response_received_at_iso or now_iso,
         "customer_id": str(customer_id).strip(),
         "operation_summary": operation_summary.strip(),
+        "is_financial_transaction": is_financial,
         "before_state": before_state.strip(),
         "after_state": after_state.strip(),
         "consequences": clean_consequences,
@@ -1103,6 +1406,23 @@ def load_and_verify_receipt(
             receipt,
         )
 
+    dry_run_calls = receipt.get("dry_run_rpc_calls")
+    is_financial = bool(receipt.get("is_financial_transaction")) or is_financial_mutation(
+        operation_summary=str(receipt.get("operation_summary", "")),
+        before_state=str(receipt.get("before_state", "")),
+        after_state=str(receipt.get("after_state", "")),
+        rpc_calls=dry_run_calls if isinstance(dry_run_calls, list) else None,
+    )
+    if is_financial and not has_financial_consequence_disclosure(
+        [str(c) for c in consequences]
+    ):
+        return (
+            False,
+            "Dry-run receipt for financial mutation is missing explicit monetary, currency, "
+            "spend, budget, billing, credit, or bidding impact disclosure in consequences.",
+            receipt,
+        )
+
     if script_path:
         resolved_script = os.path.abspath(script_path)
         expected_hash = receipt.get("script_sha256", "")
@@ -1117,7 +1437,6 @@ def load_and_verify_receipt(
                 )
 
     # Verify canonical mutate request SHA-256 integrity on the receipt
-    dry_run_calls = receipt.get("dry_run_rpc_calls")
     recorded_req_sha = str(receipt.get("request_sha256", "")).strip()
     recorded_sha_list = receipt.get("request_sha256_list")
     if isinstance(dry_run_calls, list) and dry_run_calls:
@@ -1197,12 +1516,18 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
         if mutates_enabled
         else "DISABLED (execute_mutates = false — set execute_mutates = true in config/assistant_config before --execute)"
     )
+    financial_line = (
+        "Financial Txn : YES (explicit monetary/spend/billing impact disclosure verified)\n"
+        if receipt.get("is_financial_transaction")
+        else ""
+    )
     return (
         "======================================================================\n"
         "GOOGLE ADS API MUTATION & CONSEQUENCE VERIFICATION CARD\n"
         "======================================================================\n"
         f"Customer ID   : {receipt.get('customer_id', 'Unknown')}\n"
         f"Operation     : {receipt.get('operation_summary', 'Unknown')}\n"
+        f"{financial_line}"
         f"Mutates Config: {mutates_cfg_line}\n"
         f"Dry-Run Status: PASSED (validate_only=True verified at {receipt.get('timestamp_iso', '')})\n"
         f"Request SHA256: {receipt.get('request_sha256', 'N/A')}\n"
@@ -1326,12 +1651,24 @@ def main() -> None:
 
         if not args.record_only:
             result, sent_at_iso, received_at_iso, duration_ms, captured_calls = (
-                _execute_script_subprocess(script_path, script_args)
+                _execute_script_subprocess(
+                    script_path,
+                    script_args,
+                    dry_run_mode=True,
+                )
             )
             if result.returncode != 0:
+                dry_fail_status = (
+                    "BLOCKED_MISSING_VALIDATE_ONLY"
+                    if any(
+                        c.get("status") == "BLOCKED_MISSING_VALIDATE_ONLY"
+                        for c in captured_calls
+                    )
+                    else "DRY_RUN_FAILED"
+                )
                 append_mutation_audit_log(
                     phase="DRY_RUN",
-                    status="DRY_RUN_FAILED",
+                    status=dry_fail_status,
                     customer_id=args.customer_id,
                     operation_summary=args.operation,
                     before_state=args.before,
@@ -1358,19 +1695,46 @@ def main() -> None:
                 sys.exit(result.returncode)
             dry_run_output = (result.stdout + "\n" + result.stderr).strip()
 
-        receipt = write_dry_run_receipt(
-            customer_id=args.customer_id,
-            operation_summary=args.operation,
-            before_state=args.before,
-            after_state=args.after or args.operation,
-            consequences=consequence_list,
-            reversibility=args.reversibility,
-            script_path=script_path,
-            dry_run_output=dry_run_output,
-            request_sent_at_iso=sent_at_iso,
-            response_received_at_iso=received_at_iso,
-            rpc_calls=captured_calls,
-        )
+        try:
+            receipt = write_dry_run_receipt(
+                customer_id=args.customer_id,
+                operation_summary=args.operation,
+                before_state=args.before,
+                after_state=args.after or args.operation,
+                consequences=consequence_list,
+                reversibility=args.reversibility,
+                script_path=script_path,
+                dry_run_output=dry_run_output,
+                request_sent_at_iso=sent_at_iso,
+                response_received_at_iso=received_at_iso,
+                rpc_calls=captured_calls,
+            )
+        except ValueError as exc:
+            err_msg = f"BLOCKED: {exc}"
+            append_mutation_audit_log(
+                phase="DRY_RUN",
+                status="BLOCKED_FINANCIAL_CONSEQUENCE_MISSING",
+                customer_id=args.customer_id,
+                operation_summary=args.operation,
+                before_state=args.before,
+                after_state=args.after or args.operation,
+                consequences=consequence_list,
+                reversibility=args.reversibility,
+                script_path=script_path,
+                script_sha256=script_sha256,
+                validate_only=True,
+                request_sent_at_iso=sent_at_iso,
+                response_received_at_iso=received_at_iso,
+                duration_ms=duration_ms,
+                exit_code=2,
+                stdout=dry_run_output,
+                stderr=err_msg,
+                command=[sys.executable, script_path, *script_args],
+                rpc_calls=captured_calls,
+            )
+            print(err_msg, file=sys.stderr)
+            sys.exit(2)
+
         append_mutation_audit_log(
             phase="DRY_RUN",
             status="DRY_RUN_PASSED",
@@ -1462,8 +1826,8 @@ def main() -> None:
         _execute_script_subprocess(
             script_path,
             script_args,
-            expected_request_hashes=expected_rpc_hashes,
-            enforce_request_hash=True,
+            expected_request_hashes=expected_rpc_hashes if expected_rpc_hashes else None,
+            enforce_request_hash=bool(expected_rpc_hashes),
         )
     )
 

@@ -437,18 +437,51 @@ if __name__ == "__main__":
             mod = module_from_spec(spec)
             spec.loader.exec_module(mod)
             now_iso = datetime.now(timezone.utc).isoformat()
-            receipt = mod.write_dry_run_receipt(
-                customer_id=customer_id,
-                operation_summary=operation,
-                before_state=before_state,
-                after_state=after_state,
-                consequences=consequences,
-                reversibility=reversibility,
-                script_path=script_path,
-                dry_run_output="Validated via sidecar PREPARE_MUTATION (validate_only=True).",
-                request_sent_at_iso=now_iso,
-                response_received_at_iso=now_iso,
-            )
+            try:
+                receipt = mod.write_dry_run_receipt(
+                    customer_id=customer_id,
+                    operation_summary=operation,
+                    before_state=before_state,
+                    after_state=after_state,
+                    consequences=consequences,
+                    reversibility=reversibility,
+                    script_path=script_path,
+                    dry_run_output="Validated via sidecar PREPARE_MUTATION (validate_only=True).",
+                    request_sent_at_iso=now_iso,
+                    response_received_at_iso=now_iso,
+                )
+            except ValueError as exc:
+                script_hash = (
+                    mod.compute_file_sha256(os.path.abspath(script_path))
+                    if script_path and os.path.isfile(os.path.abspath(script_path))
+                    else ""
+                )
+                mod.append_mutation_audit_log(
+                    phase="DRY_RUN",
+                    status="BLOCKED_FINANCIAL_CONSEQUENCE_MISSING",
+                    customer_id=customer_id,
+                    operation_summary=operation,
+                    before_state=before_state,
+                    after_state=after_state,
+                    consequences=consequences,
+                    reversibility=reversibility,
+                    script_path=script_path,
+                    script_sha256=script_hash,
+                    validate_only=True,
+                    request_sent_at_iso=now_iso,
+                    response_received_at_iso=now_iso,
+                    duration_ms=0.0,
+                    exit_code=2,
+                    stdout="",
+                    stderr=str(exc),
+                    command=["A2A:PREPARE_MUTATION"],
+                )
+                return {
+                    "task_id": task_id,
+                    "status": "VALIDATION_FAILED",
+                    "destructive_hint": True,
+                    "error": str(exc),
+                }
             mod.append_mutation_audit_log(
                 phase="DRY_RUN",
                 status="DRY_RUN_PASSED",
