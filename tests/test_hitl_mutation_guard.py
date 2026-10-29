@@ -2778,29 +2778,31 @@ def test_real_v26_financial_protobuf_requests_serialization_sha256_and_intercept
         / "client_libs"
         / "google-ads-python"
     )
-    if not (bundled_sdk / "google" / "ads" / "googleads" / "v26").is_dir():
-        pytest.skip("Bundled Google Ads Python v26 SDK not present")
+    if (bundled_sdk / "google" / "ads" / "googleads" / "v26").is_dir():
+        monkeypatch.syspath_prepend(str(bundled_sdk))
 
-    monkeypatch.syspath_prepend(str(bundled_sdk))
-    from google.ads.googleads.v26.services.types import (
-        account_budget_proposal_service,
-        ad_group_bid_modifier_service,
-        bidding_data_exclusion_service,
-        bidding_seasonality_adjustment_service,
-        bidding_strategy_service,
-        billing_setup_service,
-        campaign_bid_modifier_service,
-        campaign_budget_service,
-        campaign_draft_service,
-        conversion_adjustment_upload_service,
-        conversion_value_rule_service,
-        customer_service,
-        experiment_service,
-        google_ads_service,
-        incentive_service,
-        local_services_lead_service,
-        reservation_service,
-    )
+    try:
+        from google.ads.googleads.v26.services.types import (
+            account_budget_proposal_service,
+            ad_group_bid_modifier_service,
+            bidding_data_exclusion_service,
+            bidding_seasonality_adjustment_service,
+            bidding_strategy_service,
+            billing_setup_service,
+            campaign_bid_modifier_service,
+            campaign_budget_service,
+            campaign_draft_service,
+            conversion_adjustment_upload_service,
+            conversion_value_rule_service,
+            customer_service,
+            experiment_service,
+            google_ads_service,
+            incentive_service,
+            local_services_lead_service,
+            reservation_service,
+        )
+    except ImportError:
+        pytest.skip("Google Ads Python v26 SDK not available in client_libs or site-packages")
 
     run_mutation = _load_run_mutation_module()
 

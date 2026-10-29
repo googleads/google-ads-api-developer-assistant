@@ -35,15 +35,15 @@ SKILLS_DIR = PLUGIN_ROOT / "skills"
 
 
 class TestPython315Runtime:
-    """Verifies runtime compatibility and standard library behavior on Python 3.15.0."""
+    """Verifies runtime compatibility and standard library behavior on Python 3.15.x."""
 
     def test_python_315_version_info(self):
-        """Verifies running under Python 3.15.0 runtime."""
+        """Verifies running under a Python 3.15.x runtime."""
         if sys.version_info[:2] == (3, 15):
             assert sys.version_info.major == 3
             assert sys.version_info.minor == 15
-            assert sys.version_info.micro == 0
-            assert "3.15.0" in sys.version
+            assert sys.version_info.micro >= 0
+            assert f"3.15.{sys.version_info.micro}" in sys.version
 
     def test_pkg_resources_removal_immunity(self):
         """Confirms that assistant code does not depend on removed pkg_resources."""

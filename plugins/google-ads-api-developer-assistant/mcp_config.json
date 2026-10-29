@@ -1,4 +1,14 @@
 {
+  "_comment": [
+    "Architectural Purpose: Plugin-scoped Model Context Protocol (MCP) & A2A service manifest.",
+    "Discovered automatically by MCP-capable agent hosts (Antigravity / Jetski and Claude Code)",
+    "when the google-ads-api-developer-assistant plugin is loaded.",
+    "Configures and launches the local Agent-to-Agent (A2A) HTTP sidecar",
+    "(sidecars/google-ads-a2a-service/server.py, paired with sidecar.json) on 127.0.0.1:8900",
+    "with plugin-isolated Google Ads credentials (config/google-ads.yaml), exposing /health and",
+    "/v1/a2a/tasks endpoints for GAQL validation, Protobuf inspection, Ruff-linted code generation,",
+    "conversion diagnostics, and HITL-verified Google Ads API mutations."
+  ],
   "mcpServers": {
     "google-ads-api-assistant": {
       "command": "python3",
