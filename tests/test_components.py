@@ -705,6 +705,7 @@ class TestExtVersion:
         monkeypatch.setattr("os.path.expanduser", lambda p: str(lib_dir) if "google-ads-python" in p else p)
         monkeypatch.setattr("importlib.metadata.version", lambda pkg: "31.2.0")
         monkeypatch.setattr(config_init, "fetch_latest_github_python_version", lambda force=False: "34.0.0")
+        monkeypatch.setattr(config_init, "fetch_latest_pypi_python_version", lambda **kw: "34.0.0")
 
         parity = config_init.check_python_client_lib_parity(check_github=True)
         assert parity["system_version"] == "31.2.0"
