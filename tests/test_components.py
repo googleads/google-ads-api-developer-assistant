@@ -1755,65 +1755,223 @@ class TestPluginIntegrity:
         )
         assert hooks_data_after["hooks"]["config-init"]["enabled"] is True
 
-        # 3. Verify plugin.sh CLI helper commands (disable, is-enabled, test, status, enable)
+        # 3. Verify config_init.py CLI flags (--disable, --status, --enable, --json) cross-platform
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        config_init_script = os.path.join(
+            repo_root,
+            "plugins",
+            "google-ads-api-developer-assistant",
+            "config",
+            "config_init.py",
+        )
         plugin_sh = os.path.join(repo_root, "plugin.sh")
+        plugin_ps1 = os.path.join(repo_root, "plugin.ps1")
         assert os.path.isfile(plugin_sh)
+        assert os.path.isfile(plugin_ps1)
 
-        res_disable = subprocess.run(
-            ["bash", plugin_sh, "disable", "--config-dir", str(fake_cfg_dir), "--json"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        payload_disable = json.loads(res_disable.stdout)
-        assert payload_disable["enabled"] is False
-        assert payload_disable["hook_test"]["passed"] is True
-
-        res_is_enabled_off = subprocess.run(
-            ["bash", plugin_sh, "is-enabled", "--config-dir", str(fake_cfg_dir)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert res_is_enabled_off.returncode == 1
-        assert res_is_enabled_off.stdout.strip() == "disabled"
-
-        res_test_off = subprocess.run(
+        cli_disable = subprocess.run(
             [
-                "bash",
-                plugin_sh,
-                "test",
+                sys.executable,
+                config_init_script,
+                "--disable",
                 "--config-dir",
                 str(fake_cfg_dir),
-                "--expect",
-                "disabled",
+                "--json",
             ],
             capture_output=True,
             text=True,
             check=True,
         )
-        assert "Status: DISABLED" in res_test_off.stdout
-        assert "Live Hook Test    : PASS" in res_test_off.stdout
+        assert json.loads(cli_disable.stdout)["enabled"] is False
 
-        res_enable = subprocess.run(
-            ["bash", plugin_sh, "enable", "--config-dir", str(fake_cfg_dir), "--json"],
+        cli_enable = subprocess.run(
+            [
+                sys.executable,
+                config_init_script,
+                "--enable",
+                "--config-dir",
+                str(fake_cfg_dir),
+                "--json",
+            ],
             capture_output=True,
             text=True,
             check=True,
         )
-        payload_enable = json.loads(res_enable.stdout)
-        assert payload_enable["enabled"] is True
-        assert payload_enable["hook_test"]["passed"] is True
+        assert json.loads(cli_enable.stdout)["enabled"] is True
 
-        res_is_enabled_on = subprocess.run(
-            ["bash", plugin_sh, "is-enabled", "--config-dir", str(fake_cfg_dir)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert res_is_enabled_on.returncode == 0
-        assert res_is_enabled_on.stdout.strip() == "enabled"
+        # 4. Verify platform helper script (plugin.ps1 on Windows, plugin.sh on Linux/macOS)
+        helper_env = {**os.environ, "PYTHON_BIN": sys.executable}
+        if sys.platform == "win32":
+            import shutil
+
+            ps_bin = shutil.which("pwsh") or shutil.which("powershell")
+            assert ps_bin is not None
+            res_disable = subprocess.run(
+                [
+                    ps_bin,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    plugin_ps1,
+                    "disable",
+                    "-ConfigDir",
+                    str(fake_cfg_dir),
+                    "-Json",
+                ],
+                capture_output=True,
+                text=True,
+                env=helper_env,
+                check=True,
+            )
+            payload_disable = json.loads(res_disable.stdout)
+            assert payload_disable["enabled"] is False
+            assert payload_disable["hook_test"]["passed"] is True
+
+            res_is_enabled_off = subprocess.run(
+                [
+                    ps_bin,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    plugin_ps1,
+                    "is-enabled",
+                    "-ConfigDir",
+                    str(fake_cfg_dir),
+                ],
+                capture_output=True,
+                text=True,
+                env=helper_env,
+                check=False,
+            )
+            assert res_is_enabled_off.returncode == 1
+            assert res_is_enabled_off.stdout.strip() == "disabled"
+
+            res_test_off = subprocess.run(
+                [
+                    ps_bin,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    plugin_ps1,
+                    "test",
+                    "-ConfigDir",
+                    str(fake_cfg_dir),
+                    "-Expect",
+                    "disabled",
+                ],
+                capture_output=True,
+                text=True,
+                env=helper_env,
+                check=True,
+            )
+            assert "Status: DISABLED" in res_test_off.stdout
+            assert "Live Hook Test    : PASS" in res_test_off.stdout
+
+            res_enable = subprocess.run(
+                [
+                    ps_bin,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    plugin_ps1,
+                    "enable",
+                    "-ConfigDir",
+                    str(fake_cfg_dir),
+                    "-Json",
+                ],
+                capture_output=True,
+                text=True,
+                env=helper_env,
+                check=True,
+            )
+            payload_enable = json.loads(res_enable.stdout)
+            assert payload_enable["enabled"] is True
+            assert payload_enable["hook_test"]["passed"] is True
+
+            res_is_enabled_on = subprocess.run(
+                [
+                    ps_bin,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    plugin_ps1,
+                    "is-enabled",
+                    "-ConfigDir",
+                    str(fake_cfg_dir),
+                ],
+                capture_output=True,
+                text=True,
+                env=helper_env,
+                check=False,
+            )
+            assert res_is_enabled_on.returncode == 0
+            assert res_is_enabled_on.stdout.strip() == "enabled"
+        else:
+            res_disable = subprocess.run(
+                ["bash", plugin_sh, "disable", "--config-dir", str(fake_cfg_dir), "--json"],
+                capture_output=True,
+                text=True,
+                env=helper_env,
+                check=True,
+            )
+            payload_disable = json.loads(res_disable.stdout)
+            assert payload_disable["enabled"] is False
+            assert payload_disable["hook_test"]["passed"] is True
+
+            res_is_enabled_off = subprocess.run(
+                ["bash", plugin_sh, "is-enabled", "--config-dir", str(fake_cfg_dir)],
+                capture_output=True,
+                text=True,
+                env=helper_env,
+                check=False,
+            )
+            assert res_is_enabled_off.returncode == 1
+            assert res_is_enabled_off.stdout.strip() == "disabled"
+
+            res_test_off = subprocess.run(
+                [
+                    "bash",
+                    plugin_sh,
+                    "test",
+                    "--config-dir",
+                    str(fake_cfg_dir),
+                    "--expect",
+                    "disabled",
+                ],
+                capture_output=True,
+                text=True,
+                env=helper_env,
+                check=True,
+            )
+            assert "Status: DISABLED" in res_test_off.stdout
+            assert "Live Hook Test    : PASS" in res_test_off.stdout
+
+            res_enable = subprocess.run(
+                ["bash", plugin_sh, "enable", "--config-dir", str(fake_cfg_dir), "--json"],
+                capture_output=True,
+                text=True,
+                env=helper_env,
+                check=True,
+            )
+            payload_enable = json.loads(res_enable.stdout)
+            assert payload_enable["enabled"] is True
+            assert payload_enable["hook_test"]["passed"] is True
+
+            res_is_enabled_on = subprocess.run(
+                ["bash", plugin_sh, "is-enabled", "--config-dir", str(fake_cfg_dir)],
+                capture_output=True,
+                text=True,
+                env=helper_env,
+                check=False,
+            )
+            assert res_is_enabled_on.returncode == 0
+            assert res_is_enabled_on.stdout.strip() == "enabled"
+
 
 
 

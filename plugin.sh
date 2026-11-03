@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && (pwd -W 2>/dev/null || pwd))"
 PLUGIN_NAME="google-ads-api-developer-assistant"
 
 # Resolve config_init.py across repository checkout and installed plugin layouts
@@ -34,12 +34,16 @@ for candidate in \
   fi
 done
 
-PYTHON_BIN=""
-if command -v python3 >/dev/null 2>&1; then
-  PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-  PYTHON_BIN="python"
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  for cmd in python3 python; do
+    if command -v "${cmd}" >/dev/null 2>&1 && "${cmd}" -c "import sys" >/dev/null 2>&1; then
+      PYTHON_BIN="${cmd}"
+      break
+    fi
+  done
 fi
+
 
 usage() {
   cat <<EOF

@@ -82,11 +82,20 @@ if (-not $ConfigInit) {
     exit 1
 }
 
-$PythonCmd = $null
-foreach ($cmd in @("python3", "python", "py")) {
-    if (Get-Command $cmd -ErrorAction SilentlyContinue) {
-        $PythonCmd = $cmd
-        break
+$PythonCmd = $env:PYTHON_BIN
+if ([string]::IsNullOrWhiteSpace($PythonCmd)) {
+    foreach ($cmd in @("python", "python3", "py")) {
+        $cmdInfo = Get-Command $cmd -ErrorAction SilentlyContinue
+        if ($cmdInfo) {
+            try {
+                & $cmd -c "import sys; sys.exit(0)" 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    $PythonCmd = $cmdInfo.Source
+                    break
+                }
+            }
+            catch {}
+        }
     }
 }
 
@@ -108,8 +117,9 @@ function Invoke-LiveHookTest {
     $PyCode = @'
 import json, os, subprocess, sys
 config_init_path = sys.argv[1]
-cfg_dir = sys.argv[2] or None
-as_json = sys.argv[3].lower() == "true"
+raw_cfg = sys.argv[2] if len(sys.argv) > 2 else "__DEFAULT__"
+cfg_dir = None if raw_cfg in ("", "__DEFAULT__") else raw_cfg
+as_json = (sys.argv[3] if len(sys.argv) > 3 else sys.argv[-1]).lower() == "true"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(config_init_path))))
 from config import config_init
 
@@ -184,12 +194,15 @@ else:
 
 sys.exit(0 if hook_test["passed"] else 1)
 '@
+    $CfgArg = if ([string]::IsNullOrWhiteSpace($CfgDir)) { "__DEFAULT__" } else { $CfgDir }
     $JsonStr = if ($AsJson) { "true" } else { "false" }
-    $PyCode | & $PythonCmd - $ConfigInit $CfgDir $JsonStr
+    $PyCode | & $PythonCmd - $ConfigInit $CfgArg $JsonStr
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
 }
+
+$CfgArgMain = if ([string]::IsNullOrWhiteSpace($ConfigDir)) { "__DEFAULT__" } else { $ConfigDir }
 
 switch ($Action) {
     "enable" {
@@ -213,12 +226,13 @@ switch ($Action) {
             $StateCode = @'
 import os, sys
 config_init_path = sys.argv[1]
-cfg_dir = sys.argv[2] or None
+raw_cfg = sys.argv[2] if len(sys.argv) > 2 else "__DEFAULT__"
+cfg_dir = None if raw_cfg in ("", "__DEFAULT__") else raw_cfg
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(config_init_path))))
 from config import config_init
 print("enabled" if config_init.is_plugin_enabled(config_dir=cfg_dir) else "disabled")
 '@
-            $Actual = ($StateCode | & $PythonCmd - $ConfigInit $ConfigDir).Trim()
+            $Actual = ($StateCode | & $PythonCmd - $ConfigInit $CfgArgMain).Trim()
             if ($Actual -ne $Expect.ToLowerInvariant()) {
                 Write-Error "FAIL: Expected plugin status '$Expect', but got '$Actual'."
                 exit 1
@@ -229,15 +243,17 @@ print("enabled" if config_init.is_plugin_enabled(config_dir=cfg_dir) else "disab
         $StateCode = @'
 import os, sys
 config_init_path = sys.argv[1]
-cfg_dir = sys.argv[2] or None
+raw_cfg = sys.argv[2] if len(sys.argv) > 2 else "__DEFAULT__"
+cfg_dir = None if raw_cfg in ("", "__DEFAULT__") else raw_cfg
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(config_init_path))))
 from config import config_init
 print("enabled" if config_init.is_plugin_enabled(config_dir=cfg_dir) else "disabled")
 '@
-        $Actual = ($StateCode | & $PythonCmd - $ConfigInit $ConfigDir).Trim()
+        $Actual = ($StateCode | & $PythonCmd - $ConfigInit $CfgArgMain).Trim()
         if (-not $Quiet) {
             Write-Host $Actual
         }
         if ($Actual -eq "enabled") { exit 0 } else { exit 1 }
     }
 }
+
