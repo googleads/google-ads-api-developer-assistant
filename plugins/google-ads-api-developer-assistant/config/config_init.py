@@ -53,18 +53,26 @@ def get_version(ext_version_script: Optional[str] = None) -> str:
     # 2. Check candidate plugin.json / agent.json files directly in-process (fast path)
     candidate_manifests = [
         os.path.join(this_dir, "../plugin.json"),
+        os.path.join(this_dir, "../plugin.json.disabled"),
         os.path.join(this_dir, "plugin.json"),
+        os.path.join(this_dir, "plugin.json.disabled"),
         os.path.expanduser(
             "~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.json"
         ),
         os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.json.disabled"
+        ),
+        os.path.expanduser(
             "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/plugin.json"
+        ),
+        os.path.expanduser(
+            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/plugin.json.disabled"
         ),
     ]
 
     curr = this_dir
     while curr and curr != os.path.dirname(curr):
-        for fname in ("plugin.json", "agent.json"):
+        for fname in ("plugin.json", "plugin.json.disabled", "agent.json"):
             candidate_manifests.append(os.path.join(curr, fname))
         curr = os.path.dirname(curr)
 
@@ -600,6 +608,12 @@ def sync_and_set_config_kv(
     if key == "execute_mutates" and value is not None:
         parsed_bool = parse_execute_mutates_value(str(value))
         set_execute_mutates(bool(parsed_bool), config_dir=config_dir)
+    elif key in ("enabled", "plugin_enabled") and value is not None:
+        parsed_en = parse_plugin_enabled_value(str(value))
+        set_plugin_enabled(
+            bool(parsed_en) if parsed_en is not None else True,
+            config_dir=config_dir,
+        )
     elif key == "api_version":
         api_ver_val = str(value).strip() if value is not None else detect_latest_api_version()
         write_assistant_config({"api_version": api_ver_val}, config_dir=config_dir)
@@ -694,6 +708,7 @@ EXECUTE_MUTATES_FILENAME = ASSISTANT_CONFIG_FILENAME
 DEFAULT_API_VERSION = "v25"
 DEFAULT_CUSTOMER_ID = "12345678"
 DEFAULT_EXECUTE_MUTATES = False
+DEFAULT_PLUGIN_ENABLED = True
 
 
 def _extract_version_dirs(base_dir: str) -> list[str]:
@@ -1305,6 +1320,20 @@ def parse_assistant_config(raw_text: str) -> Dict[str, Any]:
             else:
                 del data["execute_mutates"]
 
+    for enabled_key in ("enabled", "plugin_enabled"):
+        if enabled_key in data and data[enabled_key] is not None:
+            en_val = data[enabled_key]
+            if isinstance(en_val, bool):
+                data[enabled_key] = en_val
+            else:
+                en_str = str(en_val).strip().strip("'\"").lower()
+                if en_str in ("true", "1", "yes", "on", "enabled"):
+                    data[enabled_key] = True
+                elif en_str in ("false", "0", "no", "off", "disabled"):
+                    data[enabled_key] = False
+                else:
+                    del data[enabled_key]
+
     return data
 
 
@@ -1313,7 +1342,7 @@ def format_assistant_config(data: Dict[str, Any]) -> str:
     api_ver = str(
         data.get("api_version") or detect_latest_api_version() or DEFAULT_API_VERSION
     ).strip().strip("'\"")
-    if api_ver and not api_ver.startswith("v") and api_ver.isdigit():
+    if api_ver and not api_ver.startswith("v") and ver_str_is_digit(api_ver):
         api_ver = f"v{api_ver}"
     cid = str(
         data.get("customer_id")
@@ -1338,6 +1367,11 @@ def format_assistant_config(data: Dict[str, Any]) -> str:
         else:
             lines.append(f'{k} = "{v}"')
     return "\n".join(lines) + "\n"
+
+
+def ver_str_is_digit(s: str) -> bool:
+    """Returns True if string s consists solely of digits."""
+    return s.isdigit()
 
 
 def get_assistant_config_paths(config_dir: Optional[str] = None) -> list[str]:
@@ -1533,6 +1567,388 @@ def set_execute_mutates(
         {"execute_mutates": bool(enabled)},
         config_dir=config_dir,
     )
+
+
+def parse_plugin_enabled_value(raw_text: str) -> Optional[bool]:
+    """Parses 'enabled = <true, false>' (or bare true/false/on/off/1/0) and returns a boolean."""
+    parsed_cfg = parse_assistant_config(raw_text)
+    for key in ("enabled", "plugin_enabled"):
+        if key in parsed_cfg and isinstance(parsed_cfg[key], bool):
+            return parsed_cfg[key]
+
+    for raw_line in raw_text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = re.match(
+            r"^(?:enabled|plugin_enabled)\s*[=:]\s*['\"]?(true|false|1|0|yes|no|on|off|enabled|disabled)['\"]?\s*$",
+            line,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).lower() in ("true", "1", "yes", "on", "enabled")
+        bare = line.strip("'\"").lower()
+        if bare in ("true", "1", "yes", "on", "enabled"):
+            return True
+        if bare in ("false", "0", "no", "off", "disabled"):
+            return False
+    return None
+
+
+def _is_hooks_json_disabled(hooks_path: str) -> Optional[bool]:
+    """Returns True if hooks.json explicitly disables all config-init hooks, False if enabled, None if unreadable."""
+    if not os.path.isfile(hooks_path):
+        return None
+    try:
+        with open(hooks_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    hooks_section = data.get("hooks")
+    if isinstance(hooks_section, dict) and "config-init" in hooks_section:
+        cfg_hook = hooks_section["config-init"]
+        if isinstance(cfg_hook, dict) and "enabled" in cfg_hook:
+            return not bool(cfg_hook["enabled"])
+    return False
+
+
+def _set_hooks_json_enabled(hooks_path: str, enabled: bool) -> bool:
+    """Updates 'enabled' flag on hooks in a hooks.json file if present."""
+    if not os.path.isfile(hooks_path):
+        return False
+    try:
+        with open(hooks_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return False
+        hooks_section = data.get("hooks")
+        if not isinstance(hooks_section, dict):
+            return False
+        changed = False
+        if "config-init" in hooks_section and isinstance(hooks_section["config-init"], dict):
+            hooks_section["config-init"]["enabled"] = bool(enabled)
+            changed = True
+        for event_list in hooks_section.values():
+            if isinstance(event_list, list):
+                for entry in event_list:
+                    if isinstance(entry, dict) and isinstance(entry.get("hooks"), list):
+                        for h in entry["hooks"]:
+                            if isinstance(h, dict) and "config_init.py" in str(h.get("command", "")):
+                                h["enabled"] = bool(enabled)
+                                changed = True
+        if changed:
+            with open(hooks_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.write("\n")
+        return changed
+    except Exception:
+        return False
+
+
+def _is_repo_source_plugin_dir(plugin_dir: str) -> bool:
+    """Returns True if plugin_dir is inside a git repository working tree (source checkout)."""
+    norm_dir = os.path.abspath(plugin_dir)
+    parent = os.path.dirname(norm_dir)
+    grandparent = os.path.dirname(parent)
+    if os.path.basename(parent) == "plugins" and (
+        os.path.exists(os.path.join(grandparent, ".git"))
+        or os.path.isfile(os.path.join(grandparent, "install.sh"))
+    ):
+        return True
+    return False
+
+
+def _toggle_installed_plugin_manifests(
+    plugin_dir: str,
+    enabled: bool,
+    is_repo_source: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Toggles plugin manifests and hooks.json in an installed plugin directory."""
+    result: Dict[str, Any] = {
+        "plugin_dir": plugin_dir,
+        "exists": os.path.isdir(plugin_dir),
+        "updated_files": [],
+    }
+    if not os.path.isdir(plugin_dir):
+        return result
+
+    if is_repo_source is None:
+        is_repo_source = _is_repo_source_plugin_dir(plugin_dir)
+
+    for hooks_rel in ("hooks.json", os.path.join("hooks", "hooks.json")):
+        hooks_path = os.path.join(plugin_dir, hooks_rel)
+        if _set_hooks_json_enabled(hooks_path, enabled):
+            result["updated_files"].append(hooks_path)
+
+    # Only rename plugin.json / mcp_config.json / sidecar.json in installed plugin directories,
+    # never in the git repository source tree.
+    if not is_repo_source:
+        manifest_rels = [
+            "plugin.json",
+            os.path.join(".claude-plugin", "plugin.json"),
+            "mcp_config.json",
+            os.path.join("sidecars", "google-ads-a2a-service", "sidecar.json"),
+        ]
+        for rel in manifest_rels:
+            active_path = os.path.join(plugin_dir, rel)
+            disabled_path = f"{active_path}.disabled"
+            try:
+                if enabled:
+                    if os.path.isfile(disabled_path):
+                        if not os.path.isfile(active_path):
+                            os.replace(disabled_path, active_path)
+                        else:
+                            os.remove(disabled_path)
+                        result["updated_files"].append(active_path)
+                else:
+                    if os.path.isfile(active_path):
+                        os.replace(active_path, disabled_path)
+                        result["updated_files"].append(disabled_path)
+            except OSError:
+                pass
+
+    return result
+
+
+def is_plugin_enabled(config_dir: Optional[str] = None) -> bool:
+    """Returns whether the plugin is enabled (defaults to True).
+
+    Checks in precedence order:
+    1. GOOGLE_ADS_ASSISTANT_ENABLED environment variable override.
+    2. Highest-precedence config/assistant_config (`enabled = true|false`).
+    3. Installed plugin manifest state (`plugin.json.disabled` or `hooks.json` `enabled: false`).
+    """
+    env_override = os.environ.get("GOOGLE_ADS_ASSISTANT_ENABLED", "").strip()
+    if env_override:
+        parsed_env = parse_plugin_enabled_value(env_override)
+        if parsed_env is not None:
+            return parsed_env
+        return DEFAULT_PLUGIN_ENABLED
+
+    for candidate in get_assistant_config_paths(config_dir=config_dir):
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    parsed = parse_plugin_enabled_value(f.read())
+                if parsed is not None:
+                    return parsed
+            except OSError:
+                continue
+
+    # Check if the plugin directory associated with config_dir or this script has hooks disabled or plugin.json.disabled
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate_plugin_dirs = []
+    if config_dir:
+        abs_cfg = os.path.abspath(config_dir)
+        if os.path.basename(abs_cfg) == "config":
+            candidate_plugin_dirs.append(os.path.dirname(abs_cfg))
+        else:
+            candidate_plugin_dirs.append(abs_cfg)
+    if os.path.basename(this_dir) == "config":
+        candidate_plugin_dirs.append(os.path.dirname(this_dir))
+    candidate_plugin_dirs.append(
+        os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant")
+    )
+
+    for pdir in candidate_plugin_dirs:
+        if not os.path.isdir(pdir):
+            continue
+        if os.path.isfile(os.path.join(pdir, "plugin.json.disabled")) and not os.path.isfile(
+            os.path.join(pdir, "plugin.json")
+        ):
+            return False
+        hooks_disabled = _is_hooks_json_disabled(os.path.join(pdir, "hooks.json"))
+        if hooks_disabled is True:
+            return False
+        break
+
+    return DEFAULT_PLUGIN_ENABLED
+
+
+def set_plugin_enabled(
+    enabled: bool,
+    config_dir: Optional[str] = None,
+    sync_global: bool = True,
+    target_type: str = "all",
+) -> str:
+    """Enables or disables the plugin in config/assistant_config and installed plugin directories."""
+    enabled_bool = bool(enabled)
+    target_path = write_assistant_config(
+        {"enabled": enabled_bool},
+        config_dir=config_dir,
+    )
+
+    # Also update the plugin directory containing target_path
+    cfg_dir = os.path.dirname(os.path.abspath(target_path))
+    if os.path.basename(cfg_dir) == "config":
+        local_plugin_dir = os.path.dirname(cfg_dir)
+        _toggle_installed_plugin_manifests(local_plugin_dir, enabled_bool)
+
+    if sync_global and config_dir is None:
+        this_dir = os.path.dirname(os.path.abspath(__file__))
+        if os.path.basename(this_dir) == "config":
+            script_cfg_path = os.path.join(this_dir, ASSISTANT_CONFIG_FILENAME)
+            if os.path.normpath(script_cfg_path) != os.path.normpath(target_path):
+                try:
+                    write_assistant_config({"enabled": enabled_bool}, config_dir=this_dir)
+                except OSError:
+                    pass
+            _toggle_installed_plugin_manifests(os.path.dirname(this_dir), enabled_bool)
+
+        global_targets = []
+        if target_type in ("agy", "all"):
+            global_targets.append(
+                os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant")
+            )
+        if target_type in ("claude", "all"):
+            global_targets.append(
+                os.path.expanduser(
+                    "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"
+                )
+            )
+            claude_mkt = os.path.expanduser("~/.claude/plugins/google-ads-assistant-local")
+            if os.path.isdir(claude_mkt):
+                _toggle_installed_plugin_manifests(
+                    os.path.join(claude_mkt, ".claude-plugin"),
+                    enabled_bool,
+                    is_repo_source=False,
+                )
+
+        for g_dir in global_targets:
+            if os.path.isdir(g_dir):
+                g_cfg = os.path.join(g_dir, "config")
+                try:
+                    write_assistant_config({"enabled": enabled_bool}, config_dir=g_cfg)
+                except OSError:
+                    pass
+                _toggle_installed_plugin_manifests(g_dir, enabled_bool, is_repo_source=False)
+
+    return target_path
+
+
+def get_plugin_status(config_dir: Optional[str] = None) -> Dict[str, Any]:
+    """Inspects and returns comprehensive plugin status and live hook behavior."""
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_plugin_dir = (
+        os.path.dirname(this_dir) if os.path.basename(this_dir) == "config" else this_dir
+    )
+    agy_plugin_dir = os.path.expanduser(
+        "~/.gemini/config/plugins/google-ads-api-developer-assistant"
+    )
+    claude_plugin_dir = os.path.expanduser(
+        "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"
+    )
+
+    enabled = is_plugin_enabled(config_dir=config_dir)
+    env_override = os.environ.get("GOOGLE_ADS_ASSISTANT_ENABLED", "").strip() or None
+
+    active_cfg_path: Optional[str] = None
+    active_cfg_enabled: Optional[bool] = None
+    for candidate in get_assistant_config_paths(config_dir=config_dir):
+        if os.path.isfile(candidate):
+            active_cfg_path = candidate
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    active_cfg_enabled = parse_plugin_enabled_value(f.read())
+            except OSError:
+                active_cfg_enabled = None
+            break
+
+    def _inspect_dir(pdir: str) -> Dict[str, Any]:
+        exists = os.path.isdir(pdir)
+        if not exists:
+            return {"path": pdir, "installed": False}
+        has_active_manifest = os.path.isfile(os.path.join(pdir, "plugin.json")) or os.path.isfile(
+            os.path.join(pdir, ".claude-plugin", "plugin.json")
+        )
+        has_disabled_manifest = os.path.isfile(
+            os.path.join(pdir, "plugin.json.disabled")
+        ) or os.path.isfile(os.path.join(pdir, ".claude-plugin", "plugin.json.disabled"))
+        hooks_path = os.path.join(pdir, "hooks.json")
+        if not os.path.isfile(hooks_path):
+            hooks_path = os.path.join(pdir, "hooks", "hooks.json")
+        hooks_disabled = _is_hooks_json_disabled(hooks_path)
+        cfg_file = os.path.join(pdir, "config", ASSISTANT_CONFIG_FILENAME)
+        cfg_enabled = None
+        if os.path.isfile(cfg_file):
+            try:
+                with open(cfg_file, "r", encoding="utf-8") as f:
+                    cfg_enabled = parse_plugin_enabled_value(f.read())
+            except OSError:
+                pass
+        return {
+            "path": pdir,
+            "installed": True,
+            "manifest_active": has_active_manifest,
+            "manifest_disabled": has_disabled_manifest,
+            "hooks_enabled": (not hooks_disabled) if hooks_disabled is not None else None,
+            "config_enabled": cfg_enabled if cfg_enabled is not None else DEFAULT_PLUGIN_ENABLED,
+        }
+
+    return {
+        "enabled": enabled,
+        "status": "enabled" if enabled else "disabled",
+        "env_override": env_override,
+        "active_config_path": active_cfg_path,
+        "config_enabled": active_cfg_enabled if active_cfg_enabled is not None else DEFAULT_PLUGIN_ENABLED,
+        "api_version": get_configured_api_version(config_dir=config_dir) or DEFAULT_API_VERSION,
+        "execute_mutates": is_execute_mutates_enabled(config_dir=config_dir),
+        "installations": {
+            "agy": _inspect_dir(agy_plugin_dir),
+            "claude": _inspect_dir(claude_plugin_dir),
+            "local": _inspect_dir(repo_plugin_dir),
+        },
+    }
+
+
+def format_plugin_status_text(status_info: Dict[str, Any]) -> str:
+    """Formats the plugin status dictionary as human-readable text."""
+    state_label = "ENABLED" if status_info.get("enabled") else "DISABLED"
+    lines = [
+        f"Google Ads API Developer Assistant Status: {state_label}",
+        f"  Effective State   : {status_info.get('status')}",
+        f"  Active Config     : {status_info.get('active_config_path') or 'default'}",
+        f"  Config 'enabled'  : {'true' if status_info.get('config_enabled') else 'false'}",
+    ]
+    if status_info.get("env_override") is not None:
+        lines.append(f"  Env Override      : GOOGLE_ADS_ASSISTANT_ENABLED={status_info['env_override']}")
+    lines.append(f"  API Version       : {status_info.get('api_version')}")
+    lines.append(
+        f"  Execute Mutates   : {'true' if status_info.get('execute_mutates') else 'false'}"
+    )
+
+    installations = status_info.get("installations", {})
+    for label, key in (
+        ("Jetski / Antigravity (~/.gemini)", "agy"),
+        ("Claude Code (~/.claude)", "claude"),
+        ("Local Workspace", "local"),
+    ):
+        info = installations.get(key, {})
+        if not info.get("installed"):
+            lines.append(f"  {label}: not installed ({info.get('path')})")
+        else:
+            manifest_state = (
+                "active (plugin.json)"
+                if info.get("manifest_active")
+                else (
+                    "disabled (plugin.json.disabled)"
+                    if info.get("manifest_disabled")
+                    else "not found"
+                )
+            )
+            hooks_state = (
+                "enabled"
+                if info.get("hooks_enabled") is True
+                else ("disabled" if info.get("hooks_enabled") is False else "n/a")
+            )
+            cfg_state = "true" if info.get("config_enabled") else "false"
+            lines.append(
+                f"  {label}: manifest={manifest_state}, hooks={hooks_state}, config.enabled={cfg_state}"
+            )
+    return "\n".join(lines)
+
 
 
 def get_configured_customer_id(config_dir: Optional[str] = None) -> Optional[str]:
@@ -2210,6 +2626,13 @@ def handle_hook() -> None:
         except Exception:
             pass
 
+    if not is_plugin_enabled():
+        if "toolCall" in input_data or "tool_input" in input_data:
+            print(json.dumps({"decision": "allow"}))
+        else:
+            print(json.dumps({}))
+        return
+
     try:
         config_path = sync_and_set_config_kv()
     except Exception:
@@ -2440,7 +2863,7 @@ def main() -> None:
         return
 
     parser = argparse.ArgumentParser(
-        description="Initialize config/google-ads.yaml from ~/google-ads.yaml and ensure required settings."
+        description="Initialize config/google-ads.yaml from ~/google-ads.yaml and manage plugin configuration."
     )
     parser.add_argument("--key", default="login_customer_id", help="Config key to set or verify")
     parser.add_argument("--value", default=None, help="Config value to set")
@@ -2449,6 +2872,38 @@ def main() -> None:
         default=None,
         choices=["true", "false"],
         help="Configure whether the plugin supports live mutations (execute_mutates = <true, false> in config/assistant_config)",
+    )
+    parser.add_argument(
+        "--enable",
+        action="store_true",
+        help="Enable the plugin so it is active in Jetski/Antigravity and Claude Code sessions",
+    )
+    parser.add_argument(
+        "--disable",
+        action="store_true",
+        help="Disable the plugin so it is not invoked in Jetski/Antigravity and Claude Code sessions",
+    )
+    parser.add_argument(
+        "--plugin-enabled",
+        default=None,
+        choices=["true", "false"],
+        help="Explicitly set enabled = <true, false> in config/assistant_config and update plugin manifests",
+    )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Report the current enabled/disabled status of the plugin and exit",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output plugin status in JSON format when used with --status, --enable, or --disable",
+    )
+    parser.add_argument(
+        "--target",
+        default="all",
+        choices=["agy", "claude", "all"],
+        help="Target platform when enabling or disabling the plugin (default: all)",
     )
     parser.add_argument("--config-dir", default=None, help="Target directory for config")
     parser.add_argument("--source-yaml", default="~/google-ads.yaml", help="Source configuration file")
@@ -2461,8 +2916,41 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if args.enable and args.disable:
+        print("[config_init] Error: Cannot specify both --enable and --disable.", file=sys.stderr)
+        sys.exit(2)
+
+    if args.enable or args.disable:
+        target_state = True if args.enable else False
+        set_plugin_enabled(
+            target_state,
+            config_dir=args.config_dir,
+            target_type=args.target,
+        )
+        status_info = get_plugin_status(config_dir=args.config_dir)
+        if args.json:
+            print(json.dumps(status_info, indent=2))
+        else:
+            print(format_plugin_status_text(status_info))
+        return
+
+    if args.status:
+        status_info = get_plugin_status(config_dir=args.config_dir)
+        if args.json:
+            print(json.dumps(status_info, indent=2))
+        else:
+            print(format_plugin_status_text(status_info))
+        return
+
     if args.execute_mutates is not None:
         set_execute_mutates(args.execute_mutates.lower() == "true", config_dir=args.config_dir)
+
+    if args.plugin_enabled is not None:
+        set_plugin_enabled(
+            args.plugin_enabled.lower() == "true",
+            config_dir=args.config_dir,
+            target_type=args.target,
+        )
 
     val = args.value
     if not val:
@@ -2477,6 +2965,12 @@ def main() -> None:
             config_dir=args.config_dir,
             source_yaml=args.source_yaml,
         )
+        if args.plugin_enabled is not None:
+            set_plugin_enabled(
+                args.plugin_enabled.lower() == "true",
+                config_dir=args.config_dir,
+                target_type=args.target,
+            )
         if args.sync_client_libs:
             ensure_client_libs_synced(
                 async_in_background=False,
@@ -2492,3 +2986,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

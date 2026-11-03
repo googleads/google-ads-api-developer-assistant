@@ -23,6 +23,7 @@ from config.config_init import evaluate_mutation_guard
 def _enable_mutates_for_hitl_tests(monkeypatch: Any) -> None:
     """Enables execute_mutates=true for general HITL workflow tests unless overridden."""
     monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates=true")
+    monkeypatch.setenv("GOOGLE_ADS_ASSISTANT_ENABLED", "true")
 
 
 def _load_run_mutation_module() -> Any:

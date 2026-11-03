@@ -51,10 +51,21 @@ param(
     [switch]$Ruby,
     [switch]$Java,
     [switch]$Dotnet,
-    [switch]$All
+    [switch]$All,
+    [switch]$Enable,
+    [Alias("Disabled")]
+    [switch]$Disable,
+    [switch]$Status
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Status) {
+    $ScriptDirTmp = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $Target = if ([string]::IsNullOrWhiteSpace($Type)) { "all" } else { $Type.ToLower() }
+    & (Join-Path $ScriptDirTmp "plugin.ps1") status $Target
+    exit $LASTEXITCODE
+}
 
 if ([string]::IsNullOrWhiteSpace($Type)) {
     Write-Error "ERROR: Missing required -Type parameter ('agy' or 'claude')."
@@ -150,6 +161,7 @@ function Set-LatestApiVersion {
             $CfgFile = Join-Path $TargetConfigDir "assistant_config"
             $Cid = "12345678"
             $ExecMutates = "false"
+            $PluginEnabled = "true"
             if (Test-Path -LiteralPath $CfgFile) {
                 $Existing = Get-Content -LiteralPath $CfgFile -Raw
                 if ($Existing -match '(?m)^\s*customer_id\s*=\s*["'']?([^"''\s#]+)["'']?') {
@@ -158,7 +170,12 @@ function Set-LatestApiVersion {
                 if ($Existing -match '(?mi)^\s*execute_mutates\s*=\s*["'']?(true|false)["'']?') {
                     $ExecMutates = $Matches[1].ToLower()
                 }
+                if ($Existing -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?(true|false)["'']?') {
+                    $PluginEnabled = $Matches[1].ToLower()
+                }
             }
+            if ($Disable) { $PluginEnabled = "false" }
+            elseif ($Enable) { $PluginEnabled = "true" }
             if ($Cid -eq "12345678") {
                 $PluginConfigDir = Join-Path (Join-Path $ProjectDirAbs "plugins\google-ads-api-developer-assistant") "config"
                 $LegacyCandidates = @(
@@ -177,7 +194,7 @@ function Set-LatestApiVersion {
                     }
                 }
             }
-            $TomlContent = "api_version = `"$Latest`"`ncustomer_id = `"$Cid`"`nexecute_mutates = $ExecMutates`n"
+            $TomlContent = "api_version = `"$Latest`"`ncustomer_id = `"$Cid`"`nexecute_mutates = $ExecMutates`nenabled = $PluginEnabled`n"
             Set-Content -Path $CfgFile -Value $TomlContent -NoNewline
             Write-Host "Configured API version $Latest in $CfgFile"
         }
@@ -334,10 +351,20 @@ function Sync-InstalledPluginDir {
     param([string]$TargetPluginDir)
     $ParentPluginDir = Split-Path $TargetPluginDir
     $IsSymlink = $false
+    $WasDisabled = $false
     if (Test-Path -LiteralPath $TargetPluginDir) {
         $TargetItem = Get-Item -LiteralPath $TargetPluginDir -Force
         if (($TargetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $TargetItem.LinkType) {
             $IsSymlink = $true
+        }
+        if ((Test-Path -LiteralPath (Join-Path $TargetPluginDir "plugin.json.disabled")) -and -not (Test-Path -LiteralPath (Join-Path $TargetPluginDir "plugin.json"))) {
+            $WasDisabled = $true
+        }
+        elseif (Test-Path -LiteralPath (Join-Path (Join-Path $TargetPluginDir "config") "assistant_config")) {
+            $PriorCfg = Get-Content -LiteralPath (Join-Path (Join-Path $TargetPluginDir "config") "assistant_config") -Raw
+            if ($PriorCfg -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?false["'']?') {
+                $WasDisabled = $true
+            }
         }
     }
 
@@ -368,6 +395,11 @@ function Sync-InstalledPluginDir {
         if ($BackupCfgContent) {
             Set-Content -Path $TargetCfgFile -Value $BackupCfgContent -NoNewline
         }
+    }
+
+    $HelperPs1 = Join-Path $ProjectDirAbs "plugin.ps1"
+    if (Test-Path -LiteralPath $HelperPs1) {
+        Copy-Item -Force -LiteralPath $HelperPs1 -Destination (Join-Path $TargetPluginDir "plugin.ps1")
     }
 
     $TargetClientLibs = Join-Path $TargetPluginDir "client_libs"
@@ -407,6 +439,14 @@ function Sync-InstalledPluginDir {
 
     $TargetPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
     Set-LatestApiVersion -SearchDir $TargetPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
+
+    $NormTarget = if ($TypeLower -eq "claudecode") { "claude" } else { $TypeLower }
+    if ($Disable -or (-not $Enable -and $WasDisabled)) {
+        & (Join-Path $ProjectDirAbs "plugin.ps1") disable $NormTarget -Quiet
+    }
+    elseif ($Enable) {
+        & (Join-Path $ProjectDirAbs "plugin.ps1") enable $NormTarget -Quiet
+    }
 }
 
 if ($Type.ToLower() -eq "agy") {

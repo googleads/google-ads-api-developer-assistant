@@ -1,5 +1,6 @@
 {
   "config-init": {
+    "enabled": true,
     "PreToolUse": [
       {
         "matcher": "run_command",

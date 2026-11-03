@@ -629,6 +629,7 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
             if os.path.isdir(cfg_dir):
                 cid = "12345678"
                 exec_mutates_str = "false"
+                enabled_str: Optional[str] = None
                 if os.path.isfile(cfg_path):
                     try:
                         with open(cfg_path, "r", encoding="utf-8") as f:
@@ -646,14 +647,24 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
                         )
                         if m_em:
                             exec_mutates_str = m_em.group(1).lower()
+                        m_en = re.search(
+                            r'(?m)^\s*enabled\s*=\s*["\']?(true|false)["\']?',
+                            existing_text,
+                            re.IGNORECASE,
+                        )
+                        if m_en:
+                            enabled_str = m_en.group(1).lower()
                     except OSError:
                         pass
+                content_out = (
+                    f'api_version = "{latest_v}"\n'
+                    f'customer_id = "{cid}"\n'
+                    f"execute_mutates = {exec_mutates_str}\n"
+                )
+                if enabled_str is not None:
+                    content_out += f"enabled = {enabled_str}\n"
                 with open(cfg_path, "w", encoding="utf-8") as f:
-                    f.write(
-                        f'api_version = "{latest_v}"\n'
-                        f'customer_id = "{cid}"\n'
-                        f"execute_mutates = {exec_mutates_str}\n"
-                    )
+                    f.write(content_out)
                 legacy_ver_txt = os.path.join(cfg_dir, "api_version.txt")
                 if os.path.isfile(legacy_ver_txt):
                     try:

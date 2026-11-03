@@ -61,6 +61,7 @@ def update_assistant_config_api_version(
 
         cid = "12345678"
         exec_mutates_str = "false"
+        enabled_str: Optional[str] = None
         if os.path.isfile(norm_path):
             try:
                 with open(norm_path, "r", encoding="utf-8") as f:
@@ -78,6 +79,13 @@ def update_assistant_config_api_version(
                 )
                 if m_em:
                     exec_mutates_str = m_em.group(1).lower()
+                m_en = re.search(
+                    r'(?m)^\s*enabled\s*=\s*["\']?(true|false)["\']?',
+                    existing_text,
+                    re.IGNORECASE,
+                )
+                if m_en:
+                    enabled_str = m_en.group(1).lower()
             except OSError:
                 pass
 
@@ -95,12 +103,15 @@ def update_assistant_config_api_version(
                         pass
 
         try:
+            content_out = (
+                f'api_version = "{ver_clean}"\n'
+                f'customer_id = "{cid}"\n'
+                f"execute_mutates = {exec_mutates_str}\n"
+            )
+            if enabled_str is not None:
+                content_out += f"enabled = {enabled_str}\n"
             with open(norm_path, "w", encoding="utf-8") as f:
-                f.write(
-                    f'api_version = "{ver_clean}"\n'
-                    f'customer_id = "{cid}"\n'
-                    f"execute_mutates = {exec_mutates_str}\n"
-                )
+                f.write(content_out)
             updated_paths.append(norm_path)
         except OSError:
             continue

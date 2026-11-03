@@ -38,6 +38,8 @@ INSTALL_RUBY=false
 INSTALL_JAVA=false
 INSTALL_DOTNET=false
 ANY_SELECTED=false
+PLUGIN_ENABLED_OPT=""
+STATUS_ONLY=false
 
 # --- Help Function ---
 usage() {
@@ -53,6 +55,9 @@ usage() {
   echo "    --type TYPE                Target platform ('agy' or 'claude')"
   echo "    --agy                      Update Antigravity plugin (shorthand for --type agy)"
   echo "    --claude                   Update Claude Code plugin (shorthand for --type claude)"
+  echo "    --enable                   Enable the plugin after updating"
+  echo "    --disable, --disabled      Disable the plugin after updating"
+  echo "    --status                   Show the current enabled/disabled status of the plugin and exit"
   echo "    --all                      Ensure all client libraries are present and updated in plugin"
   echo "    --python                   Ensure google-ads-python is present and updated in plugin"
   echo "    --php                      Ensure google-ads-php is present and updated in plugin"
@@ -62,6 +67,7 @@ usage() {
   echo ""
   echo "  Examples:"
   echo "    $0 agy                     (Updates repository, Antigravity plugin, and client libraries)"
+  echo "    $0 agy --disable           (Updates Antigravity plugin and leaves it disabled)"
   echo "    $0 claude                  (Updates repository, Claude Code plugin, and client libraries)"
   echo "    $0 agy --java              (Ensures Java library is added/updated in Antigravity plugin)"
   echo "    $0 claude --php --dotnet   (Ensures PHP and .NET libraries are added/updated in Claude Code plugin)"
@@ -109,6 +115,18 @@ while [[ $# -gt 0 ]]; do
       TYPE="claude"
       shift
       ;;
+    --enable|--enabled)
+      PLUGIN_ENABLED_OPT="true"
+      shift
+      ;;
+    --disable|--disabled)
+      PLUGIN_ENABLED_OPT="false"
+      shift
+      ;;
+    --status)
+      STATUS_ONLY=true
+      shift
+      ;;
     --all)
       INSTALL_PYTHON=true
       INSTALL_PHP=true
@@ -150,6 +168,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "${STATUS_ONLY}" == "true" ]]; then
+  SCRIPT_DIR_TMP="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  exec "${SCRIPT_DIR_TMP}/plugin.sh" status "${TYPE:-all}"
+fi
 
 # --- Validate Required Type ---
 if [[ -z "${TYPE}" ]]; then
@@ -253,6 +276,7 @@ detect_and_seed_api_version() {
       local cfg_file="${target_config_dir}/assistant_config"
       local cid="12345678"
       local exec_mutates="false"
+      local plugin_enabled="true"
       if [[ -f "${cfg_file}" ]]; then
         local existing_cid=""
         existing_cid=$(grep -E '^[[:space:]]*customer_id[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*customer_id[[:space:]]*=[[:space:]]*["'\'']?([^"'\''#[:space:]]+)["'\'']?.*$/\1/' || true)
@@ -264,6 +288,14 @@ detect_and_seed_api_version() {
         if [[ "${existing_em}" == "true" || "${existing_em}" == "false" ]]; then
           exec_mutates="${existing_em}"
         fi
+        local existing_en=""
+        existing_en=$(grep -E '^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\2/' | tr '[:upper:]' '[:lower:]' || true)
+        if [[ "${existing_en}" == "true" || "${existing_en}" == "false" ]]; then
+          plugin_enabled="${existing_en}"
+        fi
+      fi
+      if [[ -n "${PLUGIN_ENABLED_OPT}" ]]; then
+        plugin_enabled="${PLUGIN_ENABLED_OPT}"
       fi
       if [[ "${cid}" == "12345678" ]]; then
         for legacy_file in "${target_config_dir}/customer_id" "${target_config_dir}/customer_id.txt" "${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant/config/customer_id" "${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant/config/customer_id.txt"; do
@@ -281,6 +313,7 @@ detect_and_seed_api_version() {
 api_version = "v${latest_v}"
 customer_id = "${cid}"
 execute_mutates = ${exec_mutates}
+enabled = ${plugin_enabled}
 EOF
       echo "Configured API version v${latest_v} in ${cfg_file}"
     fi
@@ -381,10 +414,23 @@ detect_and_seed_api_version "${PLUGIN_SOURCE_DIR}/client_libs/google-ads-python/
 sync_installed_plugin_dir() {
   local target_plugin_dir="$1"
   local platform_label="$2"
+  local was_disabled="false"
 
   if [[ -L "${target_plugin_dir}" ]]; then
     echo "Replacing legacy symlink at ${target_plugin_dir} with standalone plugin copy..."
     rm -f "${target_plugin_dir}"
+  fi
+
+  if [[ -d "${target_plugin_dir}" ]]; then
+    if [[ -f "${target_plugin_dir}/plugin.json.disabled" && ! -f "${target_plugin_dir}/plugin.json" ]]; then
+      was_disabled="true"
+    elif [[ -f "${target_plugin_dir}/config/assistant_config" ]]; then
+      local prior_en=""
+      prior_en=$(grep -E '^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=' "${target_plugin_dir}/config/assistant_config" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\2/' | tr '[:upper:]' '[:lower:]' || true)
+      if [[ "${prior_en}" == "false" ]]; then
+        was_disabled="true"
+      fi
+    fi
   fi
 
   if [[ ! -d "${target_plugin_dir}" ]]; then
@@ -409,6 +455,11 @@ sync_installed_plugin_dir() {
     if [[ -f "${existing_cfg_backup}" ]]; then
       cp "${existing_cfg_backup}" "${target_plugin_dir}/config/assistant_config"
     fi
+  fi
+
+  if [[ -f "${PROJECT_DIR_ABS}/plugin.sh" ]]; then
+    cp "${PROJECT_DIR_ABS}/plugin.sh" "${target_plugin_dir}/plugin.sh"
+    chmod +x "${target_plugin_dir}/plugin.sh" 2>/dev/null || true
   fi
 
   local target_client_libs="${target_plugin_dir}/client_libs"
@@ -446,6 +497,12 @@ sync_installed_plugin_dir() {
   fi
 
   detect_and_seed_api_version "${target_plugin_dir}/client_libs/google-ads-python/google/ads/googleads" "${target_plugin_dir}/config"
+
+  if [[ "${PLUGIN_ENABLED_OPT}" == "false" ]] || [[ -z "${PLUGIN_ENABLED_OPT}" && "${was_disabled}" == "true" ]]; then
+    "${PROJECT_DIR_ABS}/plugin.sh" disable "${TYPE}" --quiet
+  elif [[ "${PLUGIN_ENABLED_OPT}" == "true" ]]; then
+    "${PROJECT_DIR_ABS}/plugin.sh" enable "${TYPE}" --quiet
+  fi
 }
 
 if [[ "${TYPE}" == "agy" ]]; then

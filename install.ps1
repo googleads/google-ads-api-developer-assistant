@@ -55,6 +55,11 @@ param(
     [Alias("cid")]
     [string]$CustomerId = "",
 
+    [switch]$Enable,
+    [Alias("Disabled")]
+    [switch]$Disable,
+    [switch]$Status,
+
     [Parameter(Mandatory=$false, HelpMessage="Legacy option: symlinking is not supported for agy; standalone directory copy is always used.")]
     [switch]$Link
 )
@@ -63,17 +68,6 @@ $ErrorActionPreference = "Stop"
 
 if ($Link) {
     Write-Error "ERROR: -Link is not supported. Antigravity plugin is always installed as a standalone copy."
-    exit 1
-}
-
-if ([string]::IsNullOrWhiteSpace($Type)) {
-    Write-Error "ERROR: Missing required -Type parameter ('agy' or 'claude')."
-    exit 1
-}
-
-$TypeLower = $Type.ToLower()
-if ($TypeLower -notin @("agy", "claude", "claudecode")) {
-    Write-Error "ERROR: Invalid Type '$Type'. Must be 'agy' or 'claude'."
     exit 1
 }
 
@@ -87,6 +81,23 @@ try {
 }
 catch {
     Write-Error "ERROR: This script must be run from within the google-ads-api-developer-assistant git repository."
+    exit 1
+}
+
+if ($Status) {
+    $Target = if ([string]::IsNullOrWhiteSpace($Type)) { "all" } else { $Type.ToLower() }
+    & (Join-Path $ProjectDirAbs "plugin.ps1") status $Target
+    exit $LASTEXITCODE
+}
+
+if ([string]::IsNullOrWhiteSpace($Type)) {
+    Write-Error "ERROR: Missing required -Type parameter ('agy' or 'claude')."
+    exit 1
+}
+
+$TypeLower = $Type.ToLower()
+if ($TypeLower -notin @("agy", "claude", "claudecode")) {
+    Write-Error "ERROR: Invalid Type '$Type'. Must be 'agy' or 'claude'."
     exit 1
 }
 
@@ -135,6 +146,7 @@ function Set-LatestApiVersion {
             $CfgFile = Join-Path $TargetConfigDir "assistant_config"
             $Cid = "12345678"
             $ExecMutates = "false"
+            $PluginEnabled = "true"
             if (Test-Path -LiteralPath $CfgFile) {
                 $Existing = Get-Content -LiteralPath $CfgFile -Raw
                 if ($Existing -match '(?m)^\s*customer_id\s*=\s*["'']?([^"''\s#]+)["'']?') {
@@ -143,7 +155,12 @@ function Set-LatestApiVersion {
                 if ($Existing -match '(?mi)^\s*execute_mutates\s*=\s*["'']?(true|false)["'']?') {
                     $ExecMutates = $Matches[1].ToLower()
                 }
+                if ($Existing -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?(true|false)["'']?') {
+                    $PluginEnabled = $Matches[1].ToLower()
+                }
             }
+            if ($Disable) { $PluginEnabled = "false" }
+            elseif ($Enable) { $PluginEnabled = "true" }
             if ($CustomerId) {
                 $Cid = $CustomerId.Trim().Trim("`"'").Replace("-", "")
             } elseif ($Cid -eq "12345678") {
@@ -164,7 +181,7 @@ function Set-LatestApiVersion {
                     }
                 }
             }
-            $TomlContent = "api_version = `"$Latest`"`ncustomer_id = `"$Cid`"`nexecute_mutates = $ExecMutates`n"
+            $TomlContent = "api_version = `"$Latest`"`ncustomer_id = `"$Cid`"`nexecute_mutates = $ExecMutates`nenabled = $PluginEnabled`n"
             Set-Content -Path $CfgFile -Value $TomlContent -NoNewline
             Write-Host "Configured API version $Latest in $CfgFile"
         }
@@ -312,6 +329,10 @@ function Install-PluginCopy {
         Remove-Item -Recurse -Force -LiteralPath $TargetPluginDir
     }
     Copy-Item -Recurse -Force -LiteralPath $PluginSource -Destination $TargetPluginDir
+    $HelperPs1 = Join-Path $ProjectDirAbs "plugin.ps1"
+    if (Test-Path -LiteralPath $HelperPs1) {
+        Copy-Item -Force -LiteralPath $HelperPs1 -Destination (Join-Path $TargetPluginDir "plugin.ps1")
+    }
 
     $PluginClientLibsDir = Join-Path $TargetPluginDir "client_libs"
     if (-not (Test-Path -LiteralPath $PluginClientLibsDir)) {
@@ -349,6 +370,13 @@ function Install-PluginCopy {
 
     $PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
     Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
+    $NormTarget = if ($TypeLower -eq "claudecode") { "claude" } else { $TypeLower }
+    if ($Disable) {
+        & (Join-Path $ProjectDirAbs "plugin.ps1") disable $NormTarget -Quiet
+    }
+    elseif ($Enable) {
+        & (Join-Path $ProjectDirAbs "plugin.ps1") enable $NormTarget -Quiet
+    }
 }
 
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }

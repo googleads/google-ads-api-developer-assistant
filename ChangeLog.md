@@ -2,7 +2,13 @@
 
 ## 4.1.0
 
+- **Plugin Enable/Disable Option & Status Helper Scripts (`plugin.sh` / `plugin.ps1`):**
+  - Added `enabled = true|false` configuration support in `config/assistant_config` (and `GOOGLE_ADS_ASSISTANT_ENABLED` environment variable override) along with `parse_plugin_enabled_value()`, `is_plugin_enabled()`, `set_plugin_enabled()`, `get_plugin_status()`, and `format_plugin_status_text()` in `config/config_init.py`.
+  - Updated `handle_hook()` in `config/config_init.py` to short-circuit immediately when the plugin is disabled (`{}` for `PreInvocation` and `{"decision": "allow"}` without command rewriting for `PreToolUse`).
+  - Added manifest and hook toggling (`_toggle_installed_plugin_manifests`, `_set_hooks_json_enabled`) for installed plugin directories (`~/.gemini/config/plugins/google-ads-api-developer-assistant` and `~/.claude/plugins/google-ads-assistant-local`) so `jetski`/`agy` does not load or invoke the plugin when disabled.
+  - Added `plugin.sh` (Linux/macOS) and `plugin.ps1` (Windows PowerShell) helper scripts supporting `enable`, `disable`, `status`, `test` (with live `PreInvocation`/`PreToolUse` hook verification and `--expect`), and `is-enabled` commands, plus `--enable`, `--disable`, and `--status` flags in `config/config_init.py`, `install.sh`, `update.sh`, `install.ps1`, and `update.ps1`.
 - **System Site-Directory & Client Library Version Parity Protocol (First Prompt Execution & Display):**
+
   - Added PyPI release querying (`fetch_latest_pypi_python_version` against `https://pypi.org/pypi/google-ads/json`) in `config/config_init.py` and `skills/sync-client-libs/scripts/sync_client_libs.py`.
   - Added `determine_api_version()`, `format_parity_table_markdown()`, and `format_parity_table_text()` in `config/config_init.py` to check: (1) `google-ads` in site directory against `pypi.org`, (2) `google-ads-python` in `client_libs/` against GitHub, and (3) determine active Google Ads API version based on (1) and (2).
   - Executed parity checking automatically upon the first prompt entered in the session via `PreInvocation` in `hooks.json`. The hook injects the comparison table into the agent's context, and the assistant renders the table at the very top of its first response.

@@ -228,6 +228,23 @@ try {
     }
     Write-Host "PASS: global script execution succeeded from outside directory."
 
+    # Test 13: plugin.ps1 disable, status, test, is-enabled, and enable
+    Write-Host "Test 13: plugin.ps1 disable, status, test, is-enabled, and enable"
+    & "$ProjectRoot\plugin.ps1" disable agy -Quiet
+    if (-not (Test-Path (Join-Path $AgyPluginDir "plugin.json.disabled")) -or (Test-Path (Join-Path $AgyPluginDir "plugin.json"))) {
+        Write-Error "FAIL: plugin.json was not renamed to plugin.json.disabled in $AgyPluginDir"
+        exit 1
+    }
+    & "$ProjectRoot\plugin.ps1" test -ConfigDir (Join-Path $AgyPluginDir "config") -Expect disabled | Out-Null
+
+    & "$ProjectRoot\plugin.ps1" enable agy -Quiet
+    if (-not (Test-Path (Join-Path $AgyPluginDir "plugin.json")) -or (Test-Path (Join-Path $AgyPluginDir "plugin.json.disabled"))) {
+        Write-Error "FAIL: plugin.json was not restored in $AgyPluginDir"
+        exit 1
+    }
+    & "$ProjectRoot\plugin.ps1" test -ConfigDir (Join-Path $AgyPluginDir "config") -Expect enabled | Out-Null
+    Write-Host "PASS: plugin.ps1 disable, status, test, is-enabled, and enable verified."
+
     Write-Host "=== All PowerShell Tests Passed Successfully! ==="
 }
 finally {
@@ -235,3 +252,4 @@ finally {
         Remove-Item -Recurse -Force $TestHome -ErrorAction SilentlyContinue
     }
 }
+

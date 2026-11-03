@@ -195,22 +195,53 @@ Make sure your Google Ads API credentials configuration file is in your `$HOME` 
 
 ---
 
-### 5. Configure Assistant Settings (`config/assistant_config`)
-All assistant settings—active API version, default Customer ID, and live mutation permissions—are stored in a single TOML file at [`config/assistant_config`](config/assistant_config) (and mirrored in [`plugins/google-ads-api-developer-assistant/config/assistant_config`](plugins/google-ads-api-developer-assistant/config/assistant_config)):
+### 5. Configure Assistant Settings (`config/assistant_config`) & Enable/Disable Plugin
+All assistant settings—active API version, default Customer ID, live mutation permissions, and plugin activation state—are stored in a single TOML file at [`config/assistant_config`](config/assistant_config) (and mirrored in [`plugins/google-ads-api-developer-assistant/config/assistant_config`](plugins/google-ads-api-developer-assistant/config/assistant_config)):
 
 ```toml
-api_version = "v25"
+api_version = "v26"
 customer_id = "12345678"
 execute_mutates = false
+enabled = true
 ```
 
 | Key | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| **`api_version`** | `string` | `"v25"` | Active Google Ads API version used for GAQL validation, Protobuf inspection, and code generation. Automatically detected and updated when running `install.sh`, `update.sh`, `sync_client_libs.py`, `get_latest_api_version.py`, or `python3 config/config_init.py --key api_version`. |
+| **`api_version`** | `string` | `"v26"` | Active Google Ads API version used for GAQL validation, Protobuf inspection, and code generation. Automatically detected and updated when running `install.sh`, `update.sh`, `sync_client_libs.py`, `get_latest_api_version.py`, or `python3 config/config_init.py --key api_version`. |
 | **`customer_id`** | `string` | `"12345678"` | Default Google Ads Customer ID (10-digit account ID without dashes) used when a prompt does not explicitly specify a CID (e.g., *"Get my campaigns"*). |
 | **`execute_mutates`** | `boolean` | `false` | Controls whether live Google Ads API write/mutate operations (`--execute` / `validate_only=False`) are permitted through the 4-Step HITL protocol. |
+| **`enabled`** | `boolean` | `true` | Controls whether the plugin is active when you invoke `jetski`/`agy` or Claude Code. When set to `false` (via `./plugin.sh disable`), the plugin is not loaded on new sessions and its lifecycle hooks become no-ops. |
 
-You can configure `customer_id` during installation (`./install.sh agy --cid 1234567890`), edit `config/assistant_config` directly, or run `config_init.py`:
+#### Turning the Plugin Off / On (`plugin.sh` & `plugin.ps1`)
+If you want to turn off the plugin so that it is not invoked every time you run `jetski`/`agy` (for example, when working on non-Google Ads projects), use the included [`plugin.sh`](plugin.sh) (Linux/macOS) or [`plugin.ps1`](plugin.ps1) (Windows PowerShell) helper script:
+
+```bash
+# Disable the plugin so it is not invoked when running jetski/agy
+./plugin.sh disable
+
+# Enable the plugin so it is active in jetski/agy
+./plugin.sh enable
+
+# Display the current plugin status and live hook state (or pass --json)
+./plugin.sh status
+
+# Run a diagnostic test verifying config, manifest, and live hook behavior
+./plugin.sh test
+
+# Check status in shell scripts (prints 'enabled' with exit 0, or 'disabled' with exit 1)
+./plugin.sh is-enabled
+```
+
+On Windows PowerShell:
+```powershell
+.\plugin.ps1 disable
+.\plugin.ps1 enable
+.\plugin.ps1 status
+.\plugin.ps1 test
+.\plugin.ps1 is-enabled
+```
+
+You can also configure settings during installation (`./install.sh agy --cid 1234567890` or `./install.sh agy --disable`), edit `config/assistant_config` directly, or run `config_init.py`:
 ```bash
 # Set default Customer ID in config/assistant_config and sync config/google-ads.yaml (from repo root)
 python3 plugins/google-ads-api-developer-assistant/config/config_init.py --key customer_id --value 1234567890
@@ -230,7 +261,13 @@ python3 plugins/google-ads-api-developer-assistant/config/config_init.py --sync-
 # Enable or disable live mutations in config/assistant_config
 python3 plugins/google-ads-api-developer-assistant/config/config_init.py --execute-mutates true
 python3 plugins/google-ads-api-developer-assistant/config/config_init.py --execute-mutates false
+
+# Enable, disable, or check plugin status directly via config_init.py
+python3 plugins/google-ads-api-developer-assistant/config/config_init.py --disable
+python3 plugins/google-ads-api-developer-assistant/config/config_init.py --enable
+python3 plugins/google-ads-api-developer-assistant/config/config_init.py --status
 ```
+
 
 ## Usage
 

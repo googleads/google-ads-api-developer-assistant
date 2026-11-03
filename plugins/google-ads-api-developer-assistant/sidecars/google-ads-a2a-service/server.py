@@ -145,7 +145,7 @@ def get_effective_api_version(payload: dict = None) -> str:
 
 _CACHED_PLUGIN_VERSION: str | None = None
 UNKNOWN_PLUGIN_VERSION = "Unknown"
-_VERSION_MANIFEST_FILES = ("plugin.json", "agent.json")
+_VERSION_MANIFEST_FILES = ("plugin.json", "plugin.json.disabled", "agent.json")
 
 
 def get_plugin_version() -> str:

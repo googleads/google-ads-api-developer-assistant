@@ -791,6 +791,7 @@ class TestExtVersion:
         from config import config_init
         import io
 
+        monkeypatch.setenv("GOOGLE_ADS_ASSISTANT_ENABLED", "true")
         monkeypatch.setattr(config_init, "fetch_latest_github_python_version", lambda force=False: "34.0.0")
         monkeypatch.setattr(config_init, "fetch_latest_pypi_python_version", lambda **kw: "34.0.0")
 
@@ -823,6 +824,28 @@ class TestExtVersion:
         assert "ephemeralMessage" in data3["injectSteps"][0]
         assert "Parity Table:" not in data3["injectSteps"][0]["ephemeralMessage"]
         assert "ACTIVE API CONFIGURATION:" in data3["injectSteps"][0]["ephemeralMessage"]
+
+        # 4. When plugin is disabled, PreInvocation returns {} and PreToolUse returns {"decision": "allow"} without overwrite
+        monkeypatch.setenv("GOOGLE_ADS_ASSISTANT_ENABLED", "false")
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"invocationNum": 1})))
+        config_init.handle_hook()
+        captured4 = capsys.readouterr()
+        assert json.loads(captured4.out) == {}
+
+        monkeypatch.setattr(
+            "sys.stdin",
+            io.StringIO(
+                json.dumps({
+                    "toolCall": {
+                        "name": "run_command",
+                        "args": {"CommandLine": "python3 -c 'GoogleAdsClient.load_from_storage()'"},
+                    }
+                })
+            ),
+        )
+        config_init.handle_hook()
+        captured5 = capsys.readouterr()
+        assert json.loads(captured5.out) == {"decision": "allow"}
 
     def test_get_extension_version_plugin_json(self, tmp_path, capsys):
         plugin_file = tmp_path / "plugin.json"
@@ -1649,6 +1672,149 @@ class TestPluginIntegrity:
                 text = f.read()
             assert text.startswith("---\n"), f"SKILL.md in {sdir} must start with YAML frontmatter"
             assert "name:" in text and "description:" in text
+
+    def test_plugin_enable_disable_status_and_helper_script(self, tmp_path, monkeypatch):
+        import subprocess
+        from config import config_init
+
+        monkeypatch.delenv("GOOGLE_ADS_ASSISTANT_ENABLED", raising=False)
+
+        # 1. Verify parse_plugin_enabled_value
+        assert config_init.parse_plugin_enabled_value("enabled = true") is True
+        assert config_init.parse_plugin_enabled_value("enabled = false") is False
+        assert config_init.parse_plugin_enabled_value("plugin_enabled = false") is False
+        assert config_init.parse_plugin_enabled_value("off") is False
+        assert config_init.parse_plugin_enabled_value("on") is True
+
+        # 2. Create a simulated installed plugin directory and verify manifest/hooks/config toggling
+        fake_installed_plugin = tmp_path / "installed_plugin"
+        fake_cfg_dir = fake_installed_plugin / "config"
+        fake_sidecar_dir = fake_installed_plugin / "sidecars" / "google-ads-a2a-service"
+        fake_cfg_dir.mkdir(parents=True)
+        fake_sidecar_dir.mkdir(parents=True)
+
+        (fake_installed_plugin / "plugin.json").write_text(
+            json.dumps({"name": "google-ads-api-developer-assistant", "version": "4.1.0"}),
+            encoding="utf-8",
+        )
+        (fake_installed_plugin / "mcp_config.json").write_text(
+            json.dumps({"mcpServers": {}}),
+            encoding="utf-8",
+        )
+        (fake_sidecar_dir / "sidecar.json").write_text(
+            json.dumps({"command": "python3"}),
+            encoding="utf-8",
+        )
+        (fake_installed_plugin / "hooks.json").write_text(
+            json.dumps({
+                "hooks": {
+                    "config-init": {
+                        "command": "python3",
+                        "args": ["config/config_init.py", "--hook"],
+                        "enabled": True,
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        # Disable plugin in fake_cfg_dir
+        config_init.set_plugin_enabled(
+            False,
+            config_dir=str(fake_cfg_dir),
+            sync_global=False,
+        )
+        assert config_init.is_plugin_enabled(config_dir=str(fake_cfg_dir)) is False
+        assert not (fake_installed_plugin / "plugin.json").exists()
+        assert (fake_installed_plugin / "plugin.json.disabled").is_file()
+        assert not (fake_installed_plugin / "mcp_config.json").exists()
+        assert (fake_installed_plugin / "mcp_config.json.disabled").is_file()
+        assert not (fake_sidecar_dir / "sidecar.json").exists()
+        assert (fake_sidecar_dir / "sidecar.json.disabled").is_file()
+        hooks_data = json.loads((fake_installed_plugin / "hooks.json").read_text(encoding="utf-8"))
+        assert hooks_data["hooks"]["config-init"]["enabled"] is False
+
+        status_disabled = config_init.get_plugin_status(config_dir=str(fake_cfg_dir))
+        assert status_disabled["enabled"] is False
+        assert status_disabled["status"] == "disabled"
+        assert "DISABLED" in config_init.format_plugin_status_text(status_disabled)
+
+        # Re-enable plugin in fake_cfg_dir
+        config_init.set_plugin_enabled(
+            True,
+            config_dir=str(fake_cfg_dir),
+            sync_global=False,
+        )
+        assert config_init.is_plugin_enabled(config_dir=str(fake_cfg_dir)) is True
+        assert (fake_installed_plugin / "plugin.json").is_file()
+        assert not (fake_installed_plugin / "plugin.json.disabled").exists()
+        assert (fake_installed_plugin / "mcp_config.json").is_file()
+        assert (fake_sidecar_dir / "sidecar.json").is_file()
+        hooks_data_after = json.loads(
+            (fake_installed_plugin / "hooks.json").read_text(encoding="utf-8")
+        )
+        assert hooks_data_after["hooks"]["config-init"]["enabled"] is True
+
+        # 3. Verify plugin.sh CLI helper commands (disable, is-enabled, test, status, enable)
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        plugin_sh = os.path.join(repo_root, "plugin.sh")
+        assert os.path.isfile(plugin_sh)
+
+        res_disable = subprocess.run(
+            ["bash", plugin_sh, "disable", "--config-dir", str(fake_cfg_dir), "--json"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        payload_disable = json.loads(res_disable.stdout)
+        assert payload_disable["enabled"] is False
+        assert payload_disable["hook_test"]["passed"] is True
+
+        res_is_enabled_off = subprocess.run(
+            ["bash", plugin_sh, "is-enabled", "--config-dir", str(fake_cfg_dir)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert res_is_enabled_off.returncode == 1
+        assert res_is_enabled_off.stdout.strip() == "disabled"
+
+        res_test_off = subprocess.run(
+            [
+                "bash",
+                plugin_sh,
+                "test",
+                "--config-dir",
+                str(fake_cfg_dir),
+                "--expect",
+                "disabled",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "Status: DISABLED" in res_test_off.stdout
+        assert "Live Hook Test    : PASS" in res_test_off.stdout
+
+        res_enable = subprocess.run(
+            ["bash", plugin_sh, "enable", "--config-dir", str(fake_cfg_dir), "--json"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        payload_enable = json.loads(res_enable.stdout)
+        assert payload_enable["enabled"] is True
+        assert payload_enable["hook_test"]["passed"] is True
+
+        res_is_enabled_on = subprocess.run(
+            ["bash", plugin_sh, "is-enabled", "--config-dir", str(fake_cfg_dir)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert res_is_enabled_on.returncode == 0
+        assert res_is_enabled_on.stdout.strip() == "enabled"
+
 
 
 class TestPerformanceRegressions:

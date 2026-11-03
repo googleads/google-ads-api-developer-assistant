@@ -75,6 +75,8 @@ INSTALL_JAVA=false
 INSTALL_DOTNET=false
 ANY_SELECTED=false
 CUSTOMER_ID=""
+PLUGIN_ENABLED_OPT=""
+STATUS_ONLY=false
 
 # --- Help Function ---
 usage() {
@@ -91,6 +93,9 @@ usage() {
   echo "    --agy                      Install for Antigravity (shorthand for --type agy)"
   echo "    --claude                   Install for Claude Code (shorthand for --type claude)"
   echo "    --cid, --customer-id CID   Default Google Ads Customer ID (e.g. 1234567890)"
+  echo "    --enable                   Ensure the plugin is enabled after installation (default)"
+  echo "    --disable, --disabled      Install the plugin in disabled state so it is not invoked on startup"
+  echo "    --status                   Show the current enabled/disabled status of the plugin and exit"
   echo "    --all                      Include all client libraries (Python, PHP, Ruby, Java, .NET)"
   echo "    --php                      Include google-ads-php client library"
   echo "    --ruby                     Include google-ads-ruby client library"
@@ -101,6 +106,7 @@ usage() {
   echo ""
   echo "  Examples:"
   echo "    $0 agy                     (Installs Antigravity plugin with Python client library)"
+  echo "    $0 agy --disable           (Installs Antigravity plugin in disabled state)"
   echo "    $0 claude                  (Installs Claude Code plugin via claude CLI)"
   echo "    $0 agy --java              (Installs Antigravity plugin with Java and Python client libraries)"
   echo "    $0 claude --php --dotnet   (Installs Claude Code plugin with PHP, .NET, and Python client libraries)"
@@ -160,6 +166,18 @@ while [[ $# -gt 0 ]]; do
       CUSTOMER_ID="${1#*=}"
       shift
       ;;
+    --enable|--enabled)
+      PLUGIN_ENABLED_OPT="true"
+      shift
+      ;;
+    --disable|--disabled)
+      PLUGIN_ENABLED_OPT="false"
+      shift
+      ;;
+    --status)
+      STATUS_ONLY=true
+      shift
+      ;;
     --all)
       INSTALL_PHP=true
       INSTALL_RUBY=true
@@ -199,6 +217,10 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "${STATUS_ONLY}" == "true" ]]; then
+  exec "${PROJECT_DIR_ABS}/plugin.sh" status "${TYPE:-all}"
+fi
 
 # --- Validate Required Type ---
 if [[ -z "${TYPE}" ]]; then
@@ -441,6 +463,7 @@ detect_and_seed_api_version() {
       local cfg_file="${target_config_dir}/assistant_config"
       local cid="12345678"
       local exec_mutates="false"
+      local plugin_enabled="true"
       if [[ -f "${cfg_file}" ]]; then
         local existing_cid=""
         existing_cid=$(grep -E '^[[:space:]]*customer_id[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*customer_id[[:space:]]*=[[:space:]]*["'\'']?([^"'\''#[:space:]]+)["'\'']?.*$/\1/' || true)
@@ -452,6 +475,14 @@ detect_and_seed_api_version() {
         if [[ "${existing_em}" == "true" || "${existing_em}" == "false" ]]; then
           exec_mutates="${existing_em}"
         fi
+        local existing_en=""
+        existing_en=$(grep -E '^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\2/' | tr '[:upper:]' '[:lower:]' || true)
+        if [[ "${existing_en}" == "true" || "${existing_en}" == "false" ]]; then
+          plugin_enabled="${existing_en}"
+        fi
+      fi
+      if [[ -n "${PLUGIN_ENABLED_OPT}" ]]; then
+        plugin_enabled="${PLUGIN_ENABLED_OPT}"
       fi
       if [[ -n "${CUSTOMER_ID}" ]]; then
         cid=$(echo "${CUSTOMER_ID}" | sed -E 's/^[[:space:]"'\'']+|[[:space:]"'\'']+$//g; s/-//g')
@@ -471,6 +502,7 @@ detect_and_seed_api_version() {
 api_version = "v${latest_v}"
 customer_id = "${cid}"
 execute_mutates = ${exec_mutates}
+enabled = ${plugin_enabled}
 EOF
       echo "Configured API version v${latest_v} in ${cfg_file}"
     fi
@@ -499,6 +531,10 @@ install_plugin_copy() {
   rm -rf "${target_dir}"
   mkdir -p "$(dirname "${target_dir}")"
   safe_copy_dir "${PLUGIN_SOURCE_DIR}" "${target_dir}"
+  if [[ -f "${PROJECT_DIR_ABS}/plugin.sh" ]]; then
+    cp "${PROJECT_DIR_ABS}/plugin.sh" "${target_dir}/plugin.sh"
+    chmod +x "${target_dir}/plugin.sh" 2>/dev/null || true
+  fi
   mkdir -p "${target_dir}/client_libs"
 
   for lang in python php ruby java dotnet; do
@@ -527,6 +563,11 @@ install_plugin_copy() {
   done
 
   detect_and_seed_api_version "${target_dir}/client_libs/google-ads-python/google/ads/googleads" "${target_dir}/config"
+  if [[ "${PLUGIN_ENABLED_OPT}" == "false" ]]; then
+    "${PROJECT_DIR_ABS}/plugin.sh" disable "${TYPE}" --quiet
+  elif [[ "${PLUGIN_ENABLED_OPT}" == "true" ]]; then
+    "${PROJECT_DIR_ABS}/plugin.sh" enable "${TYPE}" --quiet
+  fi
 }
 
 if [[ "${TYPE}" == "claude" ]]; then

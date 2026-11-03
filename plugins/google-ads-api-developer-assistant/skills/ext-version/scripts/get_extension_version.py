@@ -20,9 +20,9 @@ import sys
 def get_extension_version() -> None:
     """Reads agent.json or plugin.json and prints the version."""
     try:
-        # Search for plugin.json or agent.json in parent directories
+        # Search for plugin.json, plugin.json.disabled, or agent.json in parent directories
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        target_files = ["plugin.json", "agent.json"]
+        target_files = ["plugin.json", "plugin.json.disabled", "agent.json"]
         
         found = False
         while current_dir and current_dir != os.path.dirname(current_dir):

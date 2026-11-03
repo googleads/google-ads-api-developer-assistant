@@ -154,4 +154,37 @@ if [[ "${version_output}" != "4.1.0" ]]; then
 fi
 echo "PASS: global script execution succeeded from outside directory."
 
+echo "Test 13: plugin.sh disable, status, test, is-enabled, and enable"
+"${PROJECT_ROOT}/plugin.sh" disable agy >/dev/null
+if "${PROJECT_ROOT}/plugin.sh" is-enabled --config-dir "${AGY_PLUGIN_DIR}/config" --quiet; then
+  echo "FAIL: plugin.sh is-enabled should exit 1 when disabled"
+  exit 1
+fi
+if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json.disabled" || -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
+  echo "FAIL: plugin.json was not renamed to plugin.json.disabled in ${AGY_PLUGIN_DIR}"
+  exit 1
+fi
+"${PROJECT_ROOT}/plugin.sh" test --config-dir "${AGY_PLUGIN_DIR}/config" --expect disabled >/dev/null
+
+# Verify update.sh preserves disabled state unless --enable is specified
+"${PROJECT_ROOT}/update.sh" agy >/dev/null
+if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json.disabled" || -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
+  echo "FAIL: update.sh did not preserve disabled state in ${AGY_PLUGIN_DIR}"
+  exit 1
+fi
+
+# Re-enable and verify
+"${PROJECT_ROOT}/plugin.sh" enable agy >/dev/null
+if ! "${PROJECT_ROOT}/plugin.sh" is-enabled --config-dir "${AGY_PLUGIN_DIR}/config" --quiet; then
+  echo "FAIL: plugin.sh is-enabled should exit 0 when enabled"
+  exit 1
+fi
+if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json" || -f "${AGY_PLUGIN_DIR}/plugin.json.disabled" ]]; then
+  echo "FAIL: plugin.json was not restored in ${AGY_PLUGIN_DIR}"
+  exit 1
+fi
+"${PROJECT_ROOT}/plugin.sh" test --config-dir "${AGY_PLUGIN_DIR}/config" --expect enabled >/dev/null
+echo "PASS: plugin.sh disable, status, test, is-enabled, and enable verified."
+
 echo "=== All Tests Passed Successfully! ==="
+
