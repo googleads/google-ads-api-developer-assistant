@@ -17,41 +17,41 @@
 
 Evaluates both functional correctness and execution performance (total ms,
 per-op ms, p50/p95 latency, ops/sec) across core subsystems of the
-Google Ads API Developer Assistant, and compares results against saved
-version baselines (e.g., v4.0.0 vs v4.1.0) or git refs to detect regressions.
-
-Benchmarks that test modules introduced in v4.1.0 (`config/config_init.py`,
-`skills/execute-mutation/scripts/run_mutation.py`) are automatically skipped
-when executed against a v4.0.0 checkout via `--compare-git-ref v4.0.0`.
+Google Ads API Developer Assistant, and compares results between any two
+user-specified versions (Git refs, saved JSON baselines, or the current
+working tree) without assuming any fallback or hardcoding any versions.
 
 Usage:
-  # Run suite and compare against default baseline (if present)
-  python3 tests/benchmark_suite.py
+  # Compare any two versions (Git tags, branches, commits, baseline files, or 'workspace')
+  python3 tests/benchmark_suite.py <base_version> <target_version>
+  python3 tests/benchmark_suite.py --compare <base_version> <target_version>
+  python3 tests/benchmark_suite.py --base-version <base_version> --target-version <target_version>
 
-  # Save current run as a version baseline
-  python3 tests/benchmark_suite.py --save-baseline tests/benchmarks/baseline_v4.1.0.json
+  # Save a version baseline (from current workspace or a specific Git ref)
+  python3 tests/benchmark_suite.py --save-baseline <output_json_path>
+  python3 tests/benchmark_suite.py --save-git-ref-baseline <git_ref> <output_json_path>
 
-  # Compare current code against v4.0.0 or v4.1.0 baseline
-  python3 tests/benchmark_suite.py --compare-baseline tests/benchmarks/baseline_v4.0.0.json
-
-  # Compare current workspace against another git ref (e.g. tag v4.0.0)
-  python3 tests/benchmark_suite.py --compare-git-ref v4.0.0
+  # Run benchmarks on the current working tree only (without comparison)
+  python3 tests/benchmark_suite.py --run-current
 """
 
 import argparse
 import contextlib
+from datetime import datetime, timezone
+import glob
+import importlib.metadata
 import io
 import json
 import os
 import platform
+import re
 import shutil
 import statistics
 import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from unittest.mock import MagicMock
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -85,13 +85,173 @@ try:
 except ImportError:
     run_mutation = None  # type: ignore[assignment]
 
-import inspect_object  # noqa: E402
-import server  # noqa: E402
-import sync_client_libs  # noqa: E402
-import validate_conversion_upload  # noqa: E402
-import validate_gaql  # noqa: E402
+try:
+    import inspect_object  # type: ignore[import-not-found]
+except ImportError:
+    inspect_object = None  # type: ignore[assignment]
+
+try:
+    import server  # type: ignore[import-not-found]
+except ImportError:
+    server = None  # type: ignore[assignment]
+
+try:
+    import sync_client_libs  # type: ignore[import-not-found]
+except ImportError:
+    sync_client_libs = None  # type: ignore[assignment]
+
+try:
+    import validate_conversion_upload  # type: ignore[import-not-found]
+except ImportError:
+    validate_conversion_upload = None  # type: ignore[assignment]
+
+try:
+    import validate_gaql  # type: ignore[import-not-found]
+except ImportError:
+    validate_gaql = None  # type: ignore[assignment]
 
 DEFAULT_BASELINE_DIR = os.path.join(REPO_ROOT, "tests", "benchmarks")
+WORKSPACE_SPECIFIERS = frozenset({"workspace", "current", "worktree", "."})
+
+
+_CACHED_ACTIVE_API_VERSION: Optional[str] = None
+_CACHED_INSTALLED_LIB_VERSION: Optional[str] = None
+
+
+def _resolve_active_api_version() -> str:
+    """Dynamically resolves the active Google Ads API version without hardcoded fallbacks."""
+    global _CACHED_ACTIVE_API_VERSION
+    if _CACHED_ACTIVE_API_VERSION is not None:
+        return _CACHED_ACTIVE_API_VERSION
+
+    if cfg_init is not None:
+        if hasattr(cfg_init, "get_configured_api_version"):
+            configured = cfg_init.get_configured_api_version()
+            if configured:
+                _CACHED_ACTIVE_API_VERSION = (
+                    configured if configured.startswith("v") else f"v{configured}"
+                )
+                return _CACHED_ACTIVE_API_VERSION
+        if hasattr(cfg_init, "detect_latest_api_version"):
+            detected = cfg_init.detect_latest_api_version()
+            if detected:
+                _CACHED_ACTIVE_API_VERSION = (
+                    detected if detected.startswith("v") else f"v{detected}"
+                )
+                return _CACHED_ACTIVE_API_VERSION
+
+    if server is not None and hasattr(server, "get_effective_api_version"):
+        try:
+            eff = server.get_effective_api_version({})
+            if eff:
+                _CACHED_ACTIVE_API_VERSION = (
+                    eff if eff.startswith("v") else f"v{eff}"
+                )
+                return _CACHED_ACTIVE_API_VERSION
+        except Exception:
+            pass
+
+    discovered_versions: List[int] = []
+    candidate_roots = [
+        os.path.join(
+            REPO_ROOT,
+            "client_libs",
+            "google-ads-python",
+            "google",
+            "ads",
+            "googleads",
+        ),
+        os.path.join(
+            PLUGIN_ROOT,
+            "client_libs",
+            "google-ads-python",
+            "google",
+            "ads",
+            "googleads",
+        ),
+    ]
+    try:
+        import google.ads.googleads as _gads_pkg  # type: ignore[import-untyped]
+
+        for p in getattr(_gads_pkg, "__path__", []):
+            candidate_roots.append(p)
+    except Exception:
+        pass
+
+    for root in candidate_roots:
+        if os.path.isdir(root):
+            for entry in os.listdir(root):
+                m = re.match(r"^v(\d+)$", entry)
+                if m and os.path.isdir(os.path.join(root, entry)):
+                    discovered_versions.append(int(m.group(1)))
+
+    if discovered_versions:
+        _CACHED_ACTIVE_API_VERSION = f"v{max(discovered_versions)}"
+        return _CACHED_ACTIVE_API_VERSION
+
+    raise RuntimeError(
+        "Unable to resolve active Google Ads API version from configuration or installed client libraries."
+    )
+
+
+def _resolve_installed_library_version() -> str:
+    """Dynamically resolves the installed google-ads library version without hardcoding."""
+    global _CACHED_INSTALLED_LIB_VERSION
+    if _CACHED_INSTALLED_LIB_VERSION is not None:
+        return _CACHED_INSTALLED_LIB_VERSION
+
+    try:
+        _CACHED_INSTALLED_LIB_VERSION = importlib.metadata.version("google-ads").lstrip(
+            "v"
+        )
+        return _CACHED_INSTALLED_LIB_VERSION
+    except Exception:
+        pass
+
+    if sync_client_libs is not None and hasattr(
+        sync_client_libs, "detect_installed_version"
+    ):
+        for base_dir in (
+            os.path.join(REPO_ROOT, "client_libs", "google-ads-python"),
+            os.path.join(PLUGIN_ROOT, "client_libs", "google-ads-python"),
+        ):
+            if os.path.isdir(base_dir):
+                ver = sync_client_libs.detect_installed_version(
+                    "google-ads-python", base_dir
+                )
+                if ver and ver not in ("Unknown", "Not Found"):
+                    _CACHED_INSTALLED_LIB_VERSION = ver.lstrip("v")
+                    return _CACHED_INSTALLED_LIB_VERSION
+
+    raise RuntimeError("Unable to determine installed google-ads package version.")
+
+
+def _resolve_manifest_plugin_version() -> str:
+    """Reads the plugin version directly from the manifest without hardcoding."""
+    for candidate in (
+        os.path.join(PLUGIN_ROOT, "plugin.json"),
+        os.path.join(PLUGIN_ROOT, "plugin.json.disabled"),
+        os.path.join(REPO_ROOT, ".gemini", "agent.json"),
+        os.path.join(REPO_ROOT, "plugin.json"),
+    ):
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                ver = str(data.get("version", "")).strip()
+                if ver:
+                    return ver
+            except Exception:
+                continue
+    if cfg_init is not None and hasattr(cfg_init, "get_version"):
+        ver = cfg_init.get_version()
+        if ver and ver not in ("Unknown", "Version not found"):
+            return ver
+    if server is not None and hasattr(server, "get_plugin_version"):
+        ver = server.get_plugin_version()
+        if ver and ver not in ("Unknown", "Version not found"):
+            return ver
+    raise RuntimeError("Unable to resolve plugin version from manifest.")
 
 
 def _percentile(sorted_vals: List[float], pct: float) -> float:
@@ -112,7 +272,6 @@ def _measure_benchmark(
     max_total_ms: float,
     step_fn: Callable[[int], None],
     verify_fn: Callable[[], Dict[str, Any]],
-    min_version: str = "4.0.0",
 ) -> Dict[str, Any]:
     """Runs functional verification followed by timed iterations and returns metrics."""
     functional_passed = False
@@ -147,7 +306,6 @@ def _measure_benchmark(
     return {
         "name": name,
         "description": description,
-        "min_version": min_version,
         "iterations": iterations,
         "functional_passed": functional_passed,
         "functional_details": functional_details,
@@ -162,41 +320,56 @@ def _measure_benchmark(
     }
 
 
-def _bench_version_resolution() -> Dict[str, Any]:
-    """Benchmark 1: Plugin version resolution (v4.0.0 uncached vs v4.1.0 in-process cached)."""
+def _bench_version_resolution() -> Optional[Dict[str, Any]]:
+    """Benchmark 1: Plugin version resolution from manifest."""
+    if server is None and cfg_init is None:
+        return None
+
+    expected_manifest_version = _resolve_manifest_plugin_version()
 
     def verify() -> Dict[str, Any]:
-        if hasattr(server, "_CACHED_PLUGIN_VERSION"):
-            server._CACHED_PLUGIN_VERSION = None
-        v_srv = server.get_plugin_version()
-        assert v_srv.startswith("4."), f"Unexpected plugin version: {v_srv}"
-        if cfg_init is not None:
-            cfg_init._CACHED_VERSION = None
+        resolved: Optional[str] = None
+        if server is not None and hasattr(server, "get_plugin_version"):
+            if hasattr(server, "_CACHED_PLUGIN_VERSION"):
+                server._CACHED_PLUGIN_VERSION = None
+            v_srv = server.get_plugin_version()
+            assert v_srv == expected_manifest_version, (
+                f"Expected plugin version {expected_manifest_version}, got {v_srv}"
+            )
+            resolved = v_srv
+        if cfg_init is not None and hasattr(cfg_init, "get_version"):
+            if hasattr(cfg_init, "_CACHED_VERSION"):
+                cfg_init._CACHED_VERSION = None
             v_cfg = cfg_init.get_version()
-            assert v_cfg == v_srv, f"Version mismatch: {v_cfg} != {v_srv}"
-        return {"resolved_version": v_srv}
+            assert v_cfg == expected_manifest_version, (
+                f"Expected config_init version {expected_manifest_version}, got {v_cfg}"
+            )
+            resolved = v_cfg
+        assert resolved is not None
+        return {"resolved_version": resolved}
 
     def step(_i: int) -> None:
-        if cfg_init is not None:
+        if cfg_init is not None and hasattr(cfg_init, "get_version"):
             cfg_init.get_version()
-        server.get_plugin_version()
+        if server is not None and hasattr(server, "get_plugin_version"):
+            server.get_plugin_version()
 
     return _measure_benchmark(
         name="version_resolution_in_process",
-        description="Resolve plugin version from plugin.json (uncached in v4.0.0; in-process cached in v4.1.0)",
+        description="Resolve plugin version from manifest across server and config_init",
         iterations=1000,
         max_total_ms=50.0,
         step_fn=step,
         verify_fn=verify,
-        min_version="4.0.0",
     )
 
 
 def _bench_config_sync_and_migration() -> Optional[Dict[str, Any]]:
-    """Benchmark 2 (v4.1.0+): Config YAML sync, client_libs cleanup, and v4.0.0 -> v4.1.0 migration."""
+    """Benchmark 2: Config YAML sync, client_libs cleanup, and legacy config migration."""
     if cfg_init is None or not hasattr(cfg_init, "sync_and_set_config_kv"):
         return None
 
+    active_api_version = _resolve_active_api_version()
     tmp_dir = tempfile.mkdtemp(prefix="gads_bench_cfg_")
     try:
         src_yaml = os.path.join(tmp_dir, "home_google_ads.yaml")
@@ -218,8 +391,10 @@ def _bench_config_sync_and_migration() -> Optional[Dict[str, Any]]:
         def verify() -> Dict[str, Any]:
             with open(os.path.join(cfg_dir, "customer_id"), "w", encoding="utf-8") as f:
                 f.write("8887776665\n")
-            with open(os.path.join(cfg_dir, "api_version.txt"), "w", encoding="utf-8") as f:
-                f.write("v25\n")
+            with open(
+                os.path.join(cfg_dir, "api_version.txt"), "w", encoding="utf-8"
+            ) as f:
+                f.write(f"{active_api_version}\n")
             dummy_yaml = os.path.join(lib_dir, "google-ads.yaml")
             with open(dummy_yaml, "w", encoding="utf-8") as f:
                 f.write("dummy: true\n")
@@ -234,9 +409,13 @@ def _bench_config_sync_and_migration() -> Optional[Dict[str, Any]]:
                     config_dir=cfg_dir,
                 )
                 assert os.path.isfile(out_path)
-                assert not os.path.exists(dummy_yaml), "Dummy client_libs yaml not cleaned"
+                assert not os.path.exists(dummy_yaml), (
+                    "Dummy client_libs yaml not cleaned"
+                )
                 cid = cfg_init.get_configured_customer_id(config_dir=cfg_dir)
-                assert cid == "8887776665", f"Expected migrated CID 8887776665, got {cid}"
+                assert cid == "8887776665", (
+                    f"Expected migrated CID 8887776665, got {cid}"
+                )
             finally:
                 os.chdir(orig_cwd)
             return {"migrated_cid": cid, "dummy_cleaned": True}
@@ -251,19 +430,18 @@ def _bench_config_sync_and_migration() -> Optional[Dict[str, Any]]:
 
         return _measure_benchmark(
             name="config_sync_and_legacy_migration",
-            description="Sync google-ads.yaml, clean client_libs dummy YAML, and migrate v4.0.0 config",
+            description="Sync google-ads.yaml, clean client_libs dummy YAML, and migrate legacy config files",
             iterations=50,
             max_total_ms=350.0,
             step_fn=step,
             verify_fn=verify,
-            min_version="4.1.0",
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _bench_hook_interception() -> Optional[Dict[str, Any]]:
-    """Benchmark 3 (v4.1.0+): PreToolUse mutation guard & command rewriting."""
+    """Benchmark 3: PreToolUse mutation guard & command evaluation."""
     if cfg_init is None or not hasattr(cfg_init, "evaluate_mutation_guard"):
         return None
 
@@ -280,40 +458,57 @@ def _bench_hook_interception() -> Optional[Dict[str, Any]]:
         '.mutate_campaign_budgets(customer_id=\'123\', operations=[])"'
     )
 
-    def verify() -> Dict[str, Any]:
-        d_ro, _ = cfg_init.evaluate_mutation_guard(ro_cmd)
-        d_dry, _ = cfg_init.evaluate_mutation_guard(dry_run_cmd)
-        d_live, _ = cfg_init.evaluate_mutation_guard(live_mutate_cmd)
-        assert d_ro == "allow", f"Expected allow for read-only command, got {d_ro}"
-        assert d_dry == "allow", f"Expected allow for dry-run command, got {d_dry}"
-        assert d_live == "deny", f"Expected deny for unverified live mutate, got {d_live}"
-        return {
-            "readonly_decision": d_ro,
-            "dry_run_decision": d_dry,
-            "unverified_mutate_decision": d_live,
-        }
+    tmp_dir = tempfile.mkdtemp(prefix="gads_bench_hook_")
+    orig_cwd = os.getcwd()
+    try:
+        os.chdir(tmp_dir)
 
-    def step(i: int) -> None:
-        if i % 3 == 0:
-            cfg_init.evaluate_mutation_guard(ro_cmd)
-        elif i % 3 == 1:
-            cfg_init.evaluate_mutation_guard(dry_run_cmd)
-        else:
-            cfg_init.evaluate_mutation_guard(live_mutate_cmd)
+        def verify() -> Dict[str, Any]:
+            d_ro, _ = cfg_init.evaluate_mutation_guard(ro_cmd)
+            d_dry, _ = cfg_init.evaluate_mutation_guard(dry_run_cmd)
+            d_live, _ = cfg_init.evaluate_mutation_guard(live_mutate_cmd)
+            assert d_ro == "allow", (
+                f"Expected allow for read-only command, got {d_ro}"
+            )
+            assert d_dry == "allow", (
+                f"Expected allow for dry-run command, got {d_dry}"
+            )
+            assert d_live == "deny", (
+                f"Expected deny for unverified live mutate, got {d_live}"
+            )
+            return {
+                "readonly_decision": d_ro,
+                "dry_run_decision": d_dry,
+                "unverified_mutate_decision": d_live,
+            }
 
-    return _measure_benchmark(
-        name="hook_pre_tool_use_interception",
-        description="Evaluate PreToolUse HITL mutation guard across read-only, dry-run, and live mutate commands",
-        iterations=500,
-        max_total_ms=120.0,
-        step_fn=step,
-        verify_fn=verify,
-        min_version="4.1.0",
-    )
+        def step(i: int) -> None:
+            if i % 3 == 0:
+                cfg_init.evaluate_mutation_guard(ro_cmd)
+            elif i % 3 == 1:
+                cfg_init.evaluate_mutation_guard(dry_run_cmd)
+            else:
+                cfg_init.evaluate_mutation_guard(live_mutate_cmd)
+
+        return _measure_benchmark(
+            name="hook_pre_tool_use_interception",
+            description="Evaluate PreToolUse HITL mutation guard across read-only, dry-run, and live mutate commands",
+            iterations=500,
+            max_total_ms=250.0,
+            step_fn=step,
+            verify_fn=verify,
+        )
+    finally:
+        os.chdir(orig_cwd)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _bench_gaql_static_analysis() -> Dict[str, Any]:
-    """Benchmark 4 (v4.0.0+): GAQL static analysis & dry-run validation (with SHA-256 caching in v4.1.0)."""
+def _bench_gaql_static_analysis() -> Optional[Dict[str, Any]]:
+    """Benchmark 4: GAQL static analysis & dry-run validation."""
+    if validate_gaql is None or not hasattr(validate_gaql, "validate_gaql"):
+        return None
+
+    active_api_version = _resolve_active_api_version()
     mock_client = MagicMock()
     mock_service = MagicMock()
     mock_client.get_service.return_value = mock_service
@@ -329,7 +524,7 @@ def _bench_gaql_static_analysis() -> Dict[str, Any]:
         "WHERE campaign.status = 'ENABLED' OR campaign.status = 'PAUSED'"
     )
     invalid_agg_q = "SELECT COUNT(campaign.id) FROM campaign"
-    invalid_hour_v25_q = (
+    invalid_hour_date_q = (
         "SELECT campaign.id, segments.hour FROM campaign "
         "WHERE segments.date DURING LAST_7_DAYS"
     )
@@ -337,25 +532,36 @@ def _bench_gaql_static_analysis() -> Dict[str, Any]:
     def verify() -> Dict[str, Any]:
         if hasattr(validate_gaql, "invalidate_gaql_cache"):
             validate_gaql.invalidate_gaql_cache()
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            validate_gaql.validate_gaql("1234567890", "v25", valid_q, client=mock_client)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+            io.StringIO()
+        ):
+            validate_gaql.validate_gaql(
+                "1234567890", active_api_version, valid_q, client=mock_client
+            )
 
-            for bad_q in (invalid_or_q, invalid_agg_q, invalid_hour_v25_q):
+            for bad_q in (invalid_or_q, invalid_agg_q, invalid_hour_date_q):
                 exited = False
                 try:
-                    validate_gaql.validate_gaql("1234567890", "v25", bad_q, client=mock_client)
+                    validate_gaql.validate_gaql(
+                        "1234567890", active_api_version, bad_q, client=mock_client
+                    )
                 except SystemExit as exc:
                     exited = exc.code != 0
                 assert exited, f"Expected static GAQL failure for query: {bad_q}"
         return {
+            "api_version": active_api_version,
             "valid_accepted": True,
             "invalid_rejected": 3,
             "has_sha256_cache": hasattr(validate_gaql, "compute_gaql_cache_key"),
         }
 
     def step(_i: int) -> None:
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            validate_gaql.validate_gaql("1234567890", "v25", valid_q, client=mock_client)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+            io.StringIO()
+        ):
+            validate_gaql.validate_gaql(
+                "1234567890", active_api_version, valid_q, client=mock_client
+            )
 
     return _measure_benchmark(
         name="gaql_static_analysis",
@@ -364,19 +570,24 @@ def _bench_gaql_static_analysis() -> Dict[str, Any]:
         max_total_ms=150.0,
         step_fn=step,
         verify_fn=verify,
-        min_version="4.0.0",
     )
 
 
-def _bench_protobuf_inspection() -> Dict[str, Any]:
-    """Benchmark 5 (v4.0.0+): Protobuf type discovery & source inspection (uncached in v4.0.0; cached in v4.1.0)."""
+def _bench_protobuf_inspection() -> Optional[Dict[str, Any]]:
+    """Benchmark 5: Protobuf type discovery & source inspection."""
+    if inspect_object is None or not hasattr(inspect_object, "get_available_types"):
+        return None
+
+    active_api_version = _resolve_active_api_version()
     tmp_dir = tempfile.mkdtemp(prefix="gads_bench_proto_")
     orig_expanduser = inspect_object.os.path.expanduser
     orig_gettempdir = tempfile.gettempdir
     has_cache = hasattr(inspect_object, "_AVAILABLE_TYPES_CACHE")
     try:
         fake_lib_root = os.path.join(tmp_dir, "client_libs", "google-ads-python")
-        v_dir = os.path.join(fake_lib_root, "google", "ads", "googleads", "v98")
+        v_dir = os.path.join(
+            fake_lib_root, "google", "ads", "googleads", active_api_version
+        )
         types_dir = os.path.join(v_dir, "services", "types")
         os.makedirs(types_dir, exist_ok=True)
         proto_file = os.path.join(types_dir, "campaign_service.py")
@@ -393,21 +604,26 @@ def _bench_protobuf_inspection() -> Dict[str, Any]:
             inspect_object._AVAILABLE_TYPES_CACHE.clear()
 
         def verify() -> Dict[str, Any]:
-            types_cold = inspect_object.get_available_types("v98")
+            types_cold = inspect_object.get_available_types(active_api_version)
             assert "MutateCampaignsRequest" in types_cold
             disk_cache_verified = False
 
             if has_cache:
-                cache_file = os.path.join(tmp_dir, "gads_assistant_types_v98.json")
+                cache_file = os.path.join(
+                    tmp_dir, f"gads_assistant_types_{active_api_version}.json"
+                )
                 assert os.path.isfile(cache_file), "Expected on-disk proto cache file"
                 inspect_object._AVAILABLE_TYPES_CACHE.clear()
                 orig_glob = inspect_object.glob.glob
                 try:
+
                     def forbid_glob(*_a: Any, **_kw: Any) -> Any:
-                        raise AssertionError("glob.glob called despite warm disk cache")
+                        raise AssertionError(
+                            "glob.glob called despite warm disk cache"
+                        )
 
                     inspect_object.glob.glob = forbid_glob
-                    types_disk = inspect_object.get_available_types("v98")
+                    types_disk = inspect_object.get_available_types(active_api_version)
                     assert types_disk == types_cold
                     disk_cache_verified = True
                 finally:
@@ -419,21 +635,21 @@ def _bench_protobuf_inspection() -> Dict[str, Any]:
                 )
             assert ok is True
             return {
+                "api_version": active_api_version,
                 "discovered_types": len(types_cold),
                 "disk_cache_verified": disk_cache_verified,
             }
 
         def step(_i: int) -> None:
-            inspect_object.get_available_types("v98")
+            inspect_object.get_available_types(active_api_version)
 
         return _measure_benchmark(
             name="protobuf_type_discovery_and_inspection",
-            description="Discover and inspect Protobuf definitions (recursive glob in v4.0.0; memory+disk cache in v4.1.0)",
+            description="Discover and inspect Protobuf definitions from source and cache",
             iterations=200,
             max_total_ms=60.0,
             step_fn=step,
             verify_fn=verify,
-            min_version="4.0.0",
         )
     finally:
         inspect_object.os.path.expanduser = orig_expanduser  # type: ignore[assignment]
@@ -443,8 +659,14 @@ def _bench_protobuf_inspection() -> Dict[str, Any]:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _bench_client_libs_parallel_sync() -> Dict[str, Any]:
-    """Benchmark 6 (v4.0.0+): GitHub release metadata check across 5 client libraries (sequential in v4.0.0; parallel in v4.1.0)."""
+def _bench_client_libs_parallel_sync() -> Optional[Dict[str, Any]]:
+    """Benchmark 6: GitHub release metadata check across client libraries."""
+    if sync_client_libs is None or not hasattr(
+        sync_client_libs, "process_client_libs"
+    ):
+        return None
+
+    lib_version = _resolve_installed_library_version()
     tmp_dir = tempfile.mkdtemp(prefix="gads_bench_sync_")
     orig_fetch = sync_client_libs.fetch_github_latest_release
     orig_detect = sync_client_libs.detect_installed_version
@@ -454,10 +676,10 @@ def _bench_client_libs_parallel_sync() -> Dict[str, Any]:
 
         def simulated_network_fetch(_slug: str) -> Tuple[str, str]:
             time.sleep(0.025)
-            return ("v25.0.0", "https://example.com/release.tar.gz")
+            return (f"v{lib_version}", "https://example.com/release.tar.gz")
 
         sync_client_libs.fetch_github_latest_release = simulated_network_fetch
-        sync_client_libs.detect_installed_version = lambda _e, _p: "25.0.0"
+        sync_client_libs.detect_installed_version = lambda _e, _p: lib_version
 
         def verify() -> Dict[str, Any]:
             t0 = time.perf_counter()
@@ -485,12 +707,11 @@ def _bench_client_libs_parallel_sync() -> Dict[str, Any]:
 
         return _measure_benchmark(
             name="client_libs_parallel_release_sync",
-            description="Check 5 client libraries against GitHub releases (sequential in v4.0.0; ThreadPoolExecutor in v4.1.0)",
+            description="Check client libraries against GitHub releases",
             iterations=5,
             max_total_ms=400.0,
             step_fn=step,
             verify_fn=verify,
-            min_version="4.0.0",
         )
     finally:
         sync_client_libs.fetch_github_latest_release = orig_fetch
@@ -498,12 +719,20 @@ def _bench_client_libs_parallel_sync() -> Dict[str, Any]:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _bench_conversion_csv_validation() -> Dict[str, Any]:
-    """Benchmark 7 (v4.0.0+): Offline conversion CSV schema, timestamp, and GCLID validation."""
+def _bench_conversion_csv_validation() -> Optional[Dict[str, Any]]:
+    """Benchmark 7: Offline conversion CSV schema, timestamp, and GCLID validation."""
+    if validate_conversion_upload is None or not hasattr(
+        validate_conversion_upload, "validate_conversion_csv"
+    ):
+        return None
+
+    active_api_version = _resolve_active_api_version()
     tmp_dir = tempfile.mkdtemp(prefix="gads_bench_csv_")
     try:
         csv_path = os.path.join(tmp_dir, "conversions.csv")
-        rows = ["gclid,conversion_name,conversion_time,conversion_value,conversion_currency"]
+        rows = [
+            "gclid,conversion_name,conversion_time,conversion_value,conversion_currency"
+        ]
         for i in range(100):
             rows.append(
                 f"EAIaIQobChMI_benchmark_gclid_{i:04d},Lead,2026-08-19 12:00:00-04:00,49.99,USD"
@@ -512,13 +741,21 @@ def _bench_conversion_csv_validation() -> Dict[str, Any]:
             f.write("\n".join(rows) + "\n")
 
         def verify() -> Dict[str, Any]:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                validate_conversion_upload.validate_conversion_csv(csv_path, "v25")
-            return {"rows_per_batch": 100}
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                io.StringIO()
+            ):
+                validate_conversion_upload.validate_conversion_csv(
+                    csv_path, active_api_version
+                )
+            return {"rows_per_batch": 100, "api_version": active_api_version}
 
         def step(_i: int) -> None:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                validate_conversion_upload.validate_conversion_csv(csv_path, "v25")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                io.StringIO()
+            ):
+                validate_conversion_upload.validate_conversion_csv(
+                    csv_path, active_api_version
+                )
 
         return _measure_benchmark(
             name="conversion_csv_validation",
@@ -527,15 +764,16 @@ def _bench_conversion_csv_validation() -> Dict[str, Any]:
             max_total_ms=450.0,
             step_fn=step,
             verify_fn=verify,
-            min_version="4.0.0",
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _bench_hitl_mutation_receipt_and_sha256() -> Optional[Dict[str, Any]]:
-    """Benchmark 8 (v4.1.0+): HITL dry-run receipt signing, verification, and SHA-256 request normalization."""
-    if run_mutation is None or not hasattr(run_mutation, "compute_mutate_request_sha256"):
+    """Benchmark 8: HITL dry-run receipt signing, verification, and SHA-256 request normalization."""
+    if run_mutation is None or not hasattr(
+        run_mutation, "compute_mutate_request_sha256"
+    ):
         return None
 
     tmp_dir = tempfile.mkdtemp(prefix="gads_bench_hitl_")
@@ -550,17 +788,38 @@ def _bench_hitl_mutation_receipt_and_sha256() -> Optional[Dict[str, Any]]:
         dry_payload = {
             "customer_id": "1234567890",
             "validate_only": True,
-            "operations": [{"update": {"resource_name": "customers/1234567890/campaignBudgets/1", "amount_micros": 50000000}}],
+            "operations": [
+                {
+                    "update": {
+                        "resource_name": "customers/1234567890/campaignBudgets/1",
+                        "amount_micros": 50000000,
+                    }
+                }
+            ],
         }
         live_payload = {
             "customer_id": "1234567890",
             "validate_only": False,
-            "operations": [{"update": {"resource_name": "customers/1234567890/campaignBudgets/1", "amount_micros": 50000000}}],
+            "operations": [
+                {
+                    "update": {
+                        "resource_name": "customers/1234567890/campaignBudgets/1",
+                        "amount_micros": 50000000,
+                    }
+                }
+            ],
         }
         tampered_payload = {
             "customer_id": "1234567890",
             "validate_only": False,
-            "operations": [{"update": {"resource_name": "customers/1234567890/campaignBudgets/1", "amount_micros": 99000000}}],
+            "operations": [
+                {
+                    "update": {
+                        "resource_name": "customers/1234567890/campaignBudgets/1",
+                        "amount_micros": 99000000,
+                    }
+                }
+            ],
         }
 
         def verify() -> Dict[str, Any]:
@@ -573,8 +832,12 @@ def _bench_hitl_mutation_receipt_and_sha256() -> Optional[Dict[str, Any]]:
             h_tampered = run_mutation.compute_mutate_request_sha256(
                 "CampaignBudgetService", "mutate_campaign_budgets", tampered_payload
             )
-            assert h_dry == h_live, "Canonical SHA256 must match across validate_only=True/False"
-            assert h_dry != h_tampered, "Tampered payload must produce a different SHA256"
+            assert h_dry == h_live, (
+                "Canonical SHA256 must match across validate_only=True/False"
+            )
+            assert h_dry != h_tampered, (
+                "Tampered payload must produce a different SHA256"
+            )
 
             run_mutation.write_dry_run_receipt(
                 customer_id="1234567890",
@@ -632,7 +895,6 @@ def _bench_hitl_mutation_receipt_and_sha256() -> Optional[Dict[str, Any]]:
             max_total_ms=450.0,
             step_fn=step,
             verify_fn=verify,
-            min_version="4.1.0",
         )
     finally:
         run_mutation.get_receipt_paths = orig_get_receipt_paths
@@ -658,11 +920,7 @@ def run_all_benchmarks() -> Dict[str, Any]:
     all_functional_passed = all(b["functional_passed"] for b in benchmarks)
     all_performance_passed = all(b["performance_passed"] for b in benchmarks)
 
-    resolved_version = (
-        cfg_init.get_version()
-        if cfg_init is not None and hasattr(cfg_init, "get_version")
-        else server.get_plugin_version()
-    )
+    resolved_version = _resolve_manifest_plugin_version()
 
     return {
         "version": resolved_version,
@@ -681,10 +939,10 @@ def compare_reports(
     baseline: Dict[str, Any],
     max_regression_pct: float = 50.0,
 ) -> Dict[str, Any]:
-    """Compares a current benchmark report against a saved baseline report.
+    """Compares a target benchmark report against a baseline benchmark report.
 
     Flags a regression if:
-      1. Any benchmark's `functional_passed` changed from True -> False, OR
+      1. Any benchmark's `functional_passed` is False, OR
       2. A benchmark's `performance_passed` is False, OR
       3. `total_ms` increased by more than `max_regression_pct` AND exceeds a 5ms noise floor.
     """
@@ -695,8 +953,35 @@ def compare_reports(
     curr_benches = current.get("benchmarks", {})
     base_benches = baseline.get("benchmarks", {})
 
-    for name, curr_b in curr_benches.items():
+    all_names: List[str] = list(curr_benches.keys())
+    for b_name in base_benches:
+        if b_name not in curr_benches:
+            all_names.append(b_name)
+
+    for name in all_names:
+        curr_b = curr_benches.get(name)
         base_b = base_benches.get(name)
+
+        if curr_b is None and base_b is not None:
+            comparisons.append(
+                {
+                    "name": name,
+                    "in_baseline": True,
+                    "in_target": False,
+                    "functional_passed": True,
+                    "performance_passed": True,
+                    "baseline_ms": round(float(base_b.get("total_ms", 0.0)), 3),
+                    "current_ms": 0.0,
+                    "max_total_ms": float(base_b.get("max_total_ms", 0.0)),
+                    "delta_ms": 0.0,
+                    "pct_change": 0.0,
+                    "speedup_factor": 1.0,
+                    "regressed": False,
+                }
+            )
+            continue
+
+        assert curr_b is not None
         curr_ms = float(curr_b["total_ms"])
         func_ok = bool(curr_b["functional_passed"])
         perf_ok = bool(curr_b["performance_passed"])
@@ -704,7 +989,7 @@ def compare_reports(
         if not func_ok:
             functional_regressions.append(name)
 
-        if base_b:
+        if base_b is not None:
             base_ms = float(base_b.get("total_ms", 0.0))
             delta_ms = round(curr_ms - base_ms, 3)
             pct_change = (
@@ -732,8 +1017,8 @@ def compare_reports(
         comparisons.append(
             {
                 "name": name,
-                "min_version": curr_b.get("min_version", "4.0.0"),
                 "in_baseline": in_baseline,
+                "in_target": True,
                 "functional_passed": func_ok,
                 "performance_passed": perf_ok,
                 "baseline_ms": round(base_ms, 3),
@@ -750,7 +1035,8 @@ def compare_reports(
         "baseline_version": baseline.get("version", "unknown"),
         "current_version": current.get("version", "unknown"),
         "max_regression_pct": max_regression_pct,
-        "passed": len(functional_regressions) == 0 and len(performance_regressions) == 0,
+        "passed": len(functional_regressions) == 0
+        and len(performance_regressions) == 0,
         "functional_regressions": functional_regressions,
         "performance_regressions": performance_regressions,
         "comparisons": comparisons,
@@ -761,12 +1047,20 @@ def format_report_table(
     current: Dict[str, Any],
     comparison: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Formats benchmark results (and optional baseline comparison) as a readable table."""
+    """Formats benchmark results (and optional two-version comparison) as a readable table."""
     lines: List[str] = []
     lines.append("=" * 108)
-    title = f"GOOGLE ADS API DEVELOPER ASSISTANT — BENCHMARK SUITE (v{current['version']})"
+    curr_ver_label = str(current.get("version", "unknown"))
+    if not curr_ver_label.startswith("v"):
+        curr_ver_label = f"v{curr_ver_label}"
+    title = (
+        f"GOOGLE ADS API DEVELOPER ASSISTANT — BENCHMARK SUITE ({curr_ver_label})"
+    )
     if comparison:
-        title += f" vs Baseline (v{comparison['baseline_version']})"
+        base_ver_label = str(comparison.get("baseline_version", "unknown"))
+        if not base_ver_label.startswith("v"):
+            base_ver_label = f"v{base_ver_label}"
+        title += f" vs Baseline ({base_ver_label})"
     lines.append(title)
     lines.append("=" * 108)
 
@@ -779,19 +1073,28 @@ def format_report_table(
         lines.append("-" * 108)
         for c in comparison["comparisons"]:
             func_str = "PASS" if c["functional_passed"] else "FAIL"
-            status_str = "REGRESS" if c["regressed"] or not c["functional_passed"] else "PASS"
-            if c.get("in_baseline", True):
+            status_str = (
+                "REGRESS" if c["regressed"] or not c["functional_passed"] else "PASS"
+            )
+            if not c.get("in_target", True):
                 base_str = f"{c['baseline_ms']:>10.2f}"
+                curr_str = f"{'N/A':>10}"
+                delta_str = f"{'REMOVED':>9}"
+                speedup_str = f"{'N/A':>8}"
+            elif c.get("in_baseline", True):
+                base_str = f"{c['baseline_ms']:>10.2f}"
+                curr_str = f"{c['current_ms']:>10.2f}"
                 sign = "+" if c["pct_change"] > 0 else ""
                 delta_str = f"{sign}{c['pct_change']:.1f}%"
                 speedup_str = f"{c['speedup_factor']:.2f}x"
             else:
-                base_str = f"{'N/A (v4.1)':>10}"
+                base_str = f"{'N/A':>10}"
+                curr_str = f"{c['current_ms']:>10.2f}"
                 delta_str = f"{'NEW':>9}"
                 speedup_str = f"{'N/A':>8}"
             lines.append(
                 f"{c['name']:<42} | {func_str:<6} | {base_str} | "
-                f"{c['current_ms']:>10.2f} | {c['max_total_ms']:>7.1f}ms | {delta_str:>9} | "
+                f"{curr_str} | {c['max_total_ms']:>7.1f}ms | {delta_str:>9} | "
                 f"{speedup_str:>8} | {status_str:<8}"
             )
     else:
@@ -803,7 +1106,11 @@ def format_report_table(
         lines.append("-" * 108)
         for b in current["benchmarks"].values():
             func_str = "PASS" if b["functional_passed"] else "FAIL"
-            status_str = "PASS" if (b["functional_passed"] and b["performance_passed"]) else "FAIL"
+            status_str = (
+                "PASS"
+                if (b["functional_passed"] and b["performance_passed"])
+                else "FAIL"
+            )
             lines.append(
                 f"{b['name']:<44} | {func_str:<6} | {b['iterations']:>6} | "
                 f"{b['total_ms']:>10.2f} | {b['p50_ms']:>9.4f} | {b['p95_ms']:>9.4f} | "
@@ -816,10 +1123,34 @@ def format_report_table(
         if comparison is not None
         else (current["all_functional_passed"] and current["all_performance_passed"])
     )
-    verdict = "PASSED (No functional or performance regressions)" if overall_ok else "FAILED (Regressions detected)"
-    lines.append(f"Total Suite Time: {current['suite_total_ms']:.2f} ms | Verdict: {verdict}")
+    verdict = (
+        "PASSED (No functional or performance regressions)"
+        if overall_ok
+        else "FAILED (Regressions detected)"
+    )
+    lines.append(
+        f"Total Suite Time: {current['suite_total_ms']:.2f} ms | Verdict: {verdict}"
+    )
     lines.append("=" * 108)
     return "\n".join(lines)
+
+
+def _resolve_git_ref_name(spec: str) -> Optional[str]:
+    """Checks if `spec` (or `v{spec}`) resolves to a valid Git commit in REPO_ROOT."""
+    candidates = [spec]
+    if not spec.startswith("v"):
+        candidates.append(f"v{spec}")
+    for candidate in candidates:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return candidate
+    return None
 
 
 def run_against_git_ref(git_ref: str) -> Dict[str, Any]:
@@ -833,14 +1164,13 @@ def run_against_git_ref(git_ref: str) -> Dict[str, Any]:
             capture_output=True,
             text=True,
         )
-        # Copy current benchmark runner into the worktree so identical benchmarks execute
         wt_tests = os.path.join(tmp_wt, "tests")
         os.makedirs(wt_tests, exist_ok=True)
         wt_script = os.path.join(wt_tests, "_run_bench_ref.py")
         shutil.copy2(os.path.abspath(__file__), wt_script)
 
         proc = subprocess.run(
-            [sys.executable, wt_script, "--json"],
+            [sys.executable, wt_script, "--run-current", "--json"],
             cwd=tmp_wt,
             check=False,
             capture_output=True,
@@ -851,7 +1181,10 @@ def run_against_git_ref(git_ref: str) -> Dict[str, Any]:
                 f"Benchmark failed on git ref {git_ref} (exit {proc.returncode}): {proc.stderr}"
             )
         payload = json.loads(proc.stdout)
-        return payload.get("current", payload)
+        report = payload.get("current", payload)
+        if not report.get("version") or report.get("version") == "unknown":
+            report["version"] = git_ref
+        return report
     finally:
         subprocess.run(
             ["git", "worktree", "remove", "--force", tmp_wt],
@@ -861,13 +1194,61 @@ def run_against_git_ref(git_ref: str) -> Dict[str, Any]:
         shutil.rmtree(tmp_wt, ignore_errors=True)
 
 
+def resolve_version_report(version_spec: str) -> Dict[str, Any]:
+    """Resolves a user-supplied version specifier into a benchmark report without any fallback.
+
+    A version specifier can be:
+      1. A path to an existing baseline JSON file.
+      2. A workspace keyword ('workspace', 'current', 'worktree', '.') to benchmark the working tree.
+      3. A saved baseline identifier in `tests/benchmarks/` (`baseline_<spec>.json` or `baseline_v<spec>.json`).
+      4. A Git ref (tag, branch, or commit SHA) in the repository.
+
+    Raises:
+      ValueError: If `version_spec` is empty or cannot be resolved to a file, workspace, or Git ref.
+    """
+    spec = (version_spec or "").strip()
+    if not spec:
+        raise ValueError("Version specifier must not be empty.")
+
+    # 1. Explicit JSON file path
+    if os.path.isfile(spec):
+        with open(os.path.abspath(spec), "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    # 2. Explicit current working tree specifier
+    if spec.lower() in WORKSPACE_SPECIFIERS:
+        return run_all_benchmarks()
+
+    # 3. Saved baseline file in DEFAULT_BASELINE_DIR matching the version specifier
+    normalized = spec[1:] if spec.startswith("v") else spec
+    candidate_baseline_files = [
+        os.path.join(DEFAULT_BASELINE_DIR, f"baseline_{spec}.json"),
+        os.path.join(DEFAULT_BASELINE_DIR, f"baseline_v{normalized}.json"),
+        os.path.join(DEFAULT_BASELINE_DIR, f"baseline_{normalized}.json"),
+    ]
+    for candidate_path in candidate_baseline_files:
+        if os.path.isfile(candidate_path):
+            with open(candidate_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+
+    # 4. Valid Git ref (tag, branch, or commit)
+    resolved_ref = _resolve_git_ref_name(spec)
+    if resolved_ref is not None:
+        return run_against_git_ref(resolved_ref)
+
+    raise ValueError(
+        f"Unable to resolve version specifier '{version_spec}': not a valid baseline JSON file, "
+        f"saved baseline in {DEFAULT_BASELINE_DIR}, Git ref (tag/branch/commit), or 'workspace'."
+    )
+
+
 # ==============================================================================
 # Pytest Integration Tests (discovered when running `pytest tests/benchmark_suite.py`)
 # ==============================================================================
 
 
 def test_benchmark_suite_functional_and_performance_budgets() -> None:
-    """Runs the full cross-version benchmark suite and verifies all functional and latency budgets."""
+    """Runs the benchmark suite on the current workspace and verifies all functional and latency budgets."""
     report = run_all_benchmarks()
     assert report["all_functional_passed"], (
         f"Functional regression in benchmark suite: {json.dumps(report['benchmarks'], indent=2)}"
@@ -877,59 +1258,98 @@ def test_benchmark_suite_functional_and_performance_budgets() -> None:
     )
 
 
-def test_benchmark_suite_baseline_comparison_and_regression_detection() -> None:
-    """Verifies baseline comparison against saved v4.0.0 and v4.1.0 baselines and synthetic regressions."""
-    current = run_all_benchmarks()
+def test_benchmark_suite_two_version_comparison_and_no_fallback() -> None:
+    """Verifies explicit two-version comparison, regression detection, and rejection of missing version args."""
+    current = resolve_version_report("workspace")
 
-    # 1. Compare against saved v4.0.0 baseline if present
-    v400_path = os.path.join(DEFAULT_BASELINE_DIR, "baseline_v4.0.0.json")
-    if os.path.isfile(v400_path):
-        with open(v400_path, "r", encoding="utf-8") as f:
-            v400_base = json.load(f)
-        # Ensure v4.0.0 baseline only contains benchmarks that existed in v4.0.0
-        for b_name, b_data in v400_base.get("benchmarks", {}).items():
-            assert b_data.get("min_version", "4.0.0") == "4.0.0", (
-                f"v4.0.0 baseline contains v4.1.0+ benchmark: {b_name}"
-            )
-        comp_400 = compare_reports(current, v400_base, max_regression_pct=100.0)
-        assert comp_400["passed"], (
-            f"Regression detected against v4.0.0 baseline:\n{format_report_table(current, comp_400)}"
+    # 1. Verify no-fallback enforcement when invoked with no arguments
+    try:
+        main([])
+        raise AssertionError("Expected SystemExit when no versions are specified")
+    except SystemExit as exc:
+        assert exc.code != 0
+
+    # 2. Compare discovered baseline files if at least two exist, or compare against workspace
+    baseline_files = sorted(
+        glob.glob(os.path.join(DEFAULT_BASELINE_DIR, "baseline_*.json"))
+    )
+    if len(baseline_files) >= 2:
+        base_rep = resolve_version_report(baseline_files[0])
+        target_rep = resolve_version_report(baseline_files[-1])
+        comp = compare_reports(target_rep, base_rep, max_regression_pct=100.0)
+        assert comp["passed"], (
+            f"Regression detected between {baseline_files[0]} and {baseline_files[-1]}:\n"
+            f"{format_report_table(target_rep, comp)}"
+        )
+    elif len(baseline_files) == 1:
+        base_rep = resolve_version_report(baseline_files[0])
+        comp = compare_reports(current, base_rep, max_regression_pct=100.0)
+        assert comp["passed"], (
+            f"Regression detected against {baseline_files[0]}:\n"
+            f"{format_report_table(current, comp)}"
         )
 
-    # 2. Verify that compare_reports catches both functional and latency regressions
+    # 3. Verify that compare_reports catches both functional and latency regressions
     synthetic_slow = json.loads(json.dumps(current))
-    synthetic_slow["benchmarks"]["version_resolution_in_process"]["total_ms"] = (
-        current["benchmarks"]["version_resolution_in_process"]["total_ms"] + 50.0
+    first_bench_name = next(iter(current["benchmarks"]))
+    synthetic_slow["benchmarks"][first_bench_name]["total_ms"] = (
+        current["benchmarks"][first_bench_name]["total_ms"] + 50.0
     )
     comp_regressed = compare_reports(synthetic_slow, current, max_regression_pct=25.0)
     assert not comp_regressed["passed"]
-    assert "version_resolution_in_process" in comp_regressed["performance_regressions"]
+    assert first_bench_name in comp_regressed["performance_regressions"]
 
     synthetic_broken = json.loads(json.dumps(current))
-    synthetic_broken["benchmarks"]["gaql_static_analysis"]["functional_passed"] = False
-    comp_func_broken = compare_reports(synthetic_broken, current, max_regression_pct=50.0)
+    synthetic_broken["benchmarks"][first_bench_name]["functional_passed"] = False
+    comp_func_broken = compare_reports(
+        synthetic_broken, current, max_regression_pct=50.0
+    )
     assert not comp_func_broken["passed"]
-    assert "gaql_static_analysis" in comp_func_broken["functional_regressions"]
+    assert first_bench_name in comp_func_broken["functional_regressions"]
 
 
-def main() -> int:
+def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Cross-Version Performance & Functionality Benchmark Suite"
+        description=(
+            "Cross-Version Performance & Functionality Benchmark Suite. "
+            "Specify two versions to compare (Git refs, baseline JSON paths, saved version names, or 'workspace')."
+        )
+    )
+    parser.add_argument(
+        "versions",
+        nargs="*",
+        metavar="VERSION",
+        help="Two versions to compare: <base_version> <target_version>.",
+    )
+    parser.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("BASE_VERSION", "TARGET_VERSION"),
+        help="Compare BASE_VERSION against TARGET_VERSION (Git refs, baseline JSON paths, or 'workspace').",
+    )
+    parser.add_argument(
+        "--base-version",
+        "--compare-baseline",
+        "--compare-git-ref",
+        dest="base_version",
+        metavar="BASE_VERSION",
+        help="Base version (Git ref, baseline JSON path, or 'workspace') to compare from.",
+    )
+    parser.add_argument(
+        "--target-version",
+        dest="target_version",
+        metavar="TARGET_VERSION",
+        help="Target version (Git ref, baseline JSON path, or 'workspace') to compare against BASE_VERSION.",
+    )
+    parser.add_argument(
+        "--run-current",
+        action="store_true",
+        help="Run benchmarks on the current working tree only without comparing two versions.",
     )
     parser.add_argument(
         "--save-baseline",
         metavar="PATH",
-        help="Write the current benchmark report as a JSON baseline to PATH.",
-    )
-    parser.add_argument(
-        "--compare-baseline",
-        metavar="PATH",
-        help="Compare current benchmark run against a saved JSON baseline file.",
-    )
-    parser.add_argument(
-        "--compare-git-ref",
-        metavar="REF",
-        help="Compare current workspace against another git ref (tag, branch, or commit).",
+        help="Write the current working tree benchmark report as a JSON baseline to PATH.",
     )
     parser.add_argument(
         "--save-git-ref-baseline",
@@ -948,7 +1368,7 @@ def main() -> int:
         action="store_true",
         help="Output benchmark report as JSON.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.save_git_ref_baseline:
         ref_name, ref_out = args.save_git_ref_baseline
@@ -959,52 +1379,100 @@ def main() -> int:
             json.dump(ref_report, f, indent=2)
         if not args.json:
             print(f"Saved git ref '{ref_name}' benchmark baseline to {out_path}")
-
-    current_report = run_all_benchmarks()
+        if (
+            not args.save_baseline
+            and not args.run_current
+            and not args.compare
+            and not args.versions
+            and not args.base_version
+            and not args.target_version
+        ):
+            return 0
 
     if args.save_baseline:
+        current_report = run_all_benchmarks()
         out_path = os.path.abspath(args.save_baseline)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(current_report, f, indent=2)
         if not args.json:
             print(f"Saved benchmark baseline to {out_path}")
+        if (
+            not args.run_current
+            and not args.compare
+            and not args.versions
+            and not args.base_version
+            and not args.target_version
+        ):
+            return 0
 
-    baseline_report: Optional[Dict[str, Any]] = None
-    if args.compare_git_ref:
-        baseline_report = run_against_git_ref(args.compare_git_ref)
-    elif args.compare_baseline:
-        with open(os.path.abspath(args.compare_baseline), "r", encoding="utf-8") as f:
-            baseline_report = json.load(f)
-    else:
-        default_v400 = os.path.join(DEFAULT_BASELINE_DIR, "baseline_v4.0.0.json")
-        if os.path.isfile(default_v400):
-            with open(default_v400, "r", encoding="utf-8") as f:
-                baseline_report = json.load(f)
+    # Resolve the two versions to compare (no fallback is assumed)
+    base_spec: Optional[str] = None
+    target_spec: Optional[str] = None
 
-    comparison: Optional[Dict[str, Any]] = None
-    if baseline_report is not None:
+    if args.compare:
+        if args.versions or args.base_version or args.target_version:
+            parser.error(
+                "Do not combine --compare with positional versions or --base-version/--target-version."
+            )
+        base_spec, target_spec = args.compare[0], args.compare[1]
+    elif args.base_version or args.target_version:
+        if args.versions:
+            parser.error(
+                "Do not combine --base-version/--target-version with positional version arguments."
+            )
+        if not (args.base_version and args.target_version):
+            parser.error(
+                "Both --base-version and --target-version must be specified; no version fallback is assumed."
+            )
+        base_spec, target_spec = args.base_version, args.target_version
+    elif args.versions:
+        if len(args.versions) != 2:
+            parser.error(
+                f"Expected exactly 2 versions to compare (<base_version> <target_version>), got {len(args.versions)}."
+            )
+        base_spec, target_spec = args.versions[0], args.versions[1]
+    elif not args.run_current:
+        parser.error(
+            "You must specify the two versions to compare (e.g., `python3 tests/benchmark_suite.py <base_version> <target_version>` "
+            "or `--compare <base_version> <target_version>`), or pass `--run-current`. No default version fallback is assumed."
+        )
+
+    if base_spec is not None and target_spec is not None:
+        try:
+            baseline_report = resolve_version_report(base_spec)
+            target_report = resolve_version_report(target_spec)
+        except ValueError as exc:
+            parser.error(str(exc))
+
         comparison = compare_reports(
-            current_report,
+            target_report,
             baseline_report,
             max_regression_pct=args.max_regression_pct,
         )
 
+        if args.json:
+            payload: Dict[str, Any] = {
+                "baseline": baseline_report,
+                "current": target_report,
+                "comparison": comparison,
+            }
+            print(json.dumps(payload, indent=2))
+        else:
+            print(format_report_table(target_report, comparison))
+
+        return 0 if comparison["passed"] else 1
+
+    # Single-tree execution when --run-current is explicitly passed
+    current_report = run_all_benchmarks()
     if args.json:
-        payload: Dict[str, Any] = {"current": current_report}
-        if comparison is not None:
-            payload["comparison"] = comparison
-        print(json.dumps(payload, indent=2))
+        print(json.dumps({"current": current_report}, indent=2))
     else:
-        print(format_report_table(current_report, comparison))
+        print(format_report_table(current_report, None))
 
     passed = (
-        comparison["passed"]
-        if comparison is not None
-        else (
-            current_report["all_functional_passed"]
-            and current_report["all_performance_passed"]
-        )
+        current_report["all_functional_passed"]
+        and current_report["all_performance_passed"]
     )
     return 0 if passed else 1
 

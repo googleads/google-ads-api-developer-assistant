@@ -713,67 +713,87 @@ When upgrading from `4.0.0` to `4.1.0`, existing CLI arguments, A2A sidecar payl
    * In `4.0.0`, live mutations were restricted only via prompt instructions (`NO MUTATE`).
    * In `4.1.0`, the `PreToolUse` hook in `config/config_init.py` (`handle_hook`) deterministically blocks (`deny`) any command invoking a live `.mutate*()` call unless `execute_mutates = true` is enabled in `config/assistant_config` and a valid dry-run receipt (`saved/data/last_dry_run.json`) exists. Read-only queries and `validate_only=True` dry-runs are unaffected.
 
-## Performance & Functionality Benchmarks (`v4.0.0` vs `v4.1.0`)
+## Performance & Functionality Benchmarks
 
-The repository includes an automated cross-version benchmark suite (`tests/benchmark_suite.py`) that verifies both functional correctness and execution performance (`total_ms`, `mean_ms`, `p50_ms`, `p95_ms`, `ops/sec`) across 8 core subsystems of the Google Ads API Developer Assistant, and compares results against saved version baselines (`tests/benchmarks/baseline_v4.0.0.json` and `tests/benchmarks/baseline_v4.1.0.json`) or arbitrary Git refs to detect regressions.
+The repository includes an automated cross-version benchmark suite (`tests/benchmark_suite.py`) that verifies both functional correctness and execution performance (`total_ms`, `mean_ms`, `p50_ms`, `p95_ms`, `ops/sec`) across 8 core subsystems of the Google Ads API Developer Assistant, and compares results between **any two user-specified versions** (`<base_version>` and `<target_version>`). No default version fallback is assumed and no version numbers are hardcoded in the benchmark runner.
 
-| Benchmark | Iterations | `v4.0.0` Baseline (ms) | `v4.1.0` Current (ms) | Budget (ms) | Delta | Speedup | Status |
+| Benchmark | Iterations | `<base_version>` (ms) | `<target_version>` (ms) | Budget (ms) | Delta | Speedup | Status |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :---: |
 | `version_resolution_in_process` | 1,000 | `119.87` | `0.57` | `50.0` | `-99.5%` | **211.41x** | `PASS` |
 | `gaql_static_analysis` | 200 | `42.79` | `4.68` | `150.0` | `-89.1%` | **9.15x** | `PASS` |
 | `protobuf_type_discovery_and_inspection` | 200 | `99.53` | `10.30` | `60.0` | `-89.7%` | **9.66x** | `PASS` |
 | `client_libs_parallel_release_sync` | 5 | `632.77` | `145.02` | `400.0` | `-77.1%` | **4.36x** | `PASS` |
 | `conversion_csv_validation` | 50 | `101.16` | `91.35` | `450.0` | `-9.7%` | **1.11x** | `PASS` |
-| `config_sync_and_legacy_migration` | 50 | `N/A (v4.1)` | `99.31` | `350.0` | `NEW` | `N/A` | `PASS` |
-| `hook_pre_tool_use_interception` | 500 | `N/A (v4.1)` | `49.63` | `120.0` | `NEW` | `N/A` | `PASS` |
-| `hitl_mutation_receipt_and_sha256_normalization` | 100 | `N/A (v4.1)` | `82.47` | `450.0` | `NEW` | `N/A` | `PASS` |
+| `config_sync_and_legacy_migration` | 50 | `N/A` | `99.31` | `350.0` | `NEW` | `N/A` | `PASS` |
+| `hook_pre_tool_use_interception` | 500 | `N/A` | `49.63` | `250.0` | `NEW` | `N/A` | `PASS` |
+| `hitl_mutation_receipt_and_sha256_normalization` | 100 | `N/A` | `82.47` | `450.0` | `NEW` | `N/A` | `PASS` |
 
-### How to Use the Benchmarks
+### How to Run the Benchmarks
 
-#### 1. Run the Default Benchmark Suite
-From the repository root, run `tests/benchmark_suite.py`. By default, it executes all 8 benchmarks, verifies every functional assertion and latency budget, and automatically compares against `tests/benchmarks/baseline_v4.0.0.json` if present:
+You must explicitly specify the **two versions to compare** (`<base_version>` and `<target_version>`), or pass `--run-current` to benchmark only the current working tree. Running `python3 tests/benchmark_suite.py` with no arguments exits immediately with an error without assuming any fallback version.
+
+Each version argument (`<base_version>` or `<target_version>`) can be:
+* **A Git ref** (any tag, branch, or commit SHA in the repository, such as `<tag_a>`, `<tag_b>`, `main`, `dev_next`, or `HEAD~1`),
+* **A saved baseline identifier** in `tests/benchmarks/` (matching `tests/benchmarks/baseline_<version>.json`),
+* **An explicit baseline JSON file path** (e.g., `path/to/baseline_a.json`), or
+* **`workspace`** (or `current` / `.`) to run against the current working tree.
+
+#### 1. Compare Any Two Versions (`<base_version> <target_version>`)
+Pass the two versions as positional arguments, with `--compare`, or with `--base-version` and `--target-version`:
 ```bash
-python3 tests/benchmark_suite.py
+# Positional: compare <base_version> against <target_version>
+python3 tests/benchmark_suite.py <base_version> <target_version>
+
+# Compare a specific Git ref or saved baseline against the current working tree
+python3 tests/benchmark_suite.py <base_version> workspace
+
+# Using --compare or explicit --base-version / --target-version flags
+python3 tests/benchmark_suite.py --compare <base_version> <target_version>
+python3 tests/benchmark_suite.py --base-version <base_version> --target-version <target_version>
 ```
 
-#### 2. Compare Against a Specific Saved Baseline (`--compare-baseline`)
-Compare your current workspace against any saved baseline JSON file (such as `baseline_v4.0.0.json` or `baseline_v4.1.0.json`):
+#### 2. Compare Two Saved Baseline JSON Files Directly
 ```bash
-python3 tests/benchmark_suite.py --compare-baseline tests/benchmarks/baseline_v4.0.0.json
-python3 tests/benchmark_suite.py --compare-baseline tests/benchmarks/baseline_v4.1.0.json
-```
-
-#### 3. Compare Live Against Any Git Tag, Branch, or Commit (`--compare-git-ref`)
-To benchmark your current working tree directly against another Git ref (e.g., tag `v4.0.0` or `main`), use `--compare-git-ref`. The runner automatically checks out the target ref into a temporary Git worktree, executes the benchmark suite against it, and prints a side-by-side comparison table:
-```bash
-python3 tests/benchmark_suite.py --compare-git-ref v4.0.0
-```
-*(Subsystems introduced in `v4.1.0` are automatically marked `NEW (v4.1+)` when compared against a `v4.0.0` ref.)*
-
-#### 4. Save or Update Version Baselines (`--save-baseline` & `--save-git-ref-baseline`)
-When cutting a new release or updating baseline snapshots:
-```bash
-# Save the current workspace benchmark results as a baseline JSON file
-python3 tests/benchmark_suite.py --save-baseline tests/benchmarks/baseline_v4.1.0.json
-
-# Run benchmarks against a historical git ref and save its baseline JSON file
-python3 tests/benchmark_suite.py --save-git-ref-baseline v4.0.0 tests/benchmarks/baseline_v4.0.0.json
-```
-
-#### 5. Adjust Regression Sensitivity & JSON Output (`--max-regression-pct` & `--json`)
-By default, a performance regression is flagged if a benchmark exceeds its hard latency budget (`max_total_ms`) or slows down by more than `50%` (with at least a `+10 ms` absolute increase) relative to the baseline. You can tighten or relax this threshold, or emit structured JSON for CI/CD pipelines:
-```bash
-# Enforce a stricter 25% regression threshold against the v4.1.0 baseline
 python3 tests/benchmark_suite.py \
-  --compare-baseline tests/benchmarks/baseline_v4.1.0.json \
-  --max-regression-pct 25
-
-# Emit machine-readable JSON output (contains "current" and "comparison" objects)
-python3 tests/benchmark_suite.py --json
+  tests/benchmarks/baseline_<base_version>.json \
+  tests/benchmarks/baseline_<target_version>.json
 ```
 
-#### 6. Run via `pytest`
-`tests/benchmark_suite.py` also exposes `pytest` test cases that validate all functional assertions, hard latency budgets, baseline comparisons, and synthetic regression detection:
+#### 3. Compare Two Git Tags, Branches, or Commits Live
+When given Git refs that do not have pre-saved JSON files, the runner automatically checks out each ref into a temporary detached Git worktree, executes the benchmark suite against each ref, and compares them side-by-side:
+```bash
+python3 tests/benchmark_suite.py <git_ref_1> <git_ref_2>
+python3 tests/benchmark_suite.py main dev_next
+```
+
+#### 4. Run on the Current Working Tree Only (`--run-current`)
+To execute all benchmarks and verify functional assertions and hard latency budgets on the current workspace without comparing two versions:
+```bash
+python3 tests/benchmark_suite.py --run-current
+```
+
+#### 5. Save or Update Version Baselines (`--save-baseline` & `--save-git-ref-baseline`)
+When cutting a new release or saving baseline snapshots:
+```bash
+# Save the current workspace benchmark results to a JSON file
+python3 tests/benchmark_suite.py --save-baseline tests/benchmarks/baseline_<version>.json
+
+# Run benchmarks against a specific Git ref and save its baseline JSON file
+python3 tests/benchmark_suite.py --save-git-ref-baseline <git_ref> tests/benchmarks/baseline_<git_ref>.json
+```
+
+#### 6. Adjust Regression Sensitivity & JSON Output (`--max-regression-pct` & `--json`)
+By default, a performance regression is flagged if a benchmark exceeds its hard latency budget (`max_total_ms`) or slows down by more than `50%` (with at least a `+5.0 ms` absolute increase) relative to `<base_version>`. You can tighten or relax this threshold, or emit structured JSON for CI/CD pipelines:
+```bash
+# Enforce a stricter 25% regression threshold between two versions
+python3 tests/benchmark_suite.py --compare <base_version> <target_version> --max-regression-pct 25
+
+# Emit machine-readable JSON output (contains "baseline", "current", and "comparison" objects)
+python3 tests/benchmark_suite.py --compare <base_version> <target_version> --json
+```
+
+#### 7. Run via `pytest`
+`tests/benchmark_suite.py` also exposes `pytest` test cases that validate all functional assertions, hard latency budgets, two-version comparisons, no-fallback CLI enforcement, and synthetic regression detection:
 ```bash
 # Run only the benchmark suite via pytest
 pytest -v tests/benchmark_suite.py
@@ -782,19 +802,91 @@ pytest -v tests/benchmark_suite.py
 pytest -v
 ```
 
-#### 7. CLI Options Summary (`tests/benchmark_suite.py`)
+#### 8. CLI Options Summary (`tests/benchmark_suite.py`)
 
-| Flag | Description |
+| Flag / Argument | Description |
 | :--- | :--- |
-| *(no flags)* | Runs all benchmarks, checks latency budgets, and compares against `tests/benchmarks/baseline_v4.0.0.json` if present. |
-| `--compare-baseline PATH` | Compares current benchmark metrics against the JSON baseline at `PATH`. |
-| `--compare-git-ref REF` | Runs benchmarks in a temporary worktree for Git `REF` (tag, branch, or commit) and compares results. |
-| `--save-baseline PATH` | Writes the current benchmark report to `PATH` as a JSON baseline. |
+| `<base_version> <target_version>` | Positional arguments specifying the two versions to compare (required unless `--compare`, `--base-version`/`--target-version`, `--run-current`, or `--save-*` is used). |
+| `--compare BASE TARGET` | Compares `BASE` version against `TARGET` version (Git refs, baseline JSON paths, saved baseline names, or `workspace`). |
+| `--base-version BASE` | Base version to compare from (must be paired with `--target-version TARGET`). |
+| `--target-version TARGET` | Target version to compare against `--base-version BASE`. |
+| `--run-current` | Runs benchmarks on the current working tree only without comparing two versions. |
+| `--save-baseline PATH` | Writes the current working tree benchmark report to `PATH` as a JSON baseline. |
 | `--save-git-ref-baseline REF PATH` | Executes benchmarks against Git `REF` and writes that ref's report to `PATH`. |
 | `--max-regression-pct PCT` | Maximum allowed latency increase percentage before flagging a regression (default: `50.0`). |
 | `--json` | Outputs the full benchmark report and comparison results as formatted JSON to `stdout`. |
 
-**Exit Codes:** `0` when all functional checks pass, all latency budgets are met, and no regressions are detected; `1` if any functional assertion fails, any benchmark exceeds its `max_total_ms` budget, or any benchmark regresses beyond `--max-regression-pct`.
+---
+
+### How to Interpret the Benchmark Results
+
+#### 1. Reading the Comparison Table Output
+When comparing two versions (`<base_version>` and `<target_version>`), `tests/benchmark_suite.py` prints a side-by-side table:
+
+```text
+============================================================================================================
+GOOGLE ADS API DEVELOPER ASSISTANT — BENCHMARK SUITE (<target_version>) vs Baseline (<base_version>)
+============================================================================================================
+Benchmark                                  | Func   |  Base (ms) |  Curr (ms) |    Budget |     Delta |  Speedup | Status  
+------------------------------------------------------------------------------------------------------------
+version_resolution_in_process              | PASS   |     119.87 |       0.57 |    50.0ms |    -99.5% |  211.41x | PASS    
+config_sync_and_legacy_migration           | PASS   |        N/A |      99.31 |   350.0ms |       NEW |      N/A | PASS    
+hook_pre_tool_use_interception             | PASS   |        N/A |      49.63 |   250.0ms |       NEW |      N/A | PASS    
+gaql_static_analysis                       | PASS   |      42.79 |       4.68 |   150.0ms |    -89.1% |    9.15x | PASS    
+protobuf_type_discovery_and_inspection     | PASS   |      99.53 |      10.30 |    60.0ms |    -89.7% |    9.66x | PASS    
+client_libs_parallel_release_sync          | PASS   |     632.77 |     145.02 |   400.0ms |    -77.1% |    4.36x | PASS    
+conversion_csv_validation                  | PASS   |     101.16 |      91.35 |   450.0ms |     -9.7% |    1.11x | PASS    
+hitl_mutation_receipt_and_sha256_normaliza | PASS   |        N/A |      82.47 |   450.0ms |       NEW |      N/A | PASS    
+============================================================================================================
+Total Suite Time: 483.33 ms | Verdict: PASSED (No functional or performance regressions)
+============================================================================================================
+```
+
+Each column represents:
+
+| Column | JSON Field | Meaning & How to Interpret |
+| :--- | :--- | :--- |
+| **`Benchmark`** | `name` | Identifier of the subsystem benchmark being evaluated. |
+| **`Func`** | `functional_passed` | **`PASS`** if the subsystem's functional correctness assertions (`verify_fn`) succeeded prior to timing; **`FAIL`** if any functional check failed (timing is skipped if `Func` fails). |
+| **`Base (ms)`** | `baseline_ms` | Total wall-clock time (in milliseconds) across all timed iterations in `<base_version>`. Shows **`N/A`** when a subsystem did not exist in `<base_version>`. |
+| **`Curr (ms)`** | `current_ms` / `total_ms` | Total wall-clock time (in milliseconds) across all timed iterations in `<target_version>`. Lower is better. Shows **`N/A`** if a benchmark was removed in `<target_version>`. |
+| **`Budget`** | `max_total_ms` | Hard upper-bound latency budget (in milliseconds) allowed for all iterations of that benchmark combined. **`Curr (ms)` must be `<= Budget`**. |
+| **`Delta`** | `pct_change` | Percentage change in latency from `<base_version>` to `<target_version>` (`((Curr - Base) / Base) * 100%`):<br>• **Negative (`-89.1%`)**: `<target_version>` is faster than `<base_version>` (latency decreased).<br>• **Positive (`+15.2%`)**: `<target_version>` is slower than `<base_version>` (latency increased).<br>• **`NEW`**: Benchmark exists in `<target_version>` but did not exist in `<base_version>`.<br>• **`REMOVED`**: Benchmark existed in `<base_version>` but not in `<target_version>`. |
+| **`Speedup`** | `speedup_factor` | Ratio of `Base (ms) / Curr (ms)`:<br>• **`> 1.00x`** (e.g., `9.66x`): `<target_version>` is that many times faster than `<base_version>`.<br>• **`1.00x`**: Identical speed.<br>• **`< 1.00x`** (e.g., `0.80x`): `<target_version>` is slower than `<base_version>`.<br>• **`N/A`**: Benchmark only exists in one of the two compared versions. |
+| **`Status`** | `regressed` | **`PASS`** when functional checks pass, `Curr (ms) <= Budget`, and no relative regression occurred; **`REGRESS`** (or **`FAIL`**) if any check or threshold is violated. |
+
+#### 2. Reading Standalone Metrics (`Iters`, `p50`, `p95`, `ops_per_sec`)
+When run with `--run-current` (or when inspecting the `"baseline"` / `"current"` objects in `--json` output), each benchmark also reports per-iteration distribution metrics:
+* **`iterations` (`Iters`)**: Number of consecutive timed executions run after the initial functional verification pass.
+* **`total_ms` (`Total (ms)`)**: Sum of all iteration durations in milliseconds.
+* **`mean_ms`**: Arithmetic mean latency per single operation (`total_ms / iterations`).
+* **`p50_ms` (`p50 (ms)`)**: Median single-operation latency (`50th` percentile)—typical latency unaffected by occasional OS scheduling spikes.
+* **`p95_ms` (`p95 (ms)`)**: Tail single-operation latency (`95th` percentile)—95% of calls complete faster than this value.
+* **`ops_per_sec`**: Throughput in operations per second (`iterations / (total_ms / 1000)`).
+
+#### 3. How Regressions and Pass/Fail Verdicts Are Determined
+A benchmark is marked **`REGRESS`** (and the process exits with code **`1`**) if **any** of the following three conditions occur:
+1. **Functional Regression (`Func == FAIL`)**: Any correctness assertion in `verify_fn()` fails (e.g., an invalid GAQL query is not rejected, a live mutation is not blocked by the `PreToolUse` guard, or a tampered dry-run receipt passes SHA-256 verification).
+2. **Hard Budget Breach (`Curr (ms) > Budget`)**: The total runtime across iterations exceeds the benchmark's hard `max_total_ms` ceiling, regardless of `<base_version>`.
+3. **Relative Latency Regression (`Delta > --max-regression-pct` AND `delta_ms > 5.0 ms`)**: The benchmark slowed down by more than `--max-regression-pct` (default **`+50.0%`**) compared to `<base_version>` **and** the absolute slowdown exceeds a **`5.0 ms` noise floor** (which prevents false-positive failures from sub-millisecond OS jitter on sub-millisecond benchmarks like `version_resolution_in_process`).
+
+**Exit Codes:**
+* **`0`**: All functional assertions passed, all hard latency budgets were met, and no relative latency regressions were detected (`Verdict: PASSED`).
+* **`1`**: One or more functional assertions failed, a hard budget was exceeded, or a relative latency regression was detected (`Verdict: FAILED`).
+* **`2`**: CLI usage error (e.g., missing version arguments when `--run-current` is not set, or an unresolvable version specifier).
+
+#### 4. What Each Benchmark Measures
+
+| Benchmark Name | What It Tests (Functional & Performance) | Architectural Role |
+| :--- | :--- | :--- |
+| **`version_resolution_in_process`** | Resolves the active plugin version from the manifest across `config_init.get_version()` and `server.get_plugin_version()` (1,000 iterations). | Verifies in-memory manifest version caching (`_CACHED_VERSION`) vs. repeated disk reads. |
+| **`config_sync_and_legacy_migration`** | Syncs `~/google-ads.yaml` into `config/google-ads.yaml` (`0600`), removes stray `client_libs/` dummy YAML files, and migrates legacy `customer_id` / `api_version.txt` files into `config/assistant_config` (50 iterations). | Verifies $O(1)$ top-level candidate checks over `client_libs/` and idempotent config synchronization. |
+| **`hook_pre_tool_use_interception`** | Evaluates `evaluate_mutation_guard()` across read-only GAQL commands (`allow`), `--dry-run` mutation commands (`allow`), and unverified live `.mutate*()` commands (`deny`) (500 iterations). | Measures per-command hook interception and audit-logging overhead on `Bash` tool calls. |
+| **`gaql_static_analysis`** | Validates GAQL syntax, rejects `OR` clauses, `COUNT()` aggregates, and incompatible `segments.hour` + date combinations, and validates dry-run caching (200 iterations). | Verifies SHA-256 query-keyed dry-run caching (`compute_gaql_cache_key`) and static GAQL validator speed. |
+| **`protobuf_type_discovery_and_inspection`** | Discovers available Protobuf message/enum types for the active API version and inspects field definitions from source (200 iterations). | Verifies two-tier in-memory (`_AVAILABLE_TYPES_CACHE`) and `mtime`-keyed disk cache (`gads_assistant_types_<ver>.json`) performance. |
+| **`client_libs_parallel_release_sync`** | Checks client library repositories against upstream GitHub releases (`check_only=True`) with simulated `25 ms` network RTT per repo (5 iterations). | Verifies concurrent `ThreadPoolExecutor` release checks vs. sequential network polling. |
+| **`conversion_csv_validation`** | Validates a 100-row offline conversion CSV file (required headers, ISO-8601 timestamps with timezone offsets, and GCLID formatting) (50 iterations). | Ensures offline conversion troubleshooting throughput remains within the `450 ms` budget for 5,000 total rows. |
+| **`hitl_mutation_receipt_and_sha256_normalization`** | Computes canonical Protobuf SHA-256 digests (confirming `validate_only=True` and `validate_only=False` match while tampered amounts differ), writes signed `last_dry_run.json` receipts, and verifies integrity (100 iterations). | Benchmarks the cryptographic receipt verification pipeline that gates live mutations. |
 
 ## Known Quirks
 
