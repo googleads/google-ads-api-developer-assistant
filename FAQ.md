@@ -157,7 +157,7 @@ In Claude Code, use dedicated explanation slash commands:
 ### What are the system requirements?
 1. **Python:** Python >= 3.11 installed and available on your system `PATH`.
 2. **Platform CLI:** Antigravity CLI (`agy` / `antigravity`) or Claude Code CLI (`claude` with Node.js >= 18).
-3. **Google Ads API Access:** A developer token and configured credentials in `$HOME`.
+3. **Google Ads API Access:** Configured credentials in `$HOME`.
 
 ### Why does the assistant sometimes suggest deprecated fields?
 The underlying language model may have been trained on older API versions. However, the Assistant automatically checks local client library definitions and locks the active API version via `config/assistant_config`. If an API error occurs during execution, the assistant uses client library context to self-correct automatically.

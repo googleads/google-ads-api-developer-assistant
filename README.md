@@ -108,11 +108,10 @@ By default, Python is strictly used for all code generation and execution across
 ## Prerequisites
 
 1.  Familiarity with Google Ads API concepts and authentication.
-2.  A Google Ads API developer token.
-3.  A configured credentials file in your home directory if using Python (`google-ads.yaml`), PHP (`google_ads_php.ini`), or Ruby (`google_ads_config.rb`).
-4.  Antigravity or Claude Code environment configured.
-5.  A local clone of each client library for the languages you want to use. `install.sh` (Linux/macOS) or `install.ps1` (Windows) can set this up for you.
-6.  Python >= 3.11 installed and available on your system PATH. This is required for executing the default generated Python code directly.
+2.  A configured credentials file in your home directory if using Python (`google-ads.yaml`), PHP (`google_ads_php.ini`), or Ruby (`google_ads_config.rb`).
+3.  Antigravity or Claude Code environment configured.
+4.  A local clone of each client library for the languages you want to use. `install.sh` (Linux/macOS) or `install.ps1` (Windows) can set this up for you.
+5.  Python >= 3.11 installed and available on your system PATH. This is required for executing the default generated Python code directly.
 
 ## Setup
 
@@ -716,7 +715,7 @@ When upgrading from `4.0.0` to `4.1.0`, existing CLI arguments, A2A sidecar payl
 
 ## Performance & Functionality Benchmarks (`v4.0.0` vs `v4.1.0`)
 
-The repository includes an automated cross-version benchmark suite (`tests/benchmark_suite.py`) that verifies functional correctness and latency budgets (`total_ms`, `p50_ms`, `p95_ms`, `ops/sec`) against saved version baselines (`tests/benchmarks/baseline_v4.0.0.json` and `tests/benchmarks/baseline_v4.1.0.json`) or arbitrary git refs.
+The repository includes an automated cross-version benchmark suite (`tests/benchmark_suite.py`) that verifies both functional correctness and execution performance (`total_ms`, `mean_ms`, `p50_ms`, `p95_ms`, `ops/sec`) across 8 core subsystems of the Google Ads API Developer Assistant, and compares results against saved version baselines (`tests/benchmarks/baseline_v4.0.0.json` and `tests/benchmarks/baseline_v4.1.0.json`) or arbitrary Git refs to detect regressions.
 
 | Benchmark | Iterations | `v4.0.0` Baseline (ms) | `v4.1.0` Current (ms) | Budget (ms) | Delta | Speedup | Status |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :---: |
@@ -729,18 +728,73 @@ The repository includes an automated cross-version benchmark suite (`tests/bench
 | `hook_pre_tool_use_interception` | 500 | `N/A (v4.1)` | `49.63` | `120.0` | `NEW` | `N/A` | `PASS` |
 | `hitl_mutation_receipt_and_sha256_normalization` | 100 | `N/A (v4.1)` | `82.47` | `450.0` | `NEW` | `N/A` | `PASS` |
 
-To run the benchmark suite or compare against a baseline or git tag:
+### How to Use the Benchmarks
 
+#### 1. Run the Default Benchmark Suite
+From the repository root, run `tests/benchmark_suite.py`. By default, it executes all 8 benchmarks, verifies every functional assertion and latency budget, and automatically compares against `tests/benchmarks/baseline_v4.0.0.json` if present:
 ```bash
-# Run benchmark suite and compare against the saved v4.0.0 baseline
 python3 tests/benchmark_suite.py
-
-# Compare current workspace directly against git tag v4.0.0
-python3 tests/benchmark_suite.py --compare-git-ref v4.0.0
-
-# Run as part of pytest
-pytest -v tests/benchmark_suite.py
 ```
+
+#### 2. Compare Against a Specific Saved Baseline (`--compare-baseline`)
+Compare your current workspace against any saved baseline JSON file (such as `baseline_v4.0.0.json` or `baseline_v4.1.0.json`):
+```bash
+python3 tests/benchmark_suite.py --compare-baseline tests/benchmarks/baseline_v4.0.0.json
+python3 tests/benchmark_suite.py --compare-baseline tests/benchmarks/baseline_v4.1.0.json
+```
+
+#### 3. Compare Live Against Any Git Tag, Branch, or Commit (`--compare-git-ref`)
+To benchmark your current working tree directly against another Git ref (e.g., tag `v4.0.0` or `main`), use `--compare-git-ref`. The runner automatically checks out the target ref into a temporary Git worktree, executes the benchmark suite against it, and prints a side-by-side comparison table:
+```bash
+python3 tests/benchmark_suite.py --compare-git-ref v4.0.0
+```
+*(Subsystems introduced in `v4.1.0` are automatically marked `NEW (v4.1+)` when compared against a `v4.0.0` ref.)*
+
+#### 4. Save or Update Version Baselines (`--save-baseline` & `--save-git-ref-baseline`)
+When cutting a new release or updating baseline snapshots:
+```bash
+# Save the current workspace benchmark results as a baseline JSON file
+python3 tests/benchmark_suite.py --save-baseline tests/benchmarks/baseline_v4.1.0.json
+
+# Run benchmarks against a historical git ref and save its baseline JSON file
+python3 tests/benchmark_suite.py --save-git-ref-baseline v4.0.0 tests/benchmarks/baseline_v4.0.0.json
+```
+
+#### 5. Adjust Regression Sensitivity & JSON Output (`--max-regression-pct` & `--json`)
+By default, a performance regression is flagged if a benchmark exceeds its hard latency budget (`max_total_ms`) or slows down by more than `50%` (with at least a `+10 ms` absolute increase) relative to the baseline. You can tighten or relax this threshold, or emit structured JSON for CI/CD pipelines:
+```bash
+# Enforce a stricter 25% regression threshold against the v4.1.0 baseline
+python3 tests/benchmark_suite.py \
+  --compare-baseline tests/benchmarks/baseline_v4.1.0.json \
+  --max-regression-pct 25
+
+# Emit machine-readable JSON output (contains "current" and "comparison" objects)
+python3 tests/benchmark_suite.py --json
+```
+
+#### 6. Run via `pytest`
+`tests/benchmark_suite.py` also exposes `pytest` test cases that validate all functional assertions, hard latency budgets, baseline comparisons, and synthetic regression detection:
+```bash
+# Run only the benchmark suite via pytest
+pytest -v tests/benchmark_suite.py
+
+# Run the entire test and benchmark suite together
+pytest -v
+```
+
+#### 7. CLI Options Summary (`tests/benchmark_suite.py`)
+
+| Flag | Description |
+| :--- | :--- |
+| *(no flags)* | Runs all benchmarks, checks latency budgets, and compares against `tests/benchmarks/baseline_v4.0.0.json` if present. |
+| `--compare-baseline PATH` | Compares current benchmark metrics against the JSON baseline at `PATH`. |
+| `--compare-git-ref REF` | Runs benchmarks in a temporary worktree for Git `REF` (tag, branch, or commit) and compares results. |
+| `--save-baseline PATH` | Writes the current benchmark report to `PATH` as a JSON baseline. |
+| `--save-git-ref-baseline REF PATH` | Executes benchmarks against Git `REF` and writes that ref's report to `PATH`. |
+| `--max-regression-pct PCT` | Maximum allowed latency increase percentage before flagging a regression (default: `50.0`). |
+| `--json` | Outputs the full benchmark report and comparison results as formatted JSON to `stdout`. |
+
+**Exit Codes:** `0` when all functional checks pass, all latency budgets are met, and no regressions are detected; `1` if any functional assertion fails, any benchmark exceeds its `max_total_ms` budget, or any benchmark regresses beyond `--max-regression-pct`.
 
 ## Known Quirks
 

@@ -125,7 +125,6 @@ From the repository root, run `./install.sh` (Linux/macOS) or `.\install.ps1` (W
 ### Step 2: Configure Credentials
 Ensure your `google-ads.yaml` config file exists at `~/google-ads.yaml` (automatically synced into `config/google-ads.yaml` at session startup):
 ```yaml
-developer_token: "YOUR_DEVELOPER_TOKEN"
 client_id: "YOUR_OAUTH_CLIENT_ID"
 client_secret: "YOUR_OAUTH_CLIENT_SECRET"
 refresh_token: "YOUR_REFRESH_TOKEN"

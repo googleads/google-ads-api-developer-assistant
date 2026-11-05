@@ -647,7 +647,7 @@ class TestExtVersion:
         from config import config_init
 
         src_yaml = tmp_path / "home_google_ads.yaml"
-        src_yaml.write_text('developer_token: "tok"\n', encoding="utf-8")
+        src_yaml.write_text('client_id: "cid"\n', encoding="utf-8")
         cfg_dir = tmp_path / "config"
         cfg_dir.mkdir(parents=True)
         cfg_file = cfg_dir / "assistant_config"
@@ -989,7 +989,7 @@ class TestSidecarA2A:
         from config.config_init import sync_and_set_config_kv
 
         src_yaml = tmp_path / "source.yaml"
-        src_yaml.write_text("# Use CID 12345678 for testing\ndeveloper_token: \"test_token\"\n")
+        src_yaml.write_text("# Use CID 12345678 for testing\nclient_id: \"test_client\"\n")
         dest_dir = tmp_path / "config"
 
         res_path = sync_and_set_config_kv(
@@ -1002,7 +1002,7 @@ class TestSidecarA2A:
         assert os.path.isfile(res_path)
         content = open(res_path).read()
         assert "# Use CID 12345678 for testing" in content
-        assert 'developer_token: "test_token"' in content
+        assert 'client_id: "test_client"' in content
         assert 'login_customer_id: "9876543210"' in content
         assert "ads_assistant: 4.1.0" in content
         if sys.platform != "win32":
@@ -1013,7 +1013,7 @@ class TestSidecarA2A:
         from config.config_init import sync_and_set_config_kv
 
         src_yaml = tmp_path / "source.yaml"
-        src_yaml.write_text("login_customer_id: \"old_val\"\ndeveloper_token: \"test_token\"\n")
+        src_yaml.write_text("login_customer_id: \"old_val\"\nclient_id: \"test_client\"\n")
         dest_dir = tmp_path / "config"
 
         res_path = sync_and_set_config_kv(
@@ -1032,7 +1032,6 @@ class TestSidecarA2A:
 
         target = tmp_path / "google-ads.yaml"
         data = {
-            "developer_token": "token_123",
             "client_id": "client_abc",
             "client_secret": "secret_xyz",
             "refresh_token": "refresh_999",
@@ -1043,7 +1042,6 @@ class TestSidecarA2A:
         assert target.is_file()
 
         content = target.read_text()
-        assert "developer_token: token_123" in content
         assert "client_id: client_abc" in content
         assert "client_secret: secret_xyz" in content
         assert "refresh_token: refresh_999" in content
@@ -1059,7 +1057,6 @@ class TestSidecarA2A:
 
         target = tmp_path / "google-ads.yaml"
         data = {
-            "developer_token": "token_sa",
             "json_key_file_path": "/path/to/key.json",
             "impersonated_email": "sa@example.com",
             "login_customer_id": "9998887776",
@@ -1069,7 +1066,6 @@ class TestSidecarA2A:
         assert target.is_file()
 
         content = target.read_text()
-        assert "developer_token: token_sa" in content
         assert "json_key_file_path: /path/to/key.json" in content
         assert "impersonated_email: sa@example.com" in content
         assert "client_id" not in content
@@ -1085,7 +1081,6 @@ class TestSidecarA2A:
         assert success is True
 
         content = target.read_text()
-        assert "developer_token: INSERT_DEVELOPER_TOKEN_HERE" in content
         assert "client_id: INSERT_CLIENT_ID_HERE" in content
         assert "client_secret: INSERT_CLIENT_SECRET_HERE" in content
         assert "refresh_token: INSERT_REFRESH_TOKEN_HERE" in content
@@ -1115,7 +1110,6 @@ class TestSidecarA2A:
         ruby_file = tmp_path / "google_ads_config.rb"
         ruby_file.write_text(
             'Google::Ads::GoogleAds::Config.new do |c|\n'
-            '  c.developer_token = "ruby_dev_token"\n'
             '  c.client_id = "ruby_client_id"\n'
             '  c.client_secret = "ruby_client_secret"\n'
             '  c.refresh_token = "ruby_refresh_token"\n'
@@ -1123,7 +1117,6 @@ class TestSidecarA2A:
             'end\n'
         )
         data = parse_ruby_config(str(ruby_file))
-        assert data["developer_token"] == "ruby_dev_token"
         assert data["client_id"] == "ruby_client_id"
         assert data["client_secret"] == "ruby_client_secret"
         assert data["refresh_token"] == "ruby_refresh_token"
@@ -1135,14 +1128,12 @@ class TestSidecarA2A:
         ini_file = tmp_path / "google_ads_php.ini"
         ini_file.write_text(
             '[GOOGLE_ADS]\n'
-            'developerToken = "php_dev_token"\n'
             'clientId = "php_client_id"\n'
             'clientSecret = "php_client_secret"\n'
             'refreshToken = "php_refresh_token"\n'
             'loginCustomerId = "5544332211"\n'
         )
         data = parse_ini_config(str(ini_file))
-        assert data["developer_token"] == "php_dev_token"
         assert data["client_id"] == "php_client_id"
         assert data["client_secret"] == "php_client_secret"
         assert data["refresh_token"] == "php_refresh_token"
@@ -1153,14 +1144,12 @@ class TestSidecarA2A:
 
         prop_file = tmp_path / "ads.properties"
         prop_file.write_text(
-            'api.googleads.developerToken=java_dev_token\n'
             'api.googleads.clientId=java_client_id\n'
             'api.googleads.clientSecret=java_client_secret\n'
             'api.googleads.refreshToken=java_refresh_token\n'
             'api.googleads.loginCustomerId=9988776655\n'
         )
         data = parse_properties_config(str(prop_file))
-        assert data["developer_token"] == "java_dev_token"
         assert data["client_id"] == "java_client_id"
         assert data["client_secret"] == "java_client_secret"
         assert data["refresh_token"] == "java_refresh_token"
@@ -1173,7 +1162,6 @@ class TestSidecarA2A:
         app_cfg.write_text(
             "<configuration>\n"
             "  <GoogleAdsApi>\n"
-            '    <add key="DeveloperToken" value="dotnet_dev_token"/>\n'
             '    <add key="OAuth2ClientId" value="dotnet_client_id"/>\n'
             '    <add key="OAuth2ClientSecret" value="dotnet_client_secret"/>\n'
             '    <add key="OAuth2RefreshToken" value="dotnet_refresh_token"/>\n'
@@ -1182,7 +1170,6 @@ class TestSidecarA2A:
             "</configuration>\n"
         )
         data = parse_dotnet_config(str(app_cfg))
-        assert data["developer_token"] == "dotnet_dev_token"
         assert data["client_id"] == "dotnet_client_id"
         assert data["client_secret"] == "dotnet_client_secret"
         assert data["refresh_token"] == "dotnet_refresh_token"
@@ -1196,7 +1183,6 @@ class TestSidecarA2A:
             json.dumps(
                 {
                     "GoogleAdsApi": {
-                        "DeveloperToken": "json_dev_token",
                         "OAuth2ClientId": "json_client_id",
                         "OAuth2ClientSecret": "json_client_secret",
                         "OAuth2RefreshToken": "json_refresh_token",
@@ -1208,7 +1194,6 @@ class TestSidecarA2A:
             )
         )
         data = parse_dotnet_config(str(json_cfg))
-        assert data["developer_token"] == "json_dev_token"
         assert data["client_id"] == "json_client_id"
         assert data["client_secret"] == "json_client_secret"
         assert data["refresh_token"] == "json_refresh_token"
@@ -1238,7 +1223,7 @@ class TestSidecarA2A:
         src_xml = tmp_path / "App.config"
         src_xml.write_text(
             "<configuration>\n  <GoogleAdsApi>\n"
-            '    <add key="DeveloperToken" value="tok"/>\n'
+            '    <add key="OAuth2ClientId" value="cid"/>\n'
             "  </GoogleAdsApi>\n</configuration>\n"
         )
         dst_xml = tmp_path / "copied_App.config"
@@ -1246,7 +1231,7 @@ class TestSidecarA2A:
         assert '<add key="ads_assistant" value="4.1.0"/>' in dst_xml.read_text()
 
         src_json = tmp_path / "appsettings.json"
-        src_json.write_text('{"GoogleAdsApi": {"DeveloperToken": "tok"}}\n')
+        src_json.write_text('{"GoogleAdsApi": {"OAuth2ClientId": "cid"}}\n')
         dst_json = tmp_path / "copied_appsettings.json"
         assert copy_and_append_version(str(src_json), str(dst_json), version="4.1.0", lang="DotNet")
         parsed_json = json.loads(dst_json.read_text())
@@ -1260,7 +1245,6 @@ class TestSidecarA2A:
         home_dir.mkdir()
         php_file = home_dir / "google_ads_php.ini"
         php_file.write_text(
-            'developerToken = "fallback_token"\n'
             'clientId = "fallback_cid"\n'
             'clientSecret = "fallback_sec"\n'
             'refreshToken = "fallback_ref"\n'
@@ -1274,7 +1258,6 @@ class TestSidecarA2A:
 
         assert os.path.isfile(res_path)
         content = open(res_path).read()
-        assert "developer_token: fallback_token" in content
         assert "client_id: fallback_cid" in content
         assert "ads_assistant:" in content
 
@@ -1287,7 +1270,6 @@ class TestSidecarA2A:
         dotnet_file = home_dir / "App.config"
         dotnet_file.write_text(
             "<configuration>\n  <GoogleAdsApi>\n"
-            '    <add key="DeveloperToken" value="dotnet_fallback_tok"/>\n'
             '    <add key="OAuth2ClientId" value="dotnet_fallback_cid"/>\n'
             '    <add key="OAuth2ClientSecret" value="dotnet_fallback_sec"/>\n'
             '    <add key="OAuth2RefreshToken" value="dotnet_fallback_ref"/>\n'
@@ -1302,7 +1284,6 @@ class TestSidecarA2A:
 
         assert os.path.isfile(res_path)
         content = open(res_path).read()
-        assert "developer_token: dotnet_fallback_tok" in content
         assert "client_id: dotnet_fallback_cid" in content
         assert "ads_assistant:" in content
         assert (dest_dir / "App.config").is_file()
@@ -1313,10 +1294,10 @@ class TestSidecarA2A:
         dest_dir = tmp_path / "config"
         dest_dir.mkdir()
         existing_yaml = dest_dir / "google-ads.yaml"
-        existing_yaml.write_text("developer_token: \"stale_token\"\n")
+        existing_yaml.write_text("client_id: \"stale_client\"\n")
 
         src_yaml = tmp_path / "google-ads.yaml"
-        src_yaml.write_text("developer_token: \"fresh_session_token\"\n")
+        src_yaml.write_text("client_id: \"fresh_session_client\"\n")
 
         res_path = sync_and_set_config_kv(
             source_yaml=str(src_yaml),
@@ -1324,15 +1305,15 @@ class TestSidecarA2A:
         )
 
         content = open(res_path).read()
-        assert 'developer_token: "fresh_session_token"' in content
-        assert "stale_token" not in content
+        assert 'client_id: "fresh_session_client"' in content
+        assert "stale_client" not in content
         assert os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH") == str(existing_yaml)
 
     def test_copy_and_append_version_no_duplicates(self, tmp_path):
         from config.config_init import copy_and_append_version
 
         src = tmp_path / "test.yaml"
-        src.write_text("developer_token: \"token\"\nads_assistant: 1.0.0\n")
+        src.write_text("client_id: \"client\"\nads_assistant: 1.0.0\n")
         dst = tmp_path / "out.yaml"
 
         copy_and_append_version(str(src), str(dst), version="4.0.0", lang="YAML")
@@ -1344,7 +1325,7 @@ class TestSidecarA2A:
         import config.config_init as cfg_init
 
         src_yaml = tmp_path / "home_google_ads.yaml"
-        src_yaml.write_text('developer_token: "tok_abc"\n', encoding="utf-8")
+        src_yaml.write_text('client_id: "cid_abc"\n', encoding="utf-8")
 
         work_dir = tmp_path / "workspace"
         cfg_dir = work_dir / "config"
@@ -1592,7 +1573,7 @@ class TestPluginIntegrity:
         import config.sitecustomize as sc
 
         fake_yaml = tmp_path / "installed_plugin_google_ads.yaml"
-        fake_yaml.write_text('developer_token: "shim_test_token"\n', encoding="utf-8")
+        fake_yaml.write_text('client_id: "shim_test_client"\n', encoding="utf-8")
         empty_workspace = tmp_path / "empty_workspace"
         empty_workspace.mkdir()
 
@@ -2027,7 +2008,7 @@ class TestPerformanceRegressions:
         cfg_dir = work_dir / "config"
         cfg_dir.mkdir(parents=True)
         src_yaml = tmp_path / "source_google_ads.yaml"
-        src_yaml.write_text('developer_token: "test_token"\n', encoding="utf-8")
+        src_yaml.write_text('client_id: "test_client"\n', encoding="utf-8")
 
         # Create dummy top-level client_libs yaml and nested subdirectories
         lib_dir = work_dir / "client_libs" / "google-ads-python"

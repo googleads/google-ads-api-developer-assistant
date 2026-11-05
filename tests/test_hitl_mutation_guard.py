@@ -152,7 +152,6 @@ def test_mutation_audit_trail_end_to_end(tmp_path: Path, monkeypatch: Any) -> No
 
     config_yaml = tmp_path / "google-ads.yaml"
     config_yaml.write_text(
-        'developer_token: "super_secret_dev_token"\n'
         'client_id: "1234567890-abcdef.apps.googleusercontent.com"\n'
         'client_secret: "super_secret_client_secret"\n'
         'refresh_token: "super_secret_refresh_token"\n'
@@ -252,7 +251,6 @@ def test_mutation_audit_trail_end_to_end(tmp_path: Path, monkeypatch: Any) -> No
         assert oct(os.stat(str(audit_log_file)).st_mode & 0o777) == "0o600"
 
     raw_content = audit_log_file.read_text(encoding="utf-8")
-    assert "super_secret_dev_token" not in raw_content
     assert "super_secret_client_secret" not in raw_content
     assert "super_secret_refresh_token" not in raw_content
 
@@ -331,7 +329,7 @@ def test_rpc_service_interception_and_redaction() -> None:
         request={
             "customer_id": "123",
             "validate_only": False,
-            "developer_token": "secret_should_be_redacted",
+            "client_secret": "secret_should_be_redacted",
             "operations": [
                 {
                     "update": {
@@ -349,7 +347,7 @@ def test_rpc_service_interception_and_redaction() -> None:
     assert call["method"] == "mutate_campaign_budgets"
     assert call["sent_at_iso"] <= call["received_at_iso"]
     assert call["google_ads_request_id"] == "req-abc-999"
-    assert call["request_payload"]["developer_token"] == "[REDACTED]"
+    assert call["request_payload"]["client_secret"] == "[REDACTED]"
     assert (
         call["request_payload"]["operations"][0]["update"]["amount_micros"]
         == 75000000
@@ -548,7 +546,6 @@ def test_append_mutation_audit_log_direct_writes_and_content_schema(
 
     config_yaml = tmp_path / "google-ads.yaml"
     config_yaml.write_text(
-        'developer_token: "dev_tok_secret_123"\n'
         'client_id: "9876543210-xyz.apps.googleusercontent.com"\n'
         'client_secret: "client_sec_456"\n'
         'refresh_token: "refresh_tok_789"\n'
@@ -714,7 +711,6 @@ def test_audit_log_actor_service_account_and_env_fallbacks(
 
     sa_yaml = tmp_path / "google-ads.yaml"
     sa_yaml.write_text(
-        'developer_token: "sa_dev_token_secret"\n'
         'json_key_file_path: "/etc/keys/google-ads-sa.json"\n'
         'impersonated_email: "ads-admin@example.com"\n'
         'login_customer_id: "4445556667"\n'
@@ -748,7 +744,6 @@ def test_audit_log_actor_service_account_and_env_fallbacks(
     )
 
     raw = audit_log_file.read_text(encoding="utf-8")
-    assert "sa_dev_token_secret" not in raw
     entry = json.loads(raw.strip())
 
     actor = entry["actor"]

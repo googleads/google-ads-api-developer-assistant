@@ -195,7 +195,6 @@ _FINANCIAL_CONSEQUENCE_RE = re.compile(
 )
 
 _SENSITIVE_KEYS = frozenset({
-    "developer_token",
     "client_secret",
     "refresh_token",
     "private_key",

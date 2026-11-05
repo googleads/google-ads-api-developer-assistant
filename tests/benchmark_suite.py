@@ -201,7 +201,7 @@ def _bench_config_sync_and_migration() -> Optional[Dict[str, Any]]:
     try:
         src_yaml = os.path.join(tmp_dir, "home_google_ads.yaml")
         with open(src_yaml, "w", encoding="utf-8") as f:
-            f.write('developer_token: "bench_dev_token"\n')
+            f.write('client_id: "bench_client_id"\n')
 
         work_dir = os.path.join(tmp_dir, "workspace")
         cfg_dir = os.path.join(work_dir, "config")
