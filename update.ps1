@@ -211,13 +211,40 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 }
 
 # --- Project Directory Resolution ---
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$UserHomeTmp = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+$AgyPluginTargetDirTmp = Join-Path $UserHomeTmp ".gemini\config\plugins\google-ads-api-developer-assistant"
+$ProjectDirAbs = $null
 try {
-    $ProjectDirAbs = git rev-parse --show-toplevel 2>$null
-    if (-not $ProjectDirAbs) { throw "Not in a git repo" }
-    $ProjectDirAbs = (Get-Item -LiteralPath $ProjectDirAbs).FullName
+    $Candidate = git -C $ScriptDir rev-parse --show-toplevel 2>$null
+    if ($Candidate -and (Test-Path -LiteralPath (Join-Path $Candidate "plugins\google-ads-api-developer-assistant"))) {
+        $ProjectDirAbs = (Get-Item -LiteralPath $Candidate).FullName
+    }
+} catch {}
+if (-not $ProjectDirAbs) {
+    foreach ($RepoRootFile in @(
+        (Join-Path (Join-Path $ScriptDir "config") ".repo_root"),
+        (Join-Path (Join-Path $AgyPluginTargetDirTmp "config") ".repo_root")
+    )) {
+        if (Test-Path -LiteralPath $RepoRootFile) {
+            $SavedRoot = (Get-Content -LiteralPath $RepoRootFile -Raw).Trim()
+            if ($SavedRoot -and (Test-Path -LiteralPath (Join-Path $SavedRoot "plugins\google-ads-api-developer-assistant"))) {
+                $ProjectDirAbs = (Get-Item -LiteralPath $SavedRoot).FullName
+                break
+            }
+        }
+    }
 }
-catch {
-    Write-Error "ERROR: This script must be run from within the google-ads-api-developer-assistant git repository."
+if (-not $ProjectDirAbs) {
+    try {
+        $Candidate = git rev-parse --show-toplevel 2>$null
+        if ($Candidate -and (Test-Path -LiteralPath (Join-Path $Candidate "plugins\google-ads-api-developer-assistant"))) {
+            $ProjectDirAbs = (Get-Item -LiteralPath $Candidate).FullName
+        }
+    } catch {}
+}
+if (-not $ProjectDirAbs) {
+    Write-Error "ERROR: Could not locate the google-ads-api-developer-assistant git repository."
     exit 1
 }
 
@@ -239,7 +266,7 @@ try {
         }
     }
 
-    git -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull
+    git -C $ProjectDirAbs -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to update google-ads-api-developer-assistant repository."
     }
@@ -397,10 +424,17 @@ function Sync-InstalledPluginDir {
         }
     }
 
-    $HelperPs1 = Join-Path $ProjectDirAbs "plugin.ps1"
-    if (Test-Path -LiteralPath $HelperPs1) {
-        Copy-Item -Force -LiteralPath $HelperPs1 -Destination (Join-Path $TargetPluginDir "plugin.ps1")
+    foreach ($HelperName in @("plugin.ps1", "update.ps1")) {
+        $HelperPs1 = Join-Path $ProjectDirAbs $HelperName
+        if (Test-Path -LiteralPath $HelperPs1) {
+            Copy-Item -Force -LiteralPath $HelperPs1 -Destination (Join-Path $TargetPluginDir $HelperName)
+        }
     }
+    $TargetCfgDir = Join-Path $TargetPluginDir "config"
+    if (-not (Test-Path -LiteralPath $TargetCfgDir)) {
+        New-Item -ItemType Directory -Force -Path $TargetCfgDir | Out-Null
+    }
+    Set-Content -Path (Join-Path $TargetCfgDir ".repo_root") -Value "$ProjectDirAbs`n" -NoNewline
 
     $TargetClientLibs = Join-Path $TargetPluginDir "client_libs"
     if (-not (Test-Path -LiteralPath $TargetClientLibs)) {
@@ -440,12 +474,11 @@ function Sync-InstalledPluginDir {
     $TargetPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
     Set-LatestApiVersion -SearchDir $TargetPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
 
-    $NormTarget = if ($TypeLower -eq "claudecode") { "claude" } else { $TypeLower }
     if ($Disable -or (-not $Enable -and $WasDisabled)) {
-        & (Join-Path $ProjectDirAbs "plugin.ps1") disable $NormTarget -Quiet
+        & (Join-Path $ProjectDirAbs "plugin.ps1") disable -ConfigDir (Join-Path $TargetPluginDir "config") -Quiet
     }
     elseif ($Enable) {
-        & (Join-Path $ProjectDirAbs "plugin.ps1") enable $NormTarget -Quiet
+        & (Join-Path $ProjectDirAbs "plugin.ps1") enable -ConfigDir (Join-Path $TargetPluginDir "config") -Quiet
     }
 }
 

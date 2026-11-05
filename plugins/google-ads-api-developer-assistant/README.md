@@ -238,7 +238,7 @@ export GOOGLE_ADS_CONFIGURATION_FILE_PATH="config/google-ads.yaml"
 
 Configure your API version, default Customer ID, mutate switch, and plugin activation state in `config/assistant_config` (TOML format):
 ```toml
-api_version = "v26"
+api_version = "<api_version> (e.g., vXX)"
 customer_id = "12345678"
 execute_mutates = false
 enabled = true
@@ -260,7 +260,7 @@ When `enabled = true` and the user enters their first prompt in an Antigravity (
 
 ## 💻 CLI Scripts & Usage
 
-All skill scripts can be invoked directly from the command line:
+All skill scripts can be invoked directly from the command line (replace `<api_version>` with your target version, e.g., `vXX`):
 
 ### GAQL Validation
 
@@ -269,14 +269,14 @@ Pass a query directly via `--query` / `-q` or pipe via `stdin`:
 # Pass query via CLI flag
 python3 skills/validate-gaql/scripts/validate_gaql.py \
   --customer_id 1234567890 \
-  --api_version v25 \
+  --api_version <api_version> \
   --query "SELECT campaign.id, campaign.name, metrics.impressions FROM campaign WHERE segments.date DURING LAST_30_DAYS"
 
 # Or pipe query via stdin
 echo "SELECT campaign.id, campaign.name, metrics.impressions FROM campaign WHERE segments.date DURING LAST_30_DAYS" | \
   python3 skills/validate-gaql/scripts/validate_gaql.py \
     --customer_id 1234567890 \
-    --api_version v25
+    --api_version <api_version>
 ```
 
 ### Protobuf Object & Enum Inspection
@@ -286,12 +286,12 @@ Inspect field definitions, labels (`OPTIONAL` vs `REPEATED`), and nested types:
 # Inspect a resource message
 python3 skills/inspect-object/scripts/inspect_object.py \
   --object_name Campaign \
-  --api_version v25
+  --api_version <api_version>
 
 # Inspect an Enum
 python3 skills/inspect-object/scripts/inspect_object.py \
   --object_name CampaignStatusEnum.CampaignStatus \
-  --api_version v25
+  --api_version <api_version>
 ```
 
 ### Manager Account (MCC) Hierarchy
@@ -301,13 +301,13 @@ Traverse and list all client accounts under an MCC:
 # Print account tree to console
 python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py \
   --customer_id 1234567890 \
-  --api_version v25 \
+  --api_version <api_version> \
   --print_cids
 
 # Export to CSV under saved/data/
 python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py \
   --customer_id 1234567890 \
-  --api_version v25 \
+  --api_version <api_version> \
   --save_csv
 ```
 
@@ -317,17 +317,17 @@ python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py \
 # Generate comprehensive conversion diagnostic report
 python3 skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py \
   --customer_id 1234567890 \
-  --api_version v25
+  --api_version <api_version>
 
 # Pre-validate offline conversion upload CSV before sending to API
 python3 skills/troubleshoot-conversions/scripts/validate_conversion_upload.py \
   --csv_path data/conversions.csv \
-  --api_version v25
+  --api_version <api_version>
 
 # Sample recent GCLIDs with click timestamps
 python3 skills/troubleshoot-conversions/scripts/get_recent_gclids.py \
   --customer_id 1234567890 \
-  --api_version v25
+  --api_version <api_version>
 ```
 
 ### Performance Max Webpage Exclusion Filter
@@ -338,7 +338,7 @@ python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py \
   --customer_id 1234567890 \
   --asset_group_id 987654321 \
   --url_exclusion "example.com/excluded-category" \
-  --api_version v25
+  --api_version <api_version>
 ```
 
 ### Client Libraries Discovery & Upstream GitHub Sync

@@ -186,5 +186,13 @@ fi
 "${PROJECT_ROOT}/plugin.sh" test --config-dir "${AGY_PLUGIN_DIR}/config" --expect enabled >/dev/null
 echo "PASS: plugin.sh disable, status, test, is-enabled, and enable verified."
 
+echo "Test 14: installed update.sh in plugin directory runs from an arbitrary directory outside the git repo"
+if [[ ! -x "${AGY_PLUGIN_DIR}/update.sh" ]]; then
+  echo "FAIL: update.sh was not installed or not executable in ${AGY_PLUGIN_DIR}"
+  exit 1
+fi
+(cd "${TEST_HOME}" && "${AGY_PLUGIN_DIR}/update.sh" agy >/dev/null)
+echo "PASS: installed update.sh executed successfully from outside the git repository."
+
 echo "=== All Tests Passed Successfully! ==="
 

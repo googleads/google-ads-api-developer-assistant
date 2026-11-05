@@ -245,6 +245,22 @@ try {
     & "$ProjectRoot\plugin.ps1" test -ConfigDir (Join-Path $AgyPluginDir "config") -Expect enabled | Out-Null
     Write-Host "PASS: plugin.ps1 disable, status, test, is-enabled, and enable verified."
 
+    # Test 14: installed update.ps1 in plugin directory runs from an arbitrary directory outside the git repo
+    Write-Host "Test 14: installed update.ps1 in plugin directory runs from an arbitrary directory outside the git repo"
+    $InstalledUpdatePs1 = Join-Path $AgyPluginDir "update.ps1"
+    if (-not (Test-Path -LiteralPath $InstalledUpdatePs1)) {
+        Write-Error "FAIL: update.ps1 was not installed in $AgyPluginDir"
+        exit 1
+    }
+    Push-Location $TestHome
+    try {
+        & $InstalledUpdatePs1 -Type agy *>&1 | Out-Null
+    }
+    finally {
+        Pop-Location
+    }
+    Write-Host "PASS: installed update.ps1 executed successfully from outside the git repository."
+
     Write-Host "=== All PowerShell Tests Passed Successfully! ==="
 }
 finally {

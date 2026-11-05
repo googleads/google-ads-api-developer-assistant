@@ -609,11 +609,14 @@ class TestExtVersion:
         assert parsed_after["customer_id"] == "9998887776"
         assert parsed_after["execute_mutates"] is True
 
-    def test_detect_latest_api_version_fallback(self):
+    def test_detect_latest_api_version_raises_when_unavailable(self):
         with patch("os.path.isdir", return_value=False), \
              patch.dict("sys.modules", {"google.ads.googleads": None}):
-            ver = get_latest_api_version.detect_latest_api_version()
-            assert ver == "v25"
+            with pytest.raises(
+                RuntimeError,
+                match="Unable to detect the latest Google Ads API version",
+            ):
+                get_latest_api_version.detect_latest_api_version()
 
     def test_detect_latest_api_version_prefers_newer_system_pkg_over_stale_client_libs(
         self, tmp_path, monkeypatch

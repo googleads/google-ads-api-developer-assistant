@@ -1775,27 +1775,29 @@ def set_plugin_enabled(
 ) -> str:
     """Enables or disables the plugin in config/assistant_config and installed plugin directories."""
     enabled_bool = bool(enabled)
-    target_path = write_assistant_config(
-        {"enabled": enabled_bool},
-        config_dir=config_dir,
-    )
+    target_path: Optional[str] = None
 
-    # Also update the plugin directory containing target_path
-    cfg_dir = os.path.dirname(os.path.abspath(target_path))
-    if os.path.basename(cfg_dir) == "config":
-        local_plugin_dir = os.path.dirname(cfg_dir)
-        _toggle_installed_plugin_manifests(local_plugin_dir, enabled_bool)
+    if config_dir is not None or target_type == "all":
+        target_path = write_assistant_config(
+            {"enabled": enabled_bool},
+            config_dir=config_dir,
+        )
+        cfg_dir = os.path.dirname(os.path.abspath(target_path))
+        if os.path.basename(cfg_dir) == "config":
+            local_plugin_dir = os.path.dirname(cfg_dir)
+            _toggle_installed_plugin_manifests(local_plugin_dir, enabled_bool)
 
     if sync_global and config_dir is None:
-        this_dir = os.path.dirname(os.path.abspath(__file__))
-        if os.path.basename(this_dir) == "config":
-            script_cfg_path = os.path.join(this_dir, ASSISTANT_CONFIG_FILENAME)
-            if os.path.normpath(script_cfg_path) != os.path.normpath(target_path):
-                try:
-                    write_assistant_config({"enabled": enabled_bool}, config_dir=this_dir)
-                except OSError:
-                    pass
-            _toggle_installed_plugin_manifests(os.path.dirname(this_dir), enabled_bool)
+        if target_type == "all" and target_path is not None:
+            this_dir = os.path.dirname(os.path.abspath(__file__))
+            if os.path.basename(this_dir) == "config":
+                script_cfg_path = os.path.join(this_dir, ASSISTANT_CONFIG_FILENAME)
+                if os.path.normpath(script_cfg_path) != os.path.normpath(target_path):
+                    try:
+                        write_assistant_config({"enabled": enabled_bool}, config_dir=this_dir)
+                    except OSError:
+                        pass
+                _toggle_installed_plugin_manifests(os.path.dirname(this_dir), enabled_bool)
 
         global_targets = []
         if target_type in ("agy", "all"):
@@ -1820,10 +1822,18 @@ def set_plugin_enabled(
             if os.path.isdir(g_dir):
                 g_cfg = os.path.join(g_dir, "config")
                 try:
-                    write_assistant_config({"enabled": enabled_bool}, config_dir=g_cfg)
+                    written = write_assistant_config({"enabled": enabled_bool}, config_dir=g_cfg)
+                    if target_path is None:
+                        target_path = written
                 except OSError:
                     pass
                 _toggle_installed_plugin_manifests(g_dir, enabled_bool, is_repo_source=False)
+
+    if target_path is None:
+        target_path = write_assistant_config(
+            {"enabled": enabled_bool},
+            config_dir=config_dir,
+        )
 
     return target_path
 

@@ -72,15 +72,24 @@ if ($Link) {
 }
 
 # --- Project Directory Resolution ---
-# Determine the root directory of the current git repository.
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectDirAbs = $null
 try {
-    $ProjectDirAbs = git rev-parse --show-toplevel 2>$null
-    if (-not $ProjectDirAbs) { throw "Not in a git repo" }
-    # Normalize path separator
-    $ProjectDirAbs = (Get-Item -LiteralPath $ProjectDirAbs).FullName
+    $Candidate = git -C $ScriptDir rev-parse --show-toplevel 2>$null
+    if ($Candidate -and (Test-Path -LiteralPath (Join-Path $Candidate "plugins\google-ads-api-developer-assistant"))) {
+        $ProjectDirAbs = (Get-Item -LiteralPath $Candidate).FullName
+    }
+} catch {}
+if (-not $ProjectDirAbs) {
+    try {
+        $Candidate = git rev-parse --show-toplevel 2>$null
+        if ($Candidate -and (Test-Path -LiteralPath (Join-Path $Candidate "plugins\google-ads-api-developer-assistant"))) {
+            $ProjectDirAbs = (Get-Item -LiteralPath $Candidate).FullName
+        }
+    } catch {}
 }
-catch {
-    Write-Error "ERROR: This script must be run from within the google-ads-api-developer-assistant git repository."
+if (-not $ProjectDirAbs) {
+    Write-Error "ERROR: Could not locate the google-ads-api-developer-assistant git repository."
     exit 1
 }
 
@@ -154,9 +163,6 @@ function Set-LatestApiVersion {
                 }
                 if ($Existing -match '(?mi)^\s*execute_mutates\s*=\s*["'']?(true|false)["'']?') {
                     $ExecMutates = $Matches[1].ToLower()
-                }
-                if ($Existing -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?(true|false)["'']?') {
-                    $PluginEnabled = $Matches[1].ToLower()
                 }
             }
             if ($Disable) { $PluginEnabled = "false" }
@@ -329,10 +335,17 @@ function Install-PluginCopy {
         Remove-Item -Recurse -Force -LiteralPath $TargetPluginDir
     }
     Copy-Item -Recurse -Force -LiteralPath $PluginSource -Destination $TargetPluginDir
-    $HelperPs1 = Join-Path $ProjectDirAbs "plugin.ps1"
-    if (Test-Path -LiteralPath $HelperPs1) {
-        Copy-Item -Force -LiteralPath $HelperPs1 -Destination (Join-Path $TargetPluginDir "plugin.ps1")
+    foreach ($HelperName in @("plugin.ps1", "update.ps1")) {
+        $HelperPs1 = Join-Path $ProjectDirAbs $HelperName
+        if (Test-Path -LiteralPath $HelperPs1) {
+            Copy-Item -Force -LiteralPath $HelperPs1 -Destination (Join-Path $TargetPluginDir $HelperName)
+        }
     }
+    $TargetCfgDir = Join-Path $TargetPluginDir "config"
+    if (-not (Test-Path -LiteralPath $TargetCfgDir)) {
+        New-Item -ItemType Directory -Force -Path $TargetCfgDir | Out-Null
+    }
+    Set-Content -Path (Join-Path $TargetCfgDir ".repo_root") -Value "$ProjectDirAbs`n" -NoNewline
 
     $PluginClientLibsDir = Join-Path $TargetPluginDir "client_libs"
     if (-not (Test-Path -LiteralPath $PluginClientLibsDir)) {
@@ -370,12 +383,11 @@ function Install-PluginCopy {
 
     $PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
     Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir (Join-Path $TargetPluginDir "config")
-    $NormTarget = if ($TypeLower -eq "claudecode") { "claude" } else { $TypeLower }
     if ($Disable) {
-        & (Join-Path $ProjectDirAbs "plugin.ps1") disable $NormTarget -Quiet
+        & (Join-Path $ProjectDirAbs "plugin.ps1") disable -ConfigDir (Join-Path $TargetPluginDir "config") -Quiet
     }
-    elseif ($Enable) {
-        & (Join-Path $ProjectDirAbs "plugin.ps1") enable $NormTarget -Quiet
+    else {
+        & (Join-Path $ProjectDirAbs "plugin.ps1") enable -ConfigDir (Join-Path $TargetPluginDir "config") -Quiet
     }
 }
 

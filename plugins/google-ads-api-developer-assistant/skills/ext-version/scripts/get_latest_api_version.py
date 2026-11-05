@@ -212,13 +212,16 @@ def detect_latest_api_version(
         discovered_versions.sort(key=lambda x: int(x[1:]))
         detected = discovered_versions[-1]
 
-    # 3. Fallback to default version if no local library found
-    final_version = detected or "v25"
+    if not detected:
+        raise RuntimeError(
+            "Unable to detect the latest Google Ads API version from local client_libs "
+            "or installed google-ads package."
+        )
 
     if update_config or config_dir is not None:
-        update_assistant_config_api_version(final_version, config_dir=config_dir)
+        update_assistant_config_api_version(detected, config_dir=config_dir)
 
-    return final_version
+    return detected
 
 
 def main() -> None:

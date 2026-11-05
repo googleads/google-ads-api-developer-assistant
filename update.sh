@@ -327,9 +327,29 @@ if ! command -v git &> /dev/null; then
 fi
 
 # --- Project Directory Resolution ---
-if ! PROJECT_DIR_ABS=$(git rev-parse --show-toplevel 2>/dev/null); then
-  err "ERROR: This script must be run from within the google-ads-api-developer-assistant git repository."
-  exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR_ABS=""
+if candidate=$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel 2>/dev/null) && [[ -d "${candidate}/plugins/google-ads-api-developer-assistant" ]]; then
+  PROJECT_DIR_ABS="${candidate}"
+elif [[ -f "${SCRIPT_DIR}/config/.repo_root" ]]; then
+  saved_root=$(head -n 1 "${SCRIPT_DIR}/config/.repo_root" 2>/dev/null | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' || true)
+  if [[ -n "${saved_root}" && -d "${saved_root}/plugins/google-ads-api-developer-assistant" ]]; then
+    PROJECT_DIR_ABS="${saved_root}"
+  fi
+fi
+if [[ -z "${PROJECT_DIR_ABS}" && -f "${AGY_PLUGIN_TARGET_DIR}/config/.repo_root" ]]; then
+  saved_root=$(head -n 1 "${AGY_PLUGIN_TARGET_DIR}/config/.repo_root" 2>/dev/null | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' || true)
+  if [[ -n "${saved_root}" && -d "${saved_root}/plugins/google-ads-api-developer-assistant" ]]; then
+    PROJECT_DIR_ABS="${saved_root}"
+  fi
+fi
+if [[ -z "${PROJECT_DIR_ABS}" ]]; then
+  if candidate=$(git rev-parse --show-toplevel 2>/dev/null) && [[ -d "${candidate}/plugins/google-ads-api-developer-assistant" ]]; then
+    PROJECT_DIR_ABS="${candidate}"
+  else
+    err "ERROR: Could not locate the google-ads-api-developer-assistant git repository."
+    exit 1
+  fi
 fi
 readonly PROJECT_DIR_ABS
 echo "Detected project root: ${PROJECT_DIR_ABS}"
@@ -351,7 +371,7 @@ for cfg_file in assistant_config customer_id customer_id.txt; do
   fi
 done
 
-if ! git -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull; then
+if ! git -C "${PROJECT_DIR_ABS}" -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull; then
   err "ERROR: Failed to update google-ads-api-developer-assistant repository."
   # Restore config files if backup exists
   for cfg_file in assistant_config customer_id customer_id.txt; do
@@ -457,10 +477,15 @@ sync_installed_plugin_dir() {
     fi
   fi
 
-  if [[ -f "${PROJECT_DIR_ABS}/plugin.sh" ]]; then
-    cp "${PROJECT_DIR_ABS}/plugin.sh" "${target_plugin_dir}/plugin.sh"
-    chmod +x "${target_plugin_dir}/plugin.sh" 2>/dev/null || true
-  fi
+  for helper_script in plugin.sh update.sh; do
+    if [[ -f "${PROJECT_DIR_ABS}/${helper_script}" ]]; then
+      rm -f "${target_plugin_dir}/${helper_script}"
+      cp "${PROJECT_DIR_ABS}/${helper_script}" "${target_plugin_dir}/${helper_script}"
+      chmod +x "${target_plugin_dir}/${helper_script}" 2>/dev/null || true
+    fi
+  done
+  mkdir -p "${target_plugin_dir}/config"
+  echo "${PROJECT_DIR_ABS}" > "${target_plugin_dir}/config/.repo_root"
 
   local target_client_libs="${target_plugin_dir}/client_libs"
   mkdir -p "${target_client_libs}"
@@ -499,9 +524,9 @@ sync_installed_plugin_dir() {
   detect_and_seed_api_version "${target_plugin_dir}/client_libs/google-ads-python/google/ads/googleads" "${target_plugin_dir}/config"
 
   if [[ "${PLUGIN_ENABLED_OPT}" == "false" ]] || [[ -z "${PLUGIN_ENABLED_OPT}" && "${was_disabled}" == "true" ]]; then
-    "${PROJECT_DIR_ABS}/plugin.sh" disable "${TYPE}" --quiet
+    "${PROJECT_DIR_ABS}/plugin.sh" disable --config-dir "${target_plugin_dir}/config" --quiet
   elif [[ "${PLUGIN_ENABLED_OPT}" == "true" ]]; then
-    "${PROJECT_DIR_ABS}/plugin.sh" enable "${TYPE}" --quiet
+    "${PROJECT_DIR_ABS}/plugin.sh" enable --config-dir "${target_plugin_dir}/config" --quiet
   fi
 }
 

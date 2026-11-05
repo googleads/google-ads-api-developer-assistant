@@ -199,7 +199,7 @@ Make sure your Google Ads API credentials configuration file is in your `$HOME` 
 All assistant settings—active API version, default Customer ID, live mutation permissions, and plugin activation state—are stored in a single TOML file at [`config/assistant_config`](config/assistant_config) (and mirrored in [`plugins/google-ads-api-developer-assistant/config/assistant_config`](plugins/google-ads-api-developer-assistant/config/assistant_config)):
 
 ```toml
-api_version = "v26"
+api_version = "<api_version> (e.g., vXX)"
 customer_id = "12345678"
 execute_mutates = false
 enabled = true
@@ -207,39 +207,75 @@ enabled = true
 
 | Key | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| **`api_version`** | `string` | `"v26"` | Active Google Ads API version used for GAQL validation, Protobuf inspection, and code generation. Automatically detected and updated when running `install.sh`, `update.sh`, `sync_client_libs.py`, `get_latest_api_version.py`, or `python3 config/config_init.py --key api_version`. |
+| **`api_version`** | `string` | `"<api_version>"` (e.g., `vXX`) | Active Google Ads API version used for GAQL validation, Protobuf inspection, and code generation. Automatically detected and updated when running `install.sh`, `update.sh`, `sync_client_libs.py`, `get_latest_api_version.py`, or `python3 config/config_init.py --key api_version`. |
 | **`customer_id`** | `string` | `"12345678"` | Default Google Ads Customer ID (10-digit account ID without dashes) used when a prompt does not explicitly specify a CID (e.g., *"Get my campaigns"*). |
 | **`execute_mutates`** | `boolean` | `false` | Controls whether live Google Ads API write/mutate operations (`--execute` / `validate_only=False`) are permitted through the 4-Step HITL protocol. |
 | **`enabled`** | `boolean` | `true` | Controls whether the plugin is active when you invoke `jetski`/`agy` or Claude Code. When set to `false` (via `./plugin.sh disable`), the plugin is not loaded on new sessions and its lifecycle hooks become no-ops. |
 
-#### Turning the Plugin Off / On (`plugin.sh` & `plugin.ps1`)
-If you want to turn off the plugin so that it is not invoked every time you run `jetski`/`agy` (for example, when working on non-Google Ads projects), use the included [`plugin.sh`](plugin.sh) (Linux/macOS) or [`plugin.ps1`](plugin.ps1) (Windows PowerShell) helper script:
+#### Turning the Plugin Off / On (`--enable` & `--disable`)
 
-```bash
-# Disable the plugin so it is not invoked when running jetski/agy
-./plugin.sh disable
+##### Why You May Want to Use `--disable` and `--enable`
+Because the Google Ads API Developer Assistant is installed globally (`~/.gemini/config/plugins/google-ads-api-developer-assistant` for Antigravity and `~/.claude/plugins/...` for Claude Code), the host CLI loads it across **every workspace and repository** on your machine by default. Whenever the plugin is enabled:
+1. **Session Startup (`PreInvocation` Hook):** The first prompt in every session runs credential synchronization, checks `pypi.org` and GitHub releases, and prints the **Google Ads API Version & Parity Verification Report** table at the top of the assistant's response.
+2. **Context Window & Rules Injection:** The plugin's `rules/google_ads_rules.md`, 11 domain skills (`skills/`), and slash commands (`commands/`) are loaded into the agent's context window.
+3. **Command Interception (`PreToolUse` Hook) & Background Sidecar:** Every terminal tool call is inspected by `config_init.py` (to inject `PYTHONPATH` for Python commands and enforce the 4-Step HITL Mutation Guard), and the A2A sidecar / MCP server (`sidecar.json` / `mcp_config.json`) is registered.
 
-# Enable the plugin so it is active in jetski/agy
-./plugin.sh enable
+When you are working on **unrelated, non-Google Ads repositories**—or when you want zero startup latency, a clean context window without the Google Ads parity report banner, and no background sidecar or hook activity—you can run `--disable` (`disable`) to turn the plugin completely off **without uninstalling it** or losing your cloned `client_libs/` and `config/assistant_config` settings. When you switch back to Google Ads API development, run `--enable` (`enable`) to re-activate it in place.
 
-# Display the current plugin status and live hook state (or pass --json)
-./plugin.sh status
+##### What `--disable` and `--enable` Do Under the Hood
+Passing `--disable` / `--enable` (to `plugin.sh`, `plugin.ps1`, `update.sh`, `update.ps1`, `install.sh`, `install.ps1`, or `config_init.py`) coordinates three layers so that both **already-running sessions** and **newly launched sessions** respect the state:
 
-# Run a diagnostic test verifying config, manifest, and live hook behavior
-./plugin.sh test
+| Layer | What `--disable` (`disable`) Does | What `--enable` (`enable`) Does |
+| :--- | :--- | :--- |
+| **1. Configuration (`config/assistant_config`)** | Sets `enabled = false` in `config/assistant_config` while preserving your existing `api_version`, `customer_id`, and `execute_mutates` settings. | Sets `enabled = true` in `config/assistant_config` while preserving all other settings. |
+| **2. Lifecycle Hooks (`config/config_init.py` & `hooks.json`)** | Sets `"enabled": false` in the installed plugin's `hooks.json` and causes `handle_hook()` in `config_init.py` to short-circuit immediately in any active session:<br>• **`PreInvocation` / `SessionStart`:** Immediately returns `{}` (skips credential sync, PyPI/GitHub network checks, and the parity report table).<br>• **`PreToolUse`:** Immediately returns `{"decision": "allow"}` without rewriting `PYTHONPATH` or evaluating the Google Ads mutation guard. | Sets `"enabled": true` in `hooks.json` and restores full `PreInvocation` startup synchronization, parity table reporting, `PYTHONPATH` injection, and `PreToolUse` 4-Step HITL mutation guard enforcement. |
+| **3. Installed Plugin, MCP & Sidecar Manifests (`~/.gemini/...` & `~/.claude/...`)** | In installed plugin directories (never in the git repository source tree), renames:<br>• `plugin.json` $\rightarrow$ `plugin.json.disabled`<br>• `.claude-plugin/plugin.json` $\rightarrow$ `.claude-plugin/plugin.json.disabled`<br>• `mcp_config.json` $\rightarrow$ `mcp_config.json.disabled`<br>• `sidecars/google-ads-a2a-service/sidecar.json` $\rightarrow$ `sidecar.json.disabled`<br>This prevents `jetski`/`agy` and `claude` from loading the plugin's rules, skills, MCP servers, or background sidecar daemon on new sessions. | Restores all `.disabled` manifest files back to their active filenames (`plugin.json`, `.claude-plugin/plugin.json`, `mcp_config.json`, and `sidecar.json`) so the host CLI discovers and loads the plugin normally on the next session. |
 
-# Check status in shell scripts (prints 'enabled' with exit 0, or 'disabled' with exit 1)
-./plugin.sh is-enabled
-```
+> **Tip — Per-Session Environment Override:** You can also temporarily disable or enable the plugin's hooks for a single terminal session without modifying any files on disk by setting `GOOGLE_ADS_ASSISTANT_ENABLED=false` (or `true`) in your environment before running `agy` or `claude`.
 
-On Windows PowerShell:
-```powershell
-.\plugin.ps1 disable
-.\plugin.ps1 enable
-.\plugin.ps1 status
-.\plugin.ps1 test
-.\plugin.ps1 is-enabled
-```
+##### Commands to Enable, Disable, and Test Status (`plugin.sh` & `plugin.ps1`)
+Use [`plugin.sh`](plugin.sh) (Linux/macOS) or [`plugin.ps1`](plugin.ps1) (Windows PowerShell) from the repository root or from **any directory** via your installed plugin directory:
+
+* **Linux/macOS (from repository root):**
+  ```bash
+  # Disable the plugin so it is not invoked when running jetski/agy
+  ./plugin.sh disable
+
+  # Enable the plugin so it is active in jetski/agy
+  ./plugin.sh enable
+
+  # Display the current plugin status and live hook state (or pass --json)
+  ./plugin.sh status
+
+  # Run a diagnostic test verifying config, manifest, and live hook behavior
+  ./plugin.sh test
+
+  # Check status in shell scripts (prints 'enabled' with exit 0, or 'disabled' with exit 1)
+  ./plugin.sh is-enabled
+  ```
+
+* **Linux/macOS (from any directory):**
+  ```bash
+  ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh disable
+  ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh enable
+  ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh status
+  ```
+
+* **Windows PowerShell (from repository root):**
+  ```powershell
+  .\plugin.ps1 disable
+  .\plugin.ps1 enable
+  .\plugin.ps1 status
+  .\plugin.ps1 test
+  .\plugin.ps1 is-enabled
+  ```
+
+* **Windows PowerShell (from any directory):**
+  ```powershell
+  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" disable
+  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" enable
+  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" status
+  ```
 
 You can also configure settings during installation (`./install.sh agy --cid 1234567890` or `./install.sh agy --disable`), edit `config/assistant_config` directly, or run `config_init.py`:
 ```bash
@@ -252,8 +288,8 @@ python3 ~/.gemini/config/plugins/google-ads-api-developer-assistant/config/confi
 # Automatically detect the latest API version across client_libs and site-packages and update config/assistant_config
 python3 plugins/google-ads-api-developer-assistant/config/config_init.py --key api_version
 
-# Lock a specific API version in config/assistant_config
-python3 plugins/google-ads-api-developer-assistant/config/config_init.py --key api_version --value v26
+# Lock a specific API version in config/assistant_config (e.g., vXX)
+python3 plugins/google-ads-api-developer-assistant/config/config_init.py --key api_version --value <api_version>
 
 # Synchronize client_libs and api_version synchronously from the CLI
 python3 plugins/google-ads-api-developer-assistant/config/config_init.py --sync-client-libs
@@ -329,16 +365,40 @@ You can check for updates or trigger synchronization at any time while in an act
   * Natural Language: *"What is the active Google Ads API version?"*
 
 ### 3. Manual Terminal Updates
-To update the repository, assistant plugin, and all configured client libraries outside an active session:
-* **Linux/macOS:**
+To update the repository, assistant plugin, and all configured client libraries outside an active session, you can run `update.sh` / `update.ps1` either from the repository root or from **any directory** using the copy installed inside your global plugin directory:
+* **Linux/macOS (from repository root):**
   ```bash
   ./update.sh agy --all          # Update Antigravity plugin and all client libraries
   ./update.sh claude --all       # Update Claude Code plugin and all client libraries
   ```
-* **Windows (PowerShell):**
+* **Linux/macOS (from any directory):**
+  ```bash
+  # Update plugin and all client libraries
+  ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --all
+  ~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/update.sh claude --all
+
+  # Disable or enable the plugin from any directory (via update.sh or plugin.sh)
+  ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --disable
+  ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --enable
+  ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh disable
+  ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh enable
+  ```
+* **Windows PowerShell (from repository root):**
   ```powershell
   .\update.ps1 -Type agy -All
   .\update.ps1 -Type claude -All
+  ```
+* **Windows PowerShell (from any directory):**
+  ```powershell
+  # Update plugin and all client libraries
+  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -All
+  & "$HOME\.claude\plugins\google-ads-assistant-local\plugins\google-ads-api-developer-assistant\update.ps1" -Type claude -All
+
+  # Disable or enable the plugin from any directory (via update.ps1 or plugin.ps1)
+  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -Disable
+  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -Enable
+  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" disable
+  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" enable
   ```
 
 ### 4. Client Library & Runtime Version Parity
@@ -396,12 +456,12 @@ You can control this setting in either of two ways:
 1. **Edit `config/assistant_config` (TOML) directly:**
    Open `config/assistant_config` and set `execute_mutates` to `true` or `false`:
    ```toml
-   api_version = "v25"
+   api_version = "<api_version> (e.g., vXX)"
    customer_id = "12345678"
    execute_mutates = false
    ```
    ```toml
-   api_version = "v25"
+   api_version = "<api_version> (e.g., vXX)"
    customer_id = "12345678"
    execute_mutates = true
    ```
@@ -569,9 +629,9 @@ pytest -v tests/benchmark_suite.py
 ## Maintenance
 
 We will periodically release updates to the assistant and client libraries.
-To update your repository, plugin installation, and client libraries:
+During installation, `update.sh` and `update.ps1` (along with the source repository path in `config/.repo_root`) are copied into your installed plugin directory so you can run updates from the repository root or from **any directory** on your machine:
 
-*   **Linux/macOS:**
+*   **Linux/macOS (from repository root):**
     ```bash
     ./update.sh agy          # Update Antigravity plugin
     ./update.sh claude       # Update Claude Code plugin
@@ -580,7 +640,20 @@ To update your repository, plugin installation, and client libraries:
     ```bash
     ./update.sh agy --java --dotnet
     ```
-*   **Windows:**
+*   **Linux/macOS (from any directory):**
+    ```bash
+    # Update plugin and client libraries
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --java --dotnet
+    ~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/update.sh claude
+
+    # Enable or disable the plugin from any directory
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --disable
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --enable
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh disable
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh enable
+    ```
+*   **Windows PowerShell (from repository root):**
     ```powershell
     .\update.ps1 -Type agy
     .\update.ps1 -Type claude
@@ -588,6 +661,19 @@ To update your repository, plugin installation, and client libraries:
     To add or update specific client libraries:
     ```powershell
     .\update.ps1 -Type agy -Java -Dotnet
+    ```
+*   **Windows PowerShell (from any directory):**
+    ```powershell
+    # Update plugin and client libraries
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -Java -Dotnet
+    & "$HOME\.claude\plugins\google-ads-assistant-local\plugins\google-ads-api-developer-assistant\update.ps1" -Type claude
+
+    # Enable or disable the plugin from any directory
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -Disable
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -Enable
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" disable
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" enable
     ```
 
 ## Uninstallation

@@ -29,9 +29,12 @@ err() {
 }
 
 # --- Project Directory Resolution ---
-# Determine the root directory of the current git repository.
-if ! PROJECT_DIR_ABS=$(git rev-parse --show-toplevel 2>/dev/null); then
-  err "ERROR: This script must be run from within the google-ads-api-developer-assistant git repository."
+# Determine the root directory of the google-ads-api-developer-assistant git repository.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if PROJECT_DIR_ABS=$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel 2>/dev/null) && [[ -d "${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant" ]]; then
+  :
+elif ! PROJECT_DIR_ABS=$(git rev-parse --show-toplevel 2>/dev/null) || [[ ! -d "${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant" ]]; then
+  err "ERROR: Could not locate the google-ads-api-developer-assistant git repository."
   exit 1
 fi
 readonly PROJECT_DIR_ABS
@@ -475,11 +478,6 @@ detect_and_seed_api_version() {
         if [[ "${existing_em}" == "true" || "${existing_em}" == "false" ]]; then
           exec_mutates="${existing_em}"
         fi
-        local existing_en=""
-        existing_en=$(grep -E '^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\2/' | tr '[:upper:]' '[:lower:]' || true)
-        if [[ "${existing_en}" == "true" || "${existing_en}" == "false" ]]; then
-          plugin_enabled="${existing_en}"
-        fi
       fi
       if [[ -n "${PLUGIN_ENABLED_OPT}" ]]; then
         plugin_enabled="${PLUGIN_ENABLED_OPT}"
@@ -531,10 +529,14 @@ install_plugin_copy() {
   rm -rf "${target_dir}"
   mkdir -p "$(dirname "${target_dir}")"
   safe_copy_dir "${PLUGIN_SOURCE_DIR}" "${target_dir}"
-  if [[ -f "${PROJECT_DIR_ABS}/plugin.sh" ]]; then
-    cp "${PROJECT_DIR_ABS}/plugin.sh" "${target_dir}/plugin.sh"
-    chmod +x "${target_dir}/plugin.sh" 2>/dev/null || true
-  fi
+  for helper_script in plugin.sh update.sh; do
+    if [[ -f "${PROJECT_DIR_ABS}/${helper_script}" ]]; then
+      cp "${PROJECT_DIR_ABS}/${helper_script}" "${target_dir}/${helper_script}"
+      chmod +x "${target_dir}/${helper_script}" 2>/dev/null || true
+    fi
+  done
+  mkdir -p "${target_dir}/config"
+  echo "${PROJECT_DIR_ABS}" > "${target_dir}/config/.repo_root"
   mkdir -p "${target_dir}/client_libs"
 
   for lang in python php ruby java dotnet; do
@@ -564,9 +566,9 @@ install_plugin_copy() {
 
   detect_and_seed_api_version "${target_dir}/client_libs/google-ads-python/google/ads/googleads" "${target_dir}/config"
   if [[ "${PLUGIN_ENABLED_OPT}" == "false" ]]; then
-    "${PROJECT_DIR_ABS}/plugin.sh" disable "${TYPE}" --quiet
-  elif [[ "${PLUGIN_ENABLED_OPT}" == "true" ]]; then
-    "${PROJECT_DIR_ABS}/plugin.sh" enable "${TYPE}" --quiet
+    "${PROJECT_DIR_ABS}/plugin.sh" disable --config-dir "${target_dir}/config" --quiet
+  else
+    "${PROJECT_DIR_ABS}/plugin.sh" enable --config-dir "${target_dir}/config" --quiet
   fi
 }
 
