@@ -7,11 +7,12 @@ description: Executes Google Ads API write/mutation operations using the mandato
 
 When a user requests a write or mutation operation against the Google Ads API (`mutate`, `create`, `update`, `remove`, `apply_recommendation`, or offline conversion uploads), you MUST follow this 4-step workflow.
 
-> **Prerequisite — User Mutate Configuration (`config/assistant_config`):**
+> **Prerequisite — User Mutate Configuration (`config/assistant_config` & `config/financial_limits`):**
 > By default, live mutations are disabled (`execute_mutates = false` in `config/assistant_config`). While `validate_only=True` dry-runs (`--dry-run`) are always allowed, any live mutation (`--execute` or `validate_only=False`) is deterministically blocked by both the `PreToolUse` hook (`config/config_init.py`) and `run_mutation.py` unless `config/assistant_config` is set to:
 > ```toml
 > execute_mutates = true
 > ```
+> In addition, `config/financial_limits` allows users to configure per-transaction upper limits across all financial Google Ads API mutate operations (in the exact numeric format and monetary unit required by each API service: `micros` (`int64`), `currency_units` (`double`), `decimal_ratio` (`double`), or `micros_proportion` (`int64`)). Any mutation whose payload exceeds a configured positive upper limit (`> 0`) returns an error, informs the user at the HITL step, logs `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`, and refuses to execute. Users can inspect or update limits via `skills/execute-mutation/scripts/set_financial_limits.py` (or `./set_financial_limits.py`).
 
 Live mutations without both `execute_mutates = true` in `config/assistant_config` and a verified `validate_only=True` dry-run receipt (`saved/data/last_dry_run.json`) are deterministically blocked by the `PreToolUse` hook.
 

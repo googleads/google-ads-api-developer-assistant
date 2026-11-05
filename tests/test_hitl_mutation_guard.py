@@ -2984,6 +2984,430 @@ def test_real_v26_financial_protobuf_requests_serialization_sha256_and_intercept
     assert disabled_proto_captured[-1]["status"] == "BLOCKED_MUTATES_DISABLED"
 
 
+def test_financial_limits_config_and_helper_script(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Verifies config/financial_limits TOML structure, monetary unit notes, and set_financial_limits.py CLI."""
+    import json
+    import subprocess
+    import sys
+    import tomllib
+
+    repo_root = Path(__file__).resolve().parent.parent
+    fin_cfg_path = (
+        repo_root
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "config"
+        / "financial_limits"
+    )
+    assert fin_cfg_path.is_file(), "config/financial_limits must exist in the plugin config directory"
+
+    raw_text = fin_cfg_path.read_text(encoding="utf-8")
+    # Verify monetary unit notes are present in config/financial_limits
+    for unit_term in ("micros", "currency_units", "decimal_ratio", "micros_proportion", "int64", "double"):
+        assert unit_term in raw_text, f"Expected monetary unit/format note '{unit_term}' in config/financial_limits"
+
+    parsed = tomllib.loads(raw_text)
+    run_mutation = _load_run_mutation_module()
+    expected_keys = set(run_mutation._FINANCIAL_LIMIT_META.keys())
+    assert set(parsed.keys()) == expected_keys
+    for k, v in parsed.items():
+        assert v == 0 or v == 0.0, f"Default financial limit for {k} should be 0 / 0.0 (unlimited)"
+
+    # Verify helper script entrypoints exist
+    skill_script = (
+        repo_root
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "skills"
+        / "execute-mutation"
+        / "scripts"
+        / "set_financial_limits.py"
+    )
+    config_wrapper = (
+        repo_root
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "config"
+        / "set_financial_limits.py"
+    )
+    root_wrapper = repo_root / "set_financial_limits.py"
+    assert skill_script.is_file()
+    assert config_wrapper.is_file()
+    assert root_wrapper.is_file()
+
+    # Use an isolated temporary financial_limits file for CLI modification tests
+    temp_fin_file = tmp_path / "financial_limits"
+
+    # 1. --list --json returns all 20 transaction limit specs without modifying disk
+    res_list = subprocess.run(
+        [sys.executable, str(root_wrapper), "--config-file", str(temp_fin_file), "--list", "--json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    list_payload = json.loads(res_list.stdout)
+    assert len(list_payload["limits"]) == len(expected_keys)
+
+    # 2. --set KEY=AMOUNT for int64 micros and double currency_units / decimal_ratio
+    res_set = subprocess.run(
+        [
+            sys.executable,
+            str(config_wrapper),
+            "--config-file",
+            str(temp_fin_file),
+            "--set",
+            "campaign_budget_amount_micros=50000000",
+            "--set",
+            "cpc_bid_micros=5000000",
+            "--set",
+            "click_conversion_value=500.0",
+            "--set",
+            "target_roas=10.0",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert temp_fin_file.is_file()
+    set_payload = json.loads(res_set.stdout)
+    assert set_payload["updated"]["campaign_budget_amount_micros"] == 50000000
+    assert set_payload["updated"]["cpc_bid_micros"] == 5000000
+    assert set_payload["updated"]["conversion_upload_value"] == 500.0
+    assert set_payload["updated"]["target_roas"] == 10.0
+
+    # 3. --type and --amount plus dedicated per-type flag
+    res_type = subprocess.run(
+        [
+            sys.executable,
+            str(skill_script),
+            "--config-file",
+            str(temp_fin_file),
+            "--type",
+            "account_budget_spending_limit_micros",
+            "--amount",
+            "5000000000",
+            "--target-cpa-micros",
+            "25000000",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    type_payload = json.loads(res_type.stdout)
+    assert type_payload["updated"]["account_budget_spending_limit_micros"] == 5000000000
+    assert type_payload["updated"]["target_cpa_micros"] == 25000000
+
+    # Verify file remains valid TOML with comments preserved
+    updated_toml = tomllib.loads(temp_fin_file.read_text(encoding="utf-8"))
+    assert updated_toml["campaign_budget_amount_micros"] == 50000000
+    assert updated_toml["account_budget_spending_limit_micros"] == 5000000000
+    assert updated_toml["conversion_upload_value"] == 500.0
+    assert "Monetary Unit" in temp_fin_file.read_text(encoding="utf-8")
+
+    # 4. Reject non-integer float for int64 micros field (must use exact API format)
+    res_bad_int = subprocess.run(
+        [
+            sys.executable,
+            str(skill_script),
+            "--config-file",
+            str(temp_fin_file),
+            "--set",
+            "campaign_budget_amount_micros=50.5",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_bad_int.returncode == 2
+    assert "int64 integer" in res_bad_int.stderr
+
+    # 5. --reset and --reset-all
+    subprocess.run(
+        [
+            sys.executable,
+            str(skill_script),
+            "--config-file",
+            str(temp_fin_file),
+            "--reset",
+            "campaign_budget_amount_micros",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert tomllib.loads(temp_fin_file.read_text(encoding="utf-8"))["campaign_budget_amount_micros"] == 0
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(skill_script),
+            "--config-file",
+            str(temp_fin_file),
+            "--reset-all",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    reset_toml = tomllib.loads(temp_fin_file.read_text(encoding="utf-8"))
+    assert all(v == 0 or v == 0.0 for v in reset_toml.values())
+
+    # 6. Verify evaluate_mutation_guard treats set_financial_limits.py as a read-only helper script
+    decision, reason = evaluate_mutation_guard(
+        f"python3 {root_wrapper} --set campaign_budget_amount_micros=50000000"
+    )
+    assert decision == "allow"
+    assert reason is None
+
+
+def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Verifies financial upper limits block exceeding mutations at HITL (--dry-run, --execute, PreToolUse hook, A2A sidecar, and pre-RPC wrapper)."""
+    import importlib.util
+    import json
+    import subprocess
+    import sys
+
+    run_mutation = _load_run_mutation_module()
+    audit_log_file = tmp_path / "financial_limits_audit.jsonl"
+    temp_fin_file = tmp_path / "financial_limits"
+    temp_fin_file.write_text(
+        "campaign_budget_amount_micros = 50000000\n"
+        "account_budget_proposed_spending_limit_micros = 1000000000\n"
+        "cpc_bid_micros = 5000000\n"
+        "target_roas = 8.0\n"
+        "click_conversion_value = 250.0\n"
+        "conversion_adjustment_restatement_value = 250.0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GOOGLE_ADS_MUTATION_AUDIT_LOG", str(audit_log_file))
+    monkeypatch.setenv("GOOGLE_ADS_FINANCIAL_LIMITS_FILE", str(temp_fin_file))
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates = true")
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+    # 1. Pre-RPC enforcement inside _wrap_service_for_audit:
+    #    - CampaignBudget amount_micros = 50_000_000 (== limit) is ALLOWED
+    #    - CampaignBudget amount_micros = 75_000_000 (> limit) is BLOCKED BEFORE RPC with PermissionError
+    class _BudgetService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def mutate_campaign_budgets(self, request: Any = None) -> dict[str, Any]:
+            self.calls += 1
+            return {"results": [{"resource_name": "customers/1234567890/campaignBudgets/1"}]}
+
+    svc = _BudgetService()
+    captured: list[dict[str, Any]] = []
+    wrapped = run_mutation._wrap_service_for_audit(
+        svc,
+        "CampaignBudgetService",
+        captured,
+        dry_run_mode=True,
+    )
+
+    within_limit_req = {
+        "customer_id": "1234567890",
+        "validate_only": True,
+        "operations": [
+            {"update": {"resource_name": "customers/1234567890/campaignBudgets/1", "amount_micros": "50000000"}}
+        ],
+    }
+    assert wrapped.mutate_campaign_budgets(request=within_limit_req)["results"]
+    assert svc.calls == 1
+
+    exceeding_req = {
+        "customer_id": "1234567890",
+        "validate_only": True,
+        "operations": [
+            {"update": {"resource_name": "customers/1234567890/campaignBudgets/1", "amount_micros": "75000000"}}
+        ],
+    }
+    with pytest.raises(PermissionError, match="BLOCKED BY FINANCIAL UPPER LIMIT"):
+        wrapped.mutate_campaign_budgets(request=exceeding_req)
+    assert svc.calls == 1, "RPC exceeding financial upper limit must NOT be transmitted"
+    assert captured[-1]["status"] == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+
+    # 2. write_dry_run_receipt blocks when payload or script exceeds configured limit
+    exceeding_script = tmp_path / "exceed_budget.py"
+    exceeding_script.write_text(
+        "def mutate_budget(client, req):\n"
+        "    req.validate_only = True\n"
+        "    budget.amount_micros = 90000000\n"
+        "    client.get_service('CampaignBudgetService').mutate_campaign_budgets(request=req)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="BLOCKED BY FINANCIAL UPPER LIMIT"):
+        run_mutation.write_dry_run_receipt(
+            customer_id="1234567890",
+            operation_summary="CampaignBudgetService.mutate_campaign_budgets",
+            before_state="$50.00/day (50,000,000 micros)",
+            after_state="$90.00/day (90,000,000 micros)",
+            consequences=["Daily budget increases to $90.00/day (90,000,000 micros)"],
+            reversibility="REVERSIBLE",
+            script_path=str(exceeding_script),
+        )
+
+    # 3. Subprocess CLI --dry-run and --execute enforcement via run_mutation.py
+    runner_script = (
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "skills"
+        / "execute-mutation"
+        / "scripts"
+        / "run_mutation.py"
+    )
+    sub_env = os.environ.copy()
+    sub_env["GOOGLE_ADS_MUTATION_AUDIT_LOG"] = str(audit_log_file)
+    sub_env["GOOGLE_ADS_FINANCIAL_LIMITS_FILE"] = str(temp_fin_file)
+    sub_env["GOOGLE_ADS_EXECUTE_MUTATES"] = "execute_mutates = true"
+
+    cli_exceed_script = tmp_path / "cli_exceed.py"
+    cli_exceed_script.write_text(
+        "budget_amount_micros = 80000000\n"
+        "print('dry run ok')\n",
+        encoding="utf-8",
+    )
+    res_dry_blocked = subprocess.run(
+        [
+            sys.executable,
+            str(runner_script),
+            "--script",
+            str(cli_exceed_script),
+            "--dry-run",
+            "--customer-id",
+            "1234567890",
+            "--operation",
+            "CampaignBudgetService.mutate_campaign_budgets",
+            "--before",
+            "$40.00/day (40,000,000 micros)",
+            "--after",
+            "$80.00/day (80,000,000 micros)",
+            "--consequences",
+            "Daily budget increases to $80.00/day (80,000,000 micros)",
+        ],
+        capture_output=True,
+        text=True,
+        env=sub_env,
+        check=False,
+    )
+    assert res_dry_blocked.returncode == 2
+    assert "BLOCKED BY FINANCIAL UPPER LIMIT" in res_dry_blocked.stderr
+    assert "campaign_budget_amount_micros" in res_dry_blocked.stderr
+
+    # Verify audit log recorded BLOCKED_FINANCIAL_LIMIT_EXCEEDED
+    audit_lines = [
+        json.loads(line)
+        for line in audit_log_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(e["status"] == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED" for e in audit_lines)
+
+    # 4. Now write a valid receipt while limit is 100_000_000, then lower limit to 50_000_000
+    #    and verify both load_and_verify_receipt, PreToolUse hook, and A2A sidecar EXECUTE_MUTATION block it!
+    temp_fin_file.write_text("campaign_budget_amount_micros = 100000000\n", encoding="utf-8")
+    valid_receipt = run_mutation.write_dry_run_receipt(
+        customer_id="1234567890",
+        operation_summary="CampaignBudgetService.mutate_campaign_budgets",
+        before_state="$40.00/day (40,000,000 micros)",
+        after_state="$80.00/day (80,000,000 micros)",
+        consequences=["Daily budget increases to $80.00/day (80,000,000 micros)"],
+        reversibility="REVERSIBLE",
+        script_path=str(cli_exceed_script),
+        rpc_calls=[
+            {
+                "service": "CampaignBudgetService",
+                "method": "mutate_campaign_budgets",
+                "request_payload": {
+                    "customer_id": "1234567890",
+                    "validate_only": True,
+                    "operations": [{"update": {"amount_micros": "80000000"}}],
+                },
+            }
+        ],
+    )
+    assert valid_receipt["status"] == "DRY_RUN_PASSED"
+
+    # Lower limit to 50_000_000 micros ($50.00)
+    temp_fin_file.write_text("campaign_budget_amount_micros = 50000000\n", encoding="utf-8")
+
+    ok_verify, msg_verify, _ = run_mutation.load_and_verify_receipt(
+        script_path=str(cli_exceed_script)
+    )
+    assert ok_verify is False
+    assert "BLOCKED BY FINANCIAL UPPER LIMIT" in msg_verify
+
+    # PreToolUse hook evaluate_mutation_guard denies --execute when receipt exceeds limit
+    hook_decision, hook_reason = evaluate_mutation_guard(
+        f"python3 skills/execute-mutation/scripts/run_mutation.py --script {cli_exceed_script} --execute"
+    )
+    assert hook_decision == "deny"
+    assert hook_reason is not None
+    assert "BLOCKED BY HITL MUTATION GUARD" in hook_reason
+    assert "BLOCKED BY FINANCIAL UPPER LIMIT" in hook_reason
+
+    # PreToolUse hook evaluate_mutation_guard also denies direct inline/script mutation exceeding limit
+    direct_decision, direct_reason = evaluate_mutation_guard(
+        f"python3 {exceeding_script}"
+    )
+    assert direct_decision == "deny"
+    assert direct_reason is not None
+    assert "BLOCKED BY FINANCIAL UPPER LIMIT" in direct_reason
+
+    # 5. A2A Sidecar PREPARE_MUTATION and EXECUTE_MUTATION block when limit is exceeded
+    server_path = (
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "sidecars"
+        / "google-ads-a2a-service"
+        / "server.py"
+    )
+    spec = importlib.util.spec_from_file_location("a2a_server_fin_limits", server_path)
+    assert spec and spec.loader
+    server_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(server_mod)
+    handler = server_mod.A2AHandler.__new__(server_mod.A2AHandler)
+
+    exec_Blocked_resp = handler.handle_execute_mutation(
+        "task-fin-limit-exec",
+        {
+            "user_confirmed": True,
+            "confirmation_summary": "User approved",
+            "script_path": str(cli_exceed_script),
+        },
+    )
+    assert exec_Blocked_resp["status"] == "HITL_BLOCKED"
+    assert "BLOCKED BY FINANCIAL UPPER LIMIT" in exec_Blocked_resp["error"]
+
+    prep_blocked_resp = handler.handle_prepare_mutation(
+        "task-fin-limit-prep",
+        {
+            "customer_id": "1234567890",
+            "operation": "CampaignBudgetService.mutate_campaign_budgets",
+            "before_state": "$40.00/day (40,000,000 micros)",
+            "after_state": "$80.00/day (80,000,000 micros)",
+            "consequences": ["Daily budget increases to $80.00/day (80,000,000 micros)"],
+            "reversibility": "REVERSIBLE",
+            "script_path": str(cli_exceed_script),
+        },
+    )
+    assert prep_blocked_resp["status"] == "HITL_BLOCKED"
+    assert "BLOCKED BY FINANCIAL UPPER LIMIT" in prep_blocked_resp["error"]
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+
 
 
 

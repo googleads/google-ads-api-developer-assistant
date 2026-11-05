@@ -258,7 +258,7 @@ $TempConfigDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::New
 New-Item -ItemType Directory -Force -Path $TempConfigDir | Out-Null
 
 try {
-    $CfgFiles = @("assistant_config", "customer_id", "customer_id.txt")
+    $CfgFiles = @("assistant_config", "financial_limits", "customer_id", "customer_id.txt")
     foreach ($CfgFile in $CfgFiles) {
         $SrcCfg = Join-Path $ConfigDir $CfgFile
         if (Test-Path -LiteralPath $SrcCfg) {
@@ -410,9 +410,14 @@ function Sync-InstalledPluginDir {
     else {
         Write-Host "Syncing plugin files to $TargetPluginDir..."
         $TargetCfgFile = Join-Path (Join-Path $TargetPluginDir "config") "assistant_config"
+        $TargetFinFile = Join-Path (Join-Path $TargetPluginDir "config") "financial_limits"
         $BackupCfgContent = $null
+        $BackupFinContent = $null
         if (Test-Path -LiteralPath $TargetCfgFile) {
             $BackupCfgContent = Get-Content -LiteralPath $TargetCfgFile -Raw
+        }
+        if (Test-Path -LiteralPath $TargetFinFile) {
+            $BackupFinContent = Get-Content -LiteralPath $TargetFinFile -Raw
         }
         Get-ChildItem -LiteralPath $PluginSourceDir -Force | ForEach-Object {
             if ($_.Name -ne "client_libs") {
@@ -422,9 +427,12 @@ function Sync-InstalledPluginDir {
         if ($BackupCfgContent) {
             Set-Content -Path $TargetCfgFile -Value $BackupCfgContent -NoNewline
         }
+        if ($BackupFinContent) {
+            Set-Content -Path $TargetFinFile -Value $BackupFinContent -NoNewline
+        }
     }
 
-    foreach ($HelperName in @("plugin.ps1", "update.ps1")) {
+    foreach ($HelperName in @("plugin.ps1", "update.ps1", "set_financial_limits.py")) {
         $HelperPs1 = Join-Path $ProjectDirAbs $HelperName
         if (Test-Path -LiteralPath $HelperPs1) {
             Copy-Item -Force -LiteralPath $HelperPs1 -Destination (Join-Path $TargetPluginDir $HelperName)

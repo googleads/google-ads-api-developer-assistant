@@ -335,7 +335,7 @@ function Install-PluginCopy {
         Remove-Item -Recurse -Force -LiteralPath $TargetPluginDir
     }
     Copy-Item -Recurse -Force -LiteralPath $PluginSource -Destination $TargetPluginDir
-    foreach ($HelperName in @("plugin.ps1", "update.ps1")) {
+    foreach ($HelperName in @("plugin.ps1", "update.ps1", "set_financial_limits.py")) {
         $HelperPs1 = Join-Path $ProjectDirAbs $HelperName
         if (Test-Path -LiteralPath $HelperPs1) {
             Copy-Item -Force -LiteralPath $HelperPs1 -Destination (Join-Path $TargetPluginDir $HelperName)

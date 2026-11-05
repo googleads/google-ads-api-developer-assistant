@@ -246,6 +246,27 @@ enabled = true
 
 To turn off the plugin so that it is not invoked every time you launch `jetski`/`agy`, run `./plugin.sh disable` (or `.\plugin.ps1 disable` on Windows). To re-enable it or test its current status, run `./plugin.sh enable`, `./plugin.sh status`, or `./plugin.sh test`.
 
+#### Financial Transaction Upper Limits (`config/financial_limits` & `set_financial_limits.py`)
+
+Configure optional upper limits for all financial Google Ads API mutate operations in [`config/financial_limits`](config/financial_limits). Every value is specified in the exact numeric format required by the API call for each service, and each entry notes the monetary/numeric unit used (`micros` (`int64`), `currency_units` (`double`), `decimal_ratio` (`double`), or `micros_proportion` (`int64`)). By default, all limits are set to `0` / `0.0` (unlimited until set to `> 0`). Any mutation exceeding a configured positive limit returns an error, informs the user at the HITL step, logs `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`, and refuses to execute.
+
+Use [`config/set_financial_limits.py`](config/set_financial_limits.py) (or `skills/execute-mutation/scripts/set_financial_limits.py`) to list, set, or reset financial limits:
+```bash
+# List all financial transaction types, API services, monetary units, and configured limits
+python3 config/set_financial_limits.py --list
+
+# Set upper limits in exact API format (e.g. 50000000 micros = 50.00 currency units)
+python3 config/set_financial_limits.py \
+  --set campaign_budget_amount_micros=50000000 \
+  --set cpc_bid_micros=5000000 \
+  --set click_conversion_value=500.0 \
+  --set target_roas=10.0
+
+# Reset a limit (or all limits) back to 0 / 0.0 (unlimited)
+python3 config/set_financial_limits.py --reset campaign_budget_amount_micros
+python3 config/set_financial_limits.py --reset-all
+```
+
 When `enabled = true` and the user enters their first prompt in an Antigravity (`agy`) session, or in Claude Code CLI (`claude`), the `PreInvocation` hook (`python3 config/config_init.py --hook`) normalizes credentials into `config/google-ads.yaml` (`0600` permissions), advances `api_version` in `config/assistant_config`, and executes the **5-Step Client Library & API Version Verification Workflow**:
 1. **Check Python Site-Directory Version Against PyPI:** Inspects the version of `google-ads` installed in the Python site directory (`site.getsitepackages()`, `importlib.metadata.version("google-ads")`) against `pypi.org` (`https://pypi.org/pypi/google-ads/json`).
 2. **Check Latest GitHub Release:** Queries the latest release version of the client library on GitHub (`googleads/google-ads-python/releases/latest`).
@@ -362,18 +383,35 @@ python3 skills/sync-client-libs/scripts/sync_client_libs.py --json
 
 ## 🔌 Sidecar Daemon & MCP Integration
 
-### A2A Sidecar Server
+### What Is a Sidecar?
 
-The plugin includes an Agent-to-Agent (A2A) HTTP service located in `sidecars/google-ads-a2a-service/`.
+In software architecture—borrowed from the analogy of a sidecar attached to a motorcycle—a **sidecar** is a separate companion process or service that runs alongside a primary application on the same host. The sidecar shares the primary application's local execution environment (loopback network, local filesystem, and lifecycle) and offloads supporting responsibilities such as protocol translation, local API serving, configuration synchronization, or policy enforcement without coupling that logic into the main process.
 
-To start the sidecar manually:
+In CLI agent environments such as **Antigravity (`agy`)** and **Claude Code CLI**, tools execute in one of two ways:
+- **Ephemeral Skill Scripts & Hooks (One-Shot Subprocesses)**: When the agent runs a skill script (under `skills/`) or a lifecycle hook (`config_init.py`), the host spawns a new OS process for that single invocation, reads its output, and the process exits immediately.
+- **Sidecar Daemons (Persistent Background Services)**: A sidecar is a long-running background server process that the host CLI launches automatically when the plugin is loaded and keeps running for the duration of the session.
+
+Using a sidecar daemon in an agent plugin provides three main architectural advantages over one-shot scripts:
+1. **Persistent Process & Low Latency**: Because the Python interpreter and imported libraries stay resident in memory, requests handled by the sidecar avoid repeated process startup and module import overhead.
+2. **Structured Inter-Process Communication (HTTP & MCP)**: A sidecar listens on a local loopback port (`127.0.0.1`) or stdio pipe and exposes structured endpoints—such as Agent-to-Agent (A2A) HTTP routes or Model Context Protocol (MCP) tools—allowing the primary agent, subagents, or external tools to exchange typed JSON payloads rather than constructing ad-hoc shell commands.
+3. **Host-Supervised Lifecycle**: Rather than requiring the user or the LLM to manually start, monitor, or kill background servers in a terminal, the host CLI runtime supervises the sidecar process automatically via its manifest (`sidecar.json` or `mcp_config.json`), handling port assignment, log capture, automatic restarts on crash, and clean shutdown when the plugin is disabled.
+
+### How the Sidecar Functions Within the Assistant
+
+The plugin includes an Agent-to-Agent (A2A) HTTP service located in `sidecars/google-ads-a2a-service/` (`sidecar.json` and `server.py`).
+
+1. **Host Lifecycle Management**: When the plugin is enabled (`enabled = true` in `config/assistant_config`), the host reads `sidecars/google-ads-a2a-service/sidecar.json`, starts `python3 server.py` automatically in the background, assigns its loopback port via `ANTIGRAVITY_SIDECAR_WEB_PORT` (or falls back to `A2A_PORT`, default `8900`), and restarts it if it exits (`"restart_policy": "always"`). Running `./plugin.sh disable` renames `sidecar.json` and `mcp_config.json` to `.disabled`, stopping the background daemon.
+2. **Startup Credential & Config Synchronization**: On startup (and before executing incoming tasks), `server.py` calls `config_init.sync_and_set_config_kv()` to synchronize credentials from `~/google-ads.yaml` into `config/google-ads.yaml` (`0600` permissions) and load the active `customer_id`, `api_version`, and `execute_mutates` settings from `config/assistant_config`.
+3. **Dynamic API Version Resolution**: For each incoming task, `get_effective_api_version()` resolves the target Google Ads API version across the request payload / `GOOGLE_ADS_API_VERSION` env var, `config/assistant_config`, local `client_libs/google-ads-python` `v<N>` directories, and installed `google.ads.googleads` packages.
+4. **A2A HTTP Endpoints**: The daemon listens on `127.0.0.1:8900` (or `ANTIGRAVITY_SIDECAR_WEB_PORT`):
+   - `GET /` or `GET /health`: Health check endpoint returning service status, active plugin version, and listening port.
+   - `POST /v1/a2a/tasks`: Handles structured task payloads for `GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION` (writes a SHA-256 signed `validate_only=True` receipt to `saved/data/last_dry_run.json` and returns the **Mutation & Consequence Verification Card**), and `EXECUTE_MUTATION` (verifies `execute_mutates = true`, user confirmation, and the SHA-256 dry-run receipt before recording execution in `saved/logs/mutation_audit.jsonl`).
+
+To start or test the sidecar manually:
 ```bash
 python3 sidecars/google-ads-a2a-service/server.py
+curl http://127.0.0.1:8900/health
 ```
-
-The daemon listens on port `8900` (or the port defined by `ANTIGRAVITY_SIDECAR_WEB_PORT`):
-- `GET /health`: Health check endpoint.
-- `POST /v1/a2a/tasks`: Handles JSON-RPC style task payloads for `GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION`, and `EXECUTE_MUTATION`.
 
 ### Model Context Protocol (MCP)
 

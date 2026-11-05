@@ -43,6 +43,15 @@ def _resolve_assistant_config_file(file: Any, mode: str = "r") -> Any:
         plugin_acfg = os.path.join(_THIS_CONFIG_DIR, "assistant_config")
         if os.path.isfile(plugin_acfg):
             return plugin_acfg
+    elif norm == os.path.normpath("config/financial_limits") and (
+        "r" in mode and "w" not in mode and "a" not in mode and "+" not in mode
+    ):
+        env_fl = os.environ.get("GOOGLE_ADS_FINANCIAL_LIMITS_FILE", "").strip()
+        if env_fl and os.path.isfile(env_fl):
+            return env_fl
+        plugin_fl = os.path.join(_THIS_CONFIG_DIR, "financial_limits")
+        if os.path.isfile(plugin_fl):
+            return plugin_fl
 
     return file
 

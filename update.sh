@@ -364,8 +364,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Backup config/assistant_config and legacy customer_id files if they exist
-for cfg_file in assistant_config customer_id customer_id.txt; do
+# Backup config/assistant_config, config/financial_limits, and legacy customer_id files if they exist
+for cfg_file in assistant_config financial_limits customer_id customer_id.txt; do
   if [[ -f "${PLUGIN_SOURCE_DIR}/config/${cfg_file}" ]]; then
     cp "${PLUGIN_SOURCE_DIR}/config/${cfg_file}" "${TEMP_CONFIG_DIR}/${cfg_file}"
   fi
@@ -374,7 +374,7 @@ done
 if ! git -C "${PROJECT_DIR_ABS}" -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull; then
   err "ERROR: Failed to update google-ads-api-developer-assistant repository."
   # Restore config files if backup exists
-  for cfg_file in assistant_config customer_id customer_id.txt; do
+  for cfg_file in assistant_config financial_limits customer_id customer_id.txt; do
     if [[ -f "${TEMP_CONFIG_DIR}/${cfg_file}" ]]; then
       cp "${TEMP_CONFIG_DIR}/${cfg_file}" "${PLUGIN_SOURCE_DIR}/config/${cfg_file}"
     fi
@@ -383,7 +383,7 @@ if ! git -C "${PROJECT_DIR_ABS}" -c maintenance.auto=false -c gc.auto=0 -c gc.au
 fi
 
 # Restore config files
-for cfg_file in assistant_config customer_id customer_id.txt; do
+for cfg_file in assistant_config financial_limits customer_id customer_id.txt; do
   if [[ -f "${TEMP_CONFIG_DIR}/${cfg_file}" ]]; then
     cp "${TEMP_CONFIG_DIR}/${cfg_file}" "${PLUGIN_SOURCE_DIR}/config/${cfg_file}"
   fi
@@ -460,8 +460,12 @@ sync_installed_plugin_dir() {
   else
     echo "Syncing plugin files to ${target_plugin_dir}..."
     local existing_cfg_backup="${TEMP_CONFIG_DIR}/target_assistant_config"
+    local existing_fin_backup="${TEMP_CONFIG_DIR}/target_financial_limits"
     if [[ -f "${target_plugin_dir}/config/assistant_config" ]]; then
       cp "${target_plugin_dir}/config/assistant_config" "${existing_cfg_backup}"
+    fi
+    if [[ -f "${target_plugin_dir}/config/financial_limits" ]]; then
+      cp "${target_plugin_dir}/config/financial_limits" "${existing_fin_backup}"
     fi
     for item in "${PLUGIN_SOURCE_DIR}"/*; do
       if [[ -e "${item}" ]]; then
@@ -475,9 +479,12 @@ sync_installed_plugin_dir() {
     if [[ -f "${existing_cfg_backup}" ]]; then
       cp "${existing_cfg_backup}" "${target_plugin_dir}/config/assistant_config"
     fi
+    if [[ -f "${existing_fin_backup}" ]]; then
+      cp "${existing_fin_backup}" "${target_plugin_dir}/config/financial_limits"
+    fi
   fi
 
-  for helper_script in plugin.sh update.sh; do
+  for helper_script in plugin.sh update.sh set_financial_limits.py; do
     if [[ -f "${PROJECT_DIR_ABS}/${helper_script}" ]]; then
       rm -f "${target_plugin_dir}/${helper_script}"
       cp "${PROJECT_DIR_ABS}/${helper_script}" "${target_plugin_dir}/${helper_script}"

@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 import uuid
 
 
@@ -24,6 +24,7 @@ RECEIPT_FILENAME = "last_dry_run.json"
 AUDIT_LOG_FILENAME = "mutation_audit.jsonl"
 ASSISTANT_CONFIG_FILENAME = "assistant_config"
 EXECUTE_MUTATES_FILENAME = ASSISTANT_CONFIG_FILENAME
+FINANCIAL_LIMITS_FILENAME = "financial_limits"
 DEFAULT_MAX_RECEIPT_AGE_SECONDS = 1800  # 30 minutes
 _TRACE_ENV_VAR = "_GOOGLE_ADS_MUTATION_TRACE_FILE"
 _EXPECTED_HASHES_ENV_VAR = "_GOOGLE_ADS_EXPECTED_REQUEST_SHA256"
@@ -445,6 +446,446 @@ def is_execute_mutates_enabled() -> bool:
     return False
 
 
+_FINANCIAL_LIMIT_META: Dict[str, Tuple[str, str]] = {
+    "all_micros_transactions": ("int64", "micros"),
+    "all_currency_unit_transactions": ("double", "currency_units"),
+    "campaign_budget_amount_micros": ("int64", "micros"),
+    "campaign_budget_total_amount_micros": ("int64", "micros"),
+    "account_budget_spending_limit_micros": ("int64", "micros"),
+    "reservation_booking_max_budget_micros": ("int64", "micros"),
+    "cpc_bid_micros": ("int64", "micros"),
+    "cpm_bid_micros": ("int64", "micros"),
+    "cpv_bid_micros": ("int64", "micros"),
+    "target_cpa_micros": ("int64", "micros"),
+    "cpc_bid_ceiling_micros": ("int64", "micros"),
+    "target_spend_micros": ("int64", "micros"),
+    "percent_cpc_bid_micros": ("int64", "micros_proportion"),
+    "conversion_upload_value": ("double", "currency_units"),
+    "conversion_adjustment_restatement_value": ("double", "currency_units"),
+    "conversion_action_default_value": ("double", "currency_units"),
+    "conversion_value_rule_action_value": ("double", "currency_units"),
+    "target_roas": ("double", "decimal_ratio"),
+    "bid_modifier": ("double", "decimal_ratio"),
+    "seasonality_conversion_rate_modifier": ("double", "decimal_ratio"),
+}
+
+_API_FIELD_TO_LIMIT_KEY: Dict[str, str] = {
+    "amount_micros": "campaign_budget_amount_micros",
+    "recommended_budget_amount_micros": "campaign_budget_amount_micros",
+    "total_amount_micros": "campaign_budget_total_amount_micros",
+    "proposed_spending_limit_micros": "account_budget_spending_limit_micros",
+    "account_budget_proposed_spending_limit_micros": "account_budget_spending_limit_micros",
+    "approved_spending_limit_micros": "account_budget_spending_limit_micros",
+    "spending_limit_micros": "account_budget_spending_limit_micros",
+    "max_budget_micros": "reservation_booking_max_budget_micros",
+    "cpc_bid_micros": "cpc_bid_micros",
+    "target_cpc_micros": "cpc_bid_micros",
+    "cpm_bid_micros": "cpm_bid_micros",
+    "target_cpm_micros": "cpm_bid_micros",
+    "fixed_cpm_micros": "cpm_bid_micros",
+    "cpv_bid_micros": "cpv_bid_micros",
+    "target_cpv_micros": "cpv_bid_micros",
+    "target_cpa_micros": "target_cpa_micros",
+    "manual_cpa_bid_micros": "target_cpa_micros",
+    "target_cpa_bid_micros": "target_cpa_micros",
+    "cpc_bid_ceiling_micros": "cpc_bid_ceiling_micros",
+    "cpc_bid_floor_micros": "cpc_bid_ceiling_micros",
+    "target_spend_micros": "target_spend_micros",
+    "percent_cpc_bid_micros": "percent_cpc_bid_micros",
+    "location_fraction_micros": "percent_cpc_bid_micros",
+    "conversion_value": "conversion_upload_value",
+    "click_conversion_value": "conversion_upload_value",
+    "call_conversion_value": "conversion_upload_value",
+    "adjusted_value": "conversion_adjustment_restatement_value",
+    "default_value": "conversion_action_default_value",
+    "target_roas": "target_roas",
+    "bid_modifier": "bid_modifier",
+    "conversion_rate_modifier": "seasonality_conversion_rate_modifier",
+    "seasonality_modifier": "seasonality_conversion_rate_modifier",
+}
+
+_CODE_FINANCIAL_ASSIGN_RE = re.compile(
+    r"\b("
+    + "|".join(re.escape(k) for k in _API_FIELD_TO_LIMIT_KEY.keys())
+    + r"|action\.value)\s*(?:=|:)\s*['\"]?([0-9]+(?:_[0-9]+)*(?:\.[0-9]+)?)['\"]?"
+)
+_TEXT_MICROS_VALUE_RE = re.compile(
+    r"\b([0-9]{1,3}(?:[,_][0-9]{3})+|[0-9]{4,})\s*micros\b",
+    re.IGNORECASE,
+)
+
+
+def get_financial_limits_paths() -> List[str]:
+    """Returns candidate paths for reading config/financial_limits."""
+    env_file = os.environ.get("GOOGLE_ADS_FINANCIAL_LIMITS_FILE", "").strip()
+    if env_file:
+        return [os.path.abspath(env_file)]
+
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
+    repo_root = os.path.abspath(os.path.join(plugin_root, "../.."))
+    paths = [
+        os.path.abspath(os.path.join("config", FINANCIAL_LIMITS_FILENAME)),
+        os.path.join(plugin_root, "config", FINANCIAL_LIMITS_FILENAME),
+        os.path.join(repo_root, "config", FINANCIAL_LIMITS_FILENAME),
+        os.path.expanduser(
+            f"~/.gemini/config/plugins/google-ads-api-developer-assistant/config/{FINANCIAL_LIMITS_FILENAME}"
+        ),
+        os.path.expanduser(
+            f"~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/{FINANCIAL_LIMITS_FILENAME}"
+        ),
+    ]
+    deduped: List[str] = []
+    for p in paths:
+        norm = os.path.normpath(p)
+        if norm not in deduped:
+            deduped.append(norm)
+    return deduped
+
+
+def parse_financial_limits(raw_text: str) -> Dict[str, Union[int, float]]:
+    """Parses TOML or key=value text from config/financial_limits."""
+    limits: Dict[str, Union[int, float]] = {
+        k: (0 if fmt == "int64" else 0.0)
+        for k, (fmt, _) in _FINANCIAL_LIMIT_META.items()
+    }
+    if not raw_text or not raw_text.strip():
+        return limits
+
+    parsed_dict: Dict[str, Any] = {}
+    try:
+        import tomllib  # type: ignore
+
+        loaded = tomllib.loads(raw_text)
+        if isinstance(loaded, dict):
+            parsed_dict = loaded
+    except Exception:
+        pass
+
+    if not parsed_dict:
+        for raw_line in raw_text.splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            if not line or "=" not in line:
+                continue
+            k_part, v_part = line.split("=", 1)
+            parsed_dict[k_part.strip()] = v_part.strip().strip("'\"")
+
+    for raw_k, raw_v in parsed_dict.items():
+        k_norm = str(raw_k).strip().lower().replace("-", "_")
+        if k_norm in _API_FIELD_TO_LIMIT_KEY and k_norm not in _FINANCIAL_LIMIT_META:
+            k_norm = _API_FIELD_TO_LIMIT_KEY[k_norm]
+        if k_norm in _FINANCIAL_LIMIT_META:
+            fmt, _ = _FINANCIAL_LIMIT_META[k_norm]
+            try:
+                clean_v = str(raw_v).replace("_", "").replace(",", "").strip()
+                if fmt == "int64":
+                    limits[k_norm] = int(float(clean_v))
+                else:
+                    limits[k_norm] = float(clean_v)
+            except Exception:
+                continue
+    return limits
+
+
+def read_financial_limits() -> Tuple[Dict[str, Union[int, float]], Optional[str]]:
+    """Reads the highest-precedence config/financial_limits file and returns (limits, path)."""
+    defaults: Dict[str, Union[int, float]] = {
+        k: (0 if fmt == "int64" else 0.0)
+        for k, (fmt, _) in _FINANCIAL_LIMIT_META.items()
+    }
+    for candidate in get_financial_limits_paths():
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    return parse_financial_limits(f.read()), candidate
+            except OSError:
+                continue
+    return defaults, None
+
+
+def _coerce_numeric(val: Any) -> Optional[float]:
+    """Converts an int, float, or numeric string to float, or returns None."""
+    if isinstance(val, bool) or val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        s = val.strip().replace("_", "").replace(",", "")
+        if re.match(r"^[0-9]+(?:\.[0-9]+)?$", s):
+            try:
+                return float(s)
+            except ValueError:
+                return None
+    return None
+
+
+def _extract_payload_financial_amounts(
+    obj: Any,
+    service_name: str = "",
+    method_name: str = "",
+    parent_key: str = "",
+    out: Optional[List[Tuple[str, str, float]]] = None,
+    _depth: int = 0,
+) -> List[Tuple[str, str, float]]:
+    """Recursively extracts (limit_key, field_name, numeric_value) tuples from an RPC payload."""
+    if out is None:
+        out = []
+    if _depth > 12:
+        return out
+
+    svc_lower = service_name.strip().lower()
+    m_lower = method_name.strip().lower()
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            k_lower = str(k).strip().lower()
+            num_val = _coerce_numeric(v)
+            if num_val is not None:
+                if k_lower in _API_FIELD_TO_LIMIT_KEY:
+                    limit_key = _API_FIELD_TO_LIMIT_KEY[k_lower]
+                    if k_lower == "amount_micros" and (
+                        svc_lower == "reservationservice"
+                        or m_lower in ("book_campaigns", "quote_campaigns")
+                    ):
+                        out.append(
+                            ("reservation_booking_max_budget_micros", k_lower, num_val)
+                        )
+                    out.append((limit_key, k_lower, num_val))
+                elif k_lower == "value" and (
+                    parent_key in ("action", "conversion_value_rule", "conversion_value_rule_operation")
+                    or svc_lower == "conversionvalueruleservice"
+                    or m_lower == "mutate_conversion_value_rules"
+                ):
+                    out.append(("conversion_value_rule_action_value", "action.value", num_val))
+                elif k_lower.endswith("_micros"):
+                    out.append(("all_micros_transactions", k_lower, num_val))
+            else:
+                _extract_payload_financial_amounts(
+                    v,
+                    service_name=service_name,
+                    method_name=method_name,
+                    parent_key=k_lower,
+                    out=out,
+                    _depth=_depth + 1,
+                )
+    elif isinstance(obj, list):
+        for item in obj:
+            _extract_payload_financial_amounts(
+                item,
+                service_name=service_name,
+                method_name=method_name,
+                parent_key=parent_key,
+                out=out,
+                _depth=_depth + 1,
+            )
+    return out
+
+
+def _infer_limit_key_from_context(context_text: str) -> str:
+    """Infers the primary micros limit key from an operation summary or service name."""
+    lower = context_text.lower()
+    if "account_budget" in lower or "accountbudgetproposal" in lower or "spending_limit" in lower:
+        return "account_budget_spending_limit_micros"
+    if "total_amount_micros" in lower:
+        return "campaign_budget_total_amount_micros"
+    if "reservation" in lower or "book_campaigns" in lower or "max_budget_micros" in lower:
+        return "reservation_booking_max_budget_micros"
+    if "percent_cpc" in lower or "location_fraction" in lower:
+        return "percent_cpc_bid_micros"
+    if "bid_ceiling" in lower or "bid_floor" in lower:
+        return "cpc_bid_ceiling_micros"
+    if "target_cpa" in lower or "cpa_bid" in lower:
+        return "target_cpa_micros"
+    if "target_spend" in lower:
+        return "target_spend_micros"
+    if "cpm_bid" in lower or "target_cpm" in lower or "fixed_cpm" in lower:
+        return "cpm_bid_micros"
+    if "cpv_bid" in lower or "target_cpv" in lower:
+        return "cpv_bid_micros"
+    if "cpc_bid" in lower or "target_cpc" in lower:
+        return "cpc_bid_micros"
+    if "budget" in lower:
+        return "campaign_budget_amount_micros"
+    return "all_micros_transactions"
+
+
+def _evaluate_observed_amount(
+    limit_key: str,
+    field_name: str,
+    observed_val: float,
+    limits: Dict[str, Union[int, float]],
+    config_path: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Checks an observed amount against its specific limit and global fallback limit."""
+    fmt, unit = _FINANCIAL_LIMIT_META.get(limit_key, ("int64", "micros"))
+    effective_key = limit_key
+    limit_val = float(limits.get(limit_key, 0) or 0)
+
+    if limit_val <= 0:
+        if unit == "micros" and float(limits.get("all_micros_transactions", 0) or 0) > 0:
+            effective_key = "all_micros_transactions"
+            limit_val = float(limits["all_micros_transactions"])
+        elif (
+            unit == "currency_units"
+            and float(limits.get("all_currency_unit_transactions", 0.0) or 0.0) > 0.0
+        ):
+            effective_key = "all_currency_unit_transactions"
+            limit_val = float(limits["all_currency_unit_transactions"])
+
+    if limit_val > 0 and observed_val > limit_val:
+        if fmt == "int64":
+            obs_str = str(int(round(observed_val)))
+            lim_str = str(int(round(limit_val)))
+        else:
+            obs_str = str(float(observed_val))
+            lim_str = str(float(limit_val))
+        cfg_display = config_path or "config/financial_limits"
+        msg = (
+            f"BLOCKED BY FINANCIAL UPPER LIMIT (HITL GUARD): Financial transaction on "
+            f"'{effective_key}' (API field '{field_name}' = {obs_str} {unit}) exceeds the "
+            f"configured upper limit of {lim_str} {unit} [API format: {fmt}, monetary unit: {unit}] "
+            f"in {cfg_display}. Refusing to execute command."
+        )
+        return {
+            "limit_key": effective_key,
+            "field_name": field_name,
+            "observed_value": int(round(observed_val)) if fmt == "int64" else float(observed_val),
+            "upper_limit": int(round(limit_val)) if fmt == "int64" else float(limit_val),
+            "monetary_unit": unit,
+            "api_format": fmt,
+            "config_path": cfg_display,
+            "message": msg,
+        }
+    return None
+
+
+def check_financial_transaction_limits(
+    operation_summary: str = "",
+    after_state: str = "",
+    rpc_calls: Optional[List[Dict[str, Any]]] = None,
+    script_path: Optional[str] = None,
+    code_text: Optional[str] = "",
+    limits: Optional[Dict[str, Union[int, float]]] = None,
+    config_path: Optional[str] = None,
+    receipt: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, Optional[str], List[Dict[str, Any]]]:
+    """Checks all financial amounts in RPC payloads, scripts, and state against config/financial_limits.
+
+    Returns:
+        Tuple[bool, Optional[str], List[Dict[str, Any]]]:
+            (within_limits, error_message_if_exceeded, list_of_violations)
+    """
+    if isinstance(receipt, dict):
+        if not operation_summary:
+            operation_summary = str(receipt.get("operation_summary", ""))
+        if not after_state:
+            after_state = str(receipt.get("after_state", ""))
+        if rpc_calls is None and isinstance(receipt.get("dry_run_rpc_calls"), list):
+            rpc_calls = receipt.get("dry_run_rpc_calls")
+        if not script_path and receipt.get("script_path"):
+            script_path = str(receipt.get("script_path"))
+
+    if limits is None:
+        limits, config_path = read_financial_limits()
+
+    if not any(float(v or 0) > 0 for v in limits.values()):
+        return True, None, []
+
+    observations: List[Tuple[str, str, float]] = []
+
+    # 1. Inspect intercepted RPC call request payloads
+    for call in rpc_calls or []:
+        if not isinstance(call, dict):
+            continue
+        _extract_payload_financial_amounts(
+            call.get("request_payload"),
+            service_name=str(call.get("service", "")),
+            method_name=str(call.get("method", "")),
+            out=observations,
+        )
+
+    # 2. Inspect Python mutation script source code and/or command text
+    combined_code_parts: List[str] = []
+    if code_text:
+        combined_code_parts.append(code_text)
+    if script_path and os.path.isfile(script_path):
+        try:
+            with open(script_path, "r", encoding="utf-8") as f:
+                combined_code_parts.append(f.read())
+        except OSError:
+            pass
+    if combined_code_parts:
+        raw_code = "\n".join(combined_code_parts)
+        uncommented = "\n".join(
+            line.split("#", 1)[0] for line in raw_code.splitlines()
+        )
+        for match in _CODE_FINANCIAL_ASSIGN_RE.finditer(uncommented):
+            fld = match.group(1).strip().lower()
+            raw_num = match.group(2).replace("_", "")
+            try:
+                num_val = float(raw_num)
+            except ValueError:
+                continue
+            if fld == "action.value":
+                observations.append(
+                    ("conversion_value_rule_action_value", "action.value", num_val)
+                )
+            elif fld in _API_FIELD_TO_LIMIT_KEY:
+                lkey = _API_FIELD_TO_LIMIT_KEY[fld]
+                if fld == "amount_micros" and (
+                    "book_campaigns" in uncommented
+                    or "ReservationService" in uncommented
+                ):
+                    observations.append(
+                        ("reservation_booking_max_budget_micros", fld, num_val)
+                    )
+                observations.append((lkey, fld, num_val))
+
+    # 3. Inspect operation_summary and after_state text
+    summary_text = f"{operation_summary}\n{after_state}"
+    if summary_text.strip():
+        for match in _CODE_FINANCIAL_ASSIGN_RE.finditer(summary_text):
+            fld = match.group(1).strip().lower()
+            raw_num = match.group(2).replace("_", "")
+            try:
+                num_val = float(raw_num)
+            except ValueError:
+                continue
+            if fld == "action.value":
+                observations.append(
+                    ("conversion_value_rule_action_value", "action.value", num_val)
+                )
+            elif fld in _API_FIELD_TO_LIMIT_KEY:
+                observations.append((_API_FIELD_TO_LIMIT_KEY[fld], fld, num_val))
+
+        inferred_key = _infer_limit_key_from_context(summary_text)
+        for m_match in _TEXT_MICROS_VALUE_RE.finditer(summary_text):
+            raw_m = m_match.group(1).replace(",", "").replace("_", "")
+            try:
+                m_val = float(raw_m)
+                observations.append((inferred_key, f"{inferred_key}", m_val))
+            except ValueError:
+                continue
+
+    violations: List[Dict[str, Any]] = []
+    seen_violation_keys: set[Tuple[str, str, float]] = set()
+    for lkey, fld_name, obs_val in observations:
+        dedup_token = (lkey, fld_name, obs_val)
+        if dedup_token in seen_violation_keys:
+            continue
+        seen_violation_keys.add(dedup_token)
+        violation = _evaluate_observed_amount(
+            lkey, fld_name, obs_val, limits, config_path
+        )
+        if violation is not None:
+            violations.append(violation)
+
+    if violations:
+        combined_msg = " | ".join(v["message"] for v in violations)
+        return False, combined_msg, violations
+    return True, None, []
+
+
 def _find_google_ads_yaml() -> Optional[str]:
     """Locates the active config/google-ads.yaml file if present."""
     this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -740,6 +1181,29 @@ def _wrap_service_for_audit(
                     })
                     captured_calls.append(call_record)
                     raise PermissionError(err_msg)
+
+                # Pre-RPC Financial Upper Limit Guard: block any financial transaction exceeding
+                # a configured upper limit (> 0) in config/financial_limits before calling the API.
+                within_fin_limits, fin_limit_err, fin_violations = (
+                    check_financial_transaction_limits(rpc_calls=[call_record])
+                )
+                if not within_fin_limits and fin_limit_err:
+                    call_record.update({
+                        "received_at_iso": datetime.now(timezone.utc).isoformat(),
+                        "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                        "status": "BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
+                        "expected_request_sha256": None,
+                        "request_sha256_verified": False,
+                        "google_ads_request_id": None,
+                        "financial_limit_violations": fin_violations,
+                        "response_payload": {
+                            "exception_type": "PermissionError",
+                            "message": fin_limit_err,
+                        },
+                        "error": fin_limit_err,
+                    })
+                    captured_calls.append(call_record)
+                    raise PermissionError(fin_limit_err)
 
                 # Pre-RPC Mutates Config check: block live mutations (including omitted validate_only
                 # or non-validate_only RPCs) if execute_mutates = false.
@@ -1121,6 +1585,7 @@ def append_mutation_audit_log(
         "BLOCKED_SHA256_MISMATCH",
         "BLOCKED_MISSING_VALIDATE_ONLY",
         "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING",
+        "BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
     ):
         error_summary = (
             "; ".join(rpc_errors)
@@ -1217,6 +1682,16 @@ def append_mutation_audit_log(
     return audit_record
 
 
+def _remove_stale_receipts() -> None:
+    """Removes any existing dry-run receipt files when a dry-run or limit check fails."""
+    for target_path in get_receipt_paths():
+        if os.path.isfile(target_path):
+            try:
+                os.remove(target_path)
+            except OSError:
+                pass
+
+
 def write_dry_run_receipt(
     customer_id: str,
     operation_summary: str,
@@ -1261,6 +1736,17 @@ def write_dry_run_receipt(
             c_copy["request_sha256"] = c_sha
         request_sha256_list.append(c_sha)
         normalized_calls.append(c_copy)
+
+    # Enforce configured financial transaction upper limits at the HITL step
+    within_fin_limits, fin_limit_err, _ = check_financial_transaction_limits(
+        operation_summary=operation_summary,
+        after_state=after_state,
+        rpc_calls=normalized_calls,
+        script_path=resolved_script if resolved_script else None,
+    )
+    if not within_fin_limits and fin_limit_err:
+        _remove_stale_receipts()
+        raise ValueError(fin_limit_err)
 
     is_financial = is_financial_mutation(
         operation_summary=operation_summary,
@@ -1423,6 +1909,21 @@ def load_and_verify_receipt(
             receipt,
         )
 
+    # Verify financial transaction upper limits against current config/financial_limits
+    effective_script = script_path or str(receipt.get("script_path", ""))
+    within_fin_limits, fin_limit_err, _ = check_financial_transaction_limits(
+        operation_summary=str(receipt.get("operation_summary", "")),
+        after_state=str(receipt.get("after_state", "")),
+        rpc_calls=dry_run_calls if isinstance(dry_run_calls, list) else None,
+        script_path=effective_script if effective_script else None,
+    )
+    if not within_fin_limits and fin_limit_err:
+        return (
+            False,
+            fin_limit_err,
+            receipt,
+        )
+
     if script_path:
         resolved_script = os.path.abspath(script_path)
         expected_hash = receipt.get("script_sha256", "")
@@ -1516,11 +2017,18 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
         if mutates_enabled
         else "DISABLED (execute_mutates = false — set execute_mutates = true in config/assistant_config before --execute)"
     )
-    financial_line = (
-        "Financial Txn : YES (explicit monetary/spend/billing impact disclosure verified)\n"
-        if receipt.get("is_financial_transaction")
-        else ""
-    )
+    financial_line = ""
+    if receipt.get("is_financial_transaction"):
+        fin_limits, _ = read_financial_limits()
+        has_active_cap = any(float(v or 0) > 0 for v in fin_limits.values())
+        cap_note = (
+            "; within configured upper limits in config/financial_limits"
+            if has_active_cap
+            else ""
+        )
+        financial_line = (
+            f"Financial Txn : YES (explicit monetary/spend/billing impact disclosure verified{cap_note})\n"
+        )
     return (
         "======================================================================\n"
         "GOOGLE ADS API MUTATION & CONSEQUENCE VERIFICATION CARD\n"
@@ -1658,13 +2166,23 @@ def main() -> None:
                 )
             )
             if result.returncode != 0:
-                dry_fail_status = (
-                    "BLOCKED_MISSING_VALIDATE_ONLY"
-                    if any(
-                        c.get("status") == "BLOCKED_MISSING_VALIDATE_ONLY"
-                        for c in captured_calls
-                    )
-                    else "DRY_RUN_FAILED"
+                if any(
+                    c.get("status") == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+                    for c in captured_calls
+                ):
+                    dry_fail_status = "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+                    _remove_stale_receipts()
+                elif any(
+                    c.get("status") == "BLOCKED_MISSING_VALIDATE_ONLY"
+                    for c in captured_calls
+                ):
+                    dry_fail_status = "BLOCKED_MISSING_VALIDATE_ONLY"
+                else:
+                    dry_fail_status = "DRY_RUN_FAILED"
+                effective_dry_exit = (
+                    2
+                    if dry_fail_status == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+                    else result.returncode
                 )
                 append_mutation_audit_log(
                     phase="DRY_RUN",
@@ -1681,18 +2199,18 @@ def main() -> None:
                     request_sent_at_iso=sent_at_iso,
                     response_received_at_iso=received_at_iso,
                     duration_ms=duration_ms,
-                    exit_code=result.returncode,
+                    exit_code=effective_dry_exit,
                     stdout=result.stdout,
                     stderr=result.stderr,
                     command=[sys.executable, script_path, *script_args],
                     rpc_calls=captured_calls,
                 )
                 print(
-                    f"validate_only=True Dry-Run FAILED (exit code {result.returncode}):\n"
+                    f"validate_only=True Dry-Run FAILED (exit code {effective_dry_exit}):\n"
                     f"{result.stdout}\n{result.stderr}",
                     file=sys.stderr,
                 )
-                sys.exit(result.returncode)
+                sys.exit(effective_dry_exit)
             dry_run_output = (result.stdout + "\n" + result.stderr).strip()
 
         try:
@@ -1710,10 +2228,19 @@ def main() -> None:
                 rpc_calls=captured_calls,
             )
         except ValueError as exc:
-            err_msg = f"BLOCKED: {exc}"
+            err_msg = (
+                str(exc)
+                if str(exc).startswith("BLOCKED")
+                else f"BLOCKED: {exc}"
+            )
+            audit_status = (
+                "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+                if "BLOCKED BY FINANCIAL UPPER LIMIT" in str(exc)
+                else "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING"
+            )
             append_mutation_audit_log(
                 phase="DRY_RUN",
-                status="BLOCKED_FINANCIAL_CONSEQUENCE_MISSING",
+                status=audit_status,
                 customer_id=args.customer_id,
                 operation_summary=args.operation,
                 before_state=args.before,
@@ -1804,7 +2331,46 @@ def main() -> None:
 
     ok, message, receipt = load_and_verify_receipt(script_path=script_path)
     if not ok:
-        print(f"BLOCKED: {message}", file=sys.stderr)
+        err_out = (
+            message
+            if message.startswith("BLOCKED")
+            else f"BLOCKED: {message}"
+        )
+        if "BLOCKED BY FINANCIAL UPPER LIMIT" in message:
+            blocked_iso = datetime.now(timezone.utc).isoformat()
+            cid_blocked = args.customer_id or str(receipt.get("customer_id", ""))
+            op_blocked = str(args.operation or receipt.get("operation_summary", ""))
+            before_blocked = str(receipt.get("before_state", args.before))
+            after_blocked = str(receipt.get("after_state", args.after or op_blocked))
+            rev_blocked = str(receipt.get("reversibility", args.reversibility))
+            conseq_blocked = [
+                str(c) for c in receipt.get("consequences", []) if str(c).strip()
+            ]
+            append_mutation_audit_log(
+                phase="EXECUTE",
+                status="BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
+                customer_id=cid_blocked,
+                operation_summary=op_blocked,
+                before_state=before_blocked,
+                after_state=after_blocked,
+                consequences=conseq_blocked,
+                reversibility=rev_blocked,
+                script_path=script_path,
+                script_sha256=script_sha256,
+                validate_only=False,
+                request_sent_at_iso=blocked_iso,
+                response_received_at_iso=blocked_iso,
+                duration_ms=0.0,
+                exit_code=2,
+                stdout="",
+                stderr=err_out,
+                command=[sys.executable, script_path, "--execute", *extra_args],
+                rpc_calls=receipt.get("dry_run_rpc_calls")
+                if isinstance(receipt.get("dry_run_rpc_calls"), list)
+                else [],
+                receipt=receipt if receipt else None,
+            )
+        print(err_out, file=sys.stderr)
         sys.exit(2)
 
     # Record exact timestamp when the user approved the mutation and execution commenced
@@ -1839,6 +2405,9 @@ def main() -> None:
     after_state = str(receipt.get("after_state", args.after or operation_summary))
     reversibility = str(receipt.get("reversibility", args.reversibility))
 
+    blocked_by_fin_limit = any(
+        c.get("status") == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED" for c in captured_calls
+    )
     blocked_by_sha_mismatch = any(
         c.get("status") == "BLOCKED_SHA256_MISMATCH" for c in captured_calls
     )
@@ -1853,13 +2422,23 @@ def main() -> None:
         and actual_rpc_hashes != expected_rpc_hashes
     )
 
-    if result.returncode != 0 or blocked_by_sha_mismatch or missing_expected_calls:
-        failure_status = (
-            "BLOCKED_SHA256_MISMATCH"
-            if (blocked_by_sha_mismatch or missing_expected_calls)
-            else "FAILED"
+    if (
+        result.returncode != 0
+        or blocked_by_fin_limit
+        or blocked_by_sha_mismatch
+        or missing_expected_calls
+    ):
+        if blocked_by_fin_limit:
+            failure_status = "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+        elif blocked_by_sha_mismatch or missing_expected_calls:
+            failure_status = "BLOCKED_SHA256_MISMATCH"
+        else:
+            failure_status = "FAILED"
+        effective_exit_code = (
+            2
+            if blocked_by_fin_limit
+            else (result.returncode if result.returncode != 0 else 2)
         )
-        effective_exit_code = result.returncode if result.returncode != 0 else 2
         stderr_out = result.stderr
         if missing_expected_calls and not stderr_out:
             stderr_out = (

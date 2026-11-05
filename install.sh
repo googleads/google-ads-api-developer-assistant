@@ -529,7 +529,7 @@ install_plugin_copy() {
   rm -rf "${target_dir}"
   mkdir -p "$(dirname "${target_dir}")"
   safe_copy_dir "${PLUGIN_SOURCE_DIR}" "${target_dir}"
-  for helper_script in plugin.sh update.sh; do
+  for helper_script in plugin.sh update.sh set_financial_limits.py; do
     if [[ -f "${PROJECT_DIR_ABS}/${helper_script}" ]]; then
       cp "${PROJECT_DIR_ABS}/${helper_script}" "${target_dir}/${helper_script}"
       chmod +x "${target_dir}/${helper_script}" 2>/dev/null || true

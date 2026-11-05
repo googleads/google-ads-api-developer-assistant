@@ -451,6 +451,8 @@ if __name__ == "__main__":
                     response_received_at_iso=now_iso,
                 )
             except ValueError as exc:
+                err_str = str(exc)
+                is_limit_exceeded = "BLOCKED BY FINANCIAL UPPER LIMIT" in err_str
                 script_hash = (
                     mod.compute_file_sha256(os.path.abspath(script_path))
                     if script_path and os.path.isfile(os.path.abspath(script_path))
@@ -458,7 +460,11 @@ if __name__ == "__main__":
                 )
                 mod.append_mutation_audit_log(
                     phase="DRY_RUN",
-                    status="BLOCKED_FINANCIAL_CONSEQUENCE_MISSING",
+                    status=(
+                        "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+                        if is_limit_exceeded
+                        else "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING"
+                    ),
                     customer_id=customer_id,
                     operation_summary=operation,
                     before_state=before_state,
@@ -473,14 +479,14 @@ if __name__ == "__main__":
                     duration_ms=0.0,
                     exit_code=2,
                     stdout="",
-                    stderr=str(exc),
+                    stderr=err_str,
                     command=["A2A:PREPARE_MUTATION"],
                 )
                 return {
                     "task_id": task_id,
-                    "status": "VALIDATION_FAILED",
+                    "status": "HITL_BLOCKED" if is_limit_exceeded else "VALIDATION_FAILED",
                     "destructive_hint": True,
-                    "error": str(exc),
+                    "error": err_str,
                 }
             mod.append_mutation_audit_log(
                 phase="DRY_RUN",
@@ -585,6 +591,29 @@ if __name__ == "__main__":
 
             ok, msg, receipt = mod.load_and_verify_receipt(script_path=script_path)
             if not ok:
+                if "BLOCKED BY FINANCIAL UPPER LIMIT" in msg:
+                    blocked_iso = datetime.now(timezone.utc).isoformat()
+                    mod.append_mutation_audit_log(
+                        phase="EXECUTE",
+                        status="BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
+                        customer_id=str(receipt.get("customer_id", "")),
+                        operation_summary=str(receipt.get("operation_summary", "")),
+                        before_state=str(receipt.get("before_state", "")),
+                        after_state=str(receipt.get("after_state", "")),
+                        consequences=[str(c) for c in receipt.get("consequences", []) if str(c).strip()],
+                        reversibility=str(receipt.get("reversibility", "REVERSIBLE")),
+                        script_path=script_path,
+                        script_sha256=str(receipt.get("script_sha256", "")),
+                        validate_only=False,
+                        request_sent_at_iso=blocked_iso,
+                        response_received_at_iso=blocked_iso,
+                        duration_ms=0.0,
+                        exit_code=2,
+                        stdout="",
+                        stderr=msg,
+                        command=["A2A:EXECUTE_MUTATION"],
+                        receipt=receipt if receipt else None,
+                    )
                 return {
                     "task_id": task_id,
                     "status": "HITL_BLOCKED",

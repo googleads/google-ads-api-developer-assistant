@@ -650,6 +650,33 @@ def sync_and_set_config_kv(
         ):
             write_assistant_config({"api_version": latest_ver}, config_dir=config_dir)
 
+    # 3c. Ensure config/financial_limits exists in config_dir
+    target_fin_limits = os.path.join(config_dir, "financial_limits")
+    if not os.path.isfile(target_fin_limits):
+        this_cfg_dir = os.path.dirname(os.path.abspath(__file__))
+        candidate_fin_files = [
+            os.path.join(this_cfg_dir, "financial_limits"),
+            os.path.abspath(os.path.join("config", "financial_limits")),
+            os.path.expanduser(
+                "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/financial_limits"
+            ),
+        ]
+        for cand_fin in candidate_fin_files:
+            if (
+                os.path.isfile(cand_fin)
+                and os.path.abspath(cand_fin) != os.path.abspath(target_fin_limits)
+            ):
+                try:
+                    shutil.copy2(cand_fin, target_fin_limits)
+                    if sys.platform != "win32" and os.path.isfile(target_fin_limits):
+                        try:
+                            os.chmod(target_fin_limits, 0o600)
+                        except OSError:
+                            pass
+                    break
+                except OSError:
+                    continue
+
     # 4. Set environment variable for the Google Ads Python client
     os.environ["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = target_yaml
 
@@ -2047,6 +2074,7 @@ READONLY_SKILL_SCRIPTS = (
     "validate_conversion_upload.py",
     "config_init.py",
     "benchmark_suite.py",
+    "set_financial_limits.py",
 )
 
 MUTATION_CALL_PATTERN = re.compile(
@@ -2285,6 +2313,47 @@ def _compute_canonical_request_sha256(
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
+_CACHED_RUN_MUTATION_MOD: Any = None
+
+
+def _check_financial_limits_for_hook(
+    receipt: Optional[Dict[str, Any]] = None,
+    script_path: Optional[str] = None,
+    code_text: Optional[str] = None,
+) -> Tuple[bool, str, list[Dict[str, Any]]]:
+    """Checks configured financial transaction upper limits via run_mutation.py."""
+    global _CACHED_RUN_MUTATION_MOD
+    if _CACHED_RUN_MUTATION_MOD is None:
+        import importlib.util
+
+        this_dir = os.path.dirname(os.path.abspath(__file__))
+        plugin_root = os.path.abspath(os.path.join(this_dir, ".."))
+        rm_path = os.path.join(
+            plugin_root, "skills", "execute-mutation", "scripts", "run_mutation.py"
+        )
+        if os.path.isfile(rm_path):
+            spec = importlib.util.spec_from_file_location("_hook_run_mutation", rm_path)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _CACHED_RUN_MUTATION_MOD = mod
+    if _CACHED_RUN_MUTATION_MOD is not None and hasattr(
+        _CACHED_RUN_MUTATION_MOD, "check_financial_transaction_limits"
+    ):
+        ok, err_msg, violations = _CACHED_RUN_MUTATION_MOD.check_financial_transaction_limits(
+            receipt=receipt,
+            script_path=script_path,
+            code_text=code_text,
+        )
+        if not ok:
+            return (
+                False,
+                f"BLOCKED BY HITL MUTATION GUARD (FINANCIAL UPPER LIMIT EXCEEDED): {err_msg}",
+                violations,
+            )
+    return True, "", []
+
+
 def _verify_dry_run_receipt_for_hook(
     script_path: Optional[str] = None,
     max_age_seconds: int = 1800,
@@ -2362,6 +2431,17 @@ def _verify_dry_run_receipt_for_hook(
             "BLOCKED BY HITL MUTATION GUARD: Dry-run receipt for financial mutation in "
             "saved/data/last_dry_run.json is missing explicit monetary, currency, spend, "
             "budget, billing, credit, or bidding impact disclosure in consequences.",
+            receipt,
+        )
+
+    limits_ok, limits_err, _ = _check_financial_limits_for_hook(
+        receipt=receipt,
+        script_path=script_path,
+    )
+    if not limits_ok:
+        return (
+            False,
+            limits_err,
             receipt,
         )
 
@@ -2522,7 +2602,7 @@ _BARE_HOME_YAML_RE = re.compile(
     r"(?:~/google-ads\.yaml|/home/[^/\s'\"]+/google-ads\.yaml|client_libs/[^/\s'\"]+/google-ads\.yaml)"
 )
 _SKILL_REL_PATH_RE = re.compile(
-    r"\b(?:skills/[a-zA-Z0-9_\-]+/(?:scripts|references)/[a-zA-Z0-9_\-\.]+|config/config_init\.py)\b"
+    r"\b(?:skills/[a-zA-Z0-9_\-]+/(?:scripts|references)/[a-zA-Z0-9_\-\.]+|config/(?:config_init|set_financial_limits)\.py|set_financial_limits\.py)\b"
 )
 
 
@@ -2588,6 +2668,13 @@ def evaluate_mutation_guard(
 
     if not MUTATION_CALL_PATTERN.search(uncommented_code):
         return "allow", None
+
+    limits_ok, limits_err, _ = _check_financial_limits_for_hook(
+        script_path=resolved_target_script,
+        code_text=uncommented_code,
+    )
+    if not limits_ok:
+        return "deny", limits_err
 
     # A Google Ads mutation method is present in the executed code.
     # For direct script or inline execution (outside run_mutation.py), require an explicit

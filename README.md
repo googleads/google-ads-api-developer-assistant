@@ -440,6 +440,87 @@ To prevent silent schema discrepancies, missing fields, or descriptor errors:
 
 To learn more about how Antigravity and Claude define plugins, see the [Antigravity plugin specification](https://antigravity.google/docs/cli/plugins/) and the [Claude plugin specification](https://github.com/anthropics/knowledge-work-plugins).
 
+## Sidecar Daemon & How It Functions
+
+### What Is a Sidecar?
+
+In software architecture—borrowed from the analogy of a sidecar attached to a motorcycle—a **sidecar** is a separate companion process or service that runs alongside a primary application on the same host. The sidecar shares the primary application's local execution environment (loopback network, local filesystem, and lifecycle) and offloads supporting responsibilities such as protocol translation, local API serving, configuration synchronization, or policy enforcement without coupling that logic into the main process.
+
+In CLI agent environments such as **Antigravity (`agy`)** and **Claude Code CLI**, tools execute in one of two ways:
+*   **Ephemeral Skill Scripts & Hooks (One-Shot Subprocesses)**: When the agent runs a skill script (under `skills/`) or a lifecycle hook (`config_init.py`), the host spawns a new OS process for that single invocation, reads its output, and the process exits immediately.
+*   **Sidecar Daemons (Persistent Background Services)**: A sidecar is a long-running background server process that the host CLI launches automatically when the plugin is loaded and keeps running for the duration of the session.
+
+Using a sidecar daemon in an agent plugin provides three main architectural advantages over one-shot scripts:
+1.  **Persistent Process & Low Latency**: Because the Python interpreter and imported libraries stay resident in memory, requests handled by the sidecar avoid repeated process startup and module import overhead.
+2.  **Structured Inter-Process Communication (HTTP & MCP)**: A sidecar listens on a local loopback port (`127.0.0.1`) or stdio pipe and exposes structured endpoints—such as Agent-to-Agent (A2A) HTTP routes or Model Context Protocol (MCP) tools—allowing the primary agent, subagents, or external tools to exchange typed JSON payloads rather than constructing ad-hoc shell commands.
+3.  **Host-Supervised Lifecycle**: Rather than requiring the user or the LLM to manually start, monitor, or kill background servers in a terminal, the host CLI runtime supervises the sidecar process automatically via its manifest (`sidecar.json` or `mcp_config.json`), handling port assignment, log capture, automatic restarts on crash, and clean shutdown when the plugin is disabled.
+
+### How the Sidecar Is Configured in This Repository
+
+In this repository, the sidecar is the **Google Ads Agent-to-Agent (A2A) Service**, located at `plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/`:
+*   **`sidecar.json`**: The sidecar manifest read by the Antigravity runtime (`command: "python3"`, `args: ["server.py"]`, `restart_policy: "always"`).
+*   **`mcp_config.json`**: The MCP server configuration registering the `google-ads-api-assistant` server so MCP-aware hosts can route tool calls to `sidecars/google-ads-a2a-service/server.py` at `http://127.0.0.1:8900`.
+*   **`server.py`**: The Python HTTP daemon (`A2AHandler` / `HTTPServer`) that processes health checks and structured task requests.
+
+### How the Host Manages the Sidecar Lifecycle
+
+1.  **Automatic Startup**: When the plugin is enabled (`enabled = true` in `config/assistant_config`), the host watches the `sidecars/google-ads-a2a-service/` directory, reads `sidecar.json`, and automatically launches `python3 server.py` in the background.
+2.  **Port Assignment**: The server listens on `127.0.0.1` using the port injected by the host via `ANTIGRAVITY_SIDECAR_WEB_PORT`, or falls back to `A2A_PORT` (default `8900`).
+3.  **Automatic Restart**: Because `sidecar.json` specifies `"restart_policy": "always"`, the host automatically restarts the process if it exits unexpectedly.
+4.  **Disabling the Sidecar**: Running `./plugin.sh disable` (or `./update.sh --disable`) renames `sidecar.json` to `sidecar.json.disabled` and `mcp_config.json` to `mcp_config.json.disabled`. The host detects this immediately and stops the background daemon so no port or background process remains active while the plugin is disabled.
+
+### How the Sidecar Functions Within the Assistant
+
+When running, `server.py` performs three core roles for the Assistant:
+
+#### 1. Startup Credential & Configuration Synchronization
+When the sidecar starts (and before executing incoming tasks), it invokes `config/config_init.py` (`sync_and_set_config_kv()`) to:
+*   Synchronize credentials from `~/google-ads.yaml` into the plugin's runtime `config/google-ads.yaml` with `0600` permissions.
+*   Read the active `customer_id`, `api_version`, and `execute_mutates` state from `config/assistant_config`.
+
+#### 2. Dynamic API Version Resolution
+For every incoming task request, `get_effective_api_version()` resolves the target Google Ads API version in priority order:
+1.  An explicit `api_version` field in the request payload or the `GOOGLE_ADS_API_VERSION` environment variable.
+2.  The persisted `api_version` in `config/assistant_config`.
+3.  The highest `v<N>` directory present in the local `client_libs/google-ads-python/google/ads/googleads/` checkout.
+4.  The highest `v<N>` package installed in the active Python environment's `google.ads.googleads` module.
+5.  If no API version can be resolved, the server returns an `API_VERSION_CONFIRMATION_REQUIRED` status prompting the caller to confirm and persist a version.
+
+#### 3. HTTP & Agent-to-Agent (A2A) Task Endpoints
+The sidecar exposes two HTTP endpoints on `http://127.0.0.1:8900`:
+
+*   **`GET /` or `GET /health`**: Returns a JSON health status payload containing the service name, active plugin version (`plugin.json`), and listening port:
+    ```json
+    {
+      "status": "HEALTHY",
+      "service": "google-ads-a2a-sidecar",
+      "version": "4.1.0",
+      "port": 8900
+    }
+    ```
+*   **`POST /v1/a2a/tasks`**: Accepts a JSON task payload (`{"task_id": "...", "intent": "...", "payload": {...}}`) and dispatches one of six intents:
+
+| Intent | Function Within the Assistant |
+| :--- | :--- |
+| **`GAQL_VALIDATE`** | Runs static analysis checks on a GAQL query string—blocking forbidden `OR` operators, rejecting `FROM` clauses in `GoogleAdsFieldService` metadata queries, and flagging deprecated `segments.hour` usage in `v23+`. |
+| **`INSPECT_OBJECT`** | Returns Protobuf resource metadata and selectable fields for a requested `resource` and `api_version`. |
+| **`GENERATE_CODE`** | Generates `ruff`-compliant Python boilerplate initialized with `GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version=...)` and `GoogleAdsException` error handling. |
+| **`TROUBLESHOOT_CONVERSIONS`** | Runs offline conversion upload diagnostic checks (`offline_conversion_upload_client_summary` and `conversion_time > click_time` validation) for a target `customer_id`. |
+| **`PREPARE_MUTATION`** | Executes Steps 2 and 3 of the 4-Step HITL Mutation Protocol via `skills/execute-mutation/scripts/run_mutation.py`: writes a SHA-256 signed `validate_only=True` dry-run receipt to `saved/data/last_dry_run.json`, appends a `DRY_RUN_VERIFIED` entry to `saved/logs/mutation_audit.jsonl`, and returns the **Mutation & Consequence Verification Card** (`status: "HITL_CONFIRMATION_REQUIRED"`). |
+| **`EXECUTE_MUTATION`** | Enforces Step 4 of the HITL Mutation Protocol: verifies `user_confirmed=True`, a non-empty `confirmation_summary`, `execute_mutates = true` in `config/assistant_config`, and an un-expired matching SHA-256 receipt in `saved/data/last_dry_run.json` before marking the receipt `EXECUTED` and recording the live execution in `saved/logs/mutation_audit.jsonl`. |
+
+### Running or Testing the Sidecar Manually
+
+You can start the sidecar directly from the repository or inspect its health endpoint from a terminal:
+
+```bash
+# Start the sidecar server in the foreground (defaults to port 8900)
+python3 plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/server.py
+
+# Query the health endpoint in another terminal
+curl http://127.0.0.1:8900/health
+```
+
 ## How Mutates Work
 
 When you ask the Assistant to perform any write or mutation operation (such as updating a campaign budget, pausing an ad group, applying a recommendation, removing a criterion, or uploading conversions), the plugin enforces a **Defense-in-Depth Human-in-the-Loop (HITL) Verification Protocol** (`skills/execute-mutation/`) backed by deterministic `PreToolUse` lifecycle hooks (`config/config_init.py`) and pre-RPC SHA-256 verification.
@@ -481,6 +562,44 @@ When evaluating a mutation, the plugin checks candidate files in this order and 
 3. `~/.gemini/config/plugins/google-ads-api-developer-assistant/config/assistant_config` (installed global plugin directory)
 
 *(If `execute_mutates = false` is active and a live mutation is attempted, the `PreToolUse` hook and `run_mutation.py` immediately block execution on screen with: `BLOCKED BY HITL MUTATION GUARD: Mutate support is disabled by configuration (execute_mutates = false in config/assistant_config). Set 'execute_mutates = true' in config/assistant_config to enable live Google Ads API mutations.`)*
+
+---
+
+#### Financial Transaction Upper Limits (`config/financial_limits` & `set_financial_limits.py`)
+In addition to the global `execute_mutates` toggle, you can configure per-transaction upper limits for all financial Google Ads API mutate operations in [`config/financial_limits`](plugins/google-ads-api-developer-assistant/config/financial_limits).
+
+* **API Format & Monetary Units:** Every value in `config/financial_limits` is specified in the exact numeric format required by the Google Ads API call for that service, and each entry notes the monetary/numeric unit used:
+  * **`micros` (`int64` integer):** `1,000,000` micros = `1.00` unit of the Google Ads account's local currency (e.g., `50000000` = `50.00` currency units). Used for budgets (`amount_micros`, `total_amount_micros`, `proposed_spending_limit_micros`), bids (`cpc_bid_micros`, `cpm_bid_micros`, `cpv_bid_micros`, `target_cpa_micros`, `target_cpm_micros`, `fixed_cpm_micros`), and bid caps/floors (`cpc_bid_ceiling_micros`, `cpc_bid_floor_micros`, `target_spend_micros`).
+  * **`currency_units` (`double` / `float`):** Standard decimal units of the account's currency (not micros; e.g., `500.0` = `500.00` currency units). Used for offline conversion value uploads (`ClickConversion.conversion_value`, `CallConversion.conversion_value`), conversion value restatements (`RestatementValue.adjusted_value`), and conversion value rules (`ValueRuleAction.value`).
+  * **`decimal_ratio` (`double` / `float`):** Decimal multiplier or ROAS ratio (not micros; e.g., `5.0` = `500%` Target ROAS, `2.0` = `+100%` bid modifier). Used for `target_roas`, `bid_modifier`, and `seasonality_modifier`.
+  * **`micros_proportion` (`int64` integer):** Proportion of hotel price in micros (`1,000,000` = `100%`; e.g., `150000` = `15%`). Used for `percent_cpc_bid_micros`.
+* **Default (`0` / `0.0` = Unlimited):** By default, all upper limits are set to `0` (for `int64` fields) or `0.0` (for `double` fields), meaning no upper limit is enforced until you configure a positive value (`> 0`).
+* **Deterministic Enforcement at HITL & RPC Execution:** Whenever any financial limit is set to a positive value (`> 0`), `run_mutation.py` (`--dry-run` and `--execute`), the `PreToolUse` hook (`config/config_init.py`), and the A2A sidecar (`server.py`) inspect both the outgoing Protobuf `Mutate*Request` payload and the mutation script/receipt. If any value exceeds its configured upper limit, the mutate function returns an error, informs you at the HITL step (`[HITL BLOCKED - FINANCIAL UPPER LIMIT EXCEEDED]`), logs `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`, and refuses to execute the command.
+
+Use the [`set_financial_limits.py`](set_financial_limits.py) helper script (available at `./set_financial_limits.py`, `config/set_financial_limits.py`, and `skills/execute-mutation/scripts/set_financial_limits.py`) to inspect, set, or reset upper limits from the repository root or from any directory:
+
+```bash
+# List all financial transaction types, API services, monetary units, and current upper limits
+./set_financial_limits.py --list
+
+# Set upper limits using --set KEY=AMOUNT (in exact API format)
+./set_financial_limits.py \
+  --set campaign_budget_amount_micros=50000000 \
+  --set cpc_bid_micros=5000000 \
+  --set click_conversion_value=500.0 \
+  --set target_roas=10.0
+
+# Or set upper limits using --type and --amount, or dedicated per-transaction flags
+./set_financial_limits.py --type account_budget_proposed_spending_limit_micros --amount 5000000000
+./set_financial_limits.py --campaign-budget-amount-micros 50000000 --target-cpa-micros 25000000
+
+# Run from any directory via the installed plugin
+python3 ~/.gemini/config/plugins/google-ads-api-developer-assistant/set_financial_limits.py --list
+
+# Reset a specific limit (or all limits) back to 0 / 0.0 (unlimited)
+./set_financial_limits.py --reset campaign_budget_amount_micros
+./set_financial_limits.py --reset-all
+```
 
 ---
 
@@ -577,11 +696,12 @@ python3 skills/execute-mutation/scripts/run_mutation.py \
 
 | Condition | Hook / Runner Decision | What Happens on Screen |
 | :--- | :--- | :--- |
-| Read-only query (`search`, `search_stream`) or `--dry-run` (`validate_only=True`) | **`allow`** | Executes immediately and displays query results or the **Mutation & Consequence Verification Card**. |
+| Read-only query (`search`, `search_stream`) or `--dry-run` (`validate_only=True`) within configured limits | **`allow`** | Executes immediately and displays query results or the **Mutation & Consequence Verification Card**. |
+| Financial transaction amount exceeds configured upper limit in `config/financial_limits` (`> 0`) | **`deny` / `BLOCKED_FINANCIAL_LIMIT_EXCEEDED`** | Blocked at the HITL step (`--dry-run`, `--execute`, `PreToolUse` hook, and sidecar); informs the user of the exceeded limit and unit, logs to `saved/logs/mutation_audit.jsonl`, and refuses to execute. |
 | Live mutation attempted while `execute_mutates = false` (default) | **`deny` (Hard Block)** | Blocked before execution with instructions to set `execute_mutates = true` in `config/assistant_config`. |
 | Live mutation attempted without a valid ($\le 30\text{ min}$) `DRY_RUN_PASSED` receipt | **`deny` (Hard Block)** | Blocked before execution with instructions to run `--dry-run` first. |
 | Script file (`script_sha256`) or RPC request payload (`request_sha256`) altered after dry-run | **`deny` / `BLOCKED_SHA256_MISMATCH`** | Blocked before any live RPC is sent to Google Ads; mismatch logged to `saved/logs/mutation_audit.jsonl`. |
-| Valid receipt + `execute_mutates = true` + matching SHA-256 digests | **`force_ask` (Interactive CLI Prompt)** | Displays the `⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION` card in the CLI and waits for your explicit approval. |
+| Valid receipt + `execute_mutates = true` + matching SHA-256 digests + within financial limits | **`force_ask` (Interactive CLI Prompt)** | Displays the `⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION` card in the CLI and waits for your explicit approval. |
 
 ## Behavioral Differences to Note in 4.1.0
 
