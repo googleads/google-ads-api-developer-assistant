@@ -20,10 +20,17 @@ from config.config_init import evaluate_mutation_guard
 
 
 @pytest.fixture(autouse=True)
-def _enable_mutates_for_hitl_tests(monkeypatch: Any) -> None:
-    """Enables execute_mutates=true for general HITL workflow tests unless overridden."""
+def _enable_mutates_for_hitl_tests(monkeypatch: Any, tmp_path: Path) -> None:
+    """Enables execute_mutates=true and permissive financial limits for general HITL workflow tests unless overridden."""
     monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates=true")
     monkeypatch.setenv("GOOGLE_ADS_ASSISTANT_ENABLED", "true")
+    run_mutation = _load_run_mutation_module()
+    permissive_fin_file = tmp_path / "_default_permissive_financial_limits"
+    lines = []
+    for k, (fmt, _unit) in run_mutation._FINANCIAL_LIMIT_META.items():
+        lines.append(f"{k} = {10**15 if fmt == 'int64' else 1e12}")
+    permissive_fin_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    monkeypatch.setenv("GOOGLE_ADS_FINANCIAL_LIMITS_FILE", str(permissive_fin_file))
 
 
 def _load_run_mutation_module() -> Any:
@@ -3003,12 +3010,96 @@ def test_financial_limits_config_and_helper_script(
     for unit_term in ("micros", "currency_units", "decimal_ratio", "micros_proportion", "int64", "double"):
         assert unit_term in raw_text, f"Expected monetary unit/format note '{unit_term}' in config/financial_limits"
 
-    parsed = tomllib.loads(raw_text)
     run_mutation = _load_run_mutation_module()
+    parsed = run_mutation.flatten_toml_limits(tomllib.loads(raw_text))
     expected_keys = set(run_mutation._FINANCIAL_LIMIT_META.keys())
     assert set(parsed.keys()) == expected_keys
+    for required_service_field in (
+        "CampaignBudgetService.amount_micros",
+        "AssetService.amount_micros",
+        "RecommendationService.amount_micros",
+        "AdGroupService.cpc_bid_micros",
+        "AdGroupCriterionService.cpc_bid_micros",
+        "CampaignCriterionService.bid_modifier",
+        "BiddingStrategyService.target_cpa_micros",
+        "CampaignService.target_cpa_micros",
+        "ConversionUploadService.conversion_value",
+    ):
+        assert required_service_field in parsed
+
+    # Verify that immutable, output-only, and non-existent Service.field entries are NOT in config/financial_limits
+    for removed_immutable_field in (
+        "AccountBudgetProposalService.proposed_spending_limit_micros",
+        "AccountBudgetProposalService.approved_spending_limit_micros",
+        "AccountBudgetProposalService.spending_limit_micros",
+        "BatchJobService.budget_amount_micros",
+        "BatchJobService.recommended_budget_amount_micros",
+        "BiddingSeasonalityAdjustmentService.seasonality_modifier",
+        "BiddingStrategyService.cpm_bid_micros",
+        "BiddingStrategyService.fixed_cpm_micros",
+        "BiddingStrategyService.target_cpm_micros",
+        "CampaignBudgetService.recommended_budget_amount_micros",
+        "CampaignCriterionService.cpc_bid_micros",
+        "CampaignService.cpm_bid_micros",
+        "CampaignService.cpv_bid_micros",
+        "CampaignService.fixed_cpm_micros",
+        "CampaignService.percent_cpc_bid_micros",
+        "CampaignService.target_cpm_micros",
+        "CampaignService.target_cpv_micros",
+        "ExperimentArmService.budget_amount_micros",
+        "ExperimentArmService.target_cpa_micros",
+        "ExperimentArmService.target_roas",
+        "ExperimentService.amount_micros",
+        "GoogleAdsService.budget_amount_micros",
+        "GoogleAdsService.recommended_budget_amount_micros",
+        "ReservationService.amount_micros",
+        "ReservationService.max_budget_micros",
+    ):
+        assert removed_immutable_field not in parsed
+
     for k, v in parsed.items():
-        assert v == 0 or v == 0.0, f"Default financial limit for {k} should be 0 / 0.0 (unlimited)"
+        fmt, _unit = run_mutation._FINANCIAL_LIMIT_META[k]
+        if fmt == "int64":
+            assert isinstance(v, int) and v == 0, f"Default int64 limit for {k} must be 0"
+        else:
+            assert isinstance(v, float) and v == 0.0, f"Default double limit for {k} must be 0.0"
+
+    # Verify that the default 0 / 0.0 values in config/financial_limits make fields not modifiable by default
+    # (blocking any attempt to modify the field, even to 0, until a value > 0 is supplied as the upper limit)
+    monkeypatch.setenv("GOOGLE_ADS_FINANCIAL_LIMITS_FILE", str(fin_cfg_path))
+    for attempted_budget_amount in (0, 1):
+        ok_zero_int, err_zero_int, _ = run_mutation.check_financial_transaction_limits(
+            rpc_calls=[
+                {
+                    "service": "CampaignBudgetService",
+                    "method": "mutate_campaign_budgets",
+                    "request_payload": {
+                        "operations": [{"create": {"amount_micros": attempted_budget_amount}}]
+                    },
+                }
+            ]
+        )
+        assert ok_zero_int is False
+        assert "CampaignBudgetService.amount_micros" in (err_zero_int or "")
+        assert "is not modifiable by default" in (err_zero_int or "")
+        assert "Supply a value > 0" in (err_zero_int or "")
+
+    for attempted_conv_val in (0.0, 0.01):
+        ok_zero_float, err_zero_float, _ = run_mutation.check_financial_transaction_limits(
+            rpc_calls=[
+                {
+                    "service": "ConversionUploadService",
+                    "method": "upload_click_conversions",
+                    "request_payload": {
+                        "conversions": [{"conversion_value": attempted_conv_val}]
+                    },
+                }
+            ]
+        )
+        assert ok_zero_float is False
+        assert "ConversionUploadService.conversion_value" in (err_zero_float or "")
+        assert "is not modifiable by default" in (err_zero_float or "")
+        assert "Supply a value > 0" in (err_zero_float or "")
 
     # Verify helper script entrypoints exist
     skill_script = (
@@ -3035,7 +3126,7 @@ def test_financial_limits_config_and_helper_script(
     # Use an isolated temporary financial_limits file for CLI modification tests
     temp_fin_file = tmp_path / "financial_limits"
 
-    # 1. --list --json returns all 20 transaction limit specs without modifying disk
+    # 1. --list --json returns all Service.field limit specs without modifying disk
     res_list = subprocess.run(
         [sys.executable, str(root_wrapper), "--config-file", str(temp_fin_file), "--list", "--json"],
         capture_output=True,
@@ -3045,7 +3136,7 @@ def test_financial_limits_config_and_helper_script(
     list_payload = json.loads(res_list.stdout)
     assert len(list_payload["limits"]) == len(expected_keys)
 
-    # 2. --set KEY=AMOUNT for int64 micros and double currency_units / decimal_ratio
+    # 2. --set Service.field=AMOUNT for specific Service.field pairs
     res_set = subprocess.run(
         [
             sys.executable,
@@ -3053,13 +3144,17 @@ def test_financial_limits_config_and_helper_script(
             "--config-file",
             str(temp_fin_file),
             "--set",
-            "campaign_budget_amount_micros=50000000",
+            "CampaignBudgetService.amount_micros=50000000",
             "--set",
-            "cpc_bid_micros=5000000",
+            "AssetService.amount_micros=20000000",
             "--set",
-            "click_conversion_value=500.0",
+            "AdGroupService.cpc_bid_micros=5000000",
             "--set",
-            "target_roas=10.0",
+            "AdGroupCriterionService.cpc_bid_micros=3000000",
+            "--set",
+            "ConversionUploadService.conversion_value=500.0",
+            "--set",
+            "BiddingStrategyService.target_roas=10.0",
             "--json",
         ],
         capture_output=True,
@@ -3068,12 +3163,14 @@ def test_financial_limits_config_and_helper_script(
     )
     assert temp_fin_file.is_file()
     set_payload = json.loads(res_set.stdout)
-    assert set_payload["updated"]["campaign_budget_amount_micros"] == 50000000
-    assert set_payload["updated"]["cpc_bid_micros"] == 5000000
-    assert set_payload["updated"]["conversion_upload_value"] == 500.0
-    assert set_payload["updated"]["target_roas"] == 10.0
+    assert set_payload["updated"]["CampaignBudgetService.amount_micros"] == 50000000
+    assert set_payload["updated"]["AssetService.amount_micros"] == 20000000
+    assert set_payload["updated"]["AdGroupService.cpc_bid_micros"] == 5000000
+    assert set_payload["updated"]["AdGroupCriterionService.cpc_bid_micros"] == 3000000
+    assert set_payload["updated"]["ConversionUploadService.conversion_value"] == 500.0
+    assert set_payload["updated"]["BiddingStrategyService.target_roas"] == 10.0
 
-    # 3. --type and --amount plus dedicated per-type flag
+    # 3. --type Service.field and --amount plus wildcard/shorthand flag
     res_type = subprocess.run(
         [
             sys.executable,
@@ -3081,7 +3178,7 @@ def test_financial_limits_config_and_helper_script(
             "--config-file",
             str(temp_fin_file),
             "--type",
-            "account_budget_spending_limit_micros",
+            "CampaignBudgetService.total_amount_micros",
             "--amount",
             "5000000000",
             "--target-cpa-micros",
@@ -3093,14 +3190,24 @@ def test_financial_limits_config_and_helper_script(
         check=True,
     )
     type_payload = json.loads(res_type.stdout)
-    assert type_payload["updated"]["account_budget_spending_limit_micros"] == 5000000000
-    assert type_payload["updated"]["target_cpa_micros"] == 25000000
+    assert (
+        type_payload["updated"]["CampaignBudgetService.total_amount_micros"]
+        == 5000000000
+    )
+    assert type_payload["updated"]["BiddingStrategyService.target_cpa_micros"] == 25000000
+    assert type_payload["updated"]["CampaignService.target_cpa_micros"] == 25000000
 
-    # Verify file remains valid TOML with comments preserved
-    updated_toml = tomllib.loads(temp_fin_file.read_text(encoding="utf-8"))
-    assert updated_toml["campaign_budget_amount_micros"] == 50000000
-    assert updated_toml["account_budget_spending_limit_micros"] == 5000000000
-    assert updated_toml["conversion_upload_value"] == 500.0
+    # Verify file remains valid TOML with Service.field keys and comments preserved
+    updated_toml = run_mutation.flatten_toml_limits(
+        tomllib.loads(temp_fin_file.read_text(encoding="utf-8"))
+    )
+    assert updated_toml["CampaignBudgetService.amount_micros"] == 50000000
+    assert updated_toml["AssetService.amount_micros"] == 20000000
+    assert (
+        updated_toml["CampaignBudgetService.total_amount_micros"]
+        == 5000000000
+    )
+    assert updated_toml["ConversionUploadService.conversion_value"] == 500.0
     assert "Monetary Unit" in temp_fin_file.read_text(encoding="utf-8")
 
     # 4. Reject non-integer float for int64 micros field (must use exact API format)
@@ -3111,7 +3218,7 @@ def test_financial_limits_config_and_helper_script(
             "--config-file",
             str(temp_fin_file),
             "--set",
-            "campaign_budget_amount_micros=50.5",
+            "CampaignBudgetService.amount_micros=50.5",
         ],
         capture_output=True,
         text=True,
@@ -3120,7 +3227,7 @@ def test_financial_limits_config_and_helper_script(
     assert res_bad_int.returncode == 2
     assert "int64 integer" in res_bad_int.stderr
 
-    # 5. --reset and --reset-all
+    # 5. --reset Service.field and --reset-all
     subprocess.run(
         [
             sys.executable,
@@ -3128,13 +3235,17 @@ def test_financial_limits_config_and_helper_script(
             "--config-file",
             str(temp_fin_file),
             "--reset",
-            "campaign_budget_amount_micros",
+            "CampaignBudgetService.amount_micros",
         ],
         capture_output=True,
         text=True,
         check=True,
     )
-    assert tomllib.loads(temp_fin_file.read_text(encoding="utf-8"))["campaign_budget_amount_micros"] == 0
+    reset_single = run_mutation.flatten_toml_limits(
+        tomllib.loads(temp_fin_file.read_text(encoding="utf-8"))
+    )
+    assert reset_single["CampaignBudgetService.amount_micros"] == 0
+    assert reset_single["AssetService.amount_micros"] == 20000000
 
     subprocess.run(
         [
@@ -3148,12 +3259,14 @@ def test_financial_limits_config_and_helper_script(
         text=True,
         check=True,
     )
-    reset_toml = tomllib.loads(temp_fin_file.read_text(encoding="utf-8"))
+    reset_toml = run_mutation.flatten_toml_limits(
+        tomllib.loads(temp_fin_file.read_text(encoding="utf-8"))
+    )
     assert all(v == 0 or v == 0.0 for v in reset_toml.values())
 
     # 6. Verify evaluate_mutation_guard treats set_financial_limits.py as a read-only helper script
     decision, reason = evaluate_mutation_guard(
-        f"python3 {root_wrapper} --set campaign_budget_amount_micros=50000000"
+        f"python3 {root_wrapper} --set CampaignBudgetService.amount_micros=50000000"
     )
     assert decision == "allow"
     assert reason is None
@@ -3162,7 +3275,7 @@ def test_financial_limits_config_and_helper_script(
 def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Verifies financial upper limits block exceeding mutations at HITL (--dry-run, --execute, PreToolUse hook, A2A sidecar, and pre-RPC wrapper)."""
+    """Verifies Service.field financial upper limits block exceeding mutations at HITL (--dry-run, --execute, PreToolUse hook, A2A sidecar, and pre-RPC wrapper)."""
     import importlib.util
     import json
     import subprocess
@@ -3172,12 +3285,12 @@ def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
     audit_log_file = tmp_path / "financial_limits_audit.jsonl"
     temp_fin_file = tmp_path / "financial_limits"
     temp_fin_file.write_text(
-        "campaign_budget_amount_micros = 50000000\n"
-        "account_budget_proposed_spending_limit_micros = 1000000000\n"
-        "cpc_bid_micros = 5000000\n"
-        "target_roas = 8.0\n"
-        "click_conversion_value = 250.0\n"
-        "conversion_adjustment_restatement_value = 250.0\n",
+        "CampaignBudgetService.amount_micros = 50000000\n"
+        "CampaignBudgetService.total_amount_micros = 1000000000\n"
+        "AdGroupService.cpc_bid_micros = 5000000\n"
+        "BiddingStrategyService.target_roas = 8.0\n"
+        "ConversionUploadService.conversion_value = 250.0\n"
+        "ConversionAdjustmentUploadService.adjusted_value = 250.0\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("GOOGLE_ADS_MUTATION_AUDIT_LOG", str(audit_log_file))
@@ -3189,8 +3302,8 @@ def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
             os.remove(receipt_path)
 
     # 1. Pre-RPC enforcement inside _wrap_service_for_audit:
-    #    - CampaignBudget amount_micros = 50_000_000 (== limit) is ALLOWED
-    #    - CampaignBudget amount_micros = 75_000_000 (> limit) is BLOCKED BEFORE RPC with PermissionError
+    #    - CampaignBudgetService.amount_micros = 50_000_000 (== limit) is ALLOWED
+    #    - CampaignBudgetService.amount_micros = 75_000_000 (> limit) is BLOCKED BEFORE RPC with PermissionError
     class _BudgetService:
         def __init__(self) -> None:
             self.calls = 0
@@ -3230,7 +3343,7 @@ def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
     assert svc.calls == 1, "RPC exceeding financial upper limit must NOT be transmitted"
     assert captured[-1]["status"] == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
 
-    # 2. write_dry_run_receipt blocks when payload or script exceeds configured limit
+    # 2. write_dry_run_receipt blocks when payload or script exceeds configured Service.field limit
     exceeding_script = tmp_path / "exceed_budget.py"
     exceeding_script.write_text(
         "def mutate_budget(client, req):\n"
@@ -3267,7 +3380,7 @@ def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
 
     cli_exceed_script = tmp_path / "cli_exceed.py"
     cli_exceed_script.write_text(
-        "budget_amount_micros = 80000000\n"
+        "amount_micros = 80000000\n"
         "print('dry run ok')\n",
         encoding="utf-8",
     )
@@ -3296,7 +3409,7 @@ def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
     )
     assert res_dry_blocked.returncode == 2
     assert "BLOCKED BY FINANCIAL UPPER LIMIT" in res_dry_blocked.stderr
-    assert "campaign_budget_amount_micros" in res_dry_blocked.stderr
+    assert "CampaignBudgetService.amount_micros" in res_dry_blocked.stderr
 
     # Verify audit log recorded BLOCKED_FINANCIAL_LIMIT_EXCEEDED
     audit_lines = [
@@ -3308,7 +3421,7 @@ def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
 
     # 4. Now write a valid receipt while limit is 100_000_000, then lower limit to 50_000_000
     #    and verify both load_and_verify_receipt, PreToolUse hook, and A2A sidecar EXECUTE_MUTATION block it!
-    temp_fin_file.write_text("campaign_budget_amount_micros = 100000000\n", encoding="utf-8")
+    temp_fin_file.write_text("CampaignBudgetService.amount_micros = 100000000\n", encoding="utf-8")
     valid_receipt = run_mutation.write_dry_run_receipt(
         customer_id="1234567890",
         operation_summary="CampaignBudgetService.mutate_campaign_budgets",
@@ -3332,7 +3445,7 @@ def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
     assert valid_receipt["status"] == "DRY_RUN_PASSED"
 
     # Lower limit to 50_000_000 micros ($50.00)
-    temp_fin_file.write_text("campaign_budget_amount_micros = 50000000\n", encoding="utf-8")
+    temp_fin_file.write_text("CampaignBudgetService.amount_micros = 50000000\n", encoding="utf-8")
 
     ok_verify, msg_verify, _ = run_mutation.load_and_verify_receipt(
         script_path=str(cli_exceed_script)
@@ -3402,7 +3515,1241 @@ def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
         if os.path.isfile(receipt_path):
             os.remove(receipt_path)
 
+    # 6. Verify per-service disambiguation when the same field name is used across multiple services
+    temp_fin_file.write_text(
+        "CampaignBudgetService.amount_micros = 50000000\n"
+        "AssetService.amount_micros = 20000000\n"
+        "AdGroupService.cpc_bid_micros = 5000000\n"
+        "AdGroupCriterionService.cpc_bid_micros = 2000000\n"
+        "RecommendationService.new_budget_amount_micros = 50000000\n"
+        "CampaignService.commission_rate_micros = 150000\n"
+        "GoalService.additional_value = 40.0\n"
+        "UserDataService.transaction_amount_micros = 100000000\n"
+        "RecommendationService.target_cpa_multiplier = 1.25\n"
+        "CampaignGoalConfigService.high_lifetime_value_multiplier = 1.5\n",
+        encoding="utf-8",
+    )
+
+    # 6a. amount_micros = 25_000_000 is ALLOWED for CampaignBudgetService (limit 50M),
+    #     but BLOCKED for AssetService (limit 20M)
+    ok_budget_25m, _, _ = run_mutation.check_financial_transaction_limits(
+        rpc_calls=[
+            {
+                "service": "CampaignBudgetService",
+                "method": "mutate_campaign_budgets",
+                "request_payload": {
+                    "operations": [{"update": {"amount_micros": 25000000}}]
+                },
+            }
+        ]
+    )
+    assert ok_budget_25m is True
+
+    ok_asset_25m, err_asset_25m, _ = run_mutation.check_financial_transaction_limits(
+        rpc_calls=[
+            {
+                "service": "AssetService",
+                "method": "mutate_assets",
+                "request_payload": {
+                    "operations": [
+                        {
+                            "create": {
+                                "promotion_asset": {
+                                    "money_amount_off": {"amount_micros": 25000000}
+                                }
+                            }
+                        }
+                    ]
+                },
+            }
+        ]
+    )
+    assert ok_asset_25m is False
+    assert "AssetService.amount_micros" in (err_asset_25m or "")
+
+    # 6b. cpc_bid_micros = 3_000_000 is ALLOWED for AdGroupService (limit 5M),
+    #     but BLOCKED for AdGroupCriterionService (limit 2M)
+    ok_ag_cpc, _, _ = run_mutation.check_financial_transaction_limits(
+        rpc_calls=[
+            {
+                "service": "AdGroupService",
+                "method": "mutate_ad_groups",
+                "request_payload": {
+                    "operations": [{"update": {"cpc_bid_micros": 3000000}}]
+                },
+            }
+        ]
+    )
+    assert ok_ag_cpc is True
+
+    ok_crit_cpc, err_crit_cpc, _ = run_mutation.check_financial_transaction_limits(
+        rpc_calls=[
+            {
+                "service": "AdGroupCriterionService",
+                "method": "mutate_ad_group_criteria",
+                "request_payload": {
+                    "operations": [{"update": {"cpc_bid_micros": 3000000}}]
+                },
+            }
+        ]
+    )
+    assert ok_crit_cpc is False
+    assert "AdGroupCriterionService.cpc_bid_micros" in (err_crit_cpc or "")
+
+    # 6c. Additional Service.field checks across RecommendationService, CampaignService, GoalService, UserDataService, CampaignGoalConfigService
+    for svc_name, method_name, payload, expected_key in (
+        (
+            "RecommendationService",
+            "apply_recommendation",
+            {"operations": [{"campaign_budget": {"new_budget_amount_micros": 60000000}}]},
+            "RecommendationService.new_budget_amount_micros",
+        ),
+        (
+            "CampaignService",
+            "mutate_campaigns",
+            {"operations": [{"create": {"commission": {"commission_rate_micros": 200000}}}]},
+            "CampaignService.commission_rate_micros",
+        ),
+        (
+            "GoalService",
+            "mutate_goals",
+            {"operations": [{"update": {"additional_value": 55.0}}]},
+            "GoalService.additional_value",
+        ),
+        (
+            "UserDataService",
+            "upload_user_data",
+            {"operations": [{"create": {"transaction_attribute": {"transaction_amount_micros": 150000000}}}]},
+            "UserDataService.transaction_amount_micros",
+        ),
+        (
+            "RecommendationService",
+            "apply_recommendation",
+            {"operations": [{"raise_target_cpa": {"target_cpa_multiplier": 1.5}}]},
+            "RecommendationService.target_cpa_multiplier",
+        ),
+        (
+            "CampaignGoalConfigService",
+            "mutate_campaign_goal_configs",
+            {"operations": [{"update": {"high_lifetime_value_multiplier": 2.0}}]},
+            "CampaignGoalConfigService.high_lifetime_value_multiplier",
+        ),
+    ):
+        ok_case, err_case, _ = run_mutation.check_financial_transaction_limits(
+            rpc_calls=[{"service": svc_name, "method": method_name, "request_payload": payload}]
+        )
+        assert ok_case is False
+        assert expected_key in (err_case or "")
 
 
+# Explicit test specification for EVERY value in config/financial_limits:
+#limit_key -> (service_name, rpc_method, api_field, upper_limit, allowed_amount, exceeded_amount)
+_ALL_FINANCIAL_LIMIT_TEST_CASES: dict[str, tuple[str, str, str, int | float, int | float, int | float]] = {
+    "all_micros_transactions": (
+        "CampaignBudgetService",
+        "mutate_campaign_budgets",
+        "amount_micros",
+        50_000_000,
+        25_000_000,
+        75_000_000,
+    ),
+    "all_currency_unit_transactions": (
+        "ConversionUploadService",
+        "upload_click_conversions",
+        "conversion_value",
+        250.0,
+        125.0,
+        375.0,
+    ),
+    "AdGroupBidModifierService.bid_modifier": (
+        "AdGroupBidModifierService",
+        "mutate_ad_group_bid_modifiers",
+        "bid_modifier",
+        2.0,
+        1.5,
+        2.5,
+    ),
+    "AdGroupCriterionService.bid_modifier": (
+        "AdGroupCriterionService",
+        "mutate_ad_group_criteria",
+        "bid_modifier",
+        2.0,
+        1.5,
+        2.5,
+    ),
+    "AdGroupCriterionService.cpc_bid_micros": (
+        "AdGroupCriterionService",
+        "mutate_ad_group_criteria",
+        "cpc_bid_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "AdGroupCriterionService.cpm_bid_micros": (
+        "AdGroupCriterionService",
+        "mutate_ad_group_criteria",
+        "cpm_bid_micros",
+        10_000_000,
+        5_000_000,
+        15_000_000,
+    ),
+    "AdGroupCriterionService.cpv_bid_micros": (
+        "AdGroupCriterionService",
+        "mutate_ad_group_criteria",
+        "cpv_bid_micros",
+        2_000_000,
+        1_000_000,
+        3_000_000,
+    ),
+    "AdGroupCriterionService.percent_cpc_bid_micros": (
+        "AdGroupCriterionService",
+        "mutate_ad_group_criteria",
+        "percent_cpc_bid_micros",
+        200_000,
+        100_000,
+        300_000,
+    ),
+    "AdGroupService.cpc_bid_micros": (
+        "AdGroupService",
+        "mutate_ad_groups",
+        "cpc_bid_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "AdGroupService.cpm_bid_micros": (
+        "AdGroupService",
+        "mutate_ad_groups",
+        "cpm_bid_micros",
+        10_000_000,
+        5_000_000,
+        15_000_000,
+    ),
+    "AdGroupService.cpv_bid_micros": (
+        "AdGroupService",
+        "mutate_ad_groups",
+        "cpv_bid_micros",
+        2_000_000,
+        1_000_000,
+        3_000_000,
+    ),
+    "AdGroupService.fixed_cpm_micros": (
+        "AdGroupService",
+        "mutate_ad_groups",
+        "fixed_cpm_micros",
+        12_000_000,
+        6_000_000,
+        18_000_000,
+    ),
+    "AdGroupService.percent_cpc_bid_micros": (
+        "AdGroupService",
+        "mutate_ad_groups",
+        "percent_cpc_bid_micros",
+        250_000,
+        150_000,
+        350_000,
+    ),
+    "AdGroupService.target_cpa_micros": (
+        "AdGroupService",
+        "mutate_ad_groups",
+        "target_cpa_micros",
+        25_000_000,
+        15_000_000,
+        35_000_000,
+    ),
+    "AdGroupService.target_cpc_micros": (
+        "AdGroupService",
+        "mutate_ad_groups",
+        "target_cpc_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "AdGroupService.target_cpm_micros": (
+        "AdGroupService",
+        "mutate_ad_groups",
+        "target_cpm_micros",
+        10_000_000,
+        5_000_000,
+        15_000_000,
+    ),
+    "AdGroupService.target_cpv_micros": (
+        "AdGroupService",
+        "mutate_ad_groups",
+        "target_cpv_micros",
+        2_000_000,
+        1_000_000,
+        3_000_000,
+    ),
+    "AdGroupService.target_roas": (
+        "AdGroupService",
+        "mutate_ad_groups",
+        "target_roas",
+        4.0,
+        2.5,
+        5.5,
+    ),
+    "AssetService.amount_micros": (
+        "AssetService",
+        "mutate_assets",
+        "amount_micros",
+        20_000_000,
+        10_000_000,
+        30_000_000,
+    ),
+    "BatchJobService.amount_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "amount_micros",
+        50_000_000,
+        25_000_000,
+        75_000_000,
+    ),
+    "BatchJobService.bid_modifier": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "bid_modifier",
+        2.0,
+        1.5,
+        2.5,
+    ),
+    "BatchJobService.commission_rate_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "commission_rate_micros",
+        150_000,
+        100_000,
+        200_000,
+    ),
+    "BatchJobService.conversion_rate_modifier": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "conversion_rate_modifier",
+        1.5,
+        1.2,
+        1.8,
+    ),
+    "BatchJobService.cpc_bid_ceiling_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "cpc_bid_ceiling_micros",
+        15_000_000,
+        10_000_000,
+        20_000_000,
+    ),
+    "BatchJobService.cpc_bid_floor_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "cpc_bid_floor_micros",
+        5_000_000,
+        2_000_000,
+        8_000_000,
+    ),
+    "BatchJobService.cpc_bid_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "cpc_bid_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "BatchJobService.cpm_bid_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "cpm_bid_micros",
+        10_000_000,
+        5_000_000,
+        15_000_000,
+    ),
+    "BatchJobService.cpv_bid_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "cpv_bid_micros",
+        2_000_000,
+        1_000_000,
+        3_000_000,
+    ),
+    "BatchJobService.default_value": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "default_value",
+        100.0,
+        50.0,
+        150.0,
+    ),
+    "BatchJobService.fixed_cpm_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "fixed_cpm_micros",
+        12_000_000,
+        6_000_000,
+        18_000_000,
+    ),
+    "BatchJobService.location_fraction_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "location_fraction_micros",
+        500_000,
+        300_000,
+        700_000,
+    ),
+    "BatchJobService.manual_cpa_bid_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "manual_cpa_bid_micros",
+        20_000_000,
+        10_000_000,
+        30_000_000,
+    ),
+    "BatchJobService.percent_cpc_bid_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "percent_cpc_bid_micros",
+        250_000,
+        150_000,
+        350_000,
+    ),
+    "BatchJobService.target_cpa_bid_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "target_cpa_bid_micros",
+        25_000_000,
+        15_000_000,
+        35_000_000,
+    ),
+    "BatchJobService.target_cpa_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "target_cpa_micros",
+        30_000_000,
+        20_000_000,
+        40_000_000,
+    ),
+    "BatchJobService.target_cpc_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "target_cpc_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "BatchJobService.target_cpm_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "target_cpm_micros",
+        10_000_000,
+        5_000_000,
+        15_000_000,
+    ),
+    "BatchJobService.target_cpv_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "target_cpv_micros",
+        2_000_000,
+        1_000_000,
+        3_000_000,
+    ),
+    "BatchJobService.target_roas": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "target_roas",
+        5.0,
+        3.0,
+        7.0,
+    ),
+    "BatchJobService.target_spend_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "target_spend_micros",
+        100_000_000,
+        50_000_000,
+        150_000_000,
+    ),
+    "BatchJobService.total_amount_micros": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "total_amount_micros",
+        500_000_000,
+        250_000_000,
+        750_000_000,
+    ),
+    "BatchJobService.value": (
+        "BatchJobService",
+        "add_batch_job_operations",
+        "value",
+        100.0,
+        50.0,
+        150.0,
+    ),
+    "BiddingSeasonalityAdjustmentService.conversion_rate_modifier": (
+        "BiddingSeasonalityAdjustmentService",
+        "mutate_bidding_seasonality_adjustments",
+        "conversion_rate_modifier",
+        1.5,
+        1.2,
+        1.8,
+    ),
+    "BiddingStrategyService.cpc_bid_ceiling_micros": (
+        "BiddingStrategyService",
+        "mutate_bidding_strategies",
+        "cpc_bid_ceiling_micros",
+        15_000_000,
+        10_000_000,
+        20_000_000,
+    ),
+    "BiddingStrategyService.cpc_bid_floor_micros": (
+        "BiddingStrategyService",
+        "mutate_bidding_strategies",
+        "cpc_bid_floor_micros",
+        5_000_000,
+        2_000_000,
+        8_000_000,
+    ),
+    "BiddingStrategyService.location_fraction_micros": (
+        "BiddingStrategyService",
+        "mutate_bidding_strategies",
+        "location_fraction_micros",
+        500_000,
+        300_000,
+        700_000,
+    ),
+    "BiddingStrategyService.target_cpa_micros": (
+        "BiddingStrategyService",
+        "mutate_bidding_strategies",
+        "target_cpa_micros",
+        30_000_000,
+        20_000_000,
+        40_000_000,
+    ),
+    "BiddingStrategyService.target_roas": (
+        "BiddingStrategyService",
+        "mutate_bidding_strategies",
+        "target_roas",
+        5.0,
+        3.0,
+        7.0,
+    ),
+    "BiddingStrategyService.target_spend_micros": (
+        "BiddingStrategyService",
+        "mutate_bidding_strategies",
+        "target_spend_micros",
+        100_000_000,
+        50_000_000,
+        150_000_000,
+    ),
+    "CampaignBidModifierService.bid_modifier": (
+        "CampaignBidModifierService",
+        "mutate_campaign_bid_modifiers",
+        "bid_modifier",
+        2.0,
+        1.5,
+        2.5,
+    ),
+    "CampaignBudgetService.amount_micros": (
+        "CampaignBudgetService",
+        "mutate_campaign_budgets",
+        "amount_micros",
+        50_000_000,
+        25_000_000,
+        75_000_000,
+    ),
+    "CampaignBudgetService.total_amount_micros": (
+        "CampaignBudgetService",
+        "mutate_campaign_budgets",
+        "total_amount_micros",
+        500_000_000,
+        250_000_000,
+        750_000_000,
+    ),
+    "CampaignCriterionService.bid_modifier": (
+        "CampaignCriterionService",
+        "mutate_campaign_criteria",
+        "bid_modifier",
+        2.0,
+        1.5,
+        2.5,
+    ),
+    "CampaignGoalConfigService.additional_high_lifetime_value": (
+        "CampaignGoalConfigService",
+        "mutate_campaign_goal_configs",
+        "additional_high_lifetime_value",
+        100.0,
+        50.0,
+        150.0,
+    ),
+    "CampaignGoalConfigService.additional_value": (
+        "CampaignGoalConfigService",
+        "mutate_campaign_goal_configs",
+        "additional_value",
+        50.0,
+        25.0,
+        75.0,
+    ),
+    "CampaignGoalConfigService.high_lifetime_value_multiplier": (
+        "CampaignGoalConfigService",
+        "mutate_campaign_goal_configs",
+        "high_lifetime_value_multiplier",
+        2.0,
+        1.5,
+        2.5,
+    ),
+    "CampaignGoalConfigService.value_multiplier": (
+        "CampaignGoalConfigService",
+        "mutate_campaign_goal_configs",
+        "value_multiplier",
+        1.5,
+        1.2,
+        1.8,
+    ),
+    "CampaignService.commission_rate_micros": (
+        "CampaignService",
+        "mutate_campaigns",
+        "commission_rate_micros",
+        150_000,
+        100_000,
+        200_000,
+    ),
+    "CampaignService.cpc_bid_ceiling_micros": (
+        "CampaignService",
+        "mutate_campaigns",
+        "cpc_bid_ceiling_micros",
+        15_000_000,
+        10_000_000,
+        20_000_000,
+    ),
+    "CampaignService.cpc_bid_floor_micros": (
+        "CampaignService",
+        "mutate_campaigns",
+        "cpc_bid_floor_micros",
+        5_000_000,
+        2_000_000,
+        8_000_000,
+    ),
+    "CampaignService.location_fraction_micros": (
+        "CampaignService",
+        "mutate_campaigns",
+        "location_fraction_micros",
+        500_000,
+        300_000,
+        700_000,
+    ),
+    "CampaignService.manual_cpa_bid_micros": (
+        "CampaignService",
+        "mutate_campaigns",
+        "manual_cpa_bid_micros",
+        20_000_000,
+        10_000_000,
+        30_000_000,
+    ),
+    "CampaignService.target_cpa_bid_micros": (
+        "CampaignService",
+        "mutate_campaigns",
+        "target_cpa_bid_micros",
+        25_000_000,
+        15_000_000,
+        35_000_000,
+    ),
+    "CampaignService.target_cpa_micros": (
+        "CampaignService",
+        "mutate_campaigns",
+        "target_cpa_micros",
+        30_000_000,
+        20_000_000,
+        40_000_000,
+    ),
+    "CampaignService.target_cpc_micros": (
+        "CampaignService",
+        "mutate_campaigns",
+        "target_cpc_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "CampaignService.target_roas": (
+        "CampaignService",
+        "mutate_campaigns",
+        "target_roas",
+        5.0,
+        3.0,
+        7.0,
+    ),
+    "CampaignService.target_spend_micros": (
+        "CampaignService",
+        "mutate_campaigns",
+        "target_spend_micros",
+        100_000_000,
+        50_000_000,
+        150_000_000,
+    ),
+    "ConversionActionService.default_value": (
+        "ConversionActionService",
+        "mutate_conversion_actions",
+        "default_value",
+        100.0,
+        50.0,
+        150.0,
+    ),
+    "ConversionAdjustmentUploadService.adjusted_value": (
+        "ConversionAdjustmentUploadService",
+        "upload_conversion_adjustments",
+        "adjusted_value",
+        250.0,
+        125.0,
+        375.0,
+    ),
+    "ConversionUploadService.conversion_value": (
+        "ConversionUploadService",
+        "upload_click_conversions",
+        "conversion_value",
+        250.0,
+        125.0,
+        375.0,
+    ),
+    "ConversionUploadService.local_transaction_cost": (
+        "ConversionUploadService",
+        "upload_click_conversions",
+        "local_transaction_cost",
+        50.0,
+        25.0,
+        75.0,
+    ),
+    "ConversionUploadService.unit_price": (
+        "ConversionUploadService",
+        "upload_click_conversions",
+        "unit_price",
+        100.0,
+        50.0,
+        150.0,
+    ),
+    "ConversionValueRuleService.value": (
+        "ConversionValueRuleService",
+        "mutate_conversion_value_rules",
+        "value",
+        100.0,
+        50.0,
+        150.0,
+    ),
+    "GoalService.additional_high_lifetime_value": (
+        "GoalService",
+        "mutate_goals",
+        "additional_high_lifetime_value",
+        100.0,
+        50.0,
+        150.0,
+    ),
+    "GoalService.additional_value": (
+        "GoalService",
+        "mutate_goals",
+        "additional_value",
+        50.0,
+        25.0,
+        75.0,
+    ),
+    "GoalService.high_lifetime_value_multiplier": (
+        "GoalService",
+        "mutate_goals",
+        "high_lifetime_value_multiplier",
+        2.0,
+        1.5,
+        2.5,
+    ),
+    "GoalService.value_multiplier": (
+        "GoalService",
+        "mutate_goals",
+        "value_multiplier",
+        1.5,
+        1.2,
+        1.8,
+    ),
+    "GoogleAdsService.amount_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "amount_micros",
+        50_000_000,
+        25_000_000,
+        75_000_000,
+    ),
+    "GoogleAdsService.bid_modifier": (
+        "GoogleAdsService",
+        "mutate",
+        "bid_modifier",
+        2.0,
+        1.5,
+        2.5,
+    ),
+    "GoogleAdsService.commission_rate_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "commission_rate_micros",
+        150_000,
+        100_000,
+        200_000,
+    ),
+    "GoogleAdsService.conversion_rate_modifier": (
+        "GoogleAdsService",
+        "mutate",
+        "conversion_rate_modifier",
+        1.5,
+        1.2,
+        1.8,
+    ),
+    "GoogleAdsService.cpc_bid_ceiling_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "cpc_bid_ceiling_micros",
+        15_000_000,
+        10_000_000,
+        20_000_000,
+    ),
+    "GoogleAdsService.cpc_bid_floor_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "cpc_bid_floor_micros",
+        5_000_000,
+        2_000_000,
+        8_000_000,
+    ),
+    "GoogleAdsService.cpc_bid_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "cpc_bid_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "GoogleAdsService.cpm_bid_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "cpm_bid_micros",
+        10_000_000,
+        5_000_000,
+        15_000_000,
+    ),
+    "GoogleAdsService.cpv_bid_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "cpv_bid_micros",
+        2_000_000,
+        1_000_000,
+        3_000_000,
+    ),
+    "GoogleAdsService.default_value": (
+        "GoogleAdsService",
+        "mutate",
+        "default_value",
+        100.0,
+        50.0,
+        150.0,
+    ),
+    "GoogleAdsService.fixed_cpm_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "fixed_cpm_micros",
+        12_000_000,
+        6_000_000,
+        18_000_000,
+    ),
+    "GoogleAdsService.location_fraction_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "location_fraction_micros",
+        500_000,
+        300_000,
+        700_000,
+    ),
+    "GoogleAdsService.manual_cpa_bid_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "manual_cpa_bid_micros",
+        20_000_000,
+        10_000_000,
+        30_000_000,
+    ),
+    "GoogleAdsService.percent_cpc_bid_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "percent_cpc_bid_micros",
+        250_000,
+        150_000,
+        350_000,
+    ),
+    "GoogleAdsService.target_cpa_bid_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "target_cpa_bid_micros",
+        25_000_000,
+        15_000_000,
+        35_000_000,
+    ),
+    "GoogleAdsService.target_cpa_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "target_cpa_micros",
+        30_000_000,
+        20_000_000,
+        40_000_000,
+    ),
+    "GoogleAdsService.target_cpc_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "target_cpc_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "GoogleAdsService.target_cpm_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "target_cpm_micros",
+        10_000_000,
+        5_000_000,
+        15_000_000,
+    ),
+    "GoogleAdsService.target_cpv_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "target_cpv_micros",
+        2_000_000,
+        1_000_000,
+        3_000_000,
+    ),
+    "GoogleAdsService.target_roas": (
+        "GoogleAdsService",
+        "mutate",
+        "target_roas",
+        5.0,
+        3.0,
+        7.0,
+    ),
+    "GoogleAdsService.target_spend_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "target_spend_micros",
+        100_000_000,
+        50_000_000,
+        150_000_000,
+    ),
+    "GoogleAdsService.total_amount_micros": (
+        "GoogleAdsService",
+        "mutate",
+        "total_amount_micros",
+        500_000_000,
+        250_000_000,
+        750_000_000,
+    ),
+    "GoogleAdsService.value": (
+        "GoogleAdsService",
+        "mutate",
+        "value",
+        100.0,
+        50.0,
+        150.0,
+    ),
+    "KeywordPlanAdGroupKeywordService.cpc_bid_micros": (
+        "KeywordPlanAdGroupKeywordService",
+        "mutate_keyword_plan_ad_group_keywords",
+        "cpc_bid_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "KeywordPlanAdGroupService.cpc_bid_micros": (
+        "KeywordPlanAdGroupService",
+        "mutate_keyword_plan_ad_groups",
+        "cpc_bid_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "KeywordPlanCampaignService.cpc_bid_micros": (
+        "KeywordPlanCampaignService",
+        "mutate_keyword_plan_campaigns",
+        "cpc_bid_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "OfflineUserDataJobService.average_purchase_value_micros": (
+        "OfflineUserDataJobService",
+        "add_offline_user_data_job_operations",
+        "average_purchase_value_micros",
+        100_000_000,
+        50_000_000,
+        150_000_000,
+    ),
+    "OfflineUserDataJobService.lifetime_value_micros": (
+        "OfflineUserDataJobService",
+        "add_offline_user_data_job_operations",
+        "lifetime_value_micros",
+        500_000_000,
+        250_000_000,
+        750_000_000,
+    ),
+    "OfflineUserDataJobService.transaction_amount_micros": (
+        "OfflineUserDataJobService",
+        "add_offline_user_data_job_operations",
+        "transaction_amount_micros",
+        100_000_000,
+        50_000_000,
+        150_000_000,
+    ),
+    "RecommendationService.amount_micros": (
+        "RecommendationService",
+        "apply_recommendation",
+        "amount_micros",
+        20_000_000,
+        10_000_000,
+        30_000_000,
+    ),
+    "RecommendationService.budget_micros_to_move": (
+        "RecommendationService",
+        "apply_recommendation",
+        "budget_micros_to_move",
+        50_000_000,
+        25_000_000,
+        75_000_000,
+    ),
+    "RecommendationService.campaign_budget_amount_micros": (
+        "RecommendationService",
+        "apply_recommendation",
+        "campaign_budget_amount_micros",
+        50_000_000,
+        25_000_000,
+        75_000_000,
+    ),
+    "RecommendationService.cpc_bid_micros": (
+        "RecommendationService",
+        "apply_recommendation",
+        "cpc_bid_micros",
+        5_000_000,
+        3_000_000,
+        8_000_000,
+    ),
+    "RecommendationService.new_budget_amount_micros": (
+        "RecommendationService",
+        "apply_recommendation",
+        "new_budget_amount_micros",
+        50_000_000,
+        25_000_000,
+        75_000_000,
+    ),
+    "RecommendationService.new_campaign_budget_amount_micros": (
+        "RecommendationService",
+        "apply_recommendation",
+        "new_campaign_budget_amount_micros",
+        50_000_000,
+        25_000_000,
+        75_000_000,
+    ),
+    "RecommendationService.target_cpa_micros": (
+        "RecommendationService",
+        "apply_recommendation",
+        "target_cpa_micros",
+        30_000_000,
+        20_000_000,
+        40_000_000,
+    ),
+    "RecommendationService.target_cpa_multiplier": (
+        "RecommendationService",
+        "apply_recommendation",
+        "target_cpa_multiplier",
+        1.5,
+        1.2,
+        1.8,
+    ),
+    "RecommendationService.target_multiplier": (
+        "RecommendationService",
+        "apply_recommendation",
+        "target_multiplier",
+        1.5,
+        1.2,
+        1.8,
+    ),
+    "RecommendationService.target_roas": (
+        "RecommendationService",
+        "apply_recommendation",
+        "target_roas",
+        5.0,
+        3.0,
+        7.0,
+    ),
+    "RecommendationService.target_roas_multiplier": (
+        "RecommendationService",
+        "apply_recommendation",
+        "target_roas_multiplier",
+        1.2,
+        0.9,
+        1.5,
+    ),
+    "UserDataService.average_purchase_value_micros": (
+        "UserDataService",
+        "upload_user_data",
+        "average_purchase_value_micros",
+        100_000_000,
+        50_000_000,
+        150_000_000,
+    ),
+    "UserDataService.lifetime_value_micros": (
+        "UserDataService",
+        "upload_user_data",
+        "lifetime_value_micros",
+        500_000_000,
+        250_000_000,
+        750_000_000,
+    ),
+    "UserDataService.transaction_amount_micros": (
+        "UserDataService",
+        "upload_user_data",
+        "transaction_amount_micros",
+        100_000_000,
+        50_000_000,
+        150_000_000,
+    ),
+}
+
+
+def _build_payload_for_financial_limit_test(
+    limit_key: str, api_field: str, amount: int | float
+) -> dict[str, Any]:
+    """Constructs a structured RPC request payload for a given financial_limits entry."""
+    if api_field == "value":
+        return {"operations": [{"create": {"action": {"value": amount}}}]}
+    if limit_key == "AssetService.amount_micros":
+        return {
+            "operations": [
+                {"create": {"promotion_asset": {"money_amount_off": {"amount_micros": amount}}}}
+            ]
+        }
+    if limit_key == "RecommendationService.amount_micros":
+        return {
+            "operations": [
+                {"promotion_asset": {"money_amount_off": {"amount_micros": amount}}}
+            ]
+        }
+    return {"operations": [{"create": {api_field: amount}}]}
+
+
+def test_all_financial_limits_have_explicit_test_cases_and_v26_mutability() -> None:
+    """Verifies that every value in config/financial_limits has an explicit test case and is mutable in v26."""
+    import tomllib
+
+    repo_root = Path(__file__).resolve().parent.parent
+    fin_cfg_path = (
+        repo_root
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "config"
+        / "financial_limits"
+    )
+    raw_text = fin_cfg_path.read_text(encoding="utf-8")
+    run_mutation = _load_run_mutation_module()
+    parsed = run_mutation.flatten_toml_limits(tomllib.loads(raw_text))
+
+    # 1. Exact 1-to-1 match between config/financial_limits, FINANCIAL_LIMIT_SPECS, and _ALL_FINANCIAL_LIMIT_TEST_CASES
+    assert set(parsed.keys()) == set(run_mutation.FINANCIAL_LIMIT_SPECS.keys())
+    missing_tests = set(parsed.keys()) - set(_ALL_FINANCIAL_LIMIT_TEST_CASES.keys())
+    extra_tests = set(_ALL_FINANCIAL_LIMIT_TEST_CASES.keys()) - set(parsed.keys())
+    assert not missing_tests, f"Missing test cases for financial_limits entries: {sorted(missing_tests)}"
+    assert not extra_tests, f"Extra test cases not in financial_limits: {sorted(extra_tests)}"
+    assert len(_ALL_FINANCIAL_LIMIT_TEST_CASES) == 120
+
+
+@pytest.mark.parametrize("limit_key", list(_ALL_FINANCIAL_LIMIT_TEST_CASES.keys()))
+def test_each_financial_limit_value_enforcement(limit_key: str) -> None:
+    """Tests default non-modifiability (0 / 0.0), validation, within-limit allow, and exceeding-limit block for each value in financial_limits."""
+    run_mutation = _load_run_mutation_module()
+    sfl_mod = run_mutation._SFL_MOD
+
+    svc_name, method_name, api_field, upper_limit, allowed_val, exceeded_val = (
+        _ALL_FINANCIAL_LIMIT_TEST_CASES[limit_key]
+    )
+    spec = sfl_mod.FINANCIAL_LIMIT_SPECS[limit_key]
+    api_format = spec["api_format"]
+    default_zero = 0 if api_format == "int64" else 0.0
+
+    # 1. Verify default value in FINANCIAL_LIMIT_SPECS is 0 / 0.0
+    assert spec["default"] == default_zero
+
+    # 2. Verify parse_and_validate_limit_amount accepts valid upper_limit and rejects negative / malformed values
+    validated = sfl_mod.parse_and_validate_limit_amount(limit_key, upper_limit)
+    assert validated == upper_limit
+    if api_format == "int64":
+        assert isinstance(validated, int)
+        with pytest.raises(ValueError):
+            sfl_mod.parse_and_validate_limit_amount(limit_key, "12.34")
+    else:
+        assert isinstance(validated, float)
+    with pytest.raises(ValueError):
+        sfl_mod.parse_and_validate_limit_amount(limit_key, -1)
+
+    # 3. Verify parse_financial_limits parses `limit_key = upper_limit` accurately
+    parsed_single = sfl_mod.parse_financial_limits(f"{limit_key} = {upper_limit}\n")
+    assert parsed_single[limit_key] == upper_limit
+
+    # 4. Verify default 0 / 0.0 blocks modification (even attempting to set 0 / 0.0 or allowed_val)
+    all_zero_limits = {k: s["default"] for k, s in sfl_mod.FINANCIAL_LIMIT_SPECS.items()}
+    for attempt_val in (default_zero, allowed_val):
+        payload_zero = _build_payload_for_financial_limit_test(limit_key, api_field, attempt_val)
+        ok_zero, err_zero, violations_zero = run_mutation.check_financial_transaction_limits(
+            rpc_calls=[
+                {
+                    "service": svc_name,
+                    "method": method_name,
+                    "request_payload": payload_zero,
+                }
+            ],
+            limits=all_zero_limits,
+            config_path="config/financial_limits",
+        )
+        assert ok_zero is False
+        assert "is not modifiable by default" in (err_zero or "")
+        assert violations_zero
+        if limit_key not in ("all_micros_transactions", "all_currency_unit_transactions"):
+            assert limit_key in (err_zero or "")
+            assert any(v["limit_key"] == limit_key for v in violations_zero)
+
+    # 5. Verify supplying a value > 0 makes the value modifiable up to that upper limit:
+    #    - allowed_val (< upper_limit) is ALLOWED
+    #    - upper_limit (== upper_limit) is ALLOWED
+    active_limits = dict(all_zero_limits)
+    active_limits[limit_key] = upper_limit
+
+    for pass_val in (allowed_val, upper_limit):
+        payload_ok = _build_payload_for_financial_limit_test(limit_key, api_field, pass_val)
+        ok_pass, err_pass, violations_pass = run_mutation.check_financial_transaction_limits(
+            rpc_calls=[
+                {
+                    "service": svc_name,
+                    "method": method_name,
+                    "request_payload": payload_ok,
+                }
+            ],
+            limits=active_limits,
+            config_path="config/financial_limits",
+        )
+        assert ok_pass is True, f"Expected {limit_key}={pass_val} <= {upper_limit} to be allowed, got: {err_pass}"
+        assert err_pass is None
+        assert violations_pass == []
+
+    # 6. Verify transaction amount > upper_limit is BLOCKED and cites `limit_key`
+    payload_exceed = _build_payload_for_financial_limit_test(limit_key, api_field, exceeded_val)
+    ok_Alpha, err_exceed, violations_exceed = run_mutation.check_financial_transaction_limits(
+        rpc_calls=[
+            {
+                "service": svc_name,
+                "method": method_name,
+                "request_payload": payload_exceed,
+            }
+        ],
+        limits=active_limits,
+        config_path="config/financial_limits",
+    )
+    assert ok_Alpha is False
+    assert limit_key in (err_exceed or "")
+    assert "exceeds the configured upper limit" in (err_exceed or "")
+    assert len(violations_exceed) == 1
+    assert violations_exceed[0]["limit_key"] == limit_key
+    assert violations_exceed[0]["observed_value"] == exceeded_val
+    assert violations_exceed[0]["upper_limit"] == upper_limit
 
 

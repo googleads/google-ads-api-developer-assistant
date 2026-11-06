@@ -565,38 +565,41 @@ When evaluating a mutation, the plugin checks candidate files in this order and 
 ---
 
 #### Financial Transaction Upper Limits (`config/financial_limits` & `set_financial_limits.py`)
-In addition to the global `execute_mutates` toggle, you can configure per-transaction upper limits for all financial Google Ads API mutate operations in [`config/financial_limits`](plugins/google-ads-api-developer-assistant/config/financial_limits).
+In addition to the global `execute_mutates` toggle, you can configure per-service, per-field upper limits for all financial Google Ads API mutate operations in [`config/financial_limits`](plugins/google-ads-api-developer-assistant/config/financial_limits) using `Service.field` keys (e.g., `CampaignBudgetService.amount_micros`, `AssetService.amount_micros`, `AdGroupService.cpc_bid_micros`, `AdGroupCriterionService.cpc_bid_micros`).
 
-* **API Format & Monetary Units:** Every value in `config/financial_limits` is specified in the exact numeric format required by the Google Ads API call for that service, and each entry notes the monetary/numeric unit used:
-  * **`micros` (`int64` integer):** `1,000,000` micros = `1.00` unit of the Google Ads account's local currency (e.g., `50000000` = `50.00` currency units). Used for budgets (`amount_micros`, `total_amount_micros`, `proposed_spending_limit_micros`), bids (`cpc_bid_micros`, `cpm_bid_micros`, `cpv_bid_micros`, `target_cpa_micros`, `target_cpm_micros`, `fixed_cpm_micros`), and bid caps/floors (`cpc_bid_ceiling_micros`, `cpc_bid_floor_micros`, `target_spend_micros`).
-  * **`currency_units` (`double` / `float`):** Standard decimal units of the account's currency (not micros; e.g., `500.0` = `500.00` currency units). Used for offline conversion value uploads (`ClickConversion.conversion_value`, `CallConversion.conversion_value`), conversion value restatements (`RestatementValue.adjusted_value`), and conversion value rules (`ValueRuleAction.value`).
-  * **`decimal_ratio` (`double` / `float`):** Decimal multiplier or ROAS ratio (not micros; e.g., `5.0` = `500%` Target ROAS, `2.0` = `+100%` bid modifier). Used for `target_roas`, `bid_modifier`, and `seasonality_modifier`.
-  * **`micros_proportion` (`int64` integer):** Proportion of hotel price in micros (`1,000,000` = `100%`; e.g., `150000` = `15%`). Used for `percent_cpc_bid_micros`.
-* **Default (`0` / `0.0` = Unlimited):** By default, all upper limits are set to `0` (for `int64` fields) or `0.0` (for `double` fields), meaning no upper limit is enforced until you configure a positive value (`> 0`).
-* **Deterministic Enforcement at HITL & RPC Execution:** Whenever any financial limit is set to a positive value (`> 0`), `run_mutation.py` (`--dry-run` and `--execute`), the `PreToolUse` hook (`config/config_init.py`), and the A2A sidecar (`server.py`) inspect both the outgoing Protobuf `Mutate*Request` payload and the mutation script/receipt. If any value exceeds its configured upper limit, the mutate function returns an error, informs you at the HITL step (`[HITL BLOCKED - FINANCIAL UPPER LIMIT EXCEEDED]`), logs `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`, and refuses to execute the command.
+* **API Format & Monetary Units:** Every `Service.field` value in `config/financial_limits` is specified in the exact numeric format required by the Google Ads API call for that service, and each entry notes the monetary/numeric unit used:
+  * **`micros` (`int64` integer):** `1,000,000` micros = `1.00` unit of the Google Ads account's local currency (e.g., `50000000` = `50.00` currency units). Used for budgets (`CampaignBudgetService.amount_micros`, `CampaignBudgetService.total_amount_micros`, `RecommendationService.new_budget_amount_micros`), bids (`AdGroupService.cpc_bid_micros`, `AdGroupCriterionService.cpc_bid_micros`, `BiddingStrategyService.target_cpa_micros`), promotions/prices (`AssetService.amount_micros`), and user transaction amounts (`UserDataService.transaction_amount_micros`).
+  * **`currency_units` (`double` / `float`):** Standard decimal units of the account's currency (not micros; e.g., `500.0` = `500.00` currency units). Used for conversion uploads (`ConversionUploadService.conversion_value`, `ConversionUploadService.unit_price`), restatements (`ConversionAdjustmentUploadService.adjusted_value`), value rules (`ConversionValueRuleService.value`), and lifecycle goals (`GoalService.additional_value`, `CampaignGoalConfigService.additional_value`).
+  * **`decimal_ratio` (`double` / `float`):** Decimal multiplier or ROAS ratio (not micros; e.g., `5.0` = `500%` Target ROAS, `2.0` = `+100%` bid modifier). Used for `BiddingStrategyService.target_roas`, `CampaignService.target_roas`, `AdGroupBidModifierService.bid_modifier`, `BiddingSeasonalityAdjustmentService.conversion_rate_modifier`, and `GoalService.value_multiplier`.
+  * **`micros_proportion` (`int64` integer):** Proportion in micros (`1,000,000` = `100%`; e.g., `150000` = `15%`). Used for `AdGroupService.percent_cpc_bid_micros`, `CampaignService.commission_rate_micros`, and `BiddingStrategyService.location_fraction_micros`.
+* **Default (`0` / `0.0` = Not Modifiable by Default):** By default, each `Service.field` value is set to `0` (for `int64` fields) or `0.0` (for `double` fields) so that financial fields are **not modifiable by default**. You must supply a value **greater than zero (`> 0`)** to make a `Service.field` modifiable; the supplied value is the **upper limit**.
+* **Deterministic Enforcement at HITL & RPC Execution:** `run_mutation.py` (`--dry-run` and `--execute`), the `PreToolUse` hook (`config/config_init.py`), and the A2A sidecar (`server.py`) inspect both the outgoing Protobuf `Mutate*Request` payload and the mutation script/receipt against `config/financial_limits`. If a mutation attempts to modify a field whose value in `config/financial_limits` is `0` / `0.0` (not modifiable by default) or exceeds its configured upper limit (`> 0`), the mutate function returns an error, informs you at the HITL step (`[HITL BLOCKED - FINANCIAL UPPER LIMIT EXCEEDED]`), logs `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`, and refuses to execute the command.
 
-Use the [`set_financial_limits.py`](set_financial_limits.py) helper script (available at `./set_financial_limits.py`, `config/set_financial_limits.py`, and `skills/execute-mutation/scripts/set_financial_limits.py`) to inspect, set, or reset upper limits from the repository root or from any directory:
+Use the [`set_financial_limits.py`](set_financial_limits.py) helper script (available at `./set_financial_limits.py`, `config/set_financial_limits.py`, and `skills/execute-mutation/scripts/set_financial_limits.py`) to inspect, set (`> 0` to make modifiable up to that upper limit), or reset (`0` / `0.0` so the field is not modifiable) limits by `Service.field`, wildcard `*.field`, or shorthand flag from the repository root or from any directory:
 
 ```bash
-# List all financial transaction types, API services, monetary units, and current upper limits
+# List all Service.field financial limits, monetary units, and current upper limits
 ./set_financial_limits.py --list
 
-# Set upper limits using --set KEY=AMOUNT (in exact API format)
+# Supply a value > 0 to make specific Service.field combinations modifiable up to that upper limit
 ./set_financial_limits.py \
-  --set campaign_budget_amount_micros=50000000 \
-  --set cpc_bid_micros=5000000 \
-  --set click_conversion_value=500.0 \
-  --set target_roas=10.0
+  --set CampaignBudgetService.amount_micros=50000000 \
+  --set AssetService.amount_micros=20000000 \
+  --set AdGroupService.cpc_bid_micros=5000000 \
+  --set AdGroupCriterionService.cpc_bid_micros=2000000 \
+  --set ConversionUploadService.conversion_value=500.0 \
+  --set BiddingStrategyService.target_roas=10.0
 
-# Or set upper limits using --type and --amount, or dedicated per-transaction flags
-./set_financial_limits.py --type account_budget_proposed_spending_limit_micros --amount 5000000000
+# Set a field across all services using a wildcard (*.field) or shorthand flag
+./set_financial_limits.py --set "*.cpc_bid_micros=5000000"
+./set_financial_limits.py --type CampaignBudgetService.total_amount_micros --amount 5000000000
 ./set_financial_limits.py --campaign-budget-amount-micros 50000000 --target-cpa-micros 25000000
 
 # Run from any directory via the installed plugin
 python3 ~/.gemini/config/plugins/google-ads-api-developer-assistant/set_financial_limits.py --list
 
-# Reset a specific limit (or all limits) back to 0 / 0.0 (unlimited)
-./set_financial_limits.py --reset campaign_budget_amount_micros
+# Reset a specific Service.field limit (or all limits) back to 0 / 0.0 (not modifiable by default)
+./set_financial_limits.py --reset CampaignBudgetService.amount_micros
 ./set_financial_limits.py --reset-all
 ```
 
@@ -887,10 +890,6 @@ A benchmark is marked **`REGRESS`** (and the process exits with code **`1`**) if
 | **`client_libs_parallel_release_sync`** | Checks client library repositories against upstream GitHub releases (`check_only=True`) with simulated `25 ms` network RTT per repo (5 iterations). | Verifies concurrent `ThreadPoolExecutor` release checks vs. sequential network polling. |
 | **`conversion_csv_validation`** | Validates a 100-row offline conversion CSV file (required headers, ISO-8601 timestamps with timezone offsets, and GCLID formatting) (50 iterations). | Ensures offline conversion troubleshooting throughput remains within the `450 ms` budget for 5,000 total rows. |
 | **`hitl_mutation_receipt_and_sha256_normalization`** | Computes canonical Protobuf SHA-256 digests (confirming `validate_only=True` and `validate_only=False` match while tampered amounts differ), writes signed `last_dry_run.json` receipts, and verifies integrity (100 iterations). | Benchmarks the cryptographic receipt verification pipeline that gates live mutations. |
-
-## Known Quirks
-
-*   The underlying model may have been trained on an older API version. It may occasionally generate code with deprecated fields. Execution errors often provide feedback that allows the assistant to self-correct on the next attempt, using the context from the client libraries. To avoid these errors, we always search for the latest version of the API when initializing the session and ask you to verify the version.
 
 ## Maintenance
 

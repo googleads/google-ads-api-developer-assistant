@@ -1,16 +1,19 @@
 # ==============================================================================
-# Google Ads API Financial Transaction Upper Limits Configuration
+# Google Ads API Financial Transaction Upper Limits Configuration (Service.field)
 # ==============================================================================
-# Specify upper limits for financial transactions across Google Ads API services.
+# Specify upper limits for financial transactions using `<Service>.<field>` keys.
 # All values MUST be in the exact numeric format required by the Google Ads API
-# call for each service (see the monetary unit noted for each entry below).
+# call for that service and field (see the monetary unit noted for each entry).
 #
-# If any mutation attempts a financial transaction exceeding a configured upper
-# limit (> 0), the mutate functions and HITL guard will return an error, inform
-# the user at the HITL step, and refuse to execute the command.
+# Each value is set to 0 (for int64 fields) or 0.0 (for double/float fields) so
+# that financial fields are NOT modifiable by default. The user must supply a
+# value greater than zero (> 0) to make a Service.field modifiable. The supplied
+# value is the upper limit.
 #
-# Setting a value to 0 (or 0.0 for float fields) means NO upper limit is enforced
-# for that transaction type (unlimited).
+# If any mutation attempts to modify a Service.field whose value is 0 / 0.0, or
+# attempts a financial transaction exceeding the supplied upper limit (> 0), the
+# mutate functions and HITL guard will return an error, inform the user at the
+# HITL step, and refuse to execute the command.
 #
 # MONETARY & NUMERIC UNITS USED BY GOOGLE ADS API SERVICES:
 # 1. micros (int64):
@@ -20,117 +23,655 @@
 # 3. decimal_ratio (double / float):
 #    Decimal ratio or multiplier (e.g., 2.5 = 250% Target ROAS; 1.5 = +50% bid modifier).
 # 4. micros_proportion (int64):
-#    Proportion in micros where 1,000,000 = 100% (e.g., 200000 = 20% Percent CPC bid).
+#    Proportion in micros where 1,000,000 = 100% (e.g., 200000 = 20% Percent CPC or commission).
 # ==============================================================================
 
-# --- 1. Global Fallback Upper Limits (Optional) ---
+# --- Global Fallback Upper Limits (Optional) ---
 
 # Service: All Google Ads API services using micros-denominated monetary fields
-# API Fields: Any *_micros monetary field when its specific limit below is set to 0
+# API Field: *.*_micros
 # Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency)
 all_micros_transactions = 0
 
 # Service: All Google Ads API services using standard currency unit fields
-# API Fields: Any standard currency unit field when its specific limit below is set to 0.0
+# API Field: *.*
 # Monetary Unit: currency_units (double/float, 1.0 = 1.00 unit of account currency, NOT micros)
 all_currency_unit_transactions = 0.0
 
-# --- 2. Budgets, Account Spending Limits & Guaranteed Reservations ---
+# --- AdGroupBidModifierService (mutate_ad_group_bid_modifiers) ---
 
-# Service: CampaignBudgetService (mutate_campaign_budgets), GoogleAdsService (mutate), ExperimentService (graduate_experiment)
-# API Fields: amount_micros, recommended_budget_amount_micros
-# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00/day)
-campaign_budget_amount_micros = 0
+# Service: AdGroupBidModifierService (mutate_ad_group_bid_modifiers)
+# API Field: AdGroupBidModifier.bid_modifier
+# Monetary Unit: decimal_ratio (double/float, bid multiplier; e.g., 2.0 = +100% bid adjustment)
+AdGroupBidModifierService.bid_modifier = 0.0
 
-# Service: CampaignBudgetService (mutate_campaign_budgets), GoogleAdsService (mutate)
-# API Field: total_amount_micros
-# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 1000000000 = 1,000.00 lifetime total)
-campaign_budget_total_amount_micros = 0
+# --- AdGroupCriterionService (mutate_ad_group_criteria) ---
 
-# Service: AccountBudgetProposalService (mutate_account_budget_proposal)
-# API Fields: proposed_spending_limit_micros, approved_spending_limit_micros, spending_limit_micros
-# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 25000000000 = 25,000.00 account limit)
-account_budget_spending_limit_micros = 0
+# Service: AdGroupCriterionService (mutate_ad_group_criteria)
+# API Field: AdGroupCriterion.bid_modifier
+# Monetary Unit: decimal_ratio (double/float, bid multiplier; e.g., 2.0 = +100% bid adjustment)
+AdGroupCriterionService.bid_modifier = 0.0
 
-# Service: ReservationService (book_campaigns, quote_campaigns)
-# API Field: max_budget_micros (and booked campaign budget amount_micros / total_amount_micros)
-# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000000 = 10,000.00 reservation commitment)
-reservation_booking_max_budget_micros = 0
-
-# --- 3. Bidding & Bid Ceilings (Micros) ---
-
-# Services: AdGroupService (mutate_ad_groups), AdGroupCriterionService (mutate_ad_group_criteria), CampaignCriterionService (mutate_campaign_criteria), GoogleAdsService (mutate)
-# API Fields: cpc_bid_micros, target_cpc_micros
+# Service: AdGroupCriterionService (mutate_ad_group_criteria)
+# API Field: AdGroupCriterion.cpc_bid_micros
 # Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 max CPC)
-cpc_bid_micros = 0
+AdGroupCriterionService.cpc_bid_micros = 0
 
-# Services: AdGroupService, AdGroupCriterionService, BiddingStrategyService, CampaignService, GoogleAdsService
-# API Fields: cpm_bid_micros, target_cpm_micros, fixed_cpm_micros
+# Service: AdGroupCriterionService (mutate_ad_group_criteria)
+# API Field: AdGroupCriterion.cpm_bid_micros
 # Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 CPM)
-cpm_bid_micros = 0
+AdGroupCriterionService.cpm_bid_micros = 0
 
-# Services: AdGroupService, AdGroupCriterionService, CampaignService, GoogleAdsService
-# API Fields: cpv_bid_micros, target_cpv_micros
+# Service: AdGroupCriterionService (mutate_ad_group_criteria)
+# API Field: AdGroupCriterion.cpv_bid_micros
 # Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 2000000 = 2.00 CPV)
-cpv_bid_micros = 0
+AdGroupCriterionService.cpv_bid_micros = 0
 
-# Services: BiddingStrategyService (mutate_bidding_strategies), CampaignService (mutate_campaigns), AdGroupService (mutate_ad_groups), GoogleAdsService (mutate)
-# API Fields: target_cpa_micros, manual_cpa_bid_micros, target_cpa_bid_micros
-# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA)
-target_cpa_micros = 0
-
-# Services: BiddingStrategyService, CampaignService, GoogleAdsService (TargetCpa, TargetRoas, TargetSpend, TargetImpressionShare, MaximizeConversions, MaximizeConversionValue, PercentCpc)
-# API Fields: cpc_bid_ceiling_micros, cpc_bid_floor_micros
-# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 15000000 = 15.00 CPC bid ceiling)
-cpc_bid_ceiling_micros = 0
-
-# Services: BiddingStrategyService, CampaignService, GoogleAdsService (TargetSpend)
-# API Field: target_spend_micros
-# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00 target spend)
-target_spend_micros = 0
-
-# --- 4. Percentage-Based Bidding (Micros Proportion) ---
-
-# Services: AdGroupService, AdGroupCriterionService, CampaignService, GoogleAdsService (PercentCpc, TargetImpressionShare)
-# API Fields: percent_cpc_bid_micros, location_fraction_micros
+# Service: AdGroupCriterionService (mutate_ad_group_criteria)
+# API Field: AdGroupCriterion.percent_cpc_bid_micros
 # Monetary Unit: micros_proportion (int64, 1,000,000 = 100%; e.g., 250000 = 25% of item/hotel price)
-percent_cpc_bid_micros = 0
+AdGroupCriterionService.percent_cpc_bid_micros = 0
 
-# --- 5. Conversions, Restatements & Value Rules (Standard Currency Units) ---
+# --- AdGroupService (mutate_ad_groups) ---
 
-# Service: ConversionUploadService (upload_click_conversions, upload_call_conversions)
-# API Field: conversion_value
-# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 500.0 = 500.00 currency units)
-conversion_upload_value = 0.0
+# Service: AdGroupService (mutate_ad_groups)
+# API Field: AdGroup.cpc_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 max CPC)
+AdGroupService.cpc_bid_micros = 0
+
+# Service: AdGroupService (mutate_ad_groups)
+# API Field: AdGroup.cpm_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 CPM)
+AdGroupService.cpm_bid_micros = 0
+
+# Service: AdGroupService (mutate_ad_groups)
+# API Field: AdGroup.cpv_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 2000000 = 2.00 CPV)
+AdGroupService.cpv_bid_micros = 0
+
+# Service: AdGroupService (mutate_ad_groups)
+# API Field: AdGroup.fixed_cpm_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 fixed CPM)
+AdGroupService.fixed_cpm_micros = 0
+
+# Service: AdGroupService (mutate_ad_groups)
+# API Field: AdGroup.percent_cpc_bid_micros
+# Monetary Unit: micros_proportion (int64, 1,000,000 = 100%; e.g., 250000 = 25% of item/hotel price)
+AdGroupService.percent_cpc_bid_micros = 0
+
+# Service: AdGroupService (mutate_ad_groups)
+# API Field: AdGroup.target_cpa_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA)
+AdGroupService.target_cpa_micros = 0
+
+# Service: AdGroupService (mutate_ad_groups)
+# API Field: AdGroup.target_cpc_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 target CPC)
+AdGroupService.target_cpc_micros = 0
+
+# Service: AdGroupService (mutate_ad_groups)
+# API Field: AdGroup.target_cpm_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 target CPM)
+AdGroupService.target_cpm_micros = 0
+
+# Service: AdGroupService (mutate_ad_groups)
+# API Field: AdGroup.target_cpv_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 2000000 = 2.00 target CPV)
+AdGroupService.target_cpv_micros = 0
+
+# Service: AdGroupService (mutate_ad_groups)
+# API Field: AdGroup.target_roas
+# Monetary Unit: decimal_ratio (double/float, conversion value per 1.00 currency unit spent; e.g., 5.0 = 500% ROAS)
+AdGroupService.target_roas = 0.0
+
+# --- AssetService (mutate_assets) ---
+
+# Service: AssetService (mutate_assets)
+# API Field: PromotionAsset.money_amount_off.amount_micros, PromotionAsset.orders_over_amount.amount_micros, PriceOffering.price.amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00)
+AssetService.amount_micros = 0
+
+# --- BatchJobService (add_batch_job_operations) ---
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: CampaignBudget.amount_micros, Money.amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00)
+BatchJobService.amount_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: AdGroupBidModifier.bid_modifier, AdGroupCriterion.bid_modifier, CampaignBidModifier.bid_modifier, CampaignCriterion.bid_modifier
+# Monetary Unit: decimal_ratio (double/float, bid multiplier; e.g., 2.0 = +100% bid adjustment)
+BatchJobService.bid_modifier = 0.0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: Commission.commission_rate_micros
+# Monetary Unit: micros_proportion (int64, 1,000,000 = 100%; e.g., 150000 = 15% commission rate)
+BatchJobService.commission_rate_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: BiddingSeasonalityAdjustment.conversion_rate_modifier
+# Monetary Unit: decimal_ratio (double/float, conversion rate multiplier; e.g., 1.5 = +50% seasonality adjustment)
+BatchJobService.conversion_rate_modifier = 0.0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: MaximizeConversions.cpc_bid_ceiling_micros, MaximizeConversionValue.cpc_bid_ceiling_micros, TargetCpa.cpc_bid_ceiling_micros, TargetRoas.cpc_bid_ceiling_micros, TargetSpend.cpc_bid_ceiling_micros, TargetImpressionShare.cpc_bid_ceiling_micros, PercentCpc.cpc_bid_ceiling_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 15000000 = 15.00 CPC bid ceiling)
+BatchJobService.cpc_bid_ceiling_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: MaximizeConversions.cpc_bid_floor_micros, MaximizeConversionValue.cpc_bid_floor_micros, TargetCpa.cpc_bid_floor_micros, TargetRoas.cpc_bid_floor_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 15000000 = 15.00 CPC bid floor)
+BatchJobService.cpc_bid_floor_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: AdGroup.cpc_bid_micros, AdGroupCriterion.cpc_bid_micros, KeywordPlanCampaign.cpc_bid_micros, KeywordPlanAdGroup.cpc_bid_micros, KeywordPlanAdGroupKeyword.cpc_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 max CPC)
+BatchJobService.cpc_bid_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: AdGroup.cpm_bid_micros, AdGroupCriterion.cpm_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 CPM)
+BatchJobService.cpm_bid_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: AdGroup.cpv_bid_micros, AdGroupCriterion.cpv_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 2000000 = 2.00 CPV)
+BatchJobService.cpv_bid_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: ValueSettings.default_value
+# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 100.0 = 100.00 default conversion value)
+BatchJobService.default_value = 0.0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: AdGroup.fixed_cpm_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 fixed CPM)
+BatchJobService.fixed_cpm_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: TargetImpressionShare.location_fraction_micros
+# Monetary Unit: micros_proportion (int64, 1,000,000 = 100%; e.g., 500000 = 50% target impression share)
+BatchJobService.location_fraction_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: CategoryBid.manual_cpa_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 manual CPA)
+BatchJobService.manual_cpa_bid_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: AdGroup.percent_cpc_bid_micros, AdGroupCriterion.percent_cpc_bid_micros
+# Monetary Unit: micros_proportion (int64, 1,000,000 = 100%; e.g., 250000 = 25% of item/hotel price)
+BatchJobService.percent_cpc_bid_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: CategoryBid.target_cpa_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA bid)
+BatchJobService.target_cpa_bid_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: AdGroup.target_cpa_micros, TargetCpa.target_cpa_micros, MaximizeConversions.target_cpa_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA)
+BatchJobService.target_cpa_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: AdGroup.target_cpc_micros, TargetCpc.target_cpc_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 target CPC)
+BatchJobService.target_cpc_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: AdGroup.target_cpm_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 target CPM)
+BatchJobService.target_cpm_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: AdGroup.target_cpv_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 2000000 = 2.00 target CPV)
+BatchJobService.target_cpv_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: AdGroup.target_roas, TargetRoas.target_roas, MaximizeConversionValue.target_roas
+# Monetary Unit: decimal_ratio (double/float, conversion value per 1.00 currency unit spent; e.g., 5.0 = 500% ROAS)
+BatchJobService.target_roas = 0.0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: TargetSpend.target_spend_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00 target spend)
+BatchJobService.target_spend_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: CampaignBudget.total_amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 1000000000 = 1,000.00 lifetime total)
+BatchJobService.total_amount_micros = 0
+
+# Service: BatchJobService (add_batch_job_operations)
+# API Field: ValueRuleAction.value
+# Monetary Unit: currency_units (for ADD/SET operations (or decimal_ratio for MULTIPLY operation) (double/float, NOT micros; e.g., 100.0))
+BatchJobService.value = 0.0
+
+# --- BiddingSeasonalityAdjustmentService (mutate_bidding_seasonality_adjustments) ---
+
+# Service: BiddingSeasonalityAdjustmentService (mutate_bidding_seasonality_adjustments)
+# API Field: BiddingSeasonalityAdjustment.conversion_rate_modifier
+# Monetary Unit: decimal_ratio (double/float, conversion rate multiplier; e.g., 1.5 = +50% seasonality adjustment)
+BiddingSeasonalityAdjustmentService.conversion_rate_modifier = 0.0
+
+# --- BiddingStrategyService (mutate_bidding_strategies) ---
+
+# Service: BiddingStrategyService (mutate_bidding_strategies)
+# API Field: MaximizeConversions.cpc_bid_ceiling_micros, MaximizeConversionValue.cpc_bid_ceiling_micros, TargetCpa.cpc_bid_ceiling_micros, TargetRoas.cpc_bid_ceiling_micros, TargetSpend.cpc_bid_ceiling_micros, TargetImpressionShare.cpc_bid_ceiling_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 15000000 = 15.00 CPC bid ceiling)
+BiddingStrategyService.cpc_bid_ceiling_micros = 0
+
+# Service: BiddingStrategyService (mutate_bidding_strategies)
+# API Field: MaximizeConversions.cpc_bid_floor_micros, MaximizeConversionValue.cpc_bid_floor_micros, TargetCpa.cpc_bid_floor_micros, TargetRoas.cpc_bid_floor_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 15000000 = 15.00 CPC bid floor)
+BiddingStrategyService.cpc_bid_floor_micros = 0
+
+# Service: BiddingStrategyService (mutate_bidding_strategies)
+# API Field: TargetImpressionShare.location_fraction_micros
+# Monetary Unit: micros_proportion (int64, 1,000,000 = 100%; e.g., 500000 = 50% target impression share)
+BiddingStrategyService.location_fraction_micros = 0
+
+# Service: BiddingStrategyService (mutate_bidding_strategies)
+# API Field: TargetCpa.target_cpa_micros, MaximizeConversions.target_cpa_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA)
+BiddingStrategyService.target_cpa_micros = 0
+
+# Service: BiddingStrategyService (mutate_bidding_strategies)
+# API Field: TargetRoas.target_roas, MaximizeConversionValue.target_roas
+# Monetary Unit: decimal_ratio (double/float, conversion value per 1.00 currency unit spent; e.g., 5.0 = 500% ROAS)
+BiddingStrategyService.target_roas = 0.0
+
+# Service: BiddingStrategyService (mutate_bidding_strategies)
+# API Field: TargetSpend.target_spend_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00 target spend)
+BiddingStrategyService.target_spend_micros = 0
+
+# --- CampaignBidModifierService (mutate_campaign_bid_modifiers) ---
+
+# Service: CampaignBidModifierService (mutate_campaign_bid_modifiers)
+# API Field: CampaignBidModifier.bid_modifier
+# Monetary Unit: decimal_ratio (double/float, bid multiplier; e.g., 2.0 = +100% bid adjustment)
+CampaignBidModifierService.bid_modifier = 0.0
+
+# --- CampaignBudgetService (mutate_campaign_budgets) ---
+
+# Service: CampaignBudgetService (mutate_campaign_budgets)
+# API Field: CampaignBudget.amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00)
+CampaignBudgetService.amount_micros = 0
+
+# Service: CampaignBudgetService (mutate_campaign_budgets)
+# API Field: CampaignBudget.total_amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 1000000000 = 1,000.00 lifetime total)
+CampaignBudgetService.total_amount_micros = 0
+
+# --- CampaignCriterionService (mutate_campaign_criteria) ---
+
+# Service: CampaignCriterionService (mutate_campaign_criteria)
+# API Field: CampaignCriterion.bid_modifier
+# Monetary Unit: decimal_ratio (double/float, bid multiplier; e.g., 2.0 = +100% bid adjustment)
+CampaignCriterionService.bid_modifier = 0.0
+
+# --- CampaignGoalConfigService (mutate_campaign_goal_configs) ---
+
+# Service: CampaignGoalConfigService (mutate_campaign_goal_configs)
+# API Field: CustomerLifecycleOptimizationValueSettings.additional_high_lifetime_value
+# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 100.0 = 100.00 additional high-LTV value)
+CampaignGoalConfigService.additional_high_lifetime_value = 0.0
+
+# Service: CampaignGoalConfigService (mutate_campaign_goal_configs)
+# API Field: CustomerLifecycleOptimizationValueSettings.additional_value
+# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 50.0 = 50.00 additional new-customer value)
+CampaignGoalConfigService.additional_value = 0.0
+
+# Service: CampaignGoalConfigService (mutate_campaign_goal_configs)
+# API Field: CustomerLifecycleOptimizationValueSettings.high_lifetime_value_multiplier
+# Monetary Unit: decimal_ratio (double/float, high-LTV customer lifecycle value multiplier; e.g., 2.0 = 200% conversion value multiplier)
+CampaignGoalConfigService.high_lifetime_value_multiplier = 0.0
+
+# Service: CampaignGoalConfigService (mutate_campaign_goal_configs)
+# API Field: CustomerLifecycleOptimizationValueSettings.value_multiplier
+# Monetary Unit: decimal_ratio (double/float, customer lifecycle value multiplier; e.g., 1.5 = 150% conversion value multiplier)
+CampaignGoalConfigService.value_multiplier = 0.0
+
+# --- CampaignService (mutate_campaigns) ---
+
+# Service: CampaignService (mutate_campaigns)
+# API Field: Commission.commission_rate_micros
+# Monetary Unit: micros_proportion (int64, 1,000,000 = 100%; e.g., 150000 = 15% commission rate)
+CampaignService.commission_rate_micros = 0
+
+# Service: CampaignService (mutate_campaigns)
+# API Field: MaximizeConversions.cpc_bid_ceiling_micros, MaximizeConversionValue.cpc_bid_ceiling_micros, TargetCpa.cpc_bid_ceiling_micros, TargetRoas.cpc_bid_ceiling_micros, TargetSpend.cpc_bid_ceiling_micros, TargetImpressionShare.cpc_bid_ceiling_micros, PercentCpc.cpc_bid_ceiling_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 15000000 = 15.00 CPC bid ceiling)
+CampaignService.cpc_bid_ceiling_micros = 0
+
+# Service: CampaignService (mutate_campaigns)
+# API Field: MaximizeConversions.cpc_bid_floor_micros, MaximizeConversionValue.cpc_bid_floor_micros, TargetCpa.cpc_bid_floor_micros, TargetRoas.cpc_bid_floor_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 15000000 = 15.00 CPC bid floor)
+CampaignService.cpc_bid_floor_micros = 0
+
+# Service: CampaignService (mutate_campaigns)
+# API Field: TargetImpressionShare.location_fraction_micros
+# Monetary Unit: micros_proportion (int64, 1,000,000 = 100%; e.g., 500000 = 50% target impression share)
+CampaignService.location_fraction_micros = 0
+
+# Service: CampaignService (mutate_campaigns)
+# API Field: CategoryBid.manual_cpa_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 manual CPA)
+CampaignService.manual_cpa_bid_micros = 0
+
+# Service: CampaignService (mutate_campaigns)
+# API Field: CategoryBid.target_cpa_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA bid)
+CampaignService.target_cpa_bid_micros = 0
+
+# Service: CampaignService (mutate_campaigns)
+# API Field: TargetCpa.target_cpa_micros, MaximizeConversions.target_cpa_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA)
+CampaignService.target_cpa_micros = 0
+
+# Service: CampaignService (mutate_campaigns)
+# API Field: TargetCpc.target_cpc_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 target CPC)
+CampaignService.target_cpc_micros = 0
+
+# Service: CampaignService (mutate_campaigns)
+# API Field: TargetRoas.target_roas, MaximizeConversionValue.target_roas
+# Monetary Unit: decimal_ratio (double/float, conversion value per 1.00 currency unit spent; e.g., 5.0 = 500% ROAS)
+CampaignService.target_roas = 0.0
+
+# Service: CampaignService (mutate_campaigns)
+# API Field: TargetSpend.target_spend_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00 target spend)
+CampaignService.target_spend_micros = 0
+
+# --- ConversionActionService (mutate_conversion_actions) ---
+
+# Service: ConversionActionService (mutate_conversion_actions)
+# API Field: ValueSettings.default_value
+# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 100.0 = 100.00 default conversion value)
+ConversionActionService.default_value = 0.0
+
+# --- ConversionAdjustmentUploadService (upload_conversion_adjustments) ---
 
 # Service: ConversionAdjustmentUploadService (upload_conversion_adjustments)
-# API Field: adjusted_value (restatement_value.adjusted_value)
+# API Field: RestatementValue.adjusted_value
+# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 500.0 = 500.00 restated value)
+ConversionAdjustmentUploadService.adjusted_value = 0.0
+
+# --- ConversionUploadService (upload_click_conversions, upload_call_conversions) ---
+
+# Service: ConversionUploadService (upload_click_conversions, upload_call_conversions)
+# API Field: ClickConversion.conversion_value, CallConversion.conversion_value
 # Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 500.0 = 500.00 currency units)
-conversion_adjustment_restatement_value = 0.0
+ConversionUploadService.conversion_value = 0.0
 
-# Service: ConversionActionService (mutate_conversion_actions), GoogleAdsService (mutate)
-# API Field: default_value (value_settings.default_value)
-# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 100.0 = 100.00 currency units)
-conversion_action_default_value = 0.0
+# Service: ConversionUploadService (upload_click_conversions, upload_call_conversions)
+# API Field: CartData.local_transaction_cost
+# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 50.0 = 50.00 local transaction cost)
+ConversionUploadService.local_transaction_cost = 0.0
 
-# Service: ConversionValueRuleService (mutate_conversion_value_rules), GoogleAdsService (mutate)
-# API Field: value (action.value)
-# Monetary Unit: currency_units (for ADD/SET operations) or decimal_ratio (for MULTIPLY operation) (double/float, NOT micros; e.g., 100.0)
-conversion_value_rule_action_value = 0.0
+# Service: ConversionUploadService (upload_click_conversions, upload_call_conversions)
+# API Field: CartData.Item.unit_price
+# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 100.0 = 100.00 item unit price)
+ConversionUploadService.unit_price = 0.0
 
-# --- 6. ROAS Targets, Bid Modifiers & Seasonality Multipliers (Decimal Ratio) ---
+# --- ConversionValueRuleService (mutate_conversion_value_rules) ---
 
-# Services: BiddingStrategyService, CampaignService, AdGroupService, GoogleAdsService (TargetRoas, MaximizeConversionValue)
-# API Field: target_roas
-# Monetary Unit: decimal_ratio (double/float, conversion value per 1.00 currency unit spent; e.g., 5.0 = 500% ROAS)
-target_roas = 0.0
+# Service: ConversionValueRuleService (mutate_conversion_value_rules)
+# API Field: ValueRuleAction.value
+# Monetary Unit: currency_units (for ADD/SET operations (or decimal_ratio for MULTIPLY operation) (double/float, NOT micros; e.g., 100.0))
+ConversionValueRuleService.value = 0.0
 
-# Services: CampaignBidModifierService, AdGroupBidModifierService, CampaignCriterionService, AdGroupCriterionService, GoogleAdsService
-# API Field: bid_modifier
+# --- GoalService (mutate_goals) ---
+
+# Service: GoalService (mutate_goals)
+# API Field: CustomerLifecycleOptimizationValueSettings.additional_high_lifetime_value
+# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 100.0 = 100.00 additional high-LTV value)
+GoalService.additional_high_lifetime_value = 0.0
+
+# Service: GoalService (mutate_goals)
+# API Field: CustomerLifecycleOptimizationValueSettings.additional_value
+# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 50.0 = 50.00 additional new-customer value)
+GoalService.additional_value = 0.0
+
+# Service: GoalService (mutate_goals)
+# API Field: CustomerLifecycleOptimizationValueSettings.high_lifetime_value_multiplier
+# Monetary Unit: decimal_ratio (double/float, high-LTV customer lifecycle value multiplier; e.g., 2.0 = 200% conversion value multiplier)
+GoalService.high_lifetime_value_multiplier = 0.0
+
+# Service: GoalService (mutate_goals)
+# API Field: CustomerLifecycleOptimizationValueSettings.value_multiplier
+# Monetary Unit: decimal_ratio (double/float, customer lifecycle value multiplier; e.g., 1.5 = 150% conversion value multiplier)
+GoalService.value_multiplier = 0.0
+
+# --- GoogleAdsService (mutate) ---
+
+# Service: GoogleAdsService (mutate)
+# API Field: CampaignBudget.amount_micros, Money.amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00)
+GoogleAdsService.amount_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: AdGroupBidModifier.bid_modifier, AdGroupCriterion.bid_modifier, CampaignBidModifier.bid_modifier, CampaignCriterion.bid_modifier
 # Monetary Unit: decimal_ratio (double/float, bid multiplier; e.g., 2.0 = +100% bid adjustment)
-bid_modifier = 0.0
+GoogleAdsService.bid_modifier = 0.0
 
-# Service: BiddingSeasonalityAdjustmentService (mutate_bidding_seasonality_adjustments), GoogleAdsService (mutate)
-# API Fields: conversion_rate_modifier, seasonality_modifier
+# Service: GoogleAdsService (mutate)
+# API Field: Commission.commission_rate_micros
+# Monetary Unit: micros_proportion (int64, 1,000,000 = 100%; e.g., 150000 = 15% commission rate)
+GoogleAdsService.commission_rate_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: BiddingSeasonalityAdjustment.conversion_rate_modifier
 # Monetary Unit: decimal_ratio (double/float, conversion rate multiplier; e.g., 1.5 = +50% seasonality adjustment)
-seasonality_conversion_rate_modifier = 0.0
+GoogleAdsService.conversion_rate_modifier = 0.0
+
+# Service: GoogleAdsService (mutate)
+# API Field: MaximizeConversions.cpc_bid_ceiling_micros, MaximizeConversionValue.cpc_bid_ceiling_micros, TargetCpa.cpc_bid_ceiling_micros, TargetRoas.cpc_bid_ceiling_micros, TargetSpend.cpc_bid_ceiling_micros, TargetImpressionShare.cpc_bid_ceiling_micros, PercentCpc.cpc_bid_ceiling_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 15000000 = 15.00 CPC bid ceiling)
+GoogleAdsService.cpc_bid_ceiling_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: MaximizeConversions.cpc_bid_floor_micros, MaximizeConversionValue.cpc_bid_floor_micros, TargetCpa.cpc_bid_floor_micros, TargetRoas.cpc_bid_floor_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 15000000 = 15.00 CPC bid floor)
+GoogleAdsService.cpc_bid_floor_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: AdGroup.cpc_bid_micros, AdGroupCriterion.cpc_bid_micros, KeywordPlanCampaign.cpc_bid_micros, KeywordPlanAdGroup.cpc_bid_micros, KeywordPlanAdGroupKeyword.cpc_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 max CPC)
+GoogleAdsService.cpc_bid_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: AdGroup.cpm_bid_micros, AdGroupCriterion.cpm_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 CPM)
+GoogleAdsService.cpm_bid_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: AdGroup.cpv_bid_micros, AdGroupCriterion.cpv_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 2000000 = 2.00 CPV)
+GoogleAdsService.cpv_bid_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: ValueSettings.default_value
+# Monetary Unit: currency_units (double/float, standard currency units, NOT micros; e.g., 100.0 = 100.00 default conversion value)
+GoogleAdsService.default_value = 0.0
+
+# Service: GoogleAdsService (mutate)
+# API Field: AdGroup.fixed_cpm_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 fixed CPM)
+GoogleAdsService.fixed_cpm_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: TargetImpressionShare.location_fraction_micros
+# Monetary Unit: micros_proportion (int64, 1,000,000 = 100%; e.g., 500000 = 50% target impression share)
+GoogleAdsService.location_fraction_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: CategoryBid.manual_cpa_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 manual CPA)
+GoogleAdsService.manual_cpa_bid_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: AdGroup.percent_cpc_bid_micros, AdGroupCriterion.percent_cpc_bid_micros
+# Monetary Unit: micros_proportion (int64, 1,000,000 = 100%; e.g., 250000 = 25% of item/hotel price)
+GoogleAdsService.percent_cpc_bid_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: CategoryBid.target_cpa_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA bid)
+GoogleAdsService.target_cpa_bid_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: AdGroup.target_cpa_micros, TargetCpa.target_cpa_micros, MaximizeConversions.target_cpa_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA)
+GoogleAdsService.target_cpa_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: AdGroup.target_cpc_micros, TargetCpc.target_cpc_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 target CPC)
+GoogleAdsService.target_cpc_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: AdGroup.target_cpm_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 target CPM)
+GoogleAdsService.target_cpm_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: AdGroup.target_cpv_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 2000000 = 2.00 target CPV)
+GoogleAdsService.target_cpv_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: AdGroup.target_roas, TargetRoas.target_roas, MaximizeConversionValue.target_roas
+# Monetary Unit: decimal_ratio (double/float, conversion value per 1.00 currency unit spent; e.g., 5.0 = 500% ROAS)
+GoogleAdsService.target_roas = 0.0
+
+# Service: GoogleAdsService (mutate)
+# API Field: TargetSpend.target_spend_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00 target spend)
+GoogleAdsService.target_spend_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: CampaignBudget.total_amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 1000000000 = 1,000.00 lifetime total)
+GoogleAdsService.total_amount_micros = 0
+
+# Service: GoogleAdsService (mutate)
+# API Field: ValueRuleAction.value
+# Monetary Unit: currency_units (for ADD/SET operations (or decimal_ratio for MULTIPLY operation) (double/float, NOT micros; e.g., 100.0))
+GoogleAdsService.value = 0.0
+
+# --- KeywordPlanAdGroupKeywordService (mutate_keyword_plan_ad_group_keywords) ---
+
+# Service: KeywordPlanAdGroupKeywordService (mutate_keyword_plan_ad_group_keywords)
+# API Field: KeywordPlanAdGroupKeyword.cpc_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 max CPC)
+KeywordPlanAdGroupKeywordService.cpc_bid_micros = 0
+
+# --- KeywordPlanAdGroupService (mutate_keyword_plan_ad_groups) ---
+
+# Service: KeywordPlanAdGroupService (mutate_keyword_plan_ad_groups)
+# API Field: KeywordPlanAdGroup.cpc_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 max CPC)
+KeywordPlanAdGroupService.cpc_bid_micros = 0
+
+# --- KeywordPlanCampaignService (mutate_keyword_plan_campaigns) ---
+
+# Service: KeywordPlanCampaignService (mutate_keyword_plan_campaigns)
+# API Field: KeywordPlanCampaign.cpc_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 max CPC)
+KeywordPlanCampaignService.cpc_bid_micros = 0
+
+# --- OfflineUserDataJobService (add_offline_user_data_job_operations) ---
+
+# Service: OfflineUserDataJobService (add_offline_user_data_job_operations)
+# API Field: UserAttribute.average_purchase_value_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of currency; e.g., 250000000 = 250.00 average purchase value)
+OfflineUserDataJobService.average_purchase_value_micros = 0
+
+# Service: OfflineUserDataJobService (add_offline_user_data_job_operations)
+# API Field: UserAttribute.lifetime_value_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of currency; e.g., 500000000 = 500.00 user lifetime value)
+OfflineUserDataJobService.lifetime_value_micros = 0
+
+# Service: OfflineUserDataJobService (add_offline_user_data_job_operations)
+# API Field: TransactionAttribute.transaction_amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of currency; e.g., 500000000 = 500.00 transaction amount)
+OfflineUserDataJobService.transaction_amount_micros = 0
+
+# --- RecommendationService (apply_recommendation) ---
+
+# Service: RecommendationService (apply_recommendation)
+# API Field: PromotionAsset.money_amount_off.amount_micros, PromotionAsset.orders_over_amount.amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00)
+RecommendationService.amount_micros = 0
+
+# Service: RecommendationService (apply_recommendation)
+# API Field: MoveUnusedBudgetParameters.budget_micros_to_move
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 budget transfer)
+RecommendationService.budget_micros_to_move = 0
+
+# Service: RecommendationService (apply_recommendation)
+# API Field: ForecastingSetTargetCpaParameters.campaign_budget_amount_micros, ForecastingSetTargetRoasParameters.campaign_budget_amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00/day)
+RecommendationService.campaign_budget_amount_micros = 0
+
+# Service: RecommendationService (apply_recommendation)
+# API Field: KeywordParameters.cpc_bid_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 max CPC)
+RecommendationService.cpc_bid_micros = 0
+
+# Service: RecommendationService (apply_recommendation)
+# API Field: CampaignBudgetParameters.new_budget_amount_micros, RaiseBudgetPerformanceTooLowParameters.new_budget_amount_micros, UseBroadMatchKeywordParameters.new_budget_amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00/day)
+RecommendationService.new_budget_amount_micros = 0
+
+# Service: RecommendationService (apply_recommendation)
+# API Field: TargetCpaOptInParameters.new_campaign_budget_amount_micros, TargetRoasOptInParameters.new_campaign_budget_amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00/day)
+RecommendationService.new_campaign_budget_amount_micros = 0
+
+# Service: RecommendationService (apply_recommendation)
+# API Field: TargetCpaOptInParameters.target_cpa_micros, ForecastingSetTargetCpaParameters.target_cpa_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA)
+RecommendationService.target_cpa_micros = 0
+
+# Service: RecommendationService (apply_recommendation)
+# API Field: RaiseTargetCpaParameters.target_cpa_multiplier, RaiseTargetCpaPerformanceBidTooLowParameters.target_cpa_multiplier
+# Monetary Unit: decimal_ratio (double/float, recommendation Target CPA multiplier; e.g., 1.2 = 120% of current Target CPA)
+RecommendationService.target_cpa_multiplier = 0.0
+
+# Service: RecommendationService (apply_recommendation)
+# API Field: RaiseTargetCpaBidTooLowParameters.target_multiplier
+# Monetary Unit: decimal_ratio (double/float, recommendation target multiplier; e.g., 1.2 = 120% of current target)
+RecommendationService.target_multiplier = 0.0
+
+# Service: RecommendationService (apply_recommendation)
+# API Field: TargetRoasOptInParameters.target_roas, ForecastingSetTargetRoasParameters.target_roas
+# Monetary Unit: decimal_ratio (double/float, conversion value per 1.00 currency unit spent; e.g., 5.0 = 500% ROAS)
+RecommendationService.target_roas = 0.0
+
+# Service: RecommendationService (apply_recommendation)
+# API Field: LowerTargetRoasParameters.target_roas_multiplier, LowerTargetRoasPerformanceBidTooLowParameters.target_roas_multiplier
+# Monetary Unit: decimal_ratio (double/float, recommendation Target ROAS multiplier; e.g., 0.9 = 90% of current Target ROAS)
+RecommendationService.target_roas_multiplier = 0.0
+
+# --- UserDataService (upload_user_data) ---
+
+# Service: UserDataService (upload_user_data)
+# API Field: UserAttribute.average_purchase_value_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of currency; e.g., 250000000 = 250.00 average purchase value)
+UserDataService.average_purchase_value_micros = 0
+
+# Service: UserDataService (upload_user_data)
+# API Field: UserAttribute.lifetime_value_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of currency; e.g., 500000000 = 500.00 user lifetime value)
+UserDataService.lifetime_value_micros = 0
+
+# Service: UserDataService (upload_user_data)
+# API Field: TransactionAttribute.transaction_amount_micros
+# Monetary Unit: micros (int64, 1,000,000 micros = 1.00 unit of currency; e.g., 500000000 = 500.00 transaction amount)
+UserDataService.transaction_amount_micros = 0

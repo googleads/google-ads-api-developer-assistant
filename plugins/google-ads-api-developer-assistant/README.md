@@ -247,22 +247,23 @@ To turn off the plugin so that it is not invoked every time you launch `jetski`/
 
 #### Financial Transaction Upper Limits (`config/financial_limits` & `set_financial_limits.py`)
 
-Configure optional upper limits for all financial Google Ads API mutate operations in [`config/financial_limits`](config/financial_limits). Every value is specified in the exact numeric format required by the API call for each service, and each entry notes the monetary/numeric unit used (`micros` (`int64`), `currency_units` (`double`), `decimal_ratio` (`double`), or `micros_proportion` (`int64`)). By default, all limits are set to `0` / `0.0` (unlimited until set to `> 0`). Any mutation exceeding a configured positive limit returns an error, informs the user at the HITL step, logs `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`, and refuses to execute.
+Configure per-service, per-field upper limits for all financial Google Ads API mutate operations in [`config/financial_limits`](config/financial_limits) using `Service.field` keys. Every value is specified in the exact numeric format required by the API call for each service and field, and each entry notes the monetary/numeric unit used (`micros` (`int64`), `currency_units` (`double`), `decimal_ratio` (`double`), or `micros_proportion` (`int64`)). By default, each value is set to `0` (`int64`) or `0.0` (`double`) so that financial fields are **not modifiable by default**. You must supply a value **greater than zero (`> 0`)** to make a field modifiable; the supplied value is the **upper limit**. Any mutation that attempts to modify a field whose value is `0` / `0.0` (not modifiable by default) or exceeds its configured upper limit (`> 0`) returns an error, informs the user at the HITL step, logs `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`, and refuses to execute.
 
-Use [`config/set_financial_limits.py`](config/set_financial_limits.py) (or `skills/execute-mutation/scripts/set_financial_limits.py`) to list, set, or reset financial limits:
+Use [`config/set_financial_limits.py`](config/set_financial_limits.py) (or `skills/execute-mutation/scripts/set_financial_limits.py`) to list, set (`> 0`), or reset (`0` / `0.0`) financial limits:
 ```bash
-# List all financial transaction types, API services, monetary units, and configured limits
+# List all Service.field financial limits, monetary units, and configured limits
 python3 config/set_financial_limits.py --list
 
-# Set upper limits in exact API format (e.g. 50000000 micros = 50.00 currency units)
+# Supply a value > 0 in exact API format to make fields modifiable up to that upper limit
 python3 config/set_financial_limits.py \
-  --set campaign_budget_amount_micros=50000000 \
-  --set cpc_bid_micros=5000000 \
-  --set click_conversion_value=500.0 \
-  --set target_roas=10.0
+  --set CampaignBudgetService.amount_micros=50000000 \
+  --set AssetService.amount_micros=20000000 \
+  --set AdGroupService.cpc_bid_micros=5000000 \
+  --set ConversionUploadService.conversion_value=500.0 \
+  --set BiddingStrategyService.target_roas=10.0
 
-# Reset a limit (or all limits) back to 0 / 0.0 (unlimited)
-python3 config/set_financial_limits.py --reset campaign_budget_amount_micros
+# Reset a limit (or all limits) back to 0 / 0.0 (not modifiable by default)
+python3 config/set_financial_limits.py --reset CampaignBudgetService.amount_micros
 python3 config/set_financial_limits.py --reset-all
 ```
 

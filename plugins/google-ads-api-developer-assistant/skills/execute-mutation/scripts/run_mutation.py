@@ -85,6 +85,10 @@ _FINANCIAL_SERVICES = frozenset({
     "reservationservice",
     "incentiveservice",
     "localservicesleadservice",
+    "goalservice",
+    "campaigngoalconfigservice",
+    "customerlifecyclegoalservice",
+    "campaignlifecyclegoalservice",
 })
 
 _FINANCIAL_METHODS = frozenset({
@@ -107,12 +111,21 @@ _FINANCIAL_METHODS = frozenset({
     "promote_experiment",
     "schedule_experiment",
     "promote_campaign_draft",
+    "mutate_goals",
+    "mutate_campaign_goal_configs",
+    "mutate_customer_lifecycle_goals",
+    "mutate_campaign_lifecycle_goals",
 })
 
 _FINANCIAL_PAYLOAD_KEYS = frozenset({
     "amount_micros",
     "total_amount_micros",
     "recommended_budget_amount_micros",
+    "new_budget_amount_micros",
+    "new_campaign_budget_amount_micros",
+    "budget_micros_to_move",
+    "budget_amount_micros",
+    "campaign_budget_amount_micros",
     "spending_limit_micros",
     "proposed_spending_limit_micros",
     "approved_spending_limit_micros",
@@ -132,9 +145,15 @@ _FINANCIAL_PAYLOAD_KEYS = frozenset({
     "cpc_bid_ceiling_micros",
     "cpc_bid_floor_micros",
     "percent_cpc_bid_micros",
+    "commission_rate_micros",
     "fixed_cpm_micros",
     "target_spend_micros",
     "bid_modifier",
+    "target_cpa_multiplier",
+    "target_roas_multiplier",
+    "target_multiplier",
+    "value_multiplier",
+    "high_lifetime_value_multiplier",
     "bidding_strategy",
     "bidding_strategy_operation",
     "campaign_bid_modifier_operation",
@@ -151,9 +170,18 @@ _FINANCIAL_PAYLOAD_KEYS = frozenset({
     "target_impression_share",
     "target_spend",
     "conversion_value",
+    "unit_price",
+    "local_transaction_cost",
     "adjusted_value",
     "restatement_value",
     "default_value",
+    "additional_value",
+    "additional_high_lifetime_value",
+    "transaction_amount_micros",
+    "lifetime_value_micros",
+    "average_purchase_value_micros",
+    "money_amount_off",
+    "orders_over_amount",
     "conversion_value_rule_operation",
     "conversion_value_rule_set_operation",
     "selected_incentive_id",
@@ -445,67 +473,117 @@ def is_execute_mutates_enabled() -> bool:
     return False
 
 
+def _load_set_financial_limits_module():
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    sfl_path = os.path.join(this_dir, "set_financial_limits.py")
+    spec = spec_from_file_location("_set_financial_limits_mod", sfl_path)
+    if spec and spec.loader:
+        mod = module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    raise RuntimeError(f"Unable to load {sfl_path}")
+
+
+_SFL_MOD = _load_set_financial_limits_module()
+FINANCIAL_LIMIT_SPECS: Dict[str, Dict[str, Any]] = _SFL_MOD.FINANCIAL_LIMIT_SPECS
+LIMIT_KEY_ALIASES: Dict[str, str] = _SFL_MOD.LIMIT_KEY_ALIASES
+resolve_limit_key = _SFL_MOD.resolve_limit_key
+resolve_limit_keys = _SFL_MOD.resolve_limit_keys
+flatten_toml_limits = _SFL_MOD.flatten_toml_limits
+
 _FINANCIAL_LIMIT_META: Dict[str, Tuple[str, str]] = {
-    "all_micros_transactions": ("int64", "micros"),
-    "all_currency_unit_transactions": ("double", "currency_units"),
-    "campaign_budget_amount_micros": ("int64", "micros"),
-    "campaign_budget_total_amount_micros": ("int64", "micros"),
-    "account_budget_spending_limit_micros": ("int64", "micros"),
-    "reservation_booking_max_budget_micros": ("int64", "micros"),
-    "cpc_bid_micros": ("int64", "micros"),
-    "cpm_bid_micros": ("int64", "micros"),
-    "cpv_bid_micros": ("int64", "micros"),
-    "target_cpa_micros": ("int64", "micros"),
-    "cpc_bid_ceiling_micros": ("int64", "micros"),
-    "target_spend_micros": ("int64", "micros"),
-    "percent_cpc_bid_micros": ("int64", "micros_proportion"),
-    "conversion_upload_value": ("double", "currency_units"),
-    "conversion_adjustment_restatement_value": ("double", "currency_units"),
-    "conversion_action_default_value": ("double", "currency_units"),
-    "conversion_value_rule_action_value": ("double", "currency_units"),
-    "target_roas": ("double", "decimal_ratio"),
-    "bid_modifier": ("double", "decimal_ratio"),
-    "seasonality_conversion_rate_modifier": ("double", "decimal_ratio"),
+    k: (spec["api_format"], spec["monetary_unit"])
+    for k, spec in FINANCIAL_LIMIT_SPECS.items()
 }
 
-_API_FIELD_TO_LIMIT_KEY: Dict[str, str] = {
-    "amount_micros": "campaign_budget_amount_micros",
-    "recommended_budget_amount_micros": "campaign_budget_amount_micros",
-    "total_amount_micros": "campaign_budget_total_amount_micros",
-    "proposed_spending_limit_micros": "account_budget_spending_limit_micros",
-    "account_budget_proposed_spending_limit_micros": "account_budget_spending_limit_micros",
-    "approved_spending_limit_micros": "account_budget_spending_limit_micros",
-    "spending_limit_micros": "account_budget_spending_limit_micros",
-    "max_budget_micros": "reservation_booking_max_budget_micros",
-    "cpc_bid_micros": "cpc_bid_micros",
-    "target_cpc_micros": "cpc_bid_micros",
-    "cpm_bid_micros": "cpm_bid_micros",
-    "target_cpm_micros": "cpm_bid_micros",
-    "fixed_cpm_micros": "cpm_bid_micros",
-    "cpv_bid_micros": "cpv_bid_micros",
-    "target_cpv_micros": "cpv_bid_micros",
-    "target_cpa_micros": "target_cpa_micros",
-    "manual_cpa_bid_micros": "target_cpa_micros",
-    "target_cpa_bid_micros": "target_cpa_micros",
-    "cpc_bid_ceiling_micros": "cpc_bid_ceiling_micros",
-    "cpc_bid_floor_micros": "cpc_bid_ceiling_micros",
-    "target_spend_micros": "target_spend_micros",
-    "percent_cpc_bid_micros": "percent_cpc_bid_micros",
-    "location_fraction_micros": "percent_cpc_bid_micros",
-    "conversion_value": "conversion_upload_value",
-    "click_conversion_value": "conversion_upload_value",
-    "call_conversion_value": "conversion_upload_value",
-    "adjusted_value": "conversion_adjustment_restatement_value",
-    "default_value": "conversion_action_default_value",
-    "target_roas": "target_roas",
-    "bid_modifier": "bid_modifier",
-    "conversion_rate_modifier": "seasonality_conversion_rate_modifier",
-    "seasonality_modifier": "seasonality_conversion_rate_modifier",
+_API_FIELD_TO_LIMIT_KEY: Dict[str, str] = dict(LIMIT_KEY_ALIASES)
+
+# Map lowercase service names and RPC method names to canonical PascalCase Service names
+_SERVICE_NAME_LOOKUP: Dict[str, str] = {}
+_METHOD_TO_SERVICE_LOOKUP: Dict[str, str] = {
+    "mutate_ad_group_bid_modifiers": "AdGroupBidModifierService",
+    "mutate_ad_group_criteria": "AdGroupCriterionService",
+    "mutate_ad_groups": "AdGroupService",
+    "mutate_assets": "AssetService",
+    "add_batch_job_operations": "BatchJobService",
+    "mutate_bidding_seasonality_adjustments": "BiddingSeasonalityAdjustmentService",
+    "mutate_bidding_strategies": "BiddingStrategyService",
+    "mutate_campaign_bid_modifiers": "CampaignBidModifierService",
+    "mutate_campaign_budgets": "CampaignBudgetService",
+    "mutate_campaign_criteria": "CampaignCriterionService",
+    "mutate_campaign_goal_configs": "CampaignGoalConfigService",
+    "mutate_campaigns": "CampaignService",
+    "mutate_conversion_actions": "ConversionActionService",
+    "upload_conversion_adjustments": "ConversionAdjustmentUploadService",
+    "upload_click_conversions": "ConversionUploadService",
+    "upload_call_conversions": "ConversionUploadService",
+    "mutate_conversion_value_rules": "ConversionValueRuleService",
+    "mutate_goals": "GoalService",
+    "mutate": "GoogleAdsService",
+    "mutate_keyword_plan_ad_group_keywords": "KeywordPlanAdGroupKeywordService",
+    "mutate_keyword_plan_ad_groups": "KeywordPlanAdGroupService",
+    "mutate_keyword_plan_campaigns": "KeywordPlanCampaignService",
+    "add_offline_user_data_job_operations": "OfflineUserDataJobService",
+    "apply_recommendation": "RecommendationService",
+    "upload_user_data": "UserDataService",
 }
+
+for _spec_key, _spec_val in FINANCIAL_LIMIT_SPECS.items():
+    _svc = _spec_val.get("service", "")
+    if _svc and _svc != "ALL":
+        _SERVICE_NAME_LOOKUP[_svc.lower()] = _svc
+
+# Map nested operation/wrapper keys inside GoogleAdsService.mutate / BatchJobService
+_PARENT_KEY_TO_SERVICE: Dict[str, str] = {
+    "ad_group_bid_modifier_operation": "AdGroupBidModifierService",
+    "ad_group_bid_modifier": "AdGroupBidModifierService",
+    "ad_group_criterion_operation": "AdGroupCriterionService",
+    "ad_group_criterion": "AdGroupCriterionService",
+    "ad_group_operation": "AdGroupService",
+    "ad_group": "AdGroupService",
+    "asset_operation": "AssetService",
+    "promotion_asset": "AssetService",
+    "price_asset": "AssetService",
+    "price_offering": "AssetService",
+    "money_amount_off": "AssetService",
+    "orders_over_amount": "AssetService",
+    "price": "AssetService",
+    "bidding_seasonality_adjustment_operation": "BiddingSeasonalityAdjustmentService",
+    "bidding_seasonality_adjustment": "BiddingSeasonalityAdjustmentService",
+    "bidding_strategy_operation": "BiddingStrategyService",
+    "bidding_strategy": "BiddingStrategyService",
+    "campaign_bid_modifier_operation": "CampaignBidModifierService",
+    "campaign_bid_modifier": "CampaignBidModifierService",
+    "campaign_budget_operation": "CampaignBudgetService",
+    "campaign_budget": "CampaignBudgetService",
+    "campaign_criterion_operation": "CampaignCriterionService",
+    "campaign_criterion": "CampaignCriterionService",
+    "campaign_goal_config_operation": "CampaignGoalConfigService",
+    "campaign_goal_config": "CampaignGoalConfigService",
+    "campaign_operation": "CampaignService",
+    "campaign": "CampaignService",
+    "commission": "CampaignService",
+    "conversion_action_operation": "ConversionActionService",
+    "conversion_action": "ConversionActionService",
+    "value_settings": "ConversionActionService",
+    "conversion_value_rule_operation": "ConversionValueRuleService",
+    "conversion_value_rule": "ConversionValueRuleService",
+    "goal_operation": "GoalService",
+    "goal": "GoalService",
+    "keyword_plan_ad_group_keyword_operation": "KeywordPlanAdGroupKeywordService",
+    "keyword_plan_ad_group_operation": "KeywordPlanAdGroupService",
+    "keyword_plan_campaign_operation": "KeywordPlanCampaignService",
+}
+
+_ALL_TRACKED_FIELD_NAMES = set(_SFL_MOD._FIELD_UNIT_META.keys()) | set(
+    LIMIT_KEY_ALIASES.keys()
+)
 
 _CODE_FINANCIAL_ASSIGN_RE = re.compile(
     r"\b("
-    + "|".join(re.escape(k) for k in _API_FIELD_TO_LIMIT_KEY.keys())
+    + "|".join(re.escape(k) for k in sorted(_ALL_TRACKED_FIELD_NAMES, key=len, reverse=True))
     + r"|action\.value)\s*(?:=|:)\s*['\"]?([0-9]+(?:_[0-9]+)*(?:\.[0-9]+)?)['\"]?"
 )
 _TEXT_MICROS_VALUE_RE = re.compile(
@@ -516,90 +594,17 @@ _TEXT_MICROS_VALUE_RE = re.compile(
 
 def get_financial_limits_paths() -> List[str]:
     """Returns candidate paths for reading config/financial_limits."""
-    env_file = os.environ.get("GOOGLE_ADS_FINANCIAL_LIMITS_FILE", "").strip()
-    if env_file:
-        return [os.path.abspath(env_file)]
-
-    this_dir = os.path.dirname(os.path.abspath(__file__))
-    plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
-    repo_root = os.path.abspath(os.path.join(plugin_root, "../.."))
-    paths = [
-        os.path.abspath(os.path.join("config", FINANCIAL_LIMITS_FILENAME)),
-        os.path.join(plugin_root, "config", FINANCIAL_LIMITS_FILENAME),
-        os.path.join(repo_root, "config", FINANCIAL_LIMITS_FILENAME),
-        os.path.expanduser(
-            f"~/.gemini/config/plugins/google-ads-api-developer-assistant/config/{FINANCIAL_LIMITS_FILENAME}"
-        ),
-        os.path.expanduser(
-            f"~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/{FINANCIAL_LIMITS_FILENAME}"
-        ),
-    ]
-    deduped: List[str] = []
-    for p in paths:
-        norm = os.path.normpath(p)
-        if norm not in deduped:
-            deduped.append(norm)
-    return deduped
+    return _SFL_MOD.get_financial_limits_paths()
 
 
 def parse_financial_limits(raw_text: str) -> Dict[str, Union[int, float]]:
-    """Parses TOML or key=value text from config/financial_limits."""
-    limits: Dict[str, Union[int, float]] = {
-        k: (0 if fmt == "int64" else 0.0)
-        for k, (fmt, _) in _FINANCIAL_LIMIT_META.items()
-    }
-    if not raw_text or not raw_text.strip():
-        return limits
-
-    parsed_dict: Dict[str, Any] = {}
-    try:
-        import tomllib  # type: ignore
-
-        loaded = tomllib.loads(raw_text)
-        if isinstance(loaded, dict):
-            parsed_dict = loaded
-    except Exception:
-        pass
-
-    if not parsed_dict:
-        for raw_line in raw_text.splitlines():
-            line = raw_line.split("#", 1)[0].strip()
-            if not line or "=" not in line:
-                continue
-            k_part, v_part = line.split("=", 1)
-            parsed_dict[k_part.strip()] = v_part.strip().strip("'\"")
-
-    for raw_k, raw_v in parsed_dict.items():
-        k_norm = str(raw_k).strip().lower().replace("-", "_")
-        if k_norm in _API_FIELD_TO_LIMIT_KEY and k_norm not in _FINANCIAL_LIMIT_META:
-            k_norm = _API_FIELD_TO_LIMIT_KEY[k_norm]
-        if k_norm in _FINANCIAL_LIMIT_META:
-            fmt, _ = _FINANCIAL_LIMIT_META[k_norm]
-            try:
-                clean_v = str(raw_v).replace("_", "").replace(",", "").strip()
-                if fmt == "int64":
-                    limits[k_norm] = int(float(clean_v))
-                else:
-                    limits[k_norm] = float(clean_v)
-            except Exception:
-                continue
-    return limits
+    """Parses TOML (`Service.field = value` or `[Service]`) or key=value text from config/financial_limits."""
+    return _SFL_MOD.parse_financial_limits(raw_text)
 
 
 def read_financial_limits() -> Tuple[Dict[str, Union[int, float]], Optional[str]]:
     """Reads the highest-precedence config/financial_limits file and returns (limits, path)."""
-    defaults: Dict[str, Union[int, float]] = {
-        k: (0 if fmt == "int64" else 0.0)
-        for k, (fmt, _) in _FINANCIAL_LIMIT_META.items()
-    }
-    for candidate in get_financial_limits_paths():
-        if os.path.isfile(candidate):
-            try:
-                with open(candidate, "r", encoding="utf-8") as f:
-                    return parse_financial_limits(f.read()), candidate
-            except OSError:
-                continue
-    return defaults, None
+    return _SFL_MOD.read_financial_limits()
 
 
 def _coerce_numeric(val: Any) -> Optional[float]:
@@ -618,13 +623,101 @@ def _coerce_numeric(val: Any) -> Optional[float]:
     return None
 
 
+def _resolve_canonical_service(
+    service_name: str = "",
+    method_name: str = "",
+    context_text: str = "",
+) -> str:
+    """Resolves a service name, method name, or context text to a canonical Google Ads Service name."""
+    svc_clean = service_name.strip().lower()
+    if svc_clean in _SERVICE_NAME_LOOKUP:
+        return _SERVICE_NAME_LOOKUP[svc_clean]
+
+    m_clean = method_name.strip().lower()
+    if m_clean in _METHOD_TO_SERVICE_LOOKUP:
+        return _METHOD_TO_SERVICE_LOOKUP[m_clean]
+
+    ctx_lower = context_text.lower()
+    for s_low, s_canon in _SERVICE_NAME_LOOKUP.items():
+        if s_low in ctx_lower:
+            return s_canon
+    for m_low, s_canon in _METHOD_TO_SERVICE_LOOKUP.items():
+        if m_low != "mutate" and m_low in ctx_lower:
+            return s_canon
+    return ""
+
+
+def _resolve_candidate_limit_keys(
+    field_name: str,
+    service_name: str = "",
+    method_name: str = "",
+    ancestor_keys: Tuple[str, ...] = (),
+    context_text: str = "",
+    limits: Optional[Dict[str, Union[int, float]]] = None,
+) -> List[str]:
+    """Returns ordered candidate `Service.field` limit keys for an observed field."""
+    f_lower = field_name.strip().lower()
+    if f_lower == "action.value":
+        f_lower = "value"
+    elif f_lower in ("click_conversion_value", "call_conversion_value"):
+        f_lower = "conversion_value"
+
+    candidates: List[str] = []
+    canon_svc = _resolve_canonical_service(service_name, method_name, context_text)
+
+    # Check ancestor payload keys for inner resource service disambiguation
+    inferred_inner_svc = ""
+    for anc in reversed(ancestor_keys):
+        if anc in _PARENT_KEY_TO_SERVICE:
+            inferred_inner_svc = _PARENT_KEY_TO_SERVICE[anc]
+            break
+
+    if canon_svc in ("GoogleAdsService", "BatchJobService") and inferred_inner_svc:
+        inner_key = f"{inferred_inner_svc}.{f_lower}"
+        outer_key = f"{canon_svc}.{f_lower}"
+        valid_pair = [
+            k for k in (inner_key, outer_key) if k in FINANCIAL_LIMIT_SPECS
+        ]
+        if len(valid_pair) == 2 and limits is not None:
+            pos_keys = [
+                k for k in valid_pair if float(limits.get(k, 0) or 0) > 0
+            ]
+            if pos_keys:
+                return pos_keys
+            return valid_pair
+        if valid_pair:
+            return valid_pair
+
+    if canon_svc:
+        direct_key = f"{canon_svc}.{f_lower}"
+        if direct_key in FINANCIAL_LIMIT_SPECS:
+            candidates.append(direct_key)
+
+    if not candidates and inferred_inner_svc:
+        inner_key = f"{inferred_inner_svc}.{f_lower}"
+        if inner_key in FINANCIAL_LIMIT_SPECS:
+            candidates.append(inner_key)
+
+    if not candidates and f_lower in LIMIT_KEY_ALIASES:
+        alias_key = LIMIT_KEY_ALIASES[f_lower]
+        if alias_key in FINANCIAL_LIMIT_SPECS:
+            candidates.append(alias_key)
+
+    if not candidates and f_lower.endswith("_micros"):
+        candidates.append("all_micros_transactions")
+
+    return candidates
+
+
 def _extract_payload_financial_amounts(
     obj: Any,
     service_name: str = "",
     method_name: str = "",
     parent_key: str = "",
     out: Optional[List[Tuple[str, str, float]]] = None,
+    limits: Optional[Dict[str, Union[int, float]]] = None,
     _depth: int = 0,
+    _ancestors: Tuple[str, ...] = (),
 ) -> List[Tuple[str, str, float]]:
     """Recursively extracts (limit_key, field_name, numeric_value) tuples from an RPC payload."""
     if out is None:
@@ -640,22 +733,31 @@ def _extract_payload_financial_amounts(
             k_lower = str(k).strip().lower()
             num_val = _coerce_numeric(v)
             if num_val is not None:
-                if k_lower in _API_FIELD_TO_LIMIT_KEY:
-                    limit_key = _API_FIELD_TO_LIMIT_KEY[k_lower]
-                    if k_lower == "amount_micros" and (
-                        svc_lower == "reservationservice"
-                        or m_lower in ("book_campaigns", "quote_campaigns")
-                    ):
-                        out.append(
-                            ("reservation_booking_max_budget_micros", k_lower, num_val)
-                        )
-                    out.append((limit_key, k_lower, num_val))
-                elif k_lower == "value" and (
-                    parent_key in ("action", "conversion_value_rule", "conversion_value_rule_operation")
+                if k_lower == "value" and not (
+                    parent_key
+                    in (
+                        "action",
+                        "conversion_value_rule",
+                        "conversion_value_rule_operation",
+                    )
                     or svc_lower == "conversionvalueruleservice"
                     or m_lower == "mutate_conversion_value_rules"
                 ):
-                    out.append(("conversion_value_rule_action_value", "action.value", num_val))
+                    continue
+
+                if k_lower in _ALL_TRACKED_FIELD_NAMES:
+                    cand_keys = _resolve_candidate_limit_keys(
+                        k_lower,
+                        service_name=service_name,
+                        method_name=method_name,
+                        ancestor_keys=_ancestors + ((parent_key,) if parent_key else ()),
+                        limits=limits,
+                    )
+                    display_field = (
+                        "action.value" if k_lower == "value" else k_lower
+                    )
+                    for lk in cand_keys:
+                        out.append((lk, display_field, num_val))
                 elif k_lower.endswith("_micros"):
                     out.append(("all_micros_transactions", k_lower, num_val))
             else:
@@ -665,7 +767,9 @@ def _extract_payload_financial_amounts(
                     method_name=method_name,
                     parent_key=k_lower,
                     out=out,
+                    limits=limits,
                     _depth=_depth + 1,
+                    _ancestors=_ancestors + ((k_lower,) if k_lower else ()),
                 )
     elif isinstance(obj, list):
         for item in obj:
@@ -675,36 +779,54 @@ def _extract_payload_financial_amounts(
                 method_name=method_name,
                 parent_key=parent_key,
                 out=out,
+                limits=limits,
                 _depth=_depth + 1,
+                _ancestors=_ancestors,
             )
     return out
 
 
 def _infer_limit_key_from_context(context_text: str) -> str:
-    """Infers the primary micros limit key from an operation summary or service name."""
+    """Infers the primary Service.field micros limit key from an operation summary or service name."""
     lower = context_text.lower()
-    if "account_budget" in lower or "accountbudgetproposal" in lower or "spending_limit" in lower:
-        return "account_budget_spending_limit_micros"
     if "total_amount_micros" in lower:
-        return "campaign_budget_total_amount_micros"
-    if "reservation" in lower or "book_campaigns" in lower or "max_budget_micros" in lower:
-        return "reservation_booking_max_budget_micros"
-    if "percent_cpc" in lower or "location_fraction" in lower:
-        return "percent_cpc_bid_micros"
+        return "CampaignBudgetService.total_amount_micros"
+    if (
+        "money_amount_off" in lower
+        or "orders_over_amount" in lower
+        or "promotion_asset" in lower
+        or "price_asset" in lower
+        or "assetservice" in lower
+    ):
+        return "AssetService.amount_micros"
+    if "commission_rate" in lower:
+        return "CampaignService.commission_rate_micros"
+    if "location_fraction" in lower:
+        return "BiddingStrategyService.location_fraction_micros"
+    if "percent_cpc" in lower:
+        return "AdGroupService.percent_cpc_bid_micros"
+    if (
+        "transaction_amount_micros" in lower
+        or "lifetime_value_micros" in lower
+        or "average_purchase_value_micros" in lower
+        or "userdataservice" in lower
+        or "offlineuserdatajob" in lower
+    ):
+        return "UserDataService.transaction_amount_micros"
     if "bid_ceiling" in lower or "bid_floor" in lower:
-        return "cpc_bid_ceiling_micros"
+        return "BiddingStrategyService.cpc_bid_ceiling_micros"
     if "target_cpa" in lower or "cpa_bid" in lower:
-        return "target_cpa_micros"
+        return "BiddingStrategyService.target_cpa_micros"
     if "target_spend" in lower:
-        return "target_spend_micros"
+        return "BiddingStrategyService.target_spend_micros"
     if "cpm_bid" in lower or "target_cpm" in lower or "fixed_cpm" in lower:
-        return "cpm_bid_micros"
+        return "AdGroupService.cpm_bid_micros"
     if "cpv_bid" in lower or "target_cpv" in lower:
-        return "cpv_bid_micros"
+        return "AdGroupService.cpv_bid_micros"
     if "cpc_bid" in lower or "target_cpc" in lower:
-        return "cpc_bid_micros"
+        return "AdGroupService.cpc_bid_micros"
     if "budget" in lower:
-        return "campaign_budget_amount_micros"
+        return "CampaignBudgetService.amount_micros"
     return "all_micros_transactions"
 
 
@@ -715,10 +837,17 @@ def _evaluate_observed_amount(
     limits: Dict[str, Union[int, float]],
     config_path: Optional[str],
 ) -> Optional[Dict[str, Any]]:
-    """Checks an observed amount against its specific limit and global fallback limit."""
+    """Checks an observed amount against its Service.field limit.
+
+    - If the configured limit is 0 / 0.0 (and no positive global fallback applies),
+      the field is NOT modifiable by default (blocked for any value, including 0).
+    - If the user supplies a value > 0, the field is modifiable and the supplied
+      value is enforced as the upper limit.
+    """
     fmt, unit = _FINANCIAL_LIMIT_META.get(limit_key, ("int64", "micros"))
     effective_key = limit_key
-    limit_val = float(limits.get(limit_key, 0) or 0)
+    raw_limit = limits.get(limit_key, 0)
+    limit_val = float(0 if raw_limit is None else raw_limit)
 
     if limit_val <= 0:
         if unit == "micros" and float(limits.get("all_micros_transactions", 0) or 0) > 0:
@@ -731,14 +860,34 @@ def _evaluate_observed_amount(
             effective_key = "all_currency_unit_transactions"
             limit_val = float(limits["all_currency_unit_transactions"])
 
-    if limit_val > 0 and observed_val > limit_val:
-        if fmt == "int64":
-            obs_str = str(int(round(observed_val)))
-            lim_str = str(int(round(limit_val)))
-        else:
-            obs_str = str(float(observed_val))
-            lim_str = str(float(limit_val))
-        cfg_display = config_path or "config/financial_limits"
+    if fmt == "int64":
+        obs_str = str(int(round(observed_val)))
+        lim_str = str(int(round(limit_val)))
+    else:
+        obs_str = str(float(observed_val))
+        lim_str = str(float(limit_val))
+    cfg_display = config_path or "config/financial_limits"
+
+    if limit_val <= 0:
+        msg = (
+            f"BLOCKED BY FINANCIAL UPPER LIMIT (HITL GUARD): Financial field "
+            f"'{effective_key}' (API field '{field_name}' = {obs_str} {unit}) is not modifiable "
+            f"by default because its value in {cfg_display} is {lim_str}. Supply a value > 0 "
+            f"for '{effective_key}' in {cfg_display} to make this field modifiable up to that "
+            f"upper limit [API format: {fmt}, monetary unit: {unit}]. Refusing to execute command."
+        )
+        return {
+            "limit_key": effective_key,
+            "field_name": field_name,
+            "observed_value": int(round(observed_val)) if fmt == "int64" else float(observed_val),
+            "upper_limit": int(round(limit_val)) if fmt == "int64" else float(limit_val),
+            "monetary_unit": unit,
+            "api_format": fmt,
+            "config_path": cfg_display,
+            "message": msg,
+        }
+
+    if observed_val > limit_val:
         msg = (
             f"BLOCKED BY FINANCIAL UPPER LIMIT (HITL GUARD): Financial transaction on "
             f"'{effective_key}' (API field '{field_name}' = {obs_str} {unit}) exceeds the "
@@ -787,9 +936,6 @@ def check_financial_transaction_limits(
     if limits is None:
         limits, config_path = read_financial_limits()
 
-    if not any(float(v or 0) > 0 for v in limits.values()):
-        return True, None, []
-
     observations: List[Tuple[str, str, float]] = []
 
     # 1. Inspect intercepted RPC call request payloads
@@ -801,6 +947,7 @@ def check_financial_transaction_limits(
             service_name=str(call.get("service", "")),
             method_name=str(call.get("method", "")),
             out=observations,
+            limits=limits,
         )
 
     # 2. Inspect Python mutation script source code and/or command text
@@ -818,6 +965,7 @@ def check_financial_transaction_limits(
         uncommented = "\n".join(
             line.split("#", 1)[0] for line in raw_code.splitlines()
         )
+        ctx_for_code = f"{operation_summary}\n{uncommented}"
         for match in _CODE_FINANCIAL_ASSIGN_RE.finditer(uncommented):
             fld = match.group(1).strip().lower()
             raw_num = match.group(2).replace("_", "")
@@ -825,24 +973,30 @@ def check_financial_transaction_limits(
                 num_val = float(raw_num)
             except ValueError:
                 continue
-            if fld == "action.value":
-                observations.append(
-                    ("conversion_value_rule_action_value", "action.value", num_val)
+            cand_keys = _resolve_candidate_limit_keys(
+                fld,
+                context_text=ctx_for_code,
+                limits=limits,
+            )
+            if (
+                fld == "amount_micros"
+                and (
+                    "money_amount_off" in uncommented
+                    or "orders_over_amount" in uncommented
+                    or "PriceOffering" in uncommented
+                    or "PromotionAsset" in uncommented
+                    or "PriceAsset" in uncommented
+                    or "AssetService" in uncommented
                 )
-            elif fld in _API_FIELD_TO_LIMIT_KEY:
-                lkey = _API_FIELD_TO_LIMIT_KEY[fld]
-                if fld == "amount_micros" and (
-                    "book_campaigns" in uncommented
-                    or "ReservationService" in uncommented
-                ):
-                    observations.append(
-                        ("reservation_booking_max_budget_micros", fld, num_val)
-                    )
-                observations.append((lkey, fld, num_val))
+                and "RecommendationService" not in uncommented
+            ):
+                cand_keys = ["AssetService.amount_micros"]
+            for lk in cand_keys:
+                observations.append((lk, fld, num_val))
 
-    # 3. Inspect operation_summary and after_state text
+    # 3. Inspect operation_summary and after_state text if no structured RPC/script observations were found
     summary_text = f"{operation_summary}\n{after_state}"
-    if summary_text.strip():
+    if summary_text.strip() and not observations:
         for match in _CODE_FINANCIAL_ASSIGN_RE.finditer(summary_text):
             fld = match.group(1).strip().lower()
             raw_num = match.group(2).replace("_", "")
@@ -850,12 +1004,10 @@ def check_financial_transaction_limits(
                 num_val = float(raw_num)
             except ValueError:
                 continue
-            if fld == "action.value":
-                observations.append(
-                    ("conversion_value_rule_action_value", "action.value", num_val)
-                )
-            elif fld in _API_FIELD_TO_LIMIT_KEY:
-                observations.append((_API_FIELD_TO_LIMIT_KEY[fld], fld, num_val))
+            for lk in _resolve_candidate_limit_keys(
+                fld, context_text=summary_text, limits=limits
+            ):
+                observations.append((lk, fld, num_val))
 
         inferred_key = _infer_limit_key_from_context(summary_text)
         for m_match in _TEXT_MICROS_VALUE_RE.finditer(summary_text):
