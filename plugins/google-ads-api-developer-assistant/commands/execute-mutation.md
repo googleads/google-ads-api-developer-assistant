@@ -38,3 +38,10 @@ Executes Google Ads API write/mutation operations using the mandatory 4-Step Hum
        --script saved/code/<mutation_name>.py \
        --execute
      ```
+
+## Built-In Creation Scripts (`skills/execute-mutation/scripts/`):
+- `create_account.py`: Creates a client customer account under an MCC via `CustomerService.create_customer_client`.
+- `create_campaign.py`: Creates a campaign (and optional `CampaignBudget`) via `CampaignService.mutate_campaigns`.
+- `create_ad_group.py`: Creates an ad group under a campaign via `AdGroupService.mutate_ad_groups`.
+- `create_ad.py`: Creates a Responsive Search Ad under an ad group via `AdGroupAdService.mutate_ad_group_ads`.
+

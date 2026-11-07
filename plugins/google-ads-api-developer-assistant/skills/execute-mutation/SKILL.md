@@ -137,3 +137,51 @@ if __name__ == "__main__":
     )
     run_mutation(ads_client, args.customer_id, validate_only=is_dry_run)
 ```
+
+---
+
+## Built-In Resource Creation Scripts (`skills/execute-mutation/scripts/`)
+
+The skill includes ready-to-use, HITL-compliant creation scripts supporting `--dry-run` (`validate_only=True`, default), `--execute` (`validate_only=False`), and `--json`:
+
+1. **Create Account under MCC (`create_account.py`)** — `CustomerService.create_customer_client`
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_account.py" \
+     --manager-customer-id "<mcc_customer_id>" \
+     --descriptive-name "<account_name>" \
+     --currency-code "USD" \
+     --time-zone "America/New_York" \
+     --dry-run
+   ```
+2. **Create Campaign (`create_campaign.py`)** — `CampaignBudgetService.mutate_campaign_budgets` + `CampaignService.mutate_campaigns`
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_campaign.py" \
+     --customer-id "<customer_id>" \
+     --campaign-name "<campaign_name>" \
+     --budget-amount-micros 5000000 \
+     --channel-type "SEARCH" \
+     --status "PAUSED" \
+     --dry-run
+   ```
+3. **Create Ad Group (`create_ad_group.py`)** — `AdGroupService.mutate_ad_groups`
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_ad_group.py" \
+     --customer-id "<customer_id>" \
+     --campaign-id "<campaign_id>" \
+     --ad-group-name "<ad_group_name>" \
+     --cpc-bid-micros 1000000 \
+     --status "ENABLED" \
+     --dry-run
+   ```
+4. **Create Responsive Search Ad (`create_ad.py`)** — `AdGroupAdService.mutate_ad_group_ads`
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_ad.py" \
+     --customer-id "<customer_id>" \
+     --ad-group-id "<ad_group_id>" \
+     --final-url "https://www.example.com" \
+     --headline "Headline 1" --headline "Headline 2" --headline "Headline 3" \
+     --description "Description 1" --description "Description 2" \
+     --status "PAUSED" \
+     --dry-run
+   ```
+

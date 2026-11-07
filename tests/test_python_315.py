@@ -108,6 +108,10 @@ class TestPython315SubprocessCLI:
         SKILLS_DIR / "ext-version" / "scripts" / "get_extension_version.py",
         SKILLS_DIR / "sync-client-libs" / "scripts" / "sync_client_libs.py",
         SKILLS_DIR / "execute-mutation" / "scripts" / "run_mutation.py",
+        SKILLS_DIR / "execute-mutation" / "scripts" / "create_account.py",
+        SKILLS_DIR / "execute-mutation" / "scripts" / "create_campaign.py",
+        SKILLS_DIR / "execute-mutation" / "scripts" / "create_ad_group.py",
+        SKILLS_DIR / "execute-mutation" / "scripts" / "create_ad.py",
     ]
 
     @pytest.mark.parametrize("script_path", CLI_SCRIPTS, ids=lambda p: p.name)

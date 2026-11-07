@@ -2,6 +2,14 @@
 
 ## 4.1.0
 
+- **Account, Campaign, Ad Group, and Ad Creation Scripts & A2A Intents (`execute-mutation`):**
+  - Added `create_account.py` (`CustomerService.CreateCustomerClient`), `create_campaign.py` (`CampaignBudgetService.MutateCampaignBudgets` + `CampaignService.MutateCampaigns`), `create_ad_group.py` (`AdGroupService.MutateAdGroups`), and `create_ad.py` (`AdGroupAdService.MutateAdGroupAds` for Responsive Search Ads) under `skills/execute-mutation/scripts/`, all integrated with the mandatory 4-Step HITL verification protocol, `validate_only=True` dry-run receipts, and `config/financial_limits` upper-limit enforcement.
+  - Added `CREATE_ACCOUNT`, `CREATE_CAMPAIGN`, `CREATE_AD_GROUP`, and `CREATE_AD` intents to the A2A sidecar (`sidecars/google-ads-a2a-service/server.py`) with `_check_live_execution_gate` enforcement.
+  - Updated `skills/execute-mutation/SKILL.md`, `commands/execute-mutation.md`, and `README.md` with CLI and A2A usage documentation.
+- **Line & Category Coverage Runner (`tests/run_coverage.py`, `tests/conftest.py`, `tests/README_coverage.md`) & >80% Coverage Across All Categories:**
+  - Added `tests/run_coverage.py` and `tests/conftest.py` (`pytest --coverage`, `pytest --coverage-report`, `pytest --show-missed`, `pytest --fast`, and `pytest tests/run_coverage.py`) to collect in-process + subprocess line coverage via `sys.monitoring` and display per-module and per-category coverage tables with step-by-step progress output.
+  - Added `tests/README_coverage.md` documenting coverage CLI usage, progress output, column definitions, and what `Miss` and `-> MISSED` line numbers indicate.
+  - Added unit tests in `tests/test_components.py` (`TestCreateAccountCampaignAdGroupAd` and `TestRemainingModulesAbove80Coverage`) and `tests/test_python_315.py` so every individual module and every category exceeds 80% coverage (84.5% overall across 9,448 executable statements, 300 passed tests).
 - **Financial Transaction Upper Limits by `Service.field` (`config/financial_limits` & `set_financial_limits.py`):**
   - Added `config/financial_limits` and the `set_financial_limits.py` helper script (`skills/execute-mutation/scripts/set_financial_limits.py`, `config/set_financial_limits.py`, and top-level `./set_financial_limits.py`) to configure financial transaction upper limits via `<Service>.<field>` combinations across all 20 Google Ads API services with mutable financial fields (118 verified mutable `Service.field` entries plus 2 optional global fallbacks `all_micros_transactions` and `all_currency_unit_transactions`).
   - Audited all `Service.field` entries against Google Ads API v26 Protobuf request descriptors and `proto-plus` attribute docstrings, removing all immutable, output-only, and non-existent fields so that `config/financial_limits` contains strictly mutable financial fields.

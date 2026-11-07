@@ -795,14 +795,11 @@ python3 tests/benchmark_suite.py --compare <base_version> <target_version> --max
 python3 tests/benchmark_suite.py --compare <base_version> <target_version> --json
 ```
 
-#### 7. Run via `pytest`
+#### 7. Run 
 `tests/benchmark_suite.py` also exposes `pytest` test cases that validate all functional assertions, hard latency budgets, two-version comparisons, no-fallback CLI enforcement, and synthetic regression detection:
-```bash
-# Run only the benchmark suite via pytest
-pytest -v tests/benchmark_suite.py
-
-# Run the entire test and benchmark suite together
-pytest -v
+# Run only the benchmark suite vfrom the Assistant
+```
+prompt: benchmark <version_1> <version_2>
 ```
 
 #### 8. CLI Options Summary (`tests/benchmark_suite.py`)

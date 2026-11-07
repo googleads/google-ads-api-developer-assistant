@@ -267,6 +267,14 @@ class A2AHandler(BaseHTTPRequestHandler):
                     response = self.handle_prepare_mutation(task_id, payload)
                 elif intent == "EXECUTE_MUTATION":
                     response = self.handle_execute_mutation(task_id, payload)
+                elif intent == "CREATE_ACCOUNT":
+                    response = self.handle_create_account(task_id, payload)
+                elif intent == "CREATE_CAMPAIGN":
+                    response = self.handle_create_campaign(task_id, payload)
+                elif intent == "CREATE_AD_GROUP":
+                    response = self.handle_create_ad_group(task_id, payload)
+                elif intent == "CREATE_AD":
+                    response = self.handle_create_ad(task_id, payload)
                 else:
                     response = {
                         "task_id": task_id,
@@ -667,6 +675,217 @@ if __name__ == "__main__":
             "status": "FAILED",
             "error": "Unable to load run_mutation verification module.",
         }
+
+    def _load_mutation_script(self, script_filename: str):
+        """Loads a mutation script module from skills/execute-mutation/scripts/."""
+        from importlib.util import module_from_spec, spec_from_file_location
+
+        script_path = os.path.abspath(
+            os.path.join(base_dir, f"../../skills/execute-mutation/scripts/{script_filename}")
+        )
+        spec = spec_from_file_location(script_filename.replace(".py", ""), script_path)
+        if spec and spec.loader:
+            mod = module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+        raise RuntimeError(f"Unable to load mutation script '{script_filename}'.")
+
+    def _check_live_execution_gate(self, task_id: str, payload: dict):
+        """Enforces HITL confirmation and execute_mutates when validate_only=False."""
+        validate_only = bool(payload.get("validate_only", not payload.get("execute", False)))
+        if validate_only:
+            return None
+        if not bool(payload.get("user_confirmed", False)):
+            return {
+                "task_id": task_id,
+                "status": "HITL_BLOCKED",
+                "destructive_hint": True,
+                "error": (
+                    "Live execution blocked: 'user_confirmed=True' is mandatory when "
+                    "validate_only=False (or execute=True)."
+                ),
+            }
+        run_mod = self._load_mutation_script("run_mutation.py")
+        if not run_mod.is_execute_mutates_enabled():
+            return {
+                "task_id": task_id,
+                "status": "HITL_BLOCKED",
+                "destructive_hint": True,
+                "error": (
+                    "Live execution blocked: Mutate support is disabled by configuration "
+                    "(execute_mutates = false in config/assistant_config)."
+                ),
+            }
+        return None
+
+    def handle_create_account(self, task_id: str, payload: dict) -> dict:
+        """Handles CREATE_ACCOUNT intent via create_account.py."""
+        gate_error = self._check_live_execution_gate(task_id, payload)
+        if gate_error is not None:
+            return gate_error
+
+        validate_only = bool(payload.get("validate_only", not payload.get("execute", False)))
+        api_version = get_effective_api_version(payload)
+        mod = self._load_mutation_script("create_account.py")
+        try:
+            result = mod.create_account_under_mcc(
+                manager_customer_id=str(
+                    payload.get("manager_customer_id") or payload.get("customer_id", "")
+                ),
+                api_version=api_version,
+                descriptive_name=payload.get("descriptive_name") or payload.get("name"),
+                currency_code=str(payload.get("currency_code", "USD")),
+                time_zone=str(payload.get("time_zone", "America/New_York")),
+                tracking_url_template=payload.get("tracking_url_template"),
+                final_url_suffix=payload.get("final_url_suffix"),
+                email_address=payload.get("email_address"),
+                access_role=payload.get("access_role"),
+                validate_only=validate_only,
+                client=payload.get("client"),
+                json_output=False,
+            )
+            return {
+                "task_id": task_id,
+                "status": "COMPLETED",
+                "destructive_hint": True,
+                "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                "result": result,
+            }
+        except (SystemExit, Exception) as exc:
+            return {
+                "task_id": task_id,
+                "status": "FAILED",
+                "destructive_hint": True,
+                "error": f"Account creation failed: {exc}",
+            }
+
+    def handle_create_campaign(self, task_id: str, payload: dict) -> dict:
+        """Handles CREATE_CAMPAIGN intent via create_campaign.py."""
+        gate_error = self._check_live_execution_gate(task_id, payload)
+        if gate_error is not None:
+            return gate_error
+
+        validate_only = bool(payload.get("validate_only", not payload.get("execute", False)))
+        api_version = get_effective_api_version(payload)
+        mod = self._load_mutation_script("create_campaign.py")
+        try:
+            result = mod.create_campaign(
+                customer_id=str(payload.get("customer_id", "")),
+                api_version=api_version,
+                campaign_name=payload.get("campaign_name") or payload.get("name"),
+                budget_amount_micros=int(payload.get("budget_amount_micros", 5_000_000)),
+                budget_resource_name=payload.get("budget_resource_name"),
+                budget_delivery_method=str(payload.get("budget_delivery_method", "STANDARD")),
+                advertising_channel_type=str(
+                    payload.get("advertising_channel_type")
+                    or payload.get("channel_type", "SEARCH")
+                ),
+                status=str(payload.get("status", "PAUSED")),
+                start_date=payload.get("start_date"),
+                end_date=payload.get("end_date"),
+                validate_only=validate_only,
+                client=payload.get("client"),
+                json_output=False,
+            )
+            return {
+                "task_id": task_id,
+                "status": "COMPLETED",
+                "destructive_hint": True,
+                "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                "result": result,
+            }
+        except (SystemExit, Exception) as exc:
+            return {
+                "task_id": task_id,
+                "status": "FAILED",
+                "destructive_hint": True,
+                "error": f"Campaign creation failed: {exc}",
+            }
+
+    def handle_create_ad_group(self, task_id: str, payload: dict) -> dict:
+        """Handles CREATE_AD_GROUP intent via create_ad_group.py."""
+        gate_error = self._check_live_execution_gate(task_id, payload)
+        if gate_error is not None:
+            return gate_error
+
+        validate_only = bool(payload.get("validate_only", not payload.get("execute", False)))
+        api_version = get_effective_api_version(payload)
+        mod = self._load_mutation_script("create_ad_group.py")
+        try:
+            cpc_bid = payload.get("cpc_bid_micros")
+            result = mod.create_ad_group(
+                customer_id=str(payload.get("customer_id", "")),
+                campaign_id=payload.get("campaign_id"),
+                campaign_resource_name=payload.get("campaign_resource_name"),
+                api_version=api_version,
+                ad_group_name=payload.get("ad_group_name") or payload.get("name"),
+                cpc_bid_micros=int(cpc_bid) if cpc_bid is not None else None,
+                status=str(payload.get("status", "ENABLED")),
+                ad_group_type=str(payload.get("ad_group_type", "SEARCH_STANDARD")),
+                validate_only=validate_only,
+                client=payload.get("client"),
+                json_output=False,
+            )
+            return {
+                "task_id": task_id,
+                "status": "COMPLETED",
+                "destructive_hint": True,
+                "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                "result": result,
+            }
+        except (SystemExit, Exception) as exc:
+            return {
+                "task_id": task_id,
+                "status": "FAILED",
+                "destructive_hint": True,
+                "error": f"Ad group creation failed: {exc}",
+            }
+
+    def handle_create_ad(self, task_id: str, payload: dict) -> dict:
+        """Handles CREATE_AD intent via create_ad.py."""
+        gate_error = self._check_live_execution_gate(task_id, payload)
+        if gate_error is not None:
+            return gate_error
+
+        validate_only = bool(payload.get("validate_only", not payload.get("execute", False)))
+        api_version = get_effective_api_version(payload)
+        mod = self._load_mutation_script("create_ad.py")
+        try:
+            final_urls = payload.get("final_urls")
+            if isinstance(final_urls, str):
+                final_urls = [final_urls]
+            elif final_urls is None and payload.get("final_url"):
+                final_urls = [str(payload.get("final_url"))]
+
+            result = mod.create_responsive_search_ad(
+                customer_id=str(payload.get("customer_id", "")),
+                ad_group_id=payload.get("ad_group_id"),
+                ad_group_resource_name=payload.get("ad_group_resource_name"),
+                api_version=api_version,
+                final_urls=final_urls,
+                headlines=payload.get("headlines"),
+                descriptions=payload.get("descriptions"),
+                path1=payload.get("path1"),
+                path2=payload.get("path2"),
+                status=str(payload.get("status", "PAUSED")),
+                validate_only=validate_only,
+                client=payload.get("client"),
+                json_output=False,
+            )
+            return {
+                "task_id": task_id,
+                "status": "COMPLETED",
+                "destructive_hint": True,
+                "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                "result": result,
+            }
+        except (SystemExit, Exception) as exc:
+            return {
+                "task_id": task_id,
+                "status": "FAILED",
+                "destructive_hint": True,
+                "error": f"Ad creation failed: {exc}",
+            }
 
 def run_server():
     # Startup initialization: sync ~/google-ads.yaml and ensure key-value pair is configured
