@@ -2771,7 +2771,9 @@ class TestCreatePMaxAndRecentGclidsExtended:
 
         # Test main() with mocked GoogleAdsClient.load_from_storage
         monkeypatch.setattr(
-            get_recent_gclids.GoogleAdsClient, "load_from_storage", lambda **kw: MagicMock()
+            get_recent_gclids,
+            "GoogleAdsClient",
+            MagicMock(load_from_storage=lambda **kw: MagicMock()),
         )
         called = {}
         monkeypatch.setattr(
@@ -2897,9 +2899,9 @@ class TestTroubleshootConversionsExtended:
 
         # Test main() CLI invocation
         monkeypatch.setattr(
-            troubleshoot_conversions.GoogleAdsClient,
-            "load_from_storage",
-            lambda **kw: MagicMock(),
+            troubleshoot_conversions,
+            "GoogleAdsClient",
+            MagicMock(load_from_storage=lambda **kw: MagicMock()),
         )
         called_main = {}
         monkeypatch.setattr(
@@ -3142,7 +3144,9 @@ class TestCreateAccountCampaignAdGroupAd:
 
         # 2. Live execution via CLI main()
         monkeypatch.setattr(
-            mod.GoogleAdsClient, "load_from_storage", lambda path, version: client
+            mod,
+            "GoogleAdsClient",
+            MagicMock(load_from_storage=lambda path, version: client),
         )
         monkeypatch.setattr(
             sys,
@@ -3232,7 +3236,9 @@ class TestCreateAccountCampaignAdGroupAd:
 
         # 3. Live execution with pre-existing budget via CLI main()
         monkeypatch.setattr(
-            mod.GoogleAdsClient, "load_from_storage", lambda path, version: client
+            mod,
+            "GoogleAdsClient",
+            MagicMock(load_from_storage=lambda path, version: client),
         )
         monkeypatch.setattr(
             sys,
@@ -3302,7 +3308,9 @@ class TestCreateAccountCampaignAdGroupAd:
 
         # 2. Live execution via CLI main() with campaign_resource_name
         monkeypatch.setattr(
-            mod.GoogleAdsClient, "load_from_storage", lambda path, version: client
+            mod,
+            "GoogleAdsClient",
+            MagicMock(load_from_storage=lambda path, version: client),
         )
         monkeypatch.setattr(
             sys,
@@ -3377,7 +3385,9 @@ class TestCreateAccountCampaignAdGroupAd:
 
         # 2. Live execution via CLI main() with default headlines/descriptions
         monkeypatch.setattr(
-            mod.GoogleAdsClient, "load_from_storage", lambda path, version: client
+            mod,
+            "GoogleAdsClient",
+            MagicMock(load_from_storage=lambda path, version: client),
         )
         monkeypatch.setattr(
             sys,
@@ -3564,9 +3574,9 @@ class TestCreateAccountCampaignAdGroupAd:
 
             # load_from_storage failure when client=None
             monkeypatch.setattr(
-                mod.GoogleAdsClient,
-                "load_from_storage",
-                MagicMock(side_effect=RuntimeError("storage error")),
+                mod,
+                "GoogleAdsClient",
+                MagicMock(load_from_storage=MagicMock(side_effect=RuntimeError("storage error"))),
             )
             with pytest.raises(SystemExit):
                 getattr(mod, fn_name)(**call_kwargs, client=None)
@@ -3612,9 +3622,9 @@ class TestRemainingModulesAbove80Coverage:
         assert isinstance(get_cids_under_mcc._get_config_path(), str)
 
         monkeypatch.setattr(
-            get_cids_under_mcc.GoogleAdsClient,
-            "load_from_storage",
-            MagicMock(side_effect=RuntimeError("no yaml")),
+            get_cids_under_mcc,
+            "GoogleAdsClient",
+            MagicMock(load_from_storage=MagicMock(side_effect=RuntimeError("no yaml"))),
         )
         with pytest.raises(SystemExit):
             get_cids_under_mcc.get_cids_under_mcc("1234567890", "v26", client=None)
@@ -3649,9 +3659,9 @@ class TestRemainingModulesAbove80Coverage:
         assert isinstance(create_pmax_webpage_filter._get_config_path(), str)
 
         monkeypatch.setattr(
-            create_pmax_webpage_filter.GoogleAdsClient,
-            "load_from_storage",
-            MagicMock(side_effect=RuntimeError("load fail")),
+            create_pmax_webpage_filter,
+            "GoogleAdsClient",
+            MagicMock(load_from_storage=MagicMock(side_effect=RuntimeError("load fail"))),
         )
         with pytest.raises(SystemExit):
             create_pmax_webpage_filter.create_pmax_webpage_filter(
@@ -3665,9 +3675,9 @@ class TestRemainingModulesAbove80Coverage:
         assert isinstance(get_recent_gclids._get_config_path(), str)
 
         monkeypatch.setattr(
-            get_recent_gclids.GoogleAdsClient,
-            "load_from_storage",
-            MagicMock(side_effect=RuntimeError("gclid load fail")),
+            get_recent_gclids,
+            "GoogleAdsClient",
+            MagicMock(load_from_storage=MagicMock(side_effect=RuntimeError("gclid load fail"))),
         )
         monkeypatch.setattr(
             sys,
@@ -3794,6 +3804,8 @@ class TestRemainingModulesAbove80Coverage:
             validate_gaql.main()
 
     def test_sidecar_server_post_routing_and_version_fallbacks(self, tmp_path, monkeypatch):
+        import types
+
         # 1. do_POST routing for all supported intents + unsupported intent
         handler = server.A2AHandler.__new__(server.A2AHandler)
         handler.path = "/v1/a2a/tasks"
@@ -3848,17 +3860,40 @@ class TestRemainingModulesAbove80Coverage:
 
         # 2. get_effective_api_version fallbacks when config files and client_libs are absent
         monkeypatch.delenv("GOOGLE_ADS_API_VERSION", raising=False)
-        monkeypatch.setattr(os.path, "isfile", lambda p: False)
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
-        import google.ads.googleads as gads_pkg
+        orig_isfile = os.path.isfile
+        orig_isdir = os.path.isdir
+        monkeypatch.setattr(
+            os.path,
+            "isfile",
+            lambda p: False if "assistant_config" in str(p) else orig_isfile(p),
+        )
+        monkeypatch.setattr(
+            os.path,
+            "isdir",
+            lambda p: False if "google-ads-python" in str(p) else orig_isdir(p),
+        )
 
-        monkeypatch.setattr(gads_pkg, "__dir__", lambda: ["v25", "v26"])
+        class _FakeGadsModule(types.ModuleType):
+            versions = ["v25", "v26"]
+
+            def __dir__(self):
+                return list(self.versions)
+
+        fake_gads_pkg = _FakeGadsModule("google.ads.googleads")
+        fake_ads_pkg = sys.modules.get("google.ads") or types.ModuleType("google.ads")
+        fake_google_pkg = sys.modules.get("google") or types.ModuleType("google")
+        monkeypatch.setattr(fake_google_pkg, "ads", fake_ads_pkg, raising=False)
+        monkeypatch.setattr(fake_ads_pkg, "googleads", fake_gads_pkg, raising=False)
+        monkeypatch.setitem(sys.modules, "google", fake_google_pkg)
+        monkeypatch.setitem(sys.modules, "google.ads", fake_ads_pkg)
+        monkeypatch.setitem(sys.modules, "google.ads.googleads", fake_gads_pkg)
+
         # Installed google.ads.googleads attribute inspection
         ver = server.get_effective_api_version({})
         assert ver == "v26"
 
         # Interactive tty input and ValueError when google.ads.googleads has no v<N> attrs
-        monkeypatch.setattr(gads_pkg, "__dir__", lambda: [])
+        fake_gads_pkg.versions = []
         fake_stdin = MagicMock()
         fake_stdin.isatty.return_value = True
         monkeypatch.setattr(sys, "stdin", fake_stdin)

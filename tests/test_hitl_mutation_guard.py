@@ -2784,6 +2784,7 @@ def test_real_v26_financial_protobuf_requests_serialization_sha256_and_intercept
     if (bundled_sdk / "google" / "ads" / "googleads" / "v26").is_dir():
         monkeypatch.syspath_prepend(str(bundled_sdk))
 
+    _has_v26_sdk = True
     try:
         from google.ads.googleads.v26.services.types import (
             account_budget_proposal_service,
@@ -2805,6 +2806,8 @@ def test_real_v26_financial_protobuf_requests_serialization_sha256_and_intercept
             reservation_service,
         )
     except ImportError:
+        _has_v26_sdk = False
+    if not _has_v26_sdk:
         pytest.skip("Google Ads Python v26 SDK not available in client_libs or site-packages")
 
     run_mutation = _load_run_mutation_module()
