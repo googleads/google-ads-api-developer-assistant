@@ -5,10 +5,13 @@ description: Executes Google Ads API write/mutation operations using the mandato
 
 # Execute Mutation Skill (4-Step HITL & Consequence Protocol)
 
-When a user requests a write or mutation operation against the Google Ads API (`mutate`, `create`, `update`, `remove`, `apply_recommendation`, or offline conversion uploads), you MUST follow this 4-step workflow.
+When a user requests a write or mutation operation against the Google Ads API (`create`, `update`, `apply_recommendation`, or offline conversion uploads), you MUST follow this 4-step workflow.
+
+> **Hard Policy — Only `create` and `update` Mutations Allowed (Deletion Prohibited):**
+> Only **`create`** and **`update`** operations are permitted. Deletion (`remove` / `remove_all` operations, `remove_*` RPC calls, or setting `status = REMOVED`) is **strictly prohibited** across all layers (`PreToolUse` hook, `run_mutation.py` pre-RPC & receipt verifiers, and A2A sidecar). If a user asks to delete or remove a resource, refuse the deletion and offer to update its `status` to `PAUSED` instead.
 
 > **Prerequisite — User Mutate Configuration (`config/assistant_config` & `config/financial_limits`):**
-> By default, live mutations are disabled (`execute_mutates = false` in `config/assistant_config`). While `validate_only=True` dry-runs (`--dry-run`) are always allowed, any live mutation (`--execute` or `validate_only=False`) is deterministically blocked by both the `PreToolUse` hook (`config/config_init.py`) and `run_mutation.py` unless `config/assistant_config` is set to:
+> By default, live mutations are disabled (`execute_mutates = false` in `config/assistant_config`). While `validate_only=True` dry-runs (`--dry-run`) for `create` and `update` operations are allowed, any live mutation (`--execute` or `validate_only=False`) is deterministically blocked by both the `PreToolUse` hook (`config/config_init.py`) and `run_mutation.py` unless `config/assistant_config` is set to:
 > ```toml
 > execute_mutates = true
 > ```
@@ -38,8 +41,8 @@ Evaluate and articulate the exact consequences of the requested change across th
 | **Budgets & Bidding** (`CampaignBudget`, `BiddingStrategy`, `cpc_bid_micros`, bid modifiers, seasonality/data exclusions) | • Exact currency delta (`$X.XX/day` $\rightarrow$ `$Y.YY/day`, `+/-Z%`).<br>• Maximum monthly spend exposure (`daily_budget * 30.4`).<br>• Smart Bidding impact: warn if changing budget/targets by $>20\%$ may trigger learning phase fluctuations. |
 | **Account Billing, Reservations, Credits & Value Restatements** (`BillingSetup`, `AccountBudgetProposal`, `ReservationService.book_campaigns`, `IncentiveService.apply_incentive`, `LocalServicesLeadService.provide_lead_feedback`, `ConversionValueRule`, `ConversionAdjustmentUploadService`, `CustomerService.create_customer_client`, `ExperimentService.graduate_experiment` / `promote_experiment`, `CampaignDraftService.promote_campaign_draft`) | • **Mandatory monetary/financial disclosure** (enforced by `run_mutation.py` and `PreToolUse` hook): explicitly state payment account linkage, account spending limit in local currency, guaranteed-spend booking commitment, promotional credit/incentive amount, LSA lead credit request, or restated conversion value / Target ROAS revenue impact. |
 | **Status Changes** (`PAUSED` $\leftrightarrow$ `ENABLED`) | • Count of child entities affected (e.g., *"Pausing this campaign immediately halts ad serving for N active Ad Groups and M active Ads"*).<br>• Immediate spend/traffic resumption warning when changing `PAUSED` $\rightarrow$ `ENABLED`. |
-| **Destructive Operations** (`remove` / `REMOVE`) | • **IRREVERSIBLE WARNING:** Explicitly warn that `remove` permanently deletes the resource and it **cannot be re-enabled** (recommend `status = PAUSED` if temporary suspension is desired).<br>• Shared resource impact (if removing a shared budget, negative keyword list, or asset). |
-| **Targeting & Exclusions** (`CampaignCriterion`, `AssetGroupListingGroupFilter`) | • Traffic expansion vs. restriction impact (e.g., removing a negative keyword or webpage filter exposes budget to previously excluded queries/URLs).<br>• For `AssetGroupListingGroupFilter`, verify atomic listing tree completeness (root `SUBDIVISION` + sibling `"Everything else"` node). |
+| **Deletion / `remove` Operations** (`remove` / `REMOVE` / `REMOVED`) | • **PROHIBITED (HARD BLOCKED):** Deletion (`remove` / `remove_all` operations, `remove_*` RPCs, or setting `status = REMOVED`) is strictly prohibited; only `create` and `update` mutations are allowed. Recommend updating `status = PAUSED` instead. |
+| **Targeting & Exclusions** (`CampaignCriterion`, `AssetGroupListingGroupFilter`) | • Traffic expansion vs. restriction impact (e.g., adding or updating a negative keyword or webpage filter restricts or expands budget exposure across queries/URLs).<br>• For `AssetGroupListingGroupFilter`, verify atomic listing tree completeness (root `SUBDIVISION` + sibling `"Everything else"` node). |
 | **Conversions & Goals** (`ConversionAction`, `CampaignConversionGoal`) | • Automated bidding impact: warn that changing primary conversion goals alters `MaximizeConversions` / `TargetCPA` / `TargetROAS` optimization signals across campaigns. |
 
 ---
@@ -100,7 +103,7 @@ def run_mutation(client: GoogleAdsClient, customer_id: str, validate_only: bool 
     """Executes the Google Ads mutation with validate_only control."""
     service = client.get_service("CampaignBudgetService")
     operation = client.get_type("CampaignBudgetOperation")
-    # Populate operation.update / operation.create / operation.remove and update_mask
+    # Populate operation.update or operation.create (note: operation.remove is prohibited) and update_mask
     request = client.get_type("MutateCampaignBudgetsRequest")
     request.customer_id = customer_id
     request.operations = [operation]

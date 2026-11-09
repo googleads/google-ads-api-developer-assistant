@@ -5,7 +5,10 @@ argument-description: <mutation_request> The mutation operation or script to val
 
 # Execute Mutation (`/execute-mutation`)
 
-Executes Google Ads API write/mutation operations using the mandatory 4-Step Human-in-the-Loop (HITL) Verification & Consequence Disclosure Protocol.
+Executes Google Ads API write/mutation operations (`create` and `update` only; deletion/`remove` operations are strictly prohibited) using the mandatory 4-Step Human-in-the-Loop (HITL) Verification & Consequence Disclosure Protocol.
+
+> **Hard Policy — Only `create` and `update` Mutations Allowed (Deletion Prohibited):**
+> Only **`create`** and **`update`** operations are permitted. Deletion (`remove` / `remove_all` operations, `remove_*` RPC calls, or setting `status = REMOVED`) is strictly prohibited across all layers. To stop delivery without deleting a resource, update its `status` to `PAUSED`.
 
 ## Instructions:
 1. **Step 1 — Pre-Mutation State & Blast Radius Lookup**:

@@ -33,6 +33,8 @@ _DRY_RUN_MODE_ENV_VAR = "_GOOGLE_ADS_DRY_RUN_MODE"
 
 _MUTATION_METHOD_PREFIXES = (
     "mutate",
+    "remove_",
+    "delete_",
     "apply_recommendation",
     "dismiss_recommendation",
     "upload_click_conversions",
@@ -1037,6 +1039,250 @@ def check_financial_transaction_limits(
     return True, None, []
 
 
+_PROHIBITED_DELETION_RPC_PREFIXES = (
+    "remove_",
+    "delete_",
+)
+_PROHIBITED_DELETION_RPC_METHODS = frozenset({
+    "remove",
+    "delete",
+    "remove_automatically_created_assets",
+    "remove_data_link",
+    "remove_product_link",
+    "remove_product_link_invitation",
+    "remove_you_tube_video_upload",
+})
+_CODE_PROHIBITED_DELETION_RE = re.compile(
+    r"(?:"
+    r"[A-Za-z0-9_)\]]\s*\.\s*(?:remove|delete)_[a-z0-9_]+\s*\("
+    r"|\.\s*remove(?:_all)?\s*=(?!=)"
+    r"|\[\s*['\"]remove(?:_all)?['\"]\s*\]\s*=(?!=)"
+    r"|['\"]remove(?:_all)?['\"]\s*:\s*(?!None\b|False\b|['\"]{2}|\[\]|\{\})[^\s,\}\]]"
+    r"|\bsetattr\s*\([^,]+,\s*['\"]remove(?:_all)?['\"]"
+    r"|\bstatus\s*=\s*(?:['\"]REMOVED['\"]|[A-Za-z0-9_.]*\.REMOVED\b)"
+    r"|['\"]status['\"]\s*:\s*['\"]REMOVED['\"]"
+    r"|\b(?:proposal_type|proposed_proposal_type)\s*=\s*(?:['\"]REMOVE['\"]|[A-Za-z0-9_.]*\.REMOVE\b)"
+    r"|['\"](?:proposal_type|proposed_proposal_type)['\"]\s*:\s*['\"]REMOVE['\"]"
+    r")"
+)
+_SUMMARY_PROHIBITED_DELETION_RE = re.compile(
+    r"(?i)(?:"
+    r"^\s*(?:remove|delete|removing|deleting|deletion)\b"
+    r"|\b(?:remove|delete)_[a-z0-9_]+\b"
+    r"|\.(?:remove|remove_all|delete)\b"
+    r"|\b(?:operation|op)\s*[:=]\s*['\"]?(?:remove|delete)\b"
+    r"|\b(?:remove|delete)\s+(?:campaign|ad[_\s]*group|ad|asset|criterion|criteria|keyword|"
+    r"budget|label|feed|conversion|bidding|customer|account|link|video|experiment|draft|"
+    r"user[_\s]*list|audience|extension|rule|set|target|modifier|item|resource|entity|goal)s?\b"
+    r")"
+)
+_AFTER_STATE_PROHIBITED_DELETION_RE = re.compile(
+    r"(?i)(?:"
+    r"^\s*(?:REMOVED|DELETED|REMOVE|DELETE)\s*$"
+    r"|\bstatus\s*[:=]\s*['\"]?REMOVED\b"
+    r"|\bREMOVED\s*\((?:deleted|permanent|irreversible)\)"
+    r"|\bpermanently\s+(?:removed|deleted)\b"
+    r")"
+)
+
+
+def _extract_payload_deletion_violations(
+    obj: Any,
+    service_name: str = "",
+    method_name: str = "",
+    out: Optional[List[Dict[str, Any]]] = None,
+    _depth: int = 0,
+) -> List[Dict[str, Any]]:
+    """Recursively inspects an RPC call method and payload for prohibited deletion/remove operations."""
+    if out is None:
+        out = []
+    if _depth > 12:
+        return out
+
+    svc_prefix = f"{service_name.strip()}." if service_name.strip() else ""
+    m_clean = method_name.strip()
+    m_lower = m_clean.lower()
+
+    if _depth == 0 and m_lower and (
+        m_lower.startswith(_PROHIBITED_DELETION_RPC_PREFIXES)
+        or m_lower in _PROHIBITED_DELETION_RPC_METHODS
+    ):
+        msg = (
+            f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
+            f"only 'create' and 'update' operations are allowed (attempted RPC method "
+            f"'{svc_prefix}{m_clean}'). To stop delivery without deleting a resource, update its status to PAUSED."
+        )
+        out.append({
+            "reason_type": "rpc_method",
+            "field_or_method": f"{svc_prefix}{m_clean}",
+            "observed_value": m_clean,
+            "message": msg,
+        })
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            k_lower = str(k).strip().lower()
+            if k_lower in ("remove", "remove_all") and v not in (None, "", False, [], {}):
+                msg = (
+                    f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
+                    f"only 'create' and 'update' operations are allowed (observed '{k_lower}' operation on "
+                    f"{v!r} in {svc_prefix}{m_clean or 'mutate'}). To stop delivery without deleting a resource, "
+                    f"update its status to PAUSED."
+                )
+                out.append({
+                    "reason_type": "payload_remove_operation",
+                    "field_or_method": k_lower,
+                    "observed_value": v,
+                    "message": msg,
+                })
+            elif (
+                k_lower in ("status", "proposal_type", "proposed_proposal_type")
+                and isinstance(v, str)
+                and v.strip().upper() in ("REMOVED", "REMOVE")
+            ):
+                msg = (
+                    f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
+                    f"only 'create' and 'update' operations are allowed (observed '{k_lower}={v.strip()}' in "
+                    f"{svc_prefix}{m_clean or 'mutate'}). To stop delivery without deleting a resource, "
+                    f"update its status to PAUSED."
+                )
+                out.append({
+                    "reason_type": "payload_removed_status",
+                    "field_or_method": k_lower,
+                    "observed_value": v.strip(),
+                    "message": msg,
+                })
+            else:
+                _extract_payload_deletion_violations(
+                    v,
+                    service_name=service_name,
+                    method_name=method_name,
+                    out=out,
+                    _depth=_depth + 1,
+                )
+    elif isinstance(obj, list):
+        for item in obj:
+            _extract_payload_deletion_violations(
+                item,
+                service_name=service_name,
+                method_name=method_name,
+                out=out,
+                _depth=_depth + 1,
+            )
+    return out
+
+
+def check_prohibited_deletion_mutation(
+    operation_summary: str = "",
+    after_state: str = "",
+    rpc_calls: Optional[List[Dict[str, Any]]] = None,
+    script_path: Optional[str] = None,
+    code_text: Optional[str] = "",
+    receipt: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, Optional[str], List[Dict[str, Any]]]:
+    """Checks RPC payloads, Python scripts, and operation metadata for prohibited deletion/remove operations.
+
+    Only `create` and `update` mutations are allowed; deletion (`remove`) operations are strictly prohibited.
+
+    Returns:
+        Tuple[bool, Optional[str], List[Dict[str, Any]]]:
+            (is_allowed, error_message_if_prohibited, list_of_violations)
+    """
+    if isinstance(receipt, dict):
+        if not operation_summary:
+            operation_summary = str(receipt.get("operation_summary", ""))
+        if not after_state:
+            after_state = str(receipt.get("after_state", ""))
+        if rpc_calls is None and isinstance(receipt.get("dry_run_rpc_calls"), list):
+            rpc_calls = receipt.get("dry_run_rpc_calls")
+        if not script_path and receipt.get("script_path"):
+            script_path = str(receipt.get("script_path"))
+
+    violations: List[Dict[str, Any]] = []
+
+    # 1. Inspect intercepted RPC calls and request payloads
+    for call in rpc_calls or []:
+        if not isinstance(call, dict):
+            continue
+        _extract_payload_deletion_violations(
+            call.get("request_payload"),
+            service_name=str(call.get("service", "")),
+            method_name=str(call.get("method", "")),
+            out=violations,
+        )
+
+    # 2. Inspect Python mutation script source code and/or command text
+    combined_code_parts: List[str] = []
+    if code_text:
+        combined_code_parts.append(code_text)
+    if script_path and os.path.isfile(script_path):
+        try:
+            with open(script_path, "r", encoding="utf-8") as f:
+                combined_code_parts.append(f.read())
+        except OSError:
+            pass
+    if combined_code_parts:
+        raw_code = "\n".join(combined_code_parts)
+        uncommented = "\n".join(
+            line.split("#", 1)[0] for line in raw_code.splitlines()
+        )
+        for match in _CODE_PROHIBITED_DELETION_RE.finditer(uncommented):
+            snippet = match.group(0).strip()
+            msg = (
+                f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
+                f"only 'create' and 'update' operations are allowed (detected prohibited deletion syntax "
+                f"'{snippet}' in mutation code). To stop delivery without deleting a resource, update its status to PAUSED."
+            )
+            violations.append({
+                "reason_type": "code_deletion_syntax",
+                "field_or_method": snippet,
+                "observed_value": snippet,
+                "message": msg,
+            })
+
+    # 3. Inspect operation_summary and after_state metadata
+    op_clean = operation_summary.strip()
+    if op_clean and _SUMMARY_PROHIBITED_DELETION_RE.search(op_clean):
+        msg = (
+            f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
+            f"only 'create' and 'update' operations are allowed (operation_summary='{op_clean}'). "
+            f"To stop delivery without deleting a resource, update its status to PAUSED."
+        )
+        violations.append({
+            "reason_type": "operation_summary_deletion",
+            "field_or_method": "operation_summary",
+            "observed_value": op_clean,
+            "message": msg,
+        })
+
+    after_clean = after_state.strip()
+    if (
+        after_clean
+        and after_clean != op_clean
+        and _AFTER_STATE_PROHIBITED_DELETION_RE.search(after_clean)
+    ):
+        msg = (
+            f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
+            f"only 'create' and 'update' operations are allowed (after_state='{after_clean}'). "
+            f"To stop delivery without deleting a resource, update its status to PAUSED."
+        )
+        violations.append({
+            "reason_type": "after_state_deletion",
+            "field_or_method": "after_state",
+            "observed_value": after_clean,
+            "message": msg,
+        })
+
+    if violations:
+        dedup_msgs: List[str] = []
+        for v in violations:
+            m = v["message"]
+            if m not in dedup_msgs:
+                dedup_msgs.append(m)
+        return False, " | ".join(dedup_msgs), violations
+    return True, None, []
+
+
 def _find_google_ads_yaml() -> Optional[str]:
     """Locates the active config/google-ads.yaml file if present."""
     this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1298,6 +1544,29 @@ def _wrap_service_for_audit(
                     payload_vo is True
                     or (payload_vo is None and kwargs.get("validate_only") is True)
                 )
+
+                # Pre-RPC Deletion Prohibition Guard: block any deletion/remove mutation before calling the API.
+                allowed_non_delete, delete_err, delete_violations = (
+                    check_prohibited_deletion_mutation(rpc_calls=[call_record])
+                )
+                if not allowed_non_delete and delete_err:
+                    err_msg = f"BLOCKED BEFORE RPC: {delete_err}"
+                    call_record.update({
+                        "received_at_iso": datetime.now(timezone.utc).isoformat(),
+                        "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                        "status": "BLOCKED_PROHIBITED_DELETION",
+                        "expected_request_sha256": None,
+                        "request_sha256_verified": False,
+                        "google_ads_request_id": None,
+                        "deletion_violations": delete_violations,
+                        "response_payload": {
+                            "exception_type": "PermissionError",
+                            "message": err_msg,
+                        },
+                        "error": err_msg,
+                    })
+                    captured_calls.append(call_record)
+                    raise PermissionError(err_msg)
 
                 # Pre-RPC Dry-Run Guard: block any mutation call during --dry-run that lacks
                 # an explicit validate_only=True (including omitted validate_only or
@@ -1888,6 +2157,17 @@ def write_dry_run_receipt(
         request_sha256_list.append(c_sha)
         normalized_calls.append(c_copy)
 
+    # Enforce prohibition of deletion/remove mutations (only create and update are allowed)
+    allowed_non_delete, delete_err, _ = check_prohibited_deletion_mutation(
+        operation_summary=operation_summary,
+        after_state=after_state,
+        rpc_calls=normalized_calls,
+        script_path=resolved_script if resolved_script else None,
+    )
+    if not allowed_non_delete and delete_err:
+        _remove_stale_receipts()
+        raise ValueError(delete_err)
+
     # Enforce configured financial transaction upper limits at the HITL step
     within_fin_limits, fin_limit_err, _ = check_financial_transaction_limits(
         operation_summary=operation_summary,
@@ -2044,6 +2324,23 @@ def load_and_verify_receipt(
         )
 
     dry_run_calls = receipt.get("dry_run_rpc_calls")
+    effective_script = script_path or str(receipt.get("script_path", ""))
+
+    # Enforce prohibition of deletion/remove mutations (only create and update are allowed)
+    allowed_non_delete, delete_err, _ = check_prohibited_deletion_mutation(
+        operation_summary=str(receipt.get("operation_summary", "")),
+        after_state=str(receipt.get("after_state", "")),
+        rpc_calls=dry_run_calls if isinstance(dry_run_calls, list) else None,
+        script_path=effective_script if effective_script else None,
+        receipt=receipt,
+    )
+    if not allowed_non_delete and delete_err:
+        return (
+            False,
+            delete_err,
+            receipt,
+        )
+
     is_financial = bool(receipt.get("is_financial_transaction")) or is_financial_mutation(
         operation_summary=str(receipt.get("operation_summary", "")),
         before_state=str(receipt.get("before_state", "")),
@@ -2061,7 +2358,6 @@ def load_and_verify_receipt(
         )
 
     # Verify financial transaction upper limits against current config/financial_limits
-    effective_script = script_path or str(receipt.get("script_path", ""))
     within_fin_limits, fin_limit_err, _ = check_financial_transaction_limits(
         operation_summary=str(receipt.get("operation_summary", "")),
         after_state=str(receipt.get("after_state", "")),
@@ -2308,6 +2604,38 @@ def main() -> None:
         duration_ms = 0.0
         captured_calls: List[Dict[str, Any]] = []
 
+        # Pre-flight Deletion Prohibition check before executing target script
+        pre_ok, pre_del_err, _ = check_prohibited_deletion_mutation(
+            operation_summary=args.operation,
+            after_state=args.after or args.operation,
+            script_path=script_path,
+        )
+        if not pre_ok and pre_del_err:
+            _remove_stale_receipts()
+            append_mutation_audit_log(
+                phase="DRY_RUN",
+                status="BLOCKED_PROHIBITED_DELETION",
+                customer_id=args.customer_id,
+                operation_summary=args.operation,
+                before_state=args.before,
+                after_state=args.after or args.operation,
+                consequences=consequence_list,
+                reversibility=args.reversibility,
+                script_path=script_path,
+                script_sha256=script_sha256,
+                validate_only=True,
+                request_sent_at_iso=sent_at_iso,
+                response_received_at_iso=received_at_iso,
+                duration_ms=0.0,
+                exit_code=2,
+                stdout="",
+                stderr=pre_del_err,
+                command=[sys.executable, script_path, *script_args],
+                rpc_calls=[],
+            )
+            print(pre_del_err, file=sys.stderr)
+            sys.exit(2)
+
         if not args.record_only:
             result, sent_at_iso, received_at_iso, duration_ms, captured_calls = (
                 _execute_script_subprocess(
@@ -2318,6 +2646,12 @@ def main() -> None:
             )
             if result.returncode != 0:
                 if any(
+                    c.get("status") == "BLOCKED_PROHIBITED_DELETION"
+                    for c in captured_calls
+                ):
+                    dry_fail_status = "BLOCKED_PROHIBITED_DELETION"
+                    _remove_stale_receipts()
+                elif any(
                     c.get("status") == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
                     for c in captured_calls
                 ):
@@ -2332,7 +2666,8 @@ def main() -> None:
                     dry_fail_status = "DRY_RUN_FAILED"
                 effective_dry_exit = (
                     2
-                    if dry_fail_status == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+                    if dry_fail_status
+                    in ("BLOCKED_FINANCIAL_LIMIT_EXCEEDED", "BLOCKED_PROHIBITED_DELETION")
                     else result.returncode
                 )
                 append_mutation_audit_log(
@@ -2384,11 +2719,12 @@ def main() -> None:
                 if str(exc).startswith("BLOCKED")
                 else f"BLOCKED: {exc}"
             )
-            audit_status = (
-                "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
-                if "BLOCKED BY FINANCIAL UPPER LIMIT" in str(exc)
-                else "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING"
-            )
+            if "BLOCKED BY DELETION PROHIBITION" in str(exc):
+                audit_status = "BLOCKED_PROHIBITED_DELETION"
+            elif "BLOCKED BY FINANCIAL UPPER LIMIT" in str(exc):
+                audit_status = "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+            else:
+                audit_status = "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING"
             append_mutation_audit_log(
                 phase="DRY_RUN",
                 status=audit_status,
@@ -2487,7 +2823,10 @@ def main() -> None:
             if message.startswith("BLOCKED")
             else f"BLOCKED: {message}"
         )
-        if "BLOCKED BY FINANCIAL UPPER LIMIT" in message:
+        if (
+            "BLOCKED BY DELETION PROHIBITION" in message
+            or "BLOCKED BY FINANCIAL UPPER LIMIT" in message
+        ):
             blocked_iso = datetime.now(timezone.utc).isoformat()
             cid_blocked = args.customer_id or str(receipt.get("customer_id", ""))
             op_blocked = str(args.operation or receipt.get("operation_summary", ""))
@@ -2497,9 +2836,14 @@ def main() -> None:
             conseq_blocked = [
                 str(c) for c in receipt.get("consequences", []) if str(c).strip()
             ]
+            audit_block_status = (
+                "BLOCKED_PROHIBITED_DELETION"
+                if "BLOCKED BY DELETION PROHIBITION" in message
+                else "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+            )
             append_mutation_audit_log(
                 phase="EXECUTE",
-                status="BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
+                status=audit_block_status,
                 customer_id=cid_blocked,
                 operation_summary=op_blocked,
                 before_state=before_blocked,
@@ -2556,6 +2900,9 @@ def main() -> None:
     after_state = str(receipt.get("after_state", args.after or operation_summary))
     reversibility = str(receipt.get("reversibility", args.reversibility))
 
+    blocked_by_deletion = any(
+        c.get("status") == "BLOCKED_PROHIBITED_DELETION" for c in captured_calls
+    )
     blocked_by_fin_limit = any(
         c.get("status") == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED" for c in captured_calls
     )
@@ -2575,11 +2922,14 @@ def main() -> None:
 
     if (
         result.returncode != 0
+        or blocked_by_deletion
         or blocked_by_fin_limit
         or blocked_by_sha_mismatch
         or missing_expected_calls
     ):
-        if blocked_by_fin_limit:
+        if blocked_by_deletion:
+            failure_status = "BLOCKED_PROHIBITED_DELETION"
+        elif blocked_by_fin_limit:
             failure_status = "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
         elif blocked_by_sha_mismatch or missing_expected_calls:
             failure_status = "BLOCKED_SHA256_MISMATCH"
@@ -2587,7 +2937,7 @@ def main() -> None:
             failure_status = "FAILED"
         effective_exit_code = (
             2
-            if blocked_by_fin_limit
+            if (blocked_by_deletion or blocked_by_fin_limit)
             else (result.returncode if result.returncode != 0 else 2)
         )
         stderr_out = result.stderr

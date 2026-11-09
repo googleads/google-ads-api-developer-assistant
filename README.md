@@ -522,7 +522,9 @@ curl http://127.0.0.1:8900/health
 
 ## How Mutates Work
 
-When you ask the Assistant to perform any write or mutation operation (such as updating a campaign budget, pausing an ad group, applying a recommendation, removing a criterion, or uploading conversions), the plugin enforces a **Defense-in-Depth Human-in-the-Loop (HITL) Verification Protocol** (`skills/execute-mutation/`) backed by deterministic `PreToolUse` lifecycle hooks (`config/config_init.py`) and pre-RPC SHA-256 verification.
+When you ask the Assistant to perform any write or mutation operation (such as creating a campaign/ad group/ad, updating a campaign budget, pausing an ad group, applying a recommendation, or uploading conversions), the plugin enforces a **Defense-in-Depth Human-in-the-Loop (HITL) Verification Protocol** (`skills/execute-mutation/`) backed by deterministic `PreToolUse` lifecycle hooks (`config/config_init.py`) and pre-RPC SHA-256 verification.
+
+> **Create & Update Only (Deletion Prohibited):** Mutations are strictly limited to **`create`** and **`update`** operations. Deletion (`remove` / `remove_all` operations, `remove_*` RPC calls, or setting `status = REMOVED`) is hard-blocked across the `PreToolUse` hook, `run_mutation.py`, and the A2A sidecar (`BLOCKED_PROHIBITED_DELETION`). To stop ad serving without deleting a resource, update its `status` to `PAUSED`.
 
 ---
 
@@ -659,7 +661,7 @@ before running with --execute.
 The Assistant discloses category-specific consequences and **pauses for your explicit confirmation** before proceeding:
 * **Budgets & Bidding:** Exact currency delta (`$X.XX/day` $\rightarrow$ `$Y.YY/day`, `%` change), maximum monthly spend exposure (`daily_budget * 30.4`), and Smart Bidding learning-phase warnings for $>20\%$ shifts.
 * **Status Changes (`PAUSED` $\leftrightarrow$ `ENABLED`):** Exact count of downstream active Ad Groups and Ads that will immediately stop serving or resume spending.
-* **Destructive Operations (`REMOVE`):** Explicit warning when an operation is **`IRREVERSIBLE (PERMANENT)`** and cannot be re-enabled (recommending `PAUSED` if temporary suspension is desired).
+* **Deletion / `REMOVE` Operations (Prohibited):** Deletion (`remove` / `remove_all` operations, `remove_*` RPCs, or `status = REMOVED`) is hard-blocked (`BLOCKED_PROHIBITED_DELETION`); only `create` and `update` mutations are allowed (use `status = PAUSED` to stop delivery).
 * **Targeting & Conversion Goals:** Warnings on traffic expansion/restriction or automated bidding signal changes.
 
 #### Step 4 — Hook-Gated CLI Confirmation & Live Execution (`--execute`)

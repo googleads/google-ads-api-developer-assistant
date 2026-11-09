@@ -460,19 +460,22 @@ if __name__ == "__main__":
                 )
             except ValueError as exc:
                 err_str = str(exc)
+                is_deletion_prohibited = "BLOCKED BY DELETION PROHIBITION" in err_str
                 is_limit_exceeded = "BLOCKED BY FINANCIAL UPPER LIMIT" in err_str
                 script_hash = (
                     mod.compute_file_sha256(os.path.abspath(script_path))
                     if script_path and os.path.isfile(os.path.abspath(script_path))
                     else ""
                 )
+                if is_deletion_prohibited:
+                    audit_status = "BLOCKED_PROHIBITED_DELETION"
+                elif is_limit_exceeded:
+                    audit_status = "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+                else:
+                    audit_status = "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING"
                 mod.append_mutation_audit_log(
                     phase="DRY_RUN",
-                    status=(
-                        "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
-                        if is_limit_exceeded
-                        else "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING"
-                    ),
+                    status=audit_status,
                     customer_id=customer_id,
                     operation_summary=operation,
                     before_state=before_state,
@@ -492,7 +495,11 @@ if __name__ == "__main__":
                 )
                 return {
                     "task_id": task_id,
-                    "status": "HITL_BLOCKED" if is_limit_exceeded else "VALIDATION_FAILED",
+                    "status": (
+                        "HITL_BLOCKED"
+                        if (is_deletion_prohibited or is_limit_exceeded)
+                        else "VALIDATION_FAILED"
+                    ),
                     "destructive_hint": True,
                     "error": err_str,
                 }
@@ -599,11 +606,19 @@ if __name__ == "__main__":
 
             ok, msg, receipt = mod.load_and_verify_receipt(script_path=script_path)
             if not ok:
-                if "BLOCKED BY FINANCIAL UPPER LIMIT" in msg:
+                if (
+                    "BLOCKED BY DELETION PROHIBITION" in msg
+                    or "BLOCKED BY FINANCIAL UPPER LIMIT" in msg
+                ):
                     blocked_iso = datetime.now(timezone.utc).isoformat()
+                    audit_block_status = (
+                        "BLOCKED_PROHIBITED_DELETION"
+                        if "BLOCKED BY DELETION PROHIBITION" in msg
+                        else "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+                    )
                     mod.append_mutation_audit_log(
                         phase="EXECUTE",
-                        status="BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
+                        status=audit_block_status,
                         customer_id=str(receipt.get("customer_id", "")),
                         operation_summary=str(receipt.get("operation_summary", "")),
                         before_state=str(receipt.get("before_state", "")),

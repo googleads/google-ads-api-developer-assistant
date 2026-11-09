@@ -2068,12 +2068,14 @@ READONLY_SKILL_SCRIPTS = (
 )
 
 MUTATION_CALL_PATTERN = re.compile(
-    r"\.\s*(?:mutate(?:_[a-z0-9_]+)?|apply_recommendation|dismiss_recommendation|"
+    r"(?:\.\s*(?:mutate(?:_[a-z0-9_]+)?|(?:remove|delete)_[a-z0-9_]+|"
+    r"apply_recommendation|dismiss_recommendation|"
     r"upload_click_conversions|upload_call_conversions|upload_conversion_adjustments|"
     r"upload_user_data|add_batch_job_operations|run_batch_job|book_campaigns|"
     r"apply_incentive|provide_lead_feedback|create_customer_client|"
     r"promote_campaign_draft|graduate_experiment|promote_experiment|"
     r"schedule_experiment|end_experiment)\s*\("
+    r"|\b(?:op|operation|[a-zA-Z0-9_]*_op|[a-zA-Z0-9_]*_operation)\s*\.\s*remove(?:_all)?\s*=(?!=))"
 )
 
 _NON_VALIDATE_ONLY_CALL_RE = re.compile(
@@ -2306,12 +2308,8 @@ def _compute_canonical_request_sha256(
 _CACHED_RUN_MUTATION_MOD: Any = None
 
 
-def _check_financial_limits_for_hook(
-    receipt: Optional[Dict[str, Any]] = None,
-    script_path: Optional[str] = None,
-    code_text: Optional[str] = None,
-) -> Tuple[bool, str, list[Dict[str, Any]]]:
-    """Checks configured financial transaction upper limits via run_mutation.py."""
+def _load_run_mutation_for_hook() -> Any:
+    """Lazily loads and caches the run_mutation module for hook checks."""
     global _CACHED_RUN_MUTATION_MOD
     if _CACHED_RUN_MUTATION_MOD is None:
         import importlib.util
@@ -2327,10 +2325,44 @@ def _check_financial_limits_for_hook(
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
                 _CACHED_RUN_MUTATION_MOD = mod
-    if _CACHED_RUN_MUTATION_MOD is not None and hasattr(
-        _CACHED_RUN_MUTATION_MOD, "check_financial_transaction_limits"
-    ):
-        ok, err_msg, violations = _CACHED_RUN_MUTATION_MOD.check_financial_transaction_limits(
+    return _CACHED_RUN_MUTATION_MOD
+
+
+def _check_prohibited_deletion_for_hook(
+    receipt: Optional[Dict[str, Any]] = None,
+    script_path: Optional[str] = None,
+    code_text: Optional[str] = None,
+    operation_summary: str = "",
+    after_state: str = "",
+) -> Tuple[bool, str, list[Dict[str, Any]]]:
+    """Checks for prohibited deletion/remove operations via run_mutation.py."""
+    rm_mod = _load_run_mutation_for_hook()
+    if rm_mod is not None and hasattr(rm_mod, "check_prohibited_deletion_mutation"):
+        ok, err_msg, violations = rm_mod.check_prohibited_deletion_mutation(
+            operation_summary=operation_summary,
+            after_state=after_state,
+            receipt=receipt,
+            script_path=script_path,
+            code_text=code_text,
+        )
+        if not ok and err_msg:
+            return (
+                False,
+                f"BLOCKED BY HITL MUTATION GUARD (DELETION PROHIBITED): {err_msg}",
+                violations,
+            )
+    return True, "", []
+
+
+def _check_financial_limits_for_hook(
+    receipt: Optional[Dict[str, Any]] = None,
+    script_path: Optional[str] = None,
+    code_text: Optional[str] = None,
+) -> Tuple[bool, str, list[Dict[str, Any]]]:
+    """Checks configured financial transaction upper limits via run_mutation.py."""
+    rm_mod = _load_run_mutation_for_hook()
+    if rm_mod is not None and hasattr(rm_mod, "check_financial_transaction_limits"):
+        ok, err_msg, violations = rm_mod.check_financial_transaction_limits(
             receipt=receipt,
             script_path=script_path,
             code_text=code_text,
@@ -2411,6 +2443,17 @@ def _verify_dry_run_receipt_for_hook(
             False,
             "BLOCKED BY HITL MUTATION GUARD: Dry-run receipt in saved/data/last_dry_run.json is missing "
             "mandatory consequence disclosures.",
+            receipt,
+        )
+
+    del_ok, del_err, _ = _check_prohibited_deletion_for_hook(
+        receipt=receipt,
+        script_path=script_path,
+    )
+    if not del_ok:
+        return (
+            False,
+            del_err,
             receipt,
         )
 
@@ -2570,6 +2613,12 @@ _TEST_OR_LINTER_CMD_RE = re.compile(
 _SCRIPT_ARG_RE = re.compile(
     r"--script(?:=|\s+)(?:'([^']+)'|\"([^\"]+)\"|([^\s'\"]+))"
 )
+_OPERATION_ARG_RE = re.compile(
+    r"--operation(?:=|\s+)(?:'([^']+)'|\"([^\"]+)\"|([^\s'\"]+))"
+)
+_AFTER_ARG_RE = re.compile(
+    r"--after(?:=|\s+)(?:'([^']+)'|\"([^\"]+)\"|([^\s'\"]+))"
+)
 _PY_FILE_ARG_RE = re.compile(
     r"(?:'([^']+\.py)'|\"([^\"]+\.py)\"|([^\s'\"]+\.py))"
 )
@@ -2610,6 +2659,32 @@ def evaluate_mutation_guard(
 
     # 1. Explicit invocation of skills/execute-mutation/scripts/run_mutation.py
     if "run_mutation.py" in cmd:
+        script_match = _SCRIPT_ARG_RE.search(cmd)
+        target_script = (
+            script_match.group(1) or script_match.group(2) or script_match.group(3)
+            if script_match
+            else None
+        )
+        op_match = _OPERATION_ARG_RE.search(cmd)
+        op_arg = (
+            op_match.group(1) or op_match.group(2) or op_match.group(3)
+            if op_match
+            else ""
+        )
+        after_match = _AFTER_ARG_RE.search(cmd)
+        after_arg = (
+            after_match.group(1) or after_match.group(2) or after_match.group(3)
+            if after_match
+            else ""
+        )
+        del_ok, del_err, _ = _check_prohibited_deletion_for_hook(
+            script_path=target_script,
+            operation_summary=op_arg,
+            after_state=after_arg,
+        )
+        if not del_ok:
+            return "deny", del_err
+
         if "--dry-run" in cmd and "--execute" not in cmd:
             return "allow", None
         if "--execute" in cmd:
@@ -2619,14 +2694,6 @@ def evaluate_mutation_guard(
                     "BLOCKED BY HITL MUTATION GUARD: Mutate support is disabled by configuration "
                     "(execute_mutates = false in config/assistant_config). Set 'execute_mutates = true' in "
                     "config/assistant_config to enable live Google Ads API mutations.",
-                )
-            script_match = _SCRIPT_ARG_RE.search(cmd)
-            target_script = None
-            if script_match:
-                target_script = (
-                    script_match.group(1)
-                    or script_match.group(2)
-                    or script_match.group(3)
                 )
             ok, message, _ = _verify_dry_run_receipt_for_hook(
                 script_path=target_script,
@@ -2658,6 +2725,13 @@ def evaluate_mutation_guard(
 
     if not MUTATION_CALL_PATTERN.search(uncommented_code):
         return "allow", None
+
+    del_ok, del_err, _ = _check_prohibited_deletion_for_hook(
+        script_path=resolved_target_script,
+        code_text=uncommented_code,
+    )
+    if not del_ok:
+        return "deny", del_err
 
     limits_ok, limits_err, _ = _check_financial_limits_for_hook(
         script_path=resolved_target_script,
@@ -2895,6 +2969,7 @@ def handle_hook() -> None:
             f"   All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
             f"2. HITL MUTATION VERIFICATION & AUDIT MANDATE ({mutates_state_str} in config/assistant_config): "
             f"Live mutations are currently {'ENABLED' if mutates_enabled else 'DISABLED (set execute_mutates = true in config/assistant_config to enable)'}. "
+            f"Only 'create' and 'update' mutations are allowed; deletion ('remove') operations are strictly prohibited. "
             f"Before executing ANY live Google Ads mutation, you MUST:\n"
             f"   (a) Ensure execute_mutates = true is configured in config/assistant_config,\n"
             f"   (b) Query current resource state via GAQL,\n"
@@ -2926,7 +3001,8 @@ def handle_hook() -> None:
             f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml), with active api_version = \"{active_api_version}\".\n"
             f"   All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
             f"2. HITL MUTATION VERIFICATION & AUDIT MANDATE ({mutates_state_str} in config/assistant_config): "
-            f"Live mutations are currently {'ENABLED' if mutates_enabled else 'DISABLED (set execute_mutates = true in config/assistant_config to enable)'}.\n"
+            f"Live mutations are currently {'ENABLED' if mutates_enabled else 'DISABLED (set execute_mutates = true in config/assistant_config to enable)'}. "
+            f"Only 'create' and 'update' mutations are allowed; deletion ('remove') operations are strictly prohibited.\n"
             f"3. RUNNABLE CODE STORAGE MANDATE: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called 'saved' (e.g., ./saved/ or ./saved/code/).\n"
             f"4. ACTIVE API CONFIGURATION: Active Google Ads API version: \"{active_api_version}\". Parity verification was completed on the first prompt."
         )

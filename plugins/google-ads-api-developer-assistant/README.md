@@ -166,8 +166,8 @@ The assistant strictly complies with [google_ads_rules.md](rules/google_ads_rule
 
 1. **Validate Before Act Protocol**:
    - Reads the target Google Ads API version (`api_version`) from `config/assistant_config`. If unset, identifies the latest stable release, presents it for user confirmation, and persists it.
-2. **4-Step HITL Mutation & Consequence Verification Mandate**:
-   - Executing live mutations (`mutate`, `create`, `update`, `remove`) requires `execute_mutates = true` in `config/assistant_config`, a verified `validate_only=True` dry-run receipt (`saved/data/last_dry_run.json`), and explicit consequence confirmation via the `PreToolUse` hook (`config/config_init.py`).
+2. **4-Step HITL Mutation & Consequence Verification Mandate (`create` and `update` Only — Deletion Prohibited)**:
+   - Only **`create`** and **`update`** mutations are allowed; deletion (`remove` / `remove_all` operations, `remove_*` RPCs, or `status = REMOVED`) is strictly prohibited. Executing live `create` or `update` mutations requires `execute_mutates = true` in `config/assistant_config`, a verified `validate_only=True` dry-run receipt (`saved/data/last_dry_run.json`), and explicit consequence confirmation via the `PreToolUse` hook (`config/config_init.py`).
 3. **GAQL Syntax Strictness**:
    - **No `OR` operator**: The `OR` operator is strictly forbidden in GAQL. The assistant rewrites queries using `IN` or splits them into separate requests.
    - **No `FROM` clause in metadata**: Queries against `GoogleAdsFieldService` must not contain a `FROM` clause.

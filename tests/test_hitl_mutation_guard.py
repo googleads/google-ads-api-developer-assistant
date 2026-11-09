@@ -4756,3 +4756,344 @@ def test_each_financial_limit_value_enforcement(limit_key: str) -> None:
     assert violations_exceed[0]["upper_limit"] == upper_limit
 
 
+def test_only_allow_create_or_update_and_prohibit_deletion_across_all_layers(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Verifies that only create and update mutations are allowed and deletion/remove mutations are deterministically prohibited across:
+    1. check_prohibited_deletion_mutation (RPC payloads, dedicated remove_* methods, Python script code, operation_summary, after_state).
+    2. _wrap_service_for_audit (pre-RPC interception in both dry-run and live execution modes).
+    3. write_dry_run_receipt & load_and_verify_receipt.
+    4. evaluate_mutation_guard (PreToolUse hook across run_mutation.py --dry-run/--execute, direct scripts with validate_only=True, and inline python3 -c).
+    5. run_mutation.py CLI (--dry-run and --execute) and A2A sidecar (PREPARE_MUTATION and EXECUTE_MUTATION), logging BLOCKED_PROHIBITED_DELETION.
+    """
+    import importlib.util
+    import json
+    import subprocess
+    import sys
+
+    run_mutation = _load_run_mutation_module()
+    audit_log_file = tmp_path / "deletion_prohibition_audit.jsonl"
+    monkeypatch.setenv("GOOGLE_ADS_MUTATION_AUDIT_LOG", str(audit_log_file))
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+    # --- 1. Create and Update operations are ALLOWED ---
+    ok_create, err_create, viol_create = run_mutation.check_prohibited_deletion_mutation(
+        operation_summary="Create Campaign Search Q4",
+        after_state="PAUSED",
+        rpc_calls=[
+            {
+                "service": "CampaignService",
+                "method": "mutate_campaigns",
+                "request_payload": {
+                    "customer_id": "1234567890",
+                    "operations": [
+                        {
+                            "create": {
+                                "name": "Search Q4",
+                                "status": "PAUSED",
+                            }
+                        }
+                    ],
+                },
+            }
+        ],
+        code_text=(
+            "op = client.get_type('CampaignOperation')\n"
+            "op.create.name = 'Search Q4'\n"
+            "op.create.status = client.enums.CampaignStatusEnum.PAUSED\n"
+            "svc.mutate_campaigns(request=req)\n"
+        ),
+    )
+    assert ok_create is True
+    assert err_create is None
+    assert viol_create == []
+
+    ok_update, err_update, viol_update = run_mutation.check_prohibited_deletion_mutation(
+        operation_summary="Update Campaign 111 status to PAUSED",
+        after_state="PAUSED",
+        rpc_calls=[
+            {
+                "service": "CampaignService",
+                "method": "mutate_campaigns",
+                "request_payload": {
+                    "customer_id": "1234567890",
+                    "operations": [
+                        {
+                            "update": {
+                                "resource_name": "customers/1234567890/campaigns/111",
+                                "status": "PAUSED",
+                            },
+                            "update_mask": "status",
+                        }
+                    ],
+                },
+            }
+        ],
+        code_text=(
+            "# Comment mentioning op.remove = 'ignored' should not trigger\n"
+            "op = client.get_type('CampaignOperation')\n"
+            "op.update.resource_name = 'customers/1234567890/campaigns/111'\n"
+            "op.update.status = client.enums.CampaignStatusEnum.PAUSED\n"
+            "svc.mutate_campaigns(request=req)\n"
+        ),
+    )
+    assert ok_update is True
+    assert err_update is None
+    assert viol_update == []
+
+    # --- 2. Deletion / remove operations in RPC payloads are BLOCKED ---
+    prohibited_payload_cases = [
+        (
+            "CampaignService",
+            "mutate_campaigns",
+            {
+                "customer_id": "1234567890",
+                "operations": [{"remove": "customers/1234567890/campaigns/111"}],
+            },
+        ),
+        (
+            "GoogleAdsService",
+            "mutate",
+            {
+                "customer_id": "1234567890",
+                "mutate_operations": [
+                    {
+                        "ad_group_criterion_operation": {
+                            "remove": "customers/1234567890/adGroupCriteria/11~22"
+                        }
+                    }
+                ],
+            },
+        ),
+        (
+            "UserDataService",
+            "upload_user_data",
+            {
+                "customer_id": "1234567890",
+                "operations": [{"remove_all": True}],
+            },
+        ),
+        (
+            "CampaignService",
+            "mutate_campaigns",
+            {
+                "customer_id": "1234567890",
+                "operations": [
+                    {
+                        "update": {
+                            "resource_name": "customers/1234567890/campaigns/111",
+                            "status": "REMOVED",
+                        }
+                    }
+                ],
+            },
+        ),
+        (
+            "ProductLinkService",
+            "remove_product_link",
+            {
+                "customer_id": "1234567890",
+                "resource_name": "customers/1234567890/productLinks/999",
+            },
+        ),
+    ]
+    for svc_name, method_name, bad_payload in prohibited_payload_cases:
+        ok_del, err_del, viol_del = run_mutation.check_prohibited_deletion_mutation(
+            rpc_calls=[
+                {
+                    "service": svc_name,
+                    "method": method_name,
+                    "request_payload": bad_payload,
+                }
+            ]
+        )
+        assert ok_del is False, f"Expected {svc_name}.{method_name} payload {bad_payload} to be blocked"
+        assert "BLOCKED BY DELETION PROHIBITION" in (err_del or "")
+        assert "only 'create' and 'update' operations are allowed" in (err_del or "")
+        assert viol_del
+
+    # --- 3. _wrap_service_for_audit blocks remove payloads and remove_* RPCs BEFORE calling API ---
+    class _MockServiceWithRemove:
+        def __init__(self) -> None:
+            self.invocations: list[tuple[str, Any]] = []
+
+        def mutate_campaigns(self, request: Any = None) -> dict[str, Any]:
+            self.invocations.append(("mutate_campaigns", request))
+            return {"results": [{"resource_name": "customers/1234567890/campaigns/111"}]}
+
+        def remove_product_link(self, request: Any = None) -> dict[str, Any]:
+            self.invocations.append(("remove_product_link", request))
+            return {"resource_name": "customers/1234567890/productLinks/999"}
+
+    for is_dry in (True, False):
+        raw_svc = _MockServiceWithRemove()
+        captured: list[dict[str, Any]] = []
+        wrapped_svc = run_mutation._wrap_service_for_audit(
+            raw_svc,
+            "CampaignService",
+            captured,
+            dry_run_mode=is_dry,
+        )
+        # 3a. Create/Update succeeds in dry-run (with validate_only=True) and live (with validate_only=False)
+        valid_res = wrapped_svc.mutate_campaigns(
+            request={
+                "customer_id": "1234567890",
+                "validate_only": is_dry,
+                "operations": [
+                    {
+                        "update": {
+                            "resource_name": "customers/1234567890/campaigns/111",
+                            "status": "PAUSED",
+                        }
+                    }
+                ],
+            }
+        )
+        assert valid_res["results"]
+        assert len(raw_svc.invocations) == 1
+
+        # 3b. Remove operation in mutate_campaigns is hard-blocked BEFORE RPC
+        with pytest.raises(PermissionError, match="BLOCKED BY DELETION PROHIBITION"):
+            wrapped_svc.mutate_campaigns(
+                request={
+                    "customer_id": "1234567890",
+                    "validate_only": is_dry,
+                    "operations": [{"remove": "customers/1234567890/campaigns/111"}],
+                }
+            )
+        assert captured[-1]["status"] == "BLOCKED_PROHIBITED_DELETION"
+        assert len(raw_svc.invocations) == 1  # Underlying RPC was NOT called
+
+        # 3c. Dedicated remove_* RPC is hard-blocked BEFORE RPC
+        with pytest.raises(PermissionError, match="BLOCKED BY DELETION PROHIBITION"):
+            wrapped_svc.remove_product_link(
+                request={
+                    "customer_id": "1234567890",
+                    "validate_only": is_dry,
+                    "resource_name": "customers/1234567890/productLinks/999",
+                }
+            )
+        assert captured[-1]["status"] == "BLOCKED_PROHIBITED_DELETION"
+        assert len(raw_svc.invocations) == 1
+
+    # --- 4. PreToolUse Hook (evaluate_mutation_guard) blocks all deletion vectors ---
+    remove_script = tmp_path / "delete_campaign_script.py"
+    remove_script.write_text(
+        "def run(client, req):\n"
+        "    req.validate_only = True\n"
+        "    op = client.get_type('CampaignOperation')\n"
+        "    op.remove = 'customers/1234567890/campaigns/111'\n"
+        "    svc = client.get_service('CampaignService')\n"
+        "    return svc.mutate_campaigns(request=req)\n",
+        encoding="utf-8",
+    )
+    runner_path = (
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "skills"
+        / "execute-mutation"
+        / "scripts"
+        / "run_mutation.py"
+    )
+
+    # 4a. Direct script execution (even with validate_only=True!) is DENIED
+    dec_direct, rsn_direct = evaluate_mutation_guard(f"python3 {remove_script}")
+    assert dec_direct == "deny"
+    assert "DELETION PROHIBITED" in (rsn_direct or "")
+
+    # 4b. Inline python3 -c snippets with op.remove or svc.remove_* are DENIED
+    for inline_del_cmd in (
+        'python3 -c "validate_only = True; op.remove = \'customers/1234567890/campaigns/111\'; svc.mutate_campaigns(request=req)"',
+        'python3 -c "validate_only = True; svc.remove_product_link(request=req)"',
+        'python3 -c "validate_only = True; svc.mutate_campaigns(request={\'operations\': [{\'remove\': \'customers/123/campaigns/1\'}]})"',
+    ):
+        dec_inline, rsn_inline = evaluate_mutation_guard(inline_del_cmd)
+        assert dec_inline == "deny", f"Expected deny for inline deletion: {inline_del_cmd}"
+        assert "DELETION PROHIBITED" in (rsn_inline or "")
+
+    # 4c. run_mutation.py --dry-run and --execute with a remove script or remove --operation are DENIED by hook
+    dec_rm_dry, rsn_rm_dry = evaluate_mutation_guard(
+        f"python3 {runner_path} --script {remove_script} --dry-run --customer-id 1234567890 "
+        f"--operation 'Remove Campaign 111' --consequences 'Campaign removed'"
+    )
+    assert dec_rm_dry == "deny"
+    assert "DELETION PROHIBITED" in (rsn_rm_dry or "")
+
+    # --- 5. CLI run_mutation.py (--dry-run and --execute) & A2A Sidecar block and audit BLOCKED_PROHIBITED_DELETION ---
+    cli_dry_proc = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(remove_script),
+            "--dry-run",
+            "--customer-id",
+            "1234567890",
+            "--operation",
+            "Remove Campaign 111",
+            "--before",
+            "Status: ENABLED",
+            "--after",
+            "REMOVED",
+            "--consequences",
+            "Campaign permanently deleted",
+            "--reversibility",
+            "IRREVERSIBLE",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert cli_dry_proc.returncode == 2
+    assert "BLOCKED BY DELETION PROHIBITION" in cli_dry_proc.stderr
+
+    # A2A Sidecar PREPARE_MUTATION also blocks deletion and audits BLOCKED_PROHIBITED_DELETION
+    server_path = (
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "sidecars"
+        / "google-ads-a2a-service"
+        / "server.py"
+    )
+    spec = importlib.util.spec_from_file_location("sidecar_del_test", server_path)
+    assert spec is not None and spec.loader is not None
+    sidecar_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sidecar_mod)
+    handler = object.__new__(sidecar_mod.A2AHandler)
+
+    sidecar_prep_del = handler.handle_prepare_mutation(
+        "task-del-prep",
+        {
+            "customer_id": "1234567890",
+            "operation_summary": "Remove AdGroup 222",
+            "before_state": "Status: PAUSED",
+            "after_state": "REMOVED",
+            "consequences": ["Ad group permanently deleted"],
+            "reversibility": "IRREVERSIBLE",
+            "script_path": str(remove_script),
+        },
+    )
+    assert sidecar_prep_del["status"] == "HITL_BLOCKED"
+    assert "BLOCKED BY DELETION PROHIBITION" in sidecar_prep_del["error"]
+
+    audit_entries = [
+        json.loads(line)
+        for line in audit_log_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [e["status"] for e in audit_entries] == [
+        "BLOCKED_PROHIBITED_DELETION",
+        "BLOCKED_PROHIBITED_DELETION",
+    ]
+
+    for receipt_path in run_mutation.get_receipt_paths():
+        if os.path.isfile(receipt_path):
+            os.remove(receipt_path)
+
+
+
