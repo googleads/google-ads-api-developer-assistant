@@ -23,13 +23,13 @@ The master configuration files act as the system contract for the assistant:
 *   **Version Parity Enforcement**: Verifies parity between the runtime `google-ads` Python package and local `client_libs/google-ads-python` source-of-truth definitions, issuing warnings on discrepancies.
 *   **Code Generation Pipeline**: Passes all generated Python code through strict `ruff` linting before saving or displaying it.
 *   **Programmatic GAQL Validation**: Evaluates queries against field metadata and compatibility boundaries.
-*   **Safety Constraints (4-Step HITL Mutation Guard)**: Enforces a mandatory 4-step Human-in-the-Loop (HITL) verification protocol for all API mutations—requiring a GAQL before-state read, a `validate_only=True` dry-run with a SHA-256 signed receipt (`saved/data/last_dry_run.json`), explicit consequence disclosure, and deterministic `PreToolUse` hook confirmation (`"decision": "force_ask"`) before any live write executes.
+*   **Safety Constraints (4-Step HITL Mutation Guard — `create` & `update` Only)**: Enforces a mandatory 4-step Human-in-the-Loop (HITL) verification protocol for all API mutations—strictly allowing only **`create`** and **`update`** operations while deterministically prohibiting deletion (**`remove`** / `remove_all` operations, `remove_*` / `delete_*` RPCs, and `status = REMOVED`), and requiring a GAQL before-state read, a `validate_only=True` dry-run with a SHA-256 signed receipt (`saved/data/last_dry_run.json`), explicit consequence disclosure, and deterministic `PreToolUse` hook confirmation (`"decision": "force_ask"`) before any live write executes.
 
 ### 2. Domain-Specific "Skills" & Native Commands
 Rather than relying on generic AI completions, the assistant is empowered with specialized, test-backed tool directories under `plugins/google-ads-api-developer-assistant/skills/` and native slash commands under `plugins/google-ads-api-developer-assistant/commands/`.
 
 Key capabilities support dual invocation (natural language prompts in Antigravity or dedicated slash commands in Claude Code):
-*   **HITL-Verified Mutations (`/execute-mutation`)**: Executes a two-phase `--dry-run` (`validate_only=True`) and `--execute` workflow with cryptographic receipt verification and financial/serving consequence disclosure.
+*   **HITL-Verified Mutations (`/execute-mutation`)**: Executes a two-phase `--dry-run` (`validate_only=True`) and `--execute` workflow for `create` and `update` operations (deletion / `remove` is prohibited) with cryptographic receipt verification and financial/serving consequence disclosure.
 *   **GAQL Validation (`/validate-gaql`)**: Dry-runs queries via the API `validate_only` parameter.
 *   **Object Inspection (`/inspect-object`)**: Inspects API resources, nested messages, or enum definitions on the fly.
 *   **MCC Account Mapping (`/get-cids`)**: Maps client hierarchies and retrieves sub-account CIDs under manager accounts.
@@ -701,6 +701,7 @@ python3 skills/execute-mutation/scripts/run_mutation.py \
 | Condition | Hook / Runner Decision | What Happens on Screen |
 | :--- | :--- | :--- |
 | Read-only query (`search`, `search_stream`) or `--dry-run` (`validate_only=True`) within configured limits | **`allow`** | Executes immediately and displays query results or the **Mutation & Consequence Verification Card**. |
+| Deletion / `remove` operation attempted (`remove` / `remove_all` operations, `remove_*` / `delete_*` RPCs, or `status = REMOVED`) | **`deny` / `BLOCKED_PROHIBITED_DELETION`** | Hard-blocked across the `PreToolUse` hook, `run_mutation.py` (`--dry-run` and `--execute`), and A2A sidecar before any RPC executes; recommends `status = PAUSED` via an `update` operation and logs to `saved/logs/mutation_audit.jsonl`. |
 | Financial transaction amount exceeds configured upper limit in `config/financial_limits` (`> 0`) | **`deny` / `BLOCKED_FINANCIAL_LIMIT_EXCEEDED`** | Blocked at the HITL step (`--dry-run`, `--execute`, `PreToolUse` hook, and sidecar); informs the user of the exceeded limit and unit, logs to `saved/logs/mutation_audit.jsonl`, and refuses to execute. |
 | Live mutation attempted while `execute_mutates = false` (default) | **`deny` (Hard Block)** | Blocked before execution with instructions to set `execute_mutates = true` in `config/assistant_config`. |
 | Live mutation attempted without a valid ($\le 30\text{ min}$) `DRY_RUN_PASSED` receipt | **`deny` (Hard Block)** | Blocked before execution with instructions to run `--dry-run` first. |
@@ -714,9 +715,9 @@ When upgrading from `4.0.0` to `4.1.0`, existing CLI arguments, A2A sidecar payl
 1. **Default Output Path (`~/saved/...` $\rightarrow$ `./saved/...`):**
    * In `4.0.0`, skill scripts (`get_cids_under_mcc.py`, `troubleshoot_conversions.py`) wrote default output files to `~/saved/csv/` and `~/saved/logs/` in the user's home directory.
    * In `4.1.0`, default outputs are written to workspace-relative `saved/data/`, `saved/logs/`, and `saved/code/` (unless `--output_dir` is explicitly passed).
-2. **Hook-Enforced Mutation Guard (`evaluate_mutation_guard`):**
+2. **Hook-Enforced Mutation Guard (`evaluate_mutation_guard` — `create` & `update` Only):**
    * In `4.0.0`, live mutations were restricted only via prompt instructions (`NO MUTATE`).
-   * In `4.1.0`, the `PreToolUse` hook in `config/config_init.py` (`handle_hook`) deterministically blocks (`deny`) any command invoking a live `.mutate*()` call unless `execute_mutates = true` is enabled in `config/assistant_config` and a valid dry-run receipt (`saved/data/last_dry_run.json`) exists. Read-only queries and `validate_only=True` dry-runs are unaffected.
+   * In `4.1.0`, only **`create`** and **`update`** mutations are allowed while all deletion (**`remove`**) operations are deterministically prohibited (`BLOCKED_PROHIBITED_DELETION`). Furthermore, the `PreToolUse` hook in `config/config_init.py` (`handle_hook`) deterministically blocks (`deny`) any command invoking a live `.mutate*()` call unless `execute_mutates = true` is enabled in `config/assistant_config` and a valid dry-run receipt (`saved/data/last_dry_run.json`) exists. Read-only queries and `validate_only=True` dry-runs (for `create` and `update` operations) are unaffected.
 
 ## Performance & Functionality Benchmarks
 

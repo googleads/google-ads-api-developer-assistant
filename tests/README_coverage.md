@@ -56,7 +56,7 @@ When running a full coverage collection (`python3 tests/run_coverage.py`), the r
    ........................................................................ [ 99%]
    .                                                                        [100%]
    [coverage] Pytest phase complete — process is still working on subprocess & statement coverage analysis, please wait...
-   299 passed in 34.01s
+   300 passed in 34.01s
    ```
 2. **Step 2/3 — CLI Integration Subprocess Suite**:
    ```text
@@ -157,7 +157,7 @@ The remaining ~15.5% of missed lines across the repository fall into six defensi
    - Likewise, defensive OS error handlers (`except OSError: pass` around `os.chmod`, `os.remove`, or temp-file writes) only execute when the underlying filesystem fails (e.g., disk full, read-only mount, or permission denied).
 
 3. **Core Logic vs. Defensive Guardrails**
-   - **Covered (`84.5%`)**: All primary functional paths — including all 120 `financial_limits` service/field combinations, the 4-Step HITL mutation guard (`run_mutation.py`, `config_init.py`, `sitecustomize.py`), account/campaign/ad-group/ad creation, A2A sidecar endpoints, GAQL validation, conversion troubleshooting, and client library syncing — are exercised by unit and integration tests.
+   - **Covered (`84.5%`)**: All primary functional paths — including all 120 `financial_limits` service/field combinations, the 4-Step HITL mutation guard (`run_mutation.py`, `config_init.py`, `sitecustomize.py`), strict `create`/`update`-only mutation enforcement & deletion (`remove`) prohibition, account/campaign/ad-group/ad creation, A2A sidecar endpoints, GAQL validation, conversion troubleshooting, and client library syncing — are exercised by unit and integration tests.
    - **Missed (`15.5%`)**: Last-resort defensive fallbacks, OS exception handlers, interactive TTY retry loops, and secondary-language manifest regexes.
 
 4. **How to Use `Miss` When Adding New Code**

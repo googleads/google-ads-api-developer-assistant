@@ -1,6 +1,6 @@
 # Google Ads API Developer Assistant v4.1.0
 
-v4.1.0 is the latest release of the Google Ads API Developer Assistant featuring multi-platform plugin support for both **Antigravity** (`agy`) and **Claude Code** (`claude`), unified TOML configuration (`config/assistant_config`), and the 4-Step HITL Mutation Verification & Consequence Disclosure Protocol.
+v4.1.0 is the latest release of the Google Ads API Developer Assistant featuring multi-platform plugin support for both **Antigravity** (`agy`) and **Claude Code** (`claude`), unified TOML configuration (`config/assistant_config`), and the 4-Step HITL Mutation Verification & Consequence Disclosure Protocol (strictly allowing only `create` and `update` operations and prohibiting deletion / `remove` operations).
 
 ## Upgrade from 4.0.0 to 4.1.0
 
@@ -115,4 +115,4 @@ execute_mutates = false
 ```
 * **Default Customer ID (`customer_id`):** Specify your default customer ID (e.g., `customer_id = "1234567890"`).
 * **API Version (`api_version`):** The latest stable API version is automatically detected and stored in `config/assistant_config`. You can edit this value at any time to lock or override the target API version.
-* **Live Mutations (`execute_mutates`):** Set `execute_mutates = true` or `false` (defaults to `false`) to control whether live Google Ads API mutations are permitted through the 4-Step HITL verification flow.
+* **Live Mutations (`execute_mutates`):** Set `execute_mutates = true` or `false` (defaults to `false`) to control whether live Google Ads API `create` and `update` mutations are permitted through the 4-Step HITL verification flow (deletion / `remove` operations are strictly prohibited).

@@ -41,7 +41,7 @@ The **Google Ads API Developer Assistant** plugin is engineered specifically for
 
 ## 🚀 Key Features
 
-- **4-Step HITL Mutation & Consequence Verification (`execute-mutation`)**: Two-phase `--dry-run` (`validate_only=True`) and `--execute` workflow with SHA-256 tamper-evident receipts (`saved/data/last_dry_run.json`), financial/serving consequence analysis, and deterministic `PreToolUse` hook confirmation (`"decision": "force_ask"`).
+- **4-Step HITL Mutation & Consequence Verification (`execute-mutation` — `create` & `update` Only)**: Two-phase `--dry-run` (`validate_only=True`) and `--execute` workflow for `create` and `update` operations (deletion / `remove` is strictly prohibited) with SHA-256 tamper-evident receipts (`saved/data/last_dry_run.json`), financial/serving consequence analysis, and deterministic `PreToolUse` hook confirmation (`"decision": "force_ask"`).
 - **Programmatic GAQL Validation**: 4-step sequence (Schema Discovery, Compatibility Checking, Static Analysis, and Runtime Dry-Runs using `validate_only=True`). Enforces strict rules such as zero `OR` operator tolerance.
 - **Dynamic Protobuf Object Inspection**: Real-time inspection of API resources, messages, and Enums from the official Python client library descriptors without guessing schema structures.
 - **Conversion Upload Troubleshooting**: Diagnostic reporting against `offline_conversion_upload_client_summary`, click timestamp vs. conversion timestamp logic validation, GCLID sampling, and pre-upload CSV structure checks.
@@ -155,7 +155,7 @@ When installed in Claude Code, the plugin provides custom slash commands with bu
 | **`explain`** | Formats conceptual topics into 4 mandatory sections: *Big Picture*, *Analogy*, *Interconnectedness*, *Simple Language*. | `skills/explain/SKILL.md` |
 | **`assistant-tutorial`** | Interactive, progressive conversational guide covering 11 core Google Ads API topics. | `skills/assistant-tutorial/SKILL.md` |
 | **`sync-client-libs`** | Discovers client libraries under `client_libs/`, verifies installed releases against GitHub, and automatically syncs outdated codebases. | `skills/sync-client-libs/scripts/sync_client_libs.py` |
-| **`execute-mutation`** | Executes Google Ads API write/mutation operations using the 4-Step HITL Verification & Consequence Disclosure Protocol. | `skills/execute-mutation/scripts/run_mutation.py` |
+| **`execute-mutation`** | Executes Google Ads API `create` and `update` mutation operations (deletion / `remove` is strictly prohibited) using the 4-Step HITL Verification & Consequence Disclosure Protocol. | `skills/execute-mutation/scripts/run_mutation.py` |
 | **`step-by-step`** | Breaks complex multi-part procedures into numbered phases with verification checkpoints. | `skills/step-by-step/SKILL.md` |
 
 ---
@@ -180,6 +180,8 @@ The assistant strictly complies with [google_ads_rules.md](rules/google_ads_rule
 ---
 
 ## 🛡️ Mutate Operations (4-Step HITL & Consequence Verification)
+
+> **Create & Update Only (Deletion Prohibited):** Mutations are strictly limited to **`create`** and **`update`** operations. Any deletion (`remove` / `remove_all` operation fields, `remove_*` / `delete_*` RPC methods, or `status = REMOVED`) is hard-blocked (`BLOCKED_PROHIBITED_DELETION`) across the `PreToolUse` hook, `run_mutation.py`, and the A2A sidecar before any RPC is transmitted. To stop ad serving without deleting a resource, update its `status` to `PAUSED`.
 
 All write/mutation requests follow a strict two-gate defense-in-depth architecture combining the [`execute-mutation` skill](skills/execute-mutation/SKILL.md) with deterministic `PreToolUse` lifecycle interception in [`config/config_init.py`](config/config_init.py):
 
