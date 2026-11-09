@@ -670,6 +670,8 @@ def _bench_client_libs_parallel_sync() -> Optional[Dict[str, Any]]:
     tmp_dir = tempfile.mkdtemp(prefix="gads_bench_sync_")
     orig_fetch = sync_client_libs.fetch_github_latest_release
     orig_detect = sync_client_libs.detect_installed_version
+    orig_sys_ver = getattr(sync_client_libs, "detect_system_package_version", None)
+    orig_pypi_ver = getattr(sync_client_libs, "fetch_latest_pypi_python_version", None)
     try:
         for repo_name in sync_client_libs.KNOWN_REPOS:
             os.makedirs(os.path.join(tmp_dir, repo_name), exist_ok=True)
@@ -680,6 +682,14 @@ def _bench_client_libs_parallel_sync() -> Optional[Dict[str, Any]]:
 
         sync_client_libs.fetch_github_latest_release = simulated_network_fetch
         sync_client_libs.detect_installed_version = lambda _e, _p: lib_version
+        if orig_sys_ver is not None:
+            sync_client_libs.detect_system_package_version = (
+                lambda _pkg="google-ads": (lib_version, [])
+            )
+        if orig_pypi_ver is not None:
+            sync_client_libs.fetch_latest_pypi_python_version = (
+                lambda _pkg="google-ads", **_kw: lib_version
+            )
 
         def verify() -> Dict[str, Any]:
             t0 = time.perf_counter()
@@ -716,6 +726,10 @@ def _bench_client_libs_parallel_sync() -> Optional[Dict[str, Any]]:
     finally:
         sync_client_libs.fetch_github_latest_release = orig_fetch
         sync_client_libs.detect_installed_version = orig_detect
+        if orig_sys_ver is not None:
+            sync_client_libs.detect_system_package_version = orig_sys_ver
+        if orig_pypi_ver is not None:
+            sync_client_libs.fetch_latest_pypi_python_version = orig_pypi_ver
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 

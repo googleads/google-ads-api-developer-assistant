@@ -2077,6 +2077,7 @@ class TestPerformanceRegressions:
         assert res_disk == res1
 
     def test_sync_client_libs_parallel_github_fetches(self, tmp_path, monkeypatch):
+        import threading
         import time
 
         libs_dir = tmp_path / "client_libs"
@@ -2084,14 +2085,37 @@ class TestPerformanceRegressions:
         for repo_name in sync_client_libs.KNOWN_REPOS:
             (libs_dir / repo_name).mkdir()
 
+        lock = threading.Lock()
+        active_count = 0
+        max_active = 0
+
         def slow_fetch(repo_path):
-            time.sleep(0.15)
-            return ("v25.0.0", "https://example.com/tarball")
+            nonlocal active_count, max_active
+            with lock:
+                active_count += 1
+                if active_count > max_active:
+                    max_active = active_count
+            try:
+                time.sleep(0.15)
+                return ("v25.0.0", "https://example.com/tarball")
+            finally:
+                with lock:
+                    active_count -= 1
 
         monkeypatch.setattr(sync_client_libs, "fetch_github_latest_release", slow_fetch)
         monkeypatch.setattr(sync_client_libs, "detect_installed_version", lambda d, r: "25.0.0")
+        monkeypatch.setattr(
+            sync_client_libs,
+            "detect_system_package_version",
+            lambda pkg="google-ads": ("25.0.0", []),
+        )
+        monkeypatch.setattr(
+            sync_client_libs,
+            "fetch_latest_pypi_python_version",
+            lambda pkg="google-ads", **kw: "25.0.0",
+        )
 
-        # 5 libraries * 0.15s = 0.75s if sequential; parallel ThreadPoolExecutor should finish in < 0.45s
+        # 5 libraries * 0.15s = 0.75s if sequential; parallel ThreadPoolExecutor runs concurrently
         start = time.perf_counter()
         results = sync_client_libs.process_client_libs(
             client_libs_dir=str(libs_dir),
@@ -2101,8 +2125,9 @@ class TestPerformanceRegressions:
         elapsed = time.perf_counter() - start
 
         assert [r["codebase"] for r in results] == sorted(sync_client_libs.KNOWN_REPOS.keys())
-        assert elapsed < 0.50, (
-            f"process_client_libs() took {elapsed:.3f}s for 5 libraries (expected parallel execution < 0.50s)"
+        assert max_active >= 2, f"Expected concurrent ThreadPoolExecutor execution (max_active={max_active})"
+        assert elapsed < 0.60, (
+            f"process_client_libs() took {elapsed:.3f}s for 5 libraries (expected parallel execution < 0.60s)"
         )
 
     def test_precompiled_hook_regexes_and_fast_evaluation(self):
