@@ -29,9 +29,22 @@ jobs:
           allow-prereleases: true
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -o pipefail
           python -m pip install --upgrade pip
-          pip install --upgrade -r requirements.txt
+          pip_log="$(mktemp)"
+          if ! python -m pip install --upgrade -r requirements.txt 2>&1 | tee "${pip_log}"; then
+            # google-ads releases on PyPI declare an upper Requires-Python bound (google-ads 35.0.0
+            # declares >=3.10,<3.15), so pip finds no google-ads>=25.0.0 on newer interpreters.
+            # Retry with --ignore-requires-python only for that error; other failures stop the job.
+            if grep -q "require a different python version" "${pip_log}"; then
+              echo "::warning title=google-ads Requires-Python::No google-ads release on PyPI supports Python ${{ matrix.python-version }} yet. Installing with --ignore-requires-python."
+              python -m pip install --upgrade --ignore-requires-python -r requirements.txt
+            else
+              exit 1
+            fi
+          fi
 
       - name: Lint with Ruff
         run: |
@@ -70,9 +83,22 @@ jobs:
           allow-prereleases: true
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -o pipefail
           python -m pip install --upgrade pip
-          pip install --upgrade -r requirements.txt
+          pip_log="$(mktemp)"
+          if ! python -m pip install --upgrade -r requirements.txt 2>&1 | tee "${pip_log}"; then
+            # google-ads releases on PyPI declare an upper Requires-Python bound (google-ads 35.0.0
+            # declares >=3.10,<3.15), so pip finds no google-ads>=25.0.0 on newer interpreters.
+            # Retry with --ignore-requires-python only for that error; other failures stop the job.
+            if grep -q "require a different python version" "${pip_log}"; then
+              echo "::warning title=google-ads Requires-Python::No google-ads release on PyPI supports Python ${{ matrix.python-version }} yet. Installing with --ignore-requires-python."
+              python -m pip install --upgrade --ignore-requires-python -r requirements.txt
+            else
+              exit 1
+            fi
+          fi
 
       - name: Lint with Ruff
         run: |
