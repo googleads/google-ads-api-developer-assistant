@@ -3,10 +3,12 @@
 
 import argparse
 from datetime import datetime, timezone
+import enum
 import functools
 import getpass
 import hashlib
 import json
+import math
 import os
 import re
 import runpy
@@ -41,12 +43,25 @@ _MUTATION_METHOD_PREFIXES = (
     "upload_call_conversions",
     "upload_conversion_adjustments",
     "upload_user_data",
+    "create_offline_user_data_job",
+    "add_offline_user_data_job_operations",
+    "run_offline_user_data_job",
     "add_batch_job_operations",
     "run_batch_job",
     "book_campaigns",
     "apply_incentive",
     "provide_lead_feedback",
+    "append_lead_conversation",
     "create_customer_client",
+    "move_manager_link",
+    "create_data_link",
+    "update_data_link",
+    "create_product_link",
+    "create_product_link_invitation",
+    "update_product_link_invitation",
+    "create_you_tube_video_upload",
+    "update_you_tube_video_upload",
+    "generate_p_max_draft_campaign",
     "promote_campaign_draft",
     "graduate_experiment",
     "promote_experiment",
@@ -226,7 +241,10 @@ _FINANCIAL_CONSEQUENCE_RE = re.compile(
 
 _SENSITIVE_KEYS = frozenset({
     "client_secret",
+    "oauth2_client_secret",
     "refresh_token",
+    "access_token",
+    "developer_token",
     "private_key",
     "json_key",
 })
@@ -300,12 +318,12 @@ def compute_file_sha256(file_path: str) -> str:
 
 
 def _normalize_request_for_hash(obj: Any) -> Any:
-    """Normalizes a serialized RPC request payload by recursively stripping validate_only."""
+    """Normalizes a serialized RPC request payload by recursively stripping validate_only and response_content_type."""
     if isinstance(obj, dict):
         return {
             str(k): _normalize_request_for_hash(v)
             for k, v in sorted(obj.items(), key=lambda item: str(item[0]))
-            if str(k) != "validate_only"
+            if str(k) not in ("validate_only", "response_content_type")
         }
     if isinstance(obj, list):
         return [_normalize_request_for_hash(item) for item in obj]
@@ -367,6 +385,9 @@ def get_receipt_paths() -> List[str]:
         os.path.expanduser(
             f"~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/data/{RECEIPT_FILENAME}"
         ),
+        os.path.expanduser(
+            f"~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/saved/data/{RECEIPT_FILENAME}"
+        ),
     ]
     deduped: List[str] = []
     for p in paths:
@@ -389,6 +410,9 @@ def get_audit_log_paths() -> List[str]:
         os.path.join(plugin_root, "saved", "logs", AUDIT_LOG_FILENAME),
         os.path.expanduser(
             f"~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/logs/{AUDIT_LOG_FILENAME}"
+        ),
+        os.path.expanduser(
+            f"~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/saved/logs/{AUDIT_LOG_FILENAME}"
         ),
     ]
     deduped: List[str] = []
@@ -436,14 +460,23 @@ def get_execute_mutates_paths() -> List[str]:
     this_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
     repo_root = os.path.abspath(os.path.join(plugin_root, "../.."))
-    paths = [
+    paths: List[str] = []
+    env_cfg_dir = os.environ.get("GOOGLE_ADS_ASSISTANT_CONFIG_DIR", "").strip()
+    if env_cfg_dir:
+        paths.append(
+            os.path.join(os.path.abspath(env_cfg_dir), ASSISTANT_CONFIG_FILENAME)
+        )
+    paths.extend([
         os.path.abspath(os.path.join("config", ASSISTANT_CONFIG_FILENAME)),
         os.path.join(plugin_root, "config", ASSISTANT_CONFIG_FILENAME),
         os.path.join(repo_root, "config", ASSISTANT_CONFIG_FILENAME),
         os.path.expanduser(
             f"~/.gemini/config/plugins/google-ads-api-developer-assistant/config/{ASSISTANT_CONFIG_FILENAME}"
         ),
-    ]
+        os.path.expanduser(
+            f"~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/{ASSISTANT_CONFIG_FILENAME}"
+        ),
+    ])
     deduped: List[str] = []
     for p in paths:
         norm = os.path.normpath(p)
@@ -468,7 +501,7 @@ def is_execute_mutates_enabled() -> bool:
                     parsed = parse_execute_mutates_value(f.read())
                 if parsed is not None:
                     return parsed
-                return False
+                continue
             except OSError:
                 continue
 
@@ -586,7 +619,8 @@ _ALL_TRACKED_FIELD_NAMES = set(_SFL_MOD._FIELD_UNIT_META.keys()) | set(
 _CODE_FINANCIAL_ASSIGN_RE = re.compile(
     r"\b("
     + "|".join(re.escape(k) for k in sorted(_ALL_TRACKED_FIELD_NAMES, key=len, reverse=True))
-    + r"|action\.value)\s*(?:=|:)\s*['\"]?([0-9]+(?:_[0-9]+)*(?:\.[0-9]+)?)['\"]?"
+    + r"|action\.value)\s*(?:=|:)\s*(?:float\(\s*['\"]([+-]?(?:nan|inf|infinity))['\"]\s*\)|['\"]?([+-]?(?:[0-9]+(?:_[0-9]+)*(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|[+-]?(?:nan|inf|infinity))['\"]?)",
+    re.IGNORECASE,
 )
 _TEXT_MICROS_VALUE_RE = re.compile(
     r"\b([0-9]{1,3}(?:[,_][0-9]{3})+|[0-9]{4,})\s*micros\b",
@@ -610,14 +644,30 @@ def read_financial_limits() -> Tuple[Dict[str, Union[int, float]], Optional[str]
 
 
 def _coerce_numeric(val: Any) -> Optional[float]:
-    """Converts an int, float, or numeric string to float, or returns None."""
+    """Converts an int, float, or numeric string (including negative, scientific, nan, inf) to float, or returns None."""
     if isinstance(val, bool) or val is None:
         return None
     if isinstance(val, (int, float)):
         return float(val)
     if isinstance(val, str):
         s = val.strip().replace("_", "").replace(",", "")
-        if re.match(r"^[0-9]+(?:\.[0-9]+)?$", s):
+        if not s:
+            return None
+        if s.lower() in (
+            "nan",
+            "+nan",
+            "-nan",
+            "inf",
+            "+inf",
+            "-inf",
+            "infinity",
+            "+infinity",
+            "-infinity",
+        ):
+            return float(s)
+        if re.match(
+            r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", s
+        ):
             try:
                 return float(s)
             except ValueError:
@@ -849,26 +899,76 @@ def _evaluate_observed_amount(
     fmt, unit = _FINANCIAL_LIMIT_META.get(limit_key, ("int64", "micros"))
     effective_key = limit_key
     raw_limit = limits.get(limit_key, 0)
-    limit_val = float(0 if raw_limit is None else raw_limit)
+    try:
+        limit_val = float(0 if raw_limit is None else raw_limit)
+    except (TypeError, ValueError):
+        limit_val = 0.0
+    if math.isnan(limit_val) or math.isinf(limit_val) or limit_val < 0:
+        limit_val = 0.0
 
     if limit_val <= 0:
-        if unit == "micros" and float(limits.get("all_micros_transactions", 0) or 0) > 0:
+        try:
+            fb_micros = float(limits.get("all_micros_transactions", 0) or 0)
+        except (TypeError, ValueError):
+            fb_micros = 0.0
+        try:
+            fb_curr = float(limits.get("all_currency_unit_transactions", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            fb_curr = 0.0
+        if (
+            unit == "micros"
+            and not math.isnan(fb_micros)
+            and not math.isinf(fb_micros)
+            and fb_micros > 0
+        ):
             effective_key = "all_micros_transactions"
-            limit_val = float(limits["all_micros_transactions"])
+            limit_val = fb_micros
         elif (
             unit == "currency_units"
-            and float(limits.get("all_currency_unit_transactions", 0.0) or 0.0) > 0.0
+            and not math.isnan(fb_curr)
+            and not math.isinf(fb_curr)
+            and fb_curr > 0.0
         ):
             effective_key = "all_currency_unit_transactions"
-            limit_val = float(limits["all_currency_unit_transactions"])
+            limit_val = fb_curr
+
+    cfg_display = config_path or "config/financial_limits"
+    lim_out: Union[int, float] = (
+        int(round(limit_val)) if fmt == "int64" else float(limit_val)
+    )
+    lim_str = str(lim_out)
+
+    if math.isnan(observed_val) or math.isinf(observed_val) or observed_val < 0:
+        if math.isnan(observed_val) or math.isinf(observed_val):
+            obs_out: Union[int, float, str] = str(observed_val)
+            obs_str = str(observed_val)
+        elif fmt == "int64":
+            obs_out = int(round(observed_val))
+            obs_str = str(obs_out)
+        else:
+            obs_out = float(observed_val)
+            obs_str = str(obs_out)
+        msg = (
+            f"BLOCKED BY FINANCIAL UPPER LIMIT (HITL GUARD): Invalid financial value on "
+            f"'{effective_key}' (API field '{field_name}' = {obs_str} {unit}). "
+            f"NaN, Infinity, and negative financial values are prohibited "
+            f"[API format: {fmt}, monetary unit: {unit}] in {cfg_display}. Refusing to execute command."
+        )
+        return {
+            "limit_key": effective_key,
+            "field_name": field_name,
+            "observed_value": obs_out,
+            "upper_limit": lim_out,
+            "monetary_unit": unit,
+            "api_format": fmt,
+            "config_path": cfg_display,
+            "message": msg,
+        }
 
     if fmt == "int64":
         obs_str = str(int(round(observed_val)))
-        lim_str = str(int(round(limit_val)))
     else:
         obs_str = str(float(observed_val))
-        lim_str = str(float(limit_val))
-    cfg_display = config_path or "config/financial_limits"
 
     if limit_val <= 0:
         msg = (
@@ -882,7 +982,7 @@ def _evaluate_observed_amount(
             "limit_key": effective_key,
             "field_name": field_name,
             "observed_value": int(round(observed_val)) if fmt == "int64" else float(observed_val),
-            "upper_limit": int(round(limit_val)) if fmt == "int64" else float(limit_val),
+            "upper_limit": lim_out,
             "monetary_unit": unit,
             "api_format": fmt,
             "config_path": cfg_display,
@@ -900,7 +1000,7 @@ def _evaluate_observed_amount(
             "limit_key": effective_key,
             "field_name": field_name,
             "observed_value": int(round(observed_val)) if fmt == "int64" else float(observed_val),
-            "upper_limit": int(round(limit_val)) if fmt == "int64" else float(limit_val),
+            "upper_limit": lim_out,
             "monetary_unit": unit,
             "api_format": fmt,
             "config_path": cfg_display,
@@ -970,7 +1070,7 @@ def check_financial_transaction_limits(
         ctx_for_code = f"{operation_summary}\n{uncommented}"
         for match in _CODE_FINANCIAL_ASSIGN_RE.finditer(uncommented):
             fld = match.group(1).strip().lower()
-            raw_num = match.group(2).replace("_", "")
+            raw_num = (match.group(2) or match.group(3) or "").replace("_", "")
             try:
                 num_val = float(raw_num)
             except ValueError:
@@ -1001,7 +1101,7 @@ def check_financial_transaction_limits(
     if summary_text.strip() and not observations:
         for match in _CODE_FINANCIAL_ASSIGN_RE.finditer(summary_text):
             fld = match.group(1).strip().lower()
-            raw_num = match.group(2).replace("_", "")
+            raw_num = (match.group(2) or match.group(3) or "").replace("_", "")
             try:
                 num_val = float(raw_num)
             except ValueError:
@@ -1021,9 +1121,10 @@ def check_financial_transaction_limits(
                 continue
 
     violations: List[Dict[str, Any]] = []
-    seen_violation_keys: set[Tuple[str, str, float]] = set()
+    seen_violation_keys: set[Tuple[str, str, Any]] = set()
     for lkey, fld_name, obs_val in observations:
-        dedup_token = (lkey, fld_name, obs_val)
+        dedup_val: Any = "NAN" if math.isnan(obs_val) else obs_val
+        dedup_token = (lkey, fld_name, dedup_val)
         if dedup_token in seen_violation_keys:
             continue
         seen_violation_keys.add(dedup_token)
@@ -1056,6 +1157,7 @@ _CODE_PROHIBITED_DELETION_RE = re.compile(
     r"(?:"
     r"[A-Za-z0-9_)\]]\s*\.\s*(?:remove|delete)_[a-z0-9_]+\s*\("
     r"|\.\s*remove(?:_all)?\s*=(?!=)"
+    r"|\b[A-Za-z0-9_]*Operation\s*\([^)]*\bremove(?:_all)?\s*=(?!=)"
     r"|\[\s*['\"]remove(?:_all)?['\"]\s*\]\s*=(?!=)"
     r"|['\"]remove(?:_all)?['\"]\s*:\s*(?!None\b|False\b|['\"]{2}|\[\]|\{\})[^\s,\}\]]"
     r"|\bsetattr\s*\([^,]+,\s*['\"]remove(?:_all)?['\"]"
@@ -1294,6 +1396,9 @@ def _find_google_ads_yaml() -> Optional[str]:
         os.path.expanduser(
             "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
+        os.path.expanduser(
+            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+        ),
     ]
     for path in candidates:
         if path and os.path.isfile(path):
@@ -1386,6 +1491,8 @@ def _serialize_rpc_object(obj: Any, _depth: int = 0) -> Any:
     """Safely converts Protobuf messages, proto-plus objects, or Python objects into JSON-safe types."""
     if _depth > 8:
         return str(obj)
+    if isinstance(obj, enum.Enum):
+        return obj.name
     if obj is None or isinstance(obj, (bool, int, float, str)):
         return obj
     if isinstance(obj, bytes):
@@ -1407,7 +1514,10 @@ def _serialize_rpc_object(obj: Any, _depth: int = 0) -> Any:
     to_dict_fn = getattr(obj_type, "to_dict", None)
     if callable(to_dict_fn):
         try:
-            raw_dict = to_dict_fn(obj)
+            try:
+                raw_dict = to_dict_fn(obj, use_integers_for_enums=False)
+            except TypeError:
+                raw_dict = to_dict_fn(obj)
             if isinstance(raw_dict, dict):
                 return _serialize_rpc_object(raw_dict, _depth + 1)
         except Exception:
@@ -1834,6 +1944,24 @@ def _execute_script_subprocess(
     os.close(fd)
 
     env = os.environ.copy()
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
+    plugin_config_dir = os.path.join(plugin_root, "config")
+    if os.path.isdir(plugin_config_dir):
+        existing_pp = env.get("PYTHONPATH", "").strip()
+        pp_parts = [os.path.normpath(p) for p in existing_pp.split(os.pathsep) if p]
+        if os.path.normpath(plugin_config_dir) not in pp_parts:
+            env["PYTHONPATH"] = (
+                f"{existing_pp}{os.pathsep}{plugin_config_dir}"
+                if existing_pp
+                else plugin_config_dir
+            )
+
+    if not env.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH", "").strip():
+        resolved_yaml = _find_google_ads_yaml()
+        if resolved_yaml:
+            env["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = resolved_yaml
+
     env[_TRACE_ENV_VAR] = trace_path
     if dry_run_mode:
         env[_DRY_RUN_MODE_ENV_VAR] = "1"
@@ -2006,6 +2134,7 @@ def append_mutation_audit_log(
         "BLOCKED_MISSING_VALIDATE_ONLY",
         "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING",
         "BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
+        "BLOCKED_PROHIBITED_DELETION",
     ):
         error_summary = (
             "; ".join(rpc_errors)
@@ -2124,6 +2253,8 @@ def write_dry_run_receipt(
     request_sent_at_iso: Optional[str] = None,
     response_received_at_iso: Optional[str] = None,
     rpc_calls: Optional[List[Dict[str, Any]]] = None,
+    script_args: Optional[List[str]] = None,
+    record_only: bool = False,
 ) -> Dict[str, Any]:
     """Writes a signed dry-run receipt to saved/data/last_dry_run.json."""
     resolved_script = os.path.abspath(script_path) if script_path else ""
@@ -2220,6 +2351,8 @@ def write_dry_run_receipt(
         "reversibility": reversibility.strip().upper(),
         "script_path": resolved_script,
         "script_sha256": script_hash,
+        "script_args": [str(a) for a in (script_args or [])],
+        "record_only": bool(record_only),
         "request_sha256": request_sha256,
         "request_sha256_list": request_sha256_list,
         "dry_run_output": dry_run_output.strip(),
@@ -2277,16 +2410,24 @@ def load_and_verify_receipt(
     max_age_seconds: int = DEFAULT_MAX_RECEIPT_AGE_SECONDS,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Verifies that a valid, un-expired validate_only=True dry-run receipt exists."""
-    receipt: Optional[Dict[str, Any]] = None
+    loaded_candidates: List[Dict[str, Any]] = []
     for candidate in get_receipt_paths():
         if os.path.isfile(candidate):
             try:
                 with open(candidate, "r", encoding="utf-8") as f:
-                    receipt = json.load(f)
-                if receipt:
-                    break
+                    data = json.load(f)
+                if isinstance(data, dict) and data:
+                    loaded_candidates.append(data)
             except Exception:
                 continue
+
+    receipt: Optional[Dict[str, Any]] = None
+    for cand in loaded_candidates:
+        if str(cand.get("status", "")) == "DRY_RUN_PASSED":
+            receipt = cand
+            break
+    if receipt is None and loaded_candidates:
+        receipt = loaded_candidates[0]
 
     if not receipt:
         return (
@@ -2305,8 +2446,34 @@ def load_and_verify_receipt(
             receipt,
         )
 
-    ts = float(receipt.get("timestamp", 0.0))
+    raw_ts = receipt.get("timestamp")
+    try:
+        if raw_ts is None or isinstance(raw_ts, bool):
+            raise ValueError("missing timestamp")
+        ts = float(raw_ts)
+    except (TypeError, ValueError):
+        return (
+            False,
+            "Dry-run receipt timestamp is missing or malformed. "
+            "Re-run validate_only=True dry-run and re-confirm with the user.",
+            receipt,
+        )
+    if math.isnan(ts) or math.isinf(ts):
+        return (
+            False,
+            "Dry-run receipt timestamp is invalid (NaN/Infinity). "
+            "Re-run validate_only=True dry-run and re-confirm with the user.",
+            receipt,
+        )
+
     age = time.time() - ts
+    if age < -5:
+        return (
+            False,
+            f"Dry-run receipt has an invalid future timestamp ({int(-age)}s in the future). "
+            "Re-run validate_only=True dry-run and re-confirm with the user.",
+            receipt,
+        )
     if age > max_age_seconds:
         return (
             False,
@@ -2559,7 +2726,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--script-args",
-        default="",
+        default=None,
         help="Optional extra CLI arguments to pass to --script.",
     )
     parser.add_argument(
@@ -2576,6 +2743,7 @@ def main() -> None:
         sys.exit(1)
 
     script_sha256 = compute_file_sha256(script_path)
+    explicit_script_args_passed = (args.script_args is not None) or bool(unknown_args)
     extra_args = (
         shlex.split(args.script_args) if args.script_args else []
     ) + unknown_args
@@ -2699,6 +2867,64 @@ def main() -> None:
                 sys.exit(effective_dry_exit)
             dry_run_output = (result.stdout + "\n" + result.stderr).strip()
 
+            if not captured_calls and os.path.isfile(script_path):
+                try:
+                    with open(script_path, "r", encoding="utf-8") as sf:
+                        src_no_comments = re.sub(r"(?m)^\s*#.*$", "", sf.read())
+                except OSError:
+                    src_no_comments = ""
+                called_methods = set(re.findall(r"\.([a-z_][a-z0-9_]*)\s*\(", src_no_comments))
+                vo_capable_calls = {
+                    m
+                    for m in called_methods
+                    if (
+                        m == "mutate"
+                        or m.startswith("mutate_")
+                        or m
+                        in (
+                            "create_customer_client",
+                            "upload_click_conversions",
+                            "upload_call_conversions",
+                            "upload_conversion_adjustments",
+                            "add_offline_user_data_job_operations",
+                        )
+                    )
+                    and m not in _NON_VALIDATE_ONLY_MUTATION_METHODS
+                }
+                has_non_vo_preflight_method = bool(
+                    called_methods & _NON_VALIDATE_ONLY_MUTATION_METHODS
+                )
+                if vo_capable_calls and not has_non_vo_preflight_method:
+                    no_rpc_err = (
+                        "BLOCKED: Dry-run exited cleanly without executing any validate_only=True "
+                        "Google Ads API mutation RPC. Ensure the script executes its Google Ads "
+                        "mutate request with validate_only=True during --dry-run."
+                    )
+                    _remove_stale_receipts()
+                    append_mutation_audit_log(
+                        phase="DRY_RUN",
+                        status="DRY_RUN_FAILED",
+                        customer_id=args.customer_id,
+                        operation_summary=args.operation,
+                        before_state=args.before,
+                        after_state=args.after or args.operation,
+                        consequences=consequence_list,
+                        reversibility=args.reversibility,
+                        script_path=script_path,
+                        script_sha256=script_sha256,
+                        validate_only=True,
+                        request_sent_at_iso=sent_at_iso,
+                        response_received_at_iso=received_at_iso,
+                        duration_ms=duration_ms,
+                        exit_code=2,
+                        stdout=result.stdout,
+                        stderr=no_rpc_err,
+                        command=[sys.executable, script_path, *script_args],
+                        rpc_calls=[],
+                    )
+                    print(no_rpc_err, file=sys.stderr)
+                    sys.exit(2)
+
         try:
             receipt = write_dry_run_receipt(
                 customer_id=args.customer_id,
@@ -2712,6 +2938,8 @@ def main() -> None:
                 request_sent_at_iso=sent_at_iso,
                 response_received_at_iso=received_at_iso,
                 rpc_calls=captured_calls,
+                script_args=list(extra_args),
+                record_only=bool(args.record_only),
             )
         except ValueError as exc:
             err_msg = (
@@ -2868,6 +3096,58 @@ def main() -> None:
         print(err_out, file=sys.stderr)
         sys.exit(2)
 
+    recorded_script_args = receipt.get("script_args")
+    receipt_extra_args = (
+        [str(a) for a in recorded_script_args]
+        if isinstance(recorded_script_args, list)
+        else []
+    )
+    if not explicit_script_args_passed and receipt_extra_args:
+        extra_args = list(receipt_extra_args)
+    elif (
+        explicit_script_args_passed
+        and receipt_extra_args
+        and extra_args != receipt_extra_args
+    ):
+        blocked_iso = datetime.now(timezone.utc).isoformat()
+        cid_blocked = args.customer_id or str(receipt.get("customer_id", ""))
+        op_blocked = str(args.operation or receipt.get("operation_summary", ""))
+        before_blocked = str(receipt.get("before_state", args.before))
+        after_blocked = str(receipt.get("after_state", args.after or op_blocked))
+        rev_blocked = str(receipt.get("reversibility", args.reversibility))
+        conseq_blocked = [
+            str(c) for c in receipt.get("consequences", []) if str(c).strip()
+        ]
+        args_err = (
+            f"BLOCKED: --script-args on --execute ({extra_args!r}) differs from "
+            f"verified dry-run script_args ({receipt_extra_args!r}). "
+            "Re-run --dry-run with the updated arguments first."
+        )
+        append_mutation_audit_log(
+            phase="EXECUTE",
+            status="BLOCKED_SHA256_MISMATCH",
+            customer_id=cid_blocked,
+            operation_summary=op_blocked,
+            before_state=before_blocked,
+            after_state=after_blocked,
+            consequences=conseq_blocked,
+            reversibility=rev_blocked,
+            script_path=script_path,
+            script_sha256=script_sha256,
+            validate_only=False,
+            request_sent_at_iso=blocked_iso,
+            response_received_at_iso=blocked_iso,
+            duration_ms=0.0,
+            exit_code=2,
+            stdout="",
+            stderr=args_err,
+            command=[sys.executable, script_path, "--execute", *extra_args],
+            rpc_calls=[],
+            receipt=receipt,
+        )
+        print(args_err, file=sys.stderr)
+        sys.exit(2)
+
     # Record exact timestamp when the user approved the mutation and execution commenced
     user_approved_at_iso = datetime.now(timezone.utc).isoformat()
 
@@ -2882,13 +3162,33 @@ def main() -> None:
         for h in receipt.get("request_sha256_list", [])
         if str(h).strip()
     ]
+    is_record_only_receipt = receipt.get("record_only") is True
+    uses_non_vo_method = False
+    if not expected_rpc_hashes and os.path.isfile(script_path):
+        try:
+            with open(script_path, "r", encoding="utf-8") as sf:
+                exec_src_methods = set(
+                    re.findall(
+                        r"\.([a-z_][a-z0-9_]*)\s*\(",
+                        re.sub(r"(?m)^\s*#.*$", "", sf.read()),
+                    )
+                )
+            uses_non_vo_method = bool(
+                exec_src_methods & _NON_VALIDATE_ONLY_MUTATION_METHODS
+            )
+        except OSError:
+            uses_non_vo_method = False
+
+    enforce_live_hash = bool(expected_rpc_hashes) or (
+        not is_record_only_receipt and not uses_non_vo_method
+    )
 
     result, sent_at_iso, received_at_iso, duration_ms, captured_calls = (
         _execute_script_subprocess(
             script_path,
             script_args,
-            expected_request_hashes=expected_rpc_hashes if expected_rpc_hashes else None,
-            enforce_request_hash=bool(expected_rpc_hashes),
+            expected_request_hashes=expected_rpc_hashes if enforce_live_hash else None,
+            enforce_request_hash=enforce_live_hash,
         )
     )
 

@@ -2,6 +2,53 @@
 
 **Summary:** Use this assistant to work with the Google Ads API through natural language prompts. You can ask questions, create GAQL queries, generate code in multiple languages, and run API calls in your terminal.
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Agentic Design & Approach](#agentic-design--approach)
+  - [1. Unified Context via `AGENTS.md` & `CLAUDE.md`](#1-unified-context-via-agentsmd--claudemd)
+  - [2. Domain Skills & Slash Commands](#2-domain-skills--slash-commands)
+- [Key Features](#key-features)
+- [Supported Languages](#supported-languages)
+- [Prerequisites](#prerequisites)
+- [Setup](#setup)
+  - [1. Install Host Platform](#1-install-host-platform)
+  - [2. Clone the Assistant](#2-clone-the-assistant)
+  - [3. Run Install Script](#3-run-install-script)
+  - [4. Configure Credentials](#4-configure-credentials)
+  - [5. Configure Assistant Settings (`config/assistant_config`) & Enable/Disable Plugin](#5-configure-assistant-settings-configassistant_config--enabledisable-plugin)
+- [Usage](#usage)
+- [Stay in sync](#stay-in-sync)
+  - [1. What Syncs at Session Startup (`config/config_init.py`)](#1-what-syncs-at-session-startup-configconfig_initpy)
+  - [2. Sync Client Libraries During a Session](#2-sync-client-libraries-during-a-session)
+  - [3. Manual Terminal Updates](#3-manual-terminal-updates)
+  - [4. Client Library & Runtime Version Parity](#4-client-library--runtime-version-parity)
+- [Directory Structure](#directory-structure)
+- [Plugin Architecture](#plugin-architecture)
+- [Sidecar Daemon & How It Functions](#sidecar-daemon--how-it-functions)
+  - [What Is a Sidecar?](#what-is-a-sidecar)
+  - [How the Sidecar Is Configured in This Repository](#how-the-sidecar-is-configured-in-this-repository)
+  - [How the Host Manages the Sidecar Lifecycle](#how-the-host-manages-the-sidecar-lifecycle)
+  - [How the Sidecar Functions Within the Assistant](#how-the-sidecar-functions-within-the-assistant)
+  - [Run or Test the Sidecar Manually](#run-or-test-the-sidecar-manually)
+- [How Mutates Work](#how-mutates-work)
+  - [1. Configure the Mutate Switch (`execute_mutates` in `config/assistant_config`)](#1-configure-the-mutate-switch-execute_mutates-in-configassistant_config)
+  - [2. The 4-Step HITL Mutation Workflow & What You See on Screen](#2-the-4-step-hitl-mutation-workflow--what-you-see-on-screen)
+  - [3. Summary of Safeguards (`config/config_init.py` & `run_mutation.py`)](#3-summary-of-safeguards-configconfig_initpy--run_mutationpy)
+- [Behavioral Differences in 4.1.0](#behavioral-differences-in-410)
+- [Performance & Functionality Benchmarks](#performance--functionality-benchmarks)
+  - [How to Run the Benchmarks](#how-to-run-the-benchmarks)
+  - [How to Read the Benchmark Results](#how-to-read-the-benchmark-results)
+- [Maintenance](#maintenance)
+- [Uninstallation](#uninstallation)
+  - [Antigravity](#antigravity)
+  - [Claude Code](#claude-code)
+- [Contributing](#contributing)
+- [Support](#support)
+- [License](#license)
+
+---
+
 ## Overview
 
 The Google Ads API Developer Assistant helps developers work with the Google Ads API. Use natural language prompts to do these tasks:
@@ -11,7 +58,7 @@ The Google Ads API Developer Assistant helps developers work with the Google Ads
 *   Generate executable code with the Google Ads client libraries.
 *   Get and show data from the API.
 
-This assistant runs on the **Antigravity** (v4.1.0) and **Claude Code** agent frameworks. It uses `AGENTS.md` / `CLAUDE.md` files, slash commands, and custom **Skills** to apply safety rules and run validation pipelines.
+The Google Ads API Developer Assistant (v4.1.0) runs on the **Antigravity** and **Claude Code** agent frameworks. It uses `AGENTS.md` / `CLAUDE.md` files, slash commands, and custom **Skills** to apply safety rules and run validation pipelines.
 
 ## Agentic Design & Approach
 
@@ -84,7 +131,7 @@ You can start each tool with natural language prompts in Antigravity or with sla
 
 *   **Direct API Execution:** Run generated Python code directly and see the results as tables.
 
-*   **CSV Export:** Save API table results to a CSV file in the `saved/csv/` directory.
+*   **CSV Export:** Save API table results to a CSV file in the `saved/data/` directory.
     *   *"Save results to a csv file"*
 
 *   **Conversion Troubleshooting & Diagnostics:** Create diagnostic reports to find offline conversion upload errors.
@@ -971,6 +1018,16 @@ Restart your Antigravity / `agy` session to finish uninstallation.
 *(Optional)* Remove the local marketplace registration:
 *   **In Claude Code:** `/plugin marketplace remove google-ads-assistant-local`
 *   **In your terminal:** `claude plugin marketplace remove google-ads-assistant-local`
+
+Delete the local marketplace plugin directory:
+*   **Linux/macOS:**
+    ```bash
+    rm -rf ~/.claude/plugins/google-ads-assistant-local
+    ```
+*   **Windows (PowerShell):**
+    ```powershell
+    Remove-Item -Recurse -Force "$HOME\.claude\plugins\google-ads-assistant-local"
+    ```
 
 ## Contributing
 

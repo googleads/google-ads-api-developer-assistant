@@ -10,7 +10,7 @@ Before presenting or running any GAQL query, pass this 4-step sequence:
 1. **Schema Discovery:** Verify field existence, selectability, and filterability using `search_google_ads_fields`.
 2. **Compatibility Check:** Verify all selected fields are compatible with the primary resource.
 3. **Static Analysis:**
-   - `WHERE` fields MUST be in `SELECT` (unless date segments).
+   - All fields in `SELECT`, `WHERE`, and `ORDER BY` must be compatible with the `FROM` resource (`WHERE` fields do not need to appear in `SELECT`, while core date segments in `SELECT` such as `segments.date` require a finite date filter in `WHERE`).
    - **NO `OR` operator:** Replace `OR` with `IN` or split into multiple queries.
    - **NO `FROM` in Metadata:** Queries to `GoogleAdsFieldService` MUST NOT contain a `FROM` clause.
    - **Segment Renames:** In v23+, `segments.hour` was renamed to `segments.hour_of_day`.

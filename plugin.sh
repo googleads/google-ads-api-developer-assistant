@@ -58,6 +58,7 @@ Commands:
 
 Options:
   agy | claude | all           Target platform (default: all)
+  --target <agy|claude|all>    Target platform (alias: claudecode)
   --config-dir <dir>           Explicit config directory to read/update
   --expect <enabled|disabled>  Assert that the plugin is in the expected state (with 'test')
   --json                       Output status and test results in JSON format
@@ -79,6 +80,19 @@ CONFIG_DIR=""
 EXPECT_STATE=""
 JSON_OUTPUT="false"
 QUIET="false"
+
+normalize_target() {
+  local raw
+  raw="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${raw}" == "claudecode" ]]; then
+    raw="claude"
+  fi
+  if [[ "${raw}" != "agy" && "${raw}" != "claude" && "${raw}" != "all" ]]; then
+    echo "Error: Invalid target '$1'. Must be 'agy', 'claude', or 'all'." >&2
+    exit 2
+  fi
+  echo "${raw}"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -102,17 +116,21 @@ while [[ $# -gt 0 ]]; do
       ACTION="is-enabled"
       shift
       ;;
-    agy|claude|all)
-      TARGET_TYPE="$1"
+    [aA][gG][yY]|[cC][lL][aA][uU][dD][eE]|[cC][lL][aA][uU][dD][eE][cC][oO][dD][eE]|[aA][lL][lL])
+      TARGET_TYPE="$(normalize_target "$1")"
       shift
       ;;
-    --target)
+    --target|--type|-Target)
       if [[ $# -lt 2 ]]; then
-        echo "Error: --target requires a value (agy, claude, or all)." >&2
+        echo "Error: $1 requires a value (agy, claude, or all)." >&2
         exit 2
       fi
-      TARGET_TYPE="$2"
+      TARGET_TYPE="$(normalize_target "$2")"
       shift 2
+      ;;
+    --target=*|--type=*)
+      TARGET_TYPE="$(normalize_target "${1#*=}")"
+      shift
       ;;
     --config-dir)
       if [[ $# -lt 2 ]]; then
@@ -122,6 +140,10 @@ while [[ $# -gt 0 ]]; do
       CONFIG_DIR="$2"
       shift 2
       ;;
+    --config-dir=*)
+      CONFIG_DIR="${1#*=}"
+      shift
+      ;;
     --expect)
       if [[ $# -lt 2 ]]; then
         echo "Error: --expect requires 'enabled' or 'disabled'." >&2
@@ -129,6 +151,10 @@ while [[ $# -gt 0 ]]; do
       fi
       EXPECT_STATE="$(echo "$2" | tr '[:upper:]' '[:lower:]')"
       shift 2
+      ;;
+    --expect=*)
+      EXPECT_STATE="$(echo "${1#*=}" | tr '[:upper:]' '[:lower:]')"
+      shift
       ;;
     --json)
       JSON_OUTPUT="true"
@@ -174,9 +200,10 @@ fi
 
 run_live_hook_test() {
   local cfg_dir="$1"
-  local json_flag="$2"
-  "${PYTHON_BIN}" - "${CONFIG_INIT}" "${cfg_dir}" "${json_flag}" <<'PYEOF'
-import io
+  local target_type="$2"
+  local json_flag="$3"
+  "${PYTHON_BIN}" - "${CONFIG_INIT}" "${cfg_dir}" "${target_type}" "${json_flag}" <<'PYEOF'
+import inspect
 import json
 import os
 import subprocess
@@ -184,17 +211,40 @@ import sys
 
 config_init_path = sys.argv[1]
 cfg_dir = sys.argv[2] or None
-as_json = sys.argv[3].lower() == "true"
+target_type = (sys.argv[3] or "all").lower()
+if target_type == "claudecode":
+    target_type = "claude"
+as_json = sys.argv[4].lower() == "true"
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(config_init_path))))
 from config import config_init
 
-status_info = config_init.get_plugin_status(config_dir=cfg_dir)
+effective_cfg_dir = cfg_dir
+if effective_cfg_dir is None and target_type in ("agy", "claude"):
+    if target_type == "agy":
+        cand_dir = os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/config")
+    else:
+        cand_dir = os.path.expanduser(
+            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
+        )
+    if os.path.isdir(os.path.dirname(cand_dir)):
+        effective_cfg_dir = cand_dir
+
+sig = inspect.signature(config_init.get_plugin_status)
+status_kwargs = {"config_dir": effective_cfg_dir}
+if "target_type" in sig.parameters:
+    status_kwargs["target_type"] = target_type
+elif "target" in sig.parameters:
+    status_kwargs["target"] = target_type
+
+status_info = config_init.get_plugin_status(**status_kwargs)
+if target_type in ("agy", "claude"):
+    status_info["target"] = target_type
 enabled = bool(status_info.get("enabled"))
 
 env = os.environ.copy()
-if cfg_dir:
-    # Point GOOGLE_ADS_ASSISTANT_ENABLED to the effective state of cfg_dir for isolated hook testing
+if effective_cfg_dir:
+    # Point GOOGLE_ADS_ASSISTANT_ENABLED to the effective state of effective_cfg_dir for isolated hook testing
     env["GOOGLE_ADS_ASSISTANT_ENABLED"] = "true" if enabled else "false"
 
 # 1. Test PreInvocation hook (invocationNum = 2 to avoid network parity checks)
@@ -249,9 +299,21 @@ hook_test = {
 status_info["hook_test"] = hook_test
 
 if as_json:
+    if target_type in ("agy", "claude") and isinstance(status_info.get("installations"), dict):
+        if target_type in status_info["installations"]:
+            status_info["installations"] = {target_type: status_info["installations"][target_type]}
     print(json.dumps(status_info, indent=2))
 else:
-    print(config_init.format_plugin_status_text(status_info))
+    text_out = config_init.format_plugin_status_text(status_info)
+    if target_type == "agy":
+        text_out = "\n".join(
+            ln for ln in text_out.splitlines() if not ln.strip().startswith("Claude Code (~/.claude):")
+        )
+    elif target_type == "claude":
+        text_out = "\n".join(
+            ln for ln in text_out.splitlines() if not ln.strip().startswith("Jetski / Antigravity (~/.gemini):")
+        )
+    print(text_out)
     print(f"  Live Hook Test    : {'PASS' if hook_test['passed'] else 'FAIL'}")
     print(f"    PreInvocation   : {hook_test['pre_invocation_hook']}")
     print(f"    PreToolUse      : {hook_test['pre_tool_use_hook']}")
@@ -266,47 +328,67 @@ sys.exit(0 if hook_test["passed"] else 1)
 PYEOF
 }
 
+get_effective_state() {
+  local cfg_dir="$1"
+  local target_type="$2"
+  "${PYTHON_BIN}" - "${CONFIG_INIT}" "${cfg_dir}" "${target_type}" <<'PYEOF'
+import os
+import sys
+
+config_init_path = sys.argv[1]
+cfg_dir = sys.argv[2] or None
+target_type = (sys.argv[3] or "all").lower()
+if target_type == "claudecode":
+    target_type = "claude"
+if cfg_dir is None and target_type in ("agy", "claude"):
+    if target_type == "agy":
+        cand_dir = os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant/config")
+    else:
+        cand_dir = os.path.expanduser(
+            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
+        )
+    if os.path.isdir(os.path.dirname(cand_dir)):
+        cfg_dir = cand_dir
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(config_init_path))))
+from config import config_init
+print("enabled" if config_init.is_plugin_enabled(config_dir=cfg_dir) else "disabled")
+PYEOF
+}
+
 case "${ACTION}" in
   enable)
     if [[ "${JSON_OUTPUT}" == "true" ]]; then
       "${PYTHON_BIN}" "${CONFIG_INIT}" --enable "${PY_ARGS[@]}" --json >/dev/null
-      run_live_hook_test "${CONFIG_DIR}" "true"
+      run_live_hook_test "${CONFIG_DIR}" "${TARGET_TYPE}" "true"
     elif [[ "${QUIET}" == "true" ]]; then
       "${PYTHON_BIN}" "${CONFIG_INIT}" --enable "${PY_ARGS[@]}" >/dev/null
     else
       "${PYTHON_BIN}" "${CONFIG_INIT}" --enable "${PY_ARGS[@]}" >/dev/null
-      run_live_hook_test "${CONFIG_DIR}" "false"
+      run_live_hook_test "${CONFIG_DIR}" "${TARGET_TYPE}" "false"
     fi
     ;;
 
   disable)
     if [[ "${JSON_OUTPUT}" == "true" ]]; then
       "${PYTHON_BIN}" "${CONFIG_INIT}" --disable "${PY_ARGS[@]}" --json >/dev/null
-      run_live_hook_test "${CONFIG_DIR}" "true"
+      run_live_hook_test "${CONFIG_DIR}" "${TARGET_TYPE}" "true"
     elif [[ "${QUIET}" == "true" ]]; then
       "${PYTHON_BIN}" "${CONFIG_INIT}" --disable "${PY_ARGS[@]}" >/dev/null
     else
       "${PYTHON_BIN}" "${CONFIG_INIT}" --disable "${PY_ARGS[@]}" >/dev/null
-      run_live_hook_test "${CONFIG_DIR}" "false"
+      run_live_hook_test "${CONFIG_DIR}" "${TARGET_TYPE}" "false"
     fi
     ;;
 
   status)
-    run_live_hook_test "${CONFIG_DIR}" "${JSON_OUTPUT}"
+    run_live_hook_test "${CONFIG_DIR}" "${TARGET_TYPE}" "${JSON_OUTPUT}"
     ;;
 
   test)
-    run_live_hook_test "${CONFIG_DIR}" "${JSON_OUTPUT}"
+    run_live_hook_test "${CONFIG_DIR}" "${TARGET_TYPE}" "${JSON_OUTPUT}"
     if [[ -n "${EXPECT_STATE}" ]]; then
-      ACTUAL_STATE="$("${PYTHON_BIN}" - "${CONFIG_INIT}" "${CONFIG_DIR}" <<'PYEOF'
-import os, sys
-config_init_path = sys.argv[1]
-cfg_dir = sys.argv[2] or None
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(config_init_path))))
-from config import config_init
-print("enabled" if config_init.is_plugin_enabled(config_dir=cfg_dir) else "disabled")
-PYEOF
-)"
+      ACTUAL_STATE="$(get_effective_state "${CONFIG_DIR}" "${TARGET_TYPE}")"
       if [[ "${ACTUAL_STATE}" != "${EXPECT_STATE}" ]]; then
         echo "FAIL: Expected plugin status '${EXPECT_STATE}', but got '${ACTUAL_STATE}'." >&2
         exit 1
@@ -315,15 +397,7 @@ PYEOF
     ;;
 
   is-enabled)
-    STATE="$("${PYTHON_BIN}" - "${CONFIG_INIT}" "${CONFIG_DIR}" <<'PYEOF'
-import os, sys
-config_init_path = sys.argv[1]
-cfg_dir = sys.argv[2] or None
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(config_init_path))))
-from config import config_init
-print("enabled" if config_init.is_plugin_enabled(config_dir=cfg_dir) else "disabled")
-PYEOF
-)"
+    STATE="$(get_effective_state "${CONFIG_DIR}" "${TARGET_TYPE}")"
     if [[ "${QUIET}" != "true" ]]; then
       echo "${STATE}"
     fi

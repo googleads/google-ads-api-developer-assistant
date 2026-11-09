@@ -54,6 +54,16 @@ READ_ONLY_METHOD_PREFIXES: Tuple[str, ...] = (
     "fetch",
 )
 
+# Policy: Only `create` and `update` mutations are permitted; `remove_*` and `delete_*` RPCs are prohibited.
+PROHIBITED_DELETION_METHOD_PREFIXES: Tuple[str, ...] = (
+    "remove",
+    "delete",
+)
+
+PROHIBITED_DELETION_SERVICES = frozenset({
+    "AutomaticallyCreatedAssetRemovalService",
+})
+
 GAPIC_HELPER_METHODS = frozenset({
     "common_billing_account_path",
     "common_folder_path",
@@ -195,15 +205,11 @@ METHOD_EXECUTION_PRIORITY: Dict[str, int] = {
     "end_experiment": 5,
     "create_data_link": 1,
     "update_data_link": 2,
-    "remove_data_link": 3,
     "create_product_link": 1,
-    "remove_product_link": 2,
     "create_product_link_invitation": 1,
     "update_product_link_invitation": 2,
-    "remove_product_link_invitation": 3,
     "create_you_tube_video_upload": 1,
     "update_you_tube_video_upload": 2,
-    "remove_you_tube_video_upload": 3,
 }
 
 
@@ -1003,6 +1009,8 @@ def discover_write_rpcs(
             if not cls_name.endswith("ServiceClient") or cls_name.endswith("AsyncClient"):
                 continue
             service_name = cls_name[:-6]  # strip "Client"
+            if service_name in PROHIBITED_DELETION_SERVICES:
+                continue
             if norm_filter:
                 svc_norm = service_name.lower().replace("_", "")
                 if svc_norm not in (norm_filter, norm_filter_with_svc):
@@ -1019,6 +1027,11 @@ def discover_write_rpcs(
                 if any(
                     m_name == prefix or m_name.startswith(f"{prefix}_")
                     for prefix in READ_ONLY_METHOD_PREFIXES
+                ):
+                    continue
+                if any(
+                    m_name == prefix or m_name.startswith(f"{prefix}_")
+                    for prefix in PROHIBITED_DELETION_METHOD_PREFIXES
                 ):
                     continue
 
@@ -1043,6 +1056,7 @@ def discover_write_rpcs(
                 op_is_repeated = False
                 op_type_name: Optional[str] = None
                 op_subfields: Tuple[str, ...] = ()
+                remove_only_op = False
 
                 if req_cls is not None and hasattr(req_cls, "pb"):
                     pb_desc = req_cls.pb().DESCRIPTOR
@@ -1057,9 +1071,23 @@ def discover_write_rpcs(
                             op_is_repeated = bool(op_f.is_repeated)
                             if op_f.message_type is not None:
                                 op_type_name = op_f.message_type.name
-                                op_subfields = tuple(
+                                raw_subfields = tuple(
                                     sf.name for sf in op_f.message_type.fields
                                 )
+                                if (
+                                    "remove" in raw_subfields
+                                    and "create" not in raw_subfields
+                                    and "update" not in raw_subfields
+                                ):
+                                    remove_only_op = True
+                                op_subfields = tuple(
+                                    sf_name
+                                    for sf_name in raw_subfields
+                                    if sf_name != "remove"
+                                )
+
+                if remove_only_op:
+                    continue
 
                 discovered.append(
                     DiscoveredWriteMethod(
@@ -1421,7 +1449,7 @@ def execute_logged_write_rpc(
             note = f"Captured GoogleAdsFailure ({grpc_status})"
         elif scenario == "TEARDOWN":
             assertion_passed = True
-            note = f"Teardown skipped/already removed ({grpc_status})"
+            note = f"Teardown skipped/already paused ({grpc_status})"
         elif scenario == "SUCCESS":
             # Partner-allowlisted, billing-gated, or domain-prerequisite rejections from
             # the Google Ads server are classified explicitly when GoogleAdsFailure is returned.
@@ -1930,19 +1958,71 @@ def provision_test_fixtures(
     )
 
 
+def _resolve_teardown_pause_update(
+    client: GoogleAdsClient,
+    svc_name: str,
+    op: Any,
+) -> Optional[str]:
+    """Sets non-destructive PAUSED/HIDDEN/CLOSED status on op.update and returns the mask path, or None if unsupported."""
+    if not hasattr(op, "update"):
+        return None
+    upd = getattr(op, "update")
+
+    # Known service -> (field_name, enum_type_name, enum_member_name)
+    service_pause_map: Dict[str, Tuple[str, str, str]] = {
+        "CampaignService": ("status", "CampaignStatusEnum", "PAUSED"),
+        "AdGroupService": ("status", "AdGroupStatusEnum", "PAUSED"),
+        "AdGroupAdService": ("status", "AdGroupAdStatusEnum", "PAUSED"),
+        "AdGroupCriterionService": ("status", "AdGroupCriterionStatusEnum", "PAUSED"),
+        "AssetGroupService": ("status", "AssetGroupStatusEnum", "PAUSED"),
+        "ConversionActionService": ("status", "ConversionActionStatusEnum", "HIDDEN"),
+        "UserListService": ("membership_status", "UserListMembershipStatusEnum", "CLOSED"),
+    }
+    if svc_name in service_pause_map:
+        field_name, enum_cls, member_name = service_pause_map[svc_name]
+        if hasattr(upd, field_name):
+            try:
+                setattr(upd, field_name, _enum_val(client, enum_cls, member_name))
+                return field_name
+            except Exception:
+                return None
+
+    # Generic fallback via Protobuf field enum descriptor (never sets REMOVED)
+    pb_upd = upd._pb if hasattr(upd, "_pb") else upd
+    desc = getattr(pb_upd, "DESCRIPTOR", None)
+    if desc is not None:
+        status_field = desc.fields_by_name.get("status")
+        if status_field is not None and status_field.enum_type is not None:
+            for candidate_state in ("PAUSED", "HIDDEN", "CLOSED"):
+                if candidate_state in status_field.enum_type.values_by_name:
+                    val_num = status_field.enum_type.values_by_name[candidate_state].number
+                    try:
+                        setattr(upd, "status", val_num)
+                        return "status"
+                    except Exception:
+                        return None
+    return None
+
+
 def teardown_test_fixtures(
     client: GoogleAdsClient,
     fixtures: FixtureRegistry,
     audit_logger: AuditLogger,
     interceptor: RequestIdCaptureInterceptor,
 ) -> None:
-    """Cleans up created test fixtures in reverse dependency order and logs TEARDOWN records."""
+    """Deactivates created test fixtures via `update` + `PAUSED` (never `remove`) in reverse dependency order."""
     cid = fixtures.customer_id
     limit = fixtures.max_financial_mutate_micros
 
     for svc_name, method_snake, op_type_name, resource_name in reversed(
         fixtures.teardown_queue
     ):
+        if svc_name in PROHIBITED_DELETION_SERVICES or any(
+            method_snake == prefix or method_snake.startswith(f"{prefix}_")
+            for prefix in PROHIBITED_DELETION_METHOD_PREFIXES
+        ):
+            continue
+
         grpc_method = snake_to_pascal(method_snake)
         req_type_name = f"{grpc_method}Request"
         try:
@@ -1951,27 +2031,28 @@ def teardown_test_fixtures(
         except Exception:
             continue
 
+        if not hasattr(op, "update"):
+            continue
+
+        mask_field = _resolve_teardown_pause_update(client, svc_name, op)
+        if not mask_field:
+            continue
+
+        op.update.resource_name = resource_name
+        if hasattr(op, "update_mask"):
+            op.update_mask.paths.append(mask_field)
+
         if hasattr(req, "customer_id"):
             req.customer_id = cid
         if hasattr(req, "validate_only"):
             req.validate_only = False
 
-        if hasattr(op, "remove"):
-            op.remove = resource_name
-        elif hasattr(op, "update"):
-            op.update.resource_name = resource_name
-            if hasattr(op.update, "status"):
-                try:
-                    op.update.status = 3  # PAUSED / REMOVED
-                except Exception:
-                    pass
-            if hasattr(op, "update_mask"):
-                op.update_mask.paths.append("status")
-
         if hasattr(req, "operations"):
             req.operations.append(op)
         elif hasattr(req, "operation"):
             req.operation = op
+        else:
+            continue
 
         execute_logged_write_rpc(
             client=client,
@@ -1997,6 +2078,16 @@ def build_success_request(
     fixtures: FixtureRegistry,
 ) -> Any:
     """Constructs a structurally valid request payload for the given write RPC."""
+    m_name = method_meta.method_snake_name
+    svc = method_meta.service_name
+    if svc in PROHIBITED_DELETION_SERVICES or any(
+        m_name == prefix or m_name.startswith(f"{prefix}_")
+        for prefix in PROHIBITED_DELETION_METHOD_PREFIXES
+    ):
+        raise PermissionError(
+            f"Deletion RPCs are prohibited by policy (only create/update allowed): {svc}.{m_name}"
+        )
+
     cid = fixtures.customer_id
     tag = f"{fixtures.run_tag}_{uuid.uuid4().hex[:6]}"
     req = client.get_type(method_meta.request_type_name)
@@ -2009,9 +2100,6 @@ def build_success_request(
         req.partial_failure = False
     if method_meta.has_response_content_type:
         _set_mutable_resource_content_type(client, req)
-
-    m_name = method_meta.method_snake_name
-    svc = method_meta.service_name
 
     # 1. Special / Non-standard RPCs without standard `operations` / `operation`
     if method_meta.operation_field_name is None:
@@ -2059,8 +2147,6 @@ def _populate_special_success_request(
     """Populates fields on non-MutateOperation write request messages."""
     cid = fixtures.customer_id
     camp_rn = fixtures.get_or_fallback("campaign", "campaigns", "900000002")
-    aga_rn = fixtures.get_or_fallback("ad_group_ad", "adGroupAds", "900000003~900000004")
-    ast_rn = fixtures.get_or_fallback("asset", "assets", "900000007")
     budget_rn = fixtures.get_or_fallback("campaign_budget", "campaignBudgets", "900000001")
     conv_rn = fixtures.get_or_fallback("conversion_action", "conversionActions", "900000009")
 
@@ -2077,12 +2163,6 @@ def _populate_special_success_request(
         req.account_link.third_party_app_analytics.app_vendor = _enum_val(
             client, "MobileAppVendorEnum", "GOOGLE_APP_STORE"
         )
-    elif m_name == "remove_automatically_created_assets":
-        req.ad_group_ad = aga_rn
-        awft = client.get_type("AssetsWithFieldType")
-        awft.asset = ast_rn
-        awft.asset_field_type = _enum_val(client, "AssetFieldTypeEnum", "HEADLINE")
-        req.assets_with_field_type.append(awft)
     elif m_name == "add_batch_job_operations":
         req.resource_name = fixtures.get_or_fallback("batch_job", "batchJobs", "900000011")
         mop = client.get_type("MutateOperation")
@@ -2135,8 +2215,6 @@ def _populate_special_success_request(
     elif m_name == "create_data_link":
         req.data_link.youtube_video.channel_id = "UC_x5XG1OV2P6uZZ5FSM9Ttw"
         req.data_link.youtube_video.video_id = "dQw4w9WgXcQ"
-    elif m_name == "remove_data_link":
-        req.resource_name = f"customers/{cid}/dataLinks/900000014~900000015"
     elif m_name == "update_data_link":
         req.resource_name = f"customers/{cid}/dataLinks/900000014~900000015"
         req.data_link_status = _enum_val(client, "DataLinkStatusEnum", "ENABLED")
@@ -2193,8 +2271,6 @@ def _populate_special_success_request(
         )
     elif m_name == "create_product_link_invitation":
         req.product_link_invitation.hotel_center.hotel_center_id = 123456
-    elif m_name == "remove_product_link_invitation":
-        req.resource_name = f"customers/{cid}/productLinkInvitations/900000019"
     elif m_name == "update_product_link_invitation":
         req.resource_name = f"customers/{cid}/productLinkInvitations/900000019"
         req.product_link_invitation_status = _enum_val(
@@ -2202,17 +2278,11 @@ def _populate_special_success_request(
         )
     elif m_name == "create_product_link":
         req.product_link.merchant_center.merchant_center_id = 123456
-    elif m_name == "remove_product_link":
-        req.resource_name = f"customers/{cid}/productLinks/900000020"
     elif m_name == "regenerate_shareable_link_id":
         req.resource_name = f"customers/{cid}/thirdPartyAppAnalyticsLinks/900000021"
     elif m_name == "create_you_tube_video_upload":
         req.you_tube_video_upload.video_title = f"Harness Video {tag}"
         req.you_tube_video_upload.video_description = "Test harness video upload"
-    elif m_name == "remove_you_tube_video_upload":
-        req.resource_names.append(
-            f"customers/{cid}/youTubeVideoUploads/900000022"
-        )
     elif m_name == "update_you_tube_video_upload":
         req.you_tube_video_upload.resource_name = (
             f"customers/{cid}/youTubeVideoUploads/900000022"
@@ -2257,11 +2327,7 @@ def _populate_operation_for_success(
 
     # Handle operations without create/update (custom operation messages)
     if "create" not in subfields and "update" not in subfields:
-        if svc == "AutomaticallyCreatedAssetRemovalService":
-            op.campaign = camp_rn
-            op.asset = ast_rn
-            op.field_type = _enum_val(client, "AssetFieldTypeEnum", "HEADLINE")
-        elif svc == "CampaignService" and m_name == "enable_p_max_brand_guidelines":
+        if svc == "CampaignService" and m_name == "enable_p_max_brand_guidelines":
             op.campaign = camp_rn
             op.auto_populate_brand_assets = True
         elif svc == "MultiPartyAuthReviewService":
@@ -2811,12 +2877,12 @@ def build_expected_failure_request(
         except ValueError:
             nested_cls = getattr(type(req), method_meta.operation_type_name, None)
             op = nested_cls() if nested_cls is not None else getattr(req, "operation")
-        if "remove" in method_meta.operation_subfields:
-            op.remove = f"customers/{customer_id}/invalidResource/INVALID_ID"
-        elif "update" in method_meta.operation_subfields:
+        if "update" in method_meta.operation_subfields:
             target = getattr(op, "update")
             if hasattr(target, "resource_name"):
                 target.resource_name = f"customers/{customer_id}/invalidResource/INVALID_ID"
+        elif "create" in method_meta.operation_subfields:
+            _ = getattr(op, "create")
         setattr(req, "operation", op)
         return req
 

@@ -421,7 +421,7 @@ class TestCreatePMaxWebpageFilter:
 
         mock_client.get_type.side_effect = get_type_side_effect
         mock_client.enums.ListingGroupFilterTypeEnum.SUBDIVISION = "SUBDIVISION"
-        mock_client.enums.ListingGroupFilterTypeEnum.UNIT_INCLUDED = "UNIT_INCLUDED"
+        mock_client.enums.ListingGroupFilterTypeEnum.UNIT_EXCLUDED = "UNIT_EXCLUDED"
         mock_client.enums.ListingGroupFilterListingSourceEnum.WEBPAGE = "WEBPAGE"
 
         mock_response = MagicMock()
@@ -440,7 +440,10 @@ class TestCreatePMaxWebpageFilter:
         )
 
         captured = capsys.readouterr()
-        assert "Subdivision Webpage Listing Filter tree validated/created successfully." in captured.out
+        assert (
+            "Webpage exclusion Listing Filter (UNIT_EXCLUDED) validated/created successfully."
+            in captured.out
+        )
         mock_filter_service.mutate_asset_group_listing_group_filters.assert_called_once()
 
 

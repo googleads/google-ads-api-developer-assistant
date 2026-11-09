@@ -17,7 +17,7 @@ Validates Google Ads Query Language (GAQL) queries against Google Ads API schema
    - **Step 1: Schema Discovery** - Verify that all selected and filtered fields exist in the resource schema using `client_libs/google-ads-python` proto definitions or `inspect_object.py`.
    - **Step 2: Compatibility Check** - Verify that all metrics, segments, and attributed resources are selectable together with the primary resource.
    - **Step 3: Static Analysis**:
-     - Check that `WHERE` clause fields are in `SELECT` (unless date segments).
+     - Verify that all fields in `SELECT`, `WHERE`, and `ORDER BY` are compatible with the `FROM` resource (`WHERE` fields do not need to appear in `SELECT`, while core date segments in `SELECT` such as `segments.date` require a finite date filter in `WHERE`).
      - Ensure **NO `OR` operator** is used (GAQL only supports `AND`; suggest `IN` or separate queries).
      - Ensure **NO `FROM` clause** is used for `GoogleAdsFieldService` metadata queries.
      - Ensure no SQL aggregation functions (`SUM()`, `COUNT()`) are used.

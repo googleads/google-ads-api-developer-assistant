@@ -57,6 +57,15 @@ Use the uninstallation command for your platform:
     ```bash
     claude plugin marketplace remove google-ads-assistant-local
     ```
+  * Delete the local marketplace plugin directory:
+    * Linux/macOS:
+      ```bash
+      rm -rf ~/.claude/plugins/google-ads-assistant-local
+      ```
+    * Windows (PowerShell):
+      ```powershell
+      Remove-Item -Recurse -Force "$HOME\.claude\plugins\google-ads-assistant-local"
+      ```
 
 ---
 
@@ -68,14 +77,14 @@ At startup, the assistant looks for credential files in your home directory (`$H
 * **PHP:** `google_ads_php.ini`
 * **Ruby:** `google_ads_config.rb`
 * **Java:** `ads.properties`
-* **.NET:** `App.config` / `google-ads.json`
+* **.NET:** `App.config` / `appsettings.json`
 
 All runtime API calls read `config/google-ads.yaml` directly instead of `$HOME`. See the Google Ads API documentation for the required fields in each file.
 
 ### What is `config/assistant_config` and which file has priority?
 The `config/assistant_config` file stores runtime settings in TOML format:
 ```toml
-api_version = "v25"
+api_version = "v26"
 customer_id = "1234567890"
 execute_mutates = false
 ```
@@ -83,13 +92,13 @@ The assistant checks two locations in this order and uses the first file it find
 1. **Workspace configuration (First Priority):** `./config/assistant_config` in your current working directory.
 2. **Installed plugin configuration (Fallback):**
    * **Antigravity (`agy`):** `~/.gemini/config/plugins/google-ads-api-developer-assistant/config/assistant_config`
-   * **Claude Code (`claude`):** `plugins/google-ads-api-developer-assistant/config/assistant_config`
+   * **Claude Code (`claude`):** `~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/assistant_config`
 
 ### How do I set a default customer ID?
 Set `customer_id` in `config/assistant_config` (for example, `customer_id = "1234567890"`). When you enter a prompt such as *"Get my campaigns"*, the assistant uses this customer ID automatically.
 
 ### Where is the Google Ads API version configured?
-The `config/assistant_config` file stores the active API version (`api_version = "v25"`). When you install, update, or run `get_latest_api_version.py` or `sync_client_libs.py`, the assistant finds the latest stable version. It updates `api_version` in `config/assistant_config` and keeps your `customer_id` and `execute_mutates` values.
+The `config/assistant_config` file stores the active API version (`api_version = "v26"`). When you install, update, or run `get_latest_api_version.py` or `sync_client_libs.py`, the assistant finds the latest stable version. It updates `api_version` in `config/assistant_config` and keeps your `customer_id` and `execute_mutates` values.
 
 ### How do I use the assistant with my existing application code?
 Install the plugin globally with `./install.sh agy` or `./install.sh claude`. Then start your Antigravity (`agy`) or Claude Code (`claude`) session inside your application directory, or include your file paths in your prompt. The `PreInvocation` and `PreToolUse` hooks find the global plugin skills and keep your local `./config/assistant_config` settings.
@@ -105,7 +114,7 @@ Install the plugin globally with `./install.sh agy` or `./install.sh claude`. Th
 
 ### Where does the assistant save generated code and exported data?
 * **Generated Code:** `saved/code/` in your workspace.
-* **CSV Data Exports:** `saved/csv/` when you ask for CSV output.
+* **CSV Data Exports:** `saved/data/` when you ask for CSV output.
 * **Diagnostic Reports & Dry-Run Receipts:** `saved/data/` (including `saved/data/last_dry_run.json` for verified mutation dry-runs).
 * **Mutation Audit Log:** `saved/logs/mutation_audit.jsonl` (an append-only JSONL log of all dry-runs and live mutations).
 

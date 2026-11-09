@@ -23,8 +23,7 @@ Usage:
     # Full coverage run (pytest + CLI integration scripts):
     python3 tests/run_coverage.py
 
-    # Fast coverage run (~35s, reuses cached subprocess coverage and skips redundant
-    # 119-item parametrized loop):
+    # Fast coverage run (~35s, skips CLI script suite and redundant 119-item parametrized loop):
     python3 tests/run_coverage.py --fast
 
     # Instant report from the most recent coverage run (<0.2s):
@@ -140,8 +139,8 @@ except Exception:
     )
 
 
-def run_coverage_collection(fast_mode: bool = True, clean: bool = False) -> int:
-    """Runs pytest (and bash script tests when not in fast mode) under sys.monitoring."""
+def run_coverage_collection(fast_mode: bool = True, clean: bool = True) -> int:
+    """Runs pytest (and platform CLI script tests when not in fast mode) under sys.monitoring."""
     target_files = get_target_files()
     target_paths_list = [str(p.resolve()) for p in target_files]
     inproc_hits: dict[str, set[int]] = {p: set() for p in target_paths_list}
@@ -152,9 +151,13 @@ def run_coverage_collection(fast_mode: bool = True, clean: bool = False) -> int:
     _write_subprocess_coverage_hooks(target_paths_list)
 
     existing_pp = os.environ.get("PYTHONPATH", "")
-    os.environ["PYTHONPATH"] = (
-        f"{COV_HOOK_DIR}:{existing_pp}" if existing_pp else str(COV_HOOK_DIR)
-    )
+    hook_dir_str = str(COV_HOOK_DIR)
+    if hook_dir_str not in existing_pp.split(os.pathsep):
+        os.environ["PYTHONPATH"] = (
+            f"{hook_dir_str}{os.pathsep}{existing_pp}"
+            if existing_pp
+            else hook_dir_str
+        )
     os.environ["PYTHONNOUSERSITE"] = "0"
 
     tool_id = sys.monitoring.COVERAGE_ID
@@ -201,21 +204,56 @@ def run_coverage_collection(fast_mode: bool = True, clean: bool = False) -> int:
     sys.monitoring.free_tool_id(tool_id)
 
     if not fast_mode:
-        print(
-            f"\n[coverage] Step 2/{total_steps}: Running CLI integration subprocess suite (tests/test_plugin_scripts.sh) "
-            "— this step may take a while, process is still working, please wait...",
-            flush=True,
-        )
         env = os.environ.copy()
-        env["PATH"] = f"{Path(sys.executable).parent}:{env.get('PATH', '')}"
-        subprocess.run(
-            ["bash", str(REPO_ROOT / "tests" / "test_plugin_scripts.sh")],
-            cwd=str(REPO_ROOT),
-            env=env,
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        existing_path = env.get("PATH", "")
+        py_bin_dir = str(Path(sys.executable).parent)
+        env["PATH"] = (
+            f"{py_bin_dir}{os.pathsep}{existing_path}" if existing_path else py_bin_dir
         )
+
+        script_cmd: list[str] | None = None
+        script_label = "tests/test_plugin_scripts.sh"
+        if os.name == "nt":
+            ps_bin = shutil.which("pwsh") or shutil.which("powershell")
+            ps_script = REPO_ROOT / "tests" / "test_plugin_scripts.ps1"
+            if ps_bin and ps_script.is_file():
+                script_label = "tests/test_plugin_scripts.ps1"
+                script_cmd = [
+                    ps_bin,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(ps_script),
+                ]
+            elif shutil.which("bash"):
+                script_cmd = ["bash", str(REPO_ROOT / "tests" / "test_plugin_scripts.sh")]
+        else:
+            if shutil.which("bash"):
+                script_cmd = ["bash", str(REPO_ROOT / "tests" / "test_plugin_scripts.sh")]
+
+        if script_cmd is not None:
+            print(
+                f"\n[coverage] Step 2/{total_steps}: Running CLI integration subprocess suite ({script_label}) "
+                "— this step may take a while, process is still working, please wait...",
+                flush=True,
+            )
+            sub_res = subprocess.run(
+                script_cmd,
+                cwd=str(REPO_ROOT),
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if sub_res.returncode != 0:
+                print(
+                    f"[coverage] ERROR: {script_label} failed with exit code {sub_res.returncode}:\n"
+                    f"{sub_res.stdout}\n{sub_res.stderr}",
+                    file=sys.stderr,
+                )
+                if exit_code == 0:
+                    exit_code = sub_res.returncode
 
     final_step = 2 if fast_mode else 3
     print(
@@ -287,14 +325,14 @@ def compute_and_print_report(
     for p in target_files:
         abs_p = str(p.resolve())
         try:
-            rel_p = str(p.relative_to(PLUGIN_ROOT))
+            rel_p = p.relative_to(PLUGIN_ROOT).as_posix()
             parts = rel_p.split("/")
             if parts[0] in ("skills", "sidecars") and len(parts) >= 2:
                 cat = f"{parts[0]}/{parts[1]}"
             else:
                 cat = parts[0]
         except ValueError:
-            rel_p = str(p.relative_to(REPO_ROOT)) + " (root)"
+            rel_p = p.relative_to(REPO_ROOT).as_posix() + " (root)"
             cat = "root"
 
         exec_lines = trace._find_executable_linenos(abs_p)
@@ -422,7 +460,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--fast",
         action="store_true",
-        help="Skip redundant 119-item parametrized loop and reuse cached subprocess coverage (~35s).",
+        help="Skip CLI integration script suite and redundant 119-item parametrized loop (~35s).",
+    )
+    parser.add_argument(
+        "--no-clean",
+        action="store_true",
+        help="Preserve prior coverage hit files in .pytest_cache/coverage/cov_data for incremental union.",
     )
     parser.add_argument(
         "--report-only",
@@ -443,13 +486,13 @@ def main(argv: list[str] | None = None) -> int:
 
     exit_code = 0
     if not args.report_only:
-        exit_code = run_coverage_collection(fast_mode=args.fast)
+        exit_code = run_coverage_collection(fast_mode=args.fast, clean=not args.no_clean)
     elif not COV_DATA_DIR.exists() or not any(COV_DATA_DIR.glob("*.json")):
         print(
             "No cached coverage data found in .pytest_cache/coverage/cov_data; running --fast collection first...",
             file=sys.stderr,
         )
-        exit_code = run_coverage_collection(fast_mode=True)
+        exit_code = run_coverage_collection(fast_mode=True, clean=True)
 
     compute_and_print_report(show_missed=args.show_missed, json_output=args.json)
     return exit_code
@@ -474,5 +517,3 @@ def test_coverage_above_80_percent() -> None:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-

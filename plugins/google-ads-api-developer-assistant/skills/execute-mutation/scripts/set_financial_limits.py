@@ -2,13 +2,16 @@
 """Helper utility to view, configure, and reset Google Ads API financial transaction upper limits by Service.field."""
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import sys
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 FINANCIAL_LIMITS_FILENAME = "financial_limits"
+MAX_INT64 = (1 << 63) - 1  # 9223372036854775807
 
 # Field-level metadata: (api_format, monetary_unit, unit_description, default_value)
 _FIELD_UNIT_META: Dict[str, Tuple[str, str, str, Union[int, float]]] = {
@@ -866,6 +869,11 @@ def parse_and_validate_limit_amount(
             f"Invalid value '{raw_value}' for '{canonical_key}'. Expected {api_format} ({monetary_unit})."
         )
 
+    if isinstance(raw_value, float) and (math.isnan(raw_value) or math.isinf(raw_value)):
+        raise ValueError(
+            f"Invalid amount '{raw_value}' for '{canonical_key}': NaN and Infinity are not allowed."
+        )
+
     raw_str = str(raw_value).strip().replace(",", "").replace("_", "")
     if not raw_str:
         raise ValueError(
@@ -883,6 +891,8 @@ def parse_and_validate_limit_amount(
                     f"({unit_desc}). Do not pass decimal fractions for micros fields."
                 )
             val_int = int(raw_value)
+        elif isinstance(raw_value, int):
+            val_int = raw_value
         else:
             if "." in raw_str:
                 raise ValueError(
@@ -903,6 +913,10 @@ def parse_and_validate_limit_amount(
                 f"Invalid amount '{val_int}' for '{canonical_key}': value must be >= 0 "
                 f"(0 = not modifiable; > 0 = modifiable up to that upper limit)."
             )
+        if val_int > MAX_INT64:
+            raise ValueError(
+                f"Invalid amount '{val_int}' for '{canonical_key}': value exceeds int64 max ({MAX_INT64})."
+            )
         return val_int
 
     # double / float format
@@ -913,6 +927,11 @@ def parse_and_validate_limit_amount(
             f"Invalid amount '{raw_value}' for '{canonical_key}': "
             f"must be a numeric value (double/float) in '{monetary_unit}' ({unit_desc})."
         ) from exc
+
+    if math.isnan(val_float) or math.isinf(val_float):
+        raise ValueError(
+            f"Invalid amount '{raw_value}' for '{canonical_key}': NaN and Infinity are not allowed."
+        )
 
     if val_float < 0.0:
         raise ValueError(
@@ -978,13 +997,75 @@ def get_financial_limits_paths(
     return deduped
 
 
+_DEFAULT_LIMITS_TEMPLATE: Dict[str, Union[int, float]] = {
+    k: spec["default"] for k, spec in FINANCIAL_LIMIT_SPECS.items()
+}
+_PARSED_LIMITS_CACHE: Dict[str, Dict[str, Union[int, float]]] = {}
+
+
+def _coerce_parsed_limit_value(
+    raw_v: Any, api_format: str
+) -> Optional[Union[int, float]]:
+    """Safely parses a raw financial_limits value, rejecting NaN, Inf, negatives, and int64 overflow."""
+    if isinstance(raw_v, bool) or raw_v is None:
+        return None
+    if isinstance(raw_v, int):
+        if raw_v < 0 or raw_v > MAX_INT64:
+            return None
+        return raw_v if api_format == "int64" else float(raw_v)
+    if isinstance(raw_v, float):
+        if math.isnan(raw_v) or math.isinf(raw_v) or raw_v < 0.0:
+            return None
+        if api_format == "int64":
+            if not raw_v.is_integer():
+                return None
+            iv = int(raw_v)
+            return iv if iv <= MAX_INT64 else None
+        return raw_v
+
+    clean_v = str(raw_v).replace("_", "").replace(",", "").strip()
+    if not clean_v or clean_v.lower() in (
+        "nan",
+        "+nan",
+        "-nan",
+        "inf",
+        "+inf",
+        "-inf",
+        "infinity",
+        "+infinity",
+        "-infinity",
+    ):
+        return None
+
+    if api_format == "int64":
+        try:
+            iv = int(clean_v)
+        except ValueError:
+            fv = float(clean_v)
+            if math.isnan(fv) or math.isinf(fv) or not fv.is_integer():
+                return None
+            iv = int(fv)
+        if iv < 0 or iv > MAX_INT64:
+            return None
+        return iv
+
+    fv = float(clean_v)
+    if math.isnan(fv) or math.isinf(fv) or fv < 0.0:
+        return None
+    return fv
+
+
 def parse_financial_limits(raw_text: str) -> Dict[str, Union[int, float]]:
     """Parses TOML (`Service.field = value` or `[Service]`) or key=value text from config/financial_limits."""
-    limits: Dict[str, Union[int, float]] = {
-        k: spec["default"] for k, spec in FINANCIAL_LIMIT_SPECS.items()
-    }
     if not raw_text or not raw_text.strip():
-        return limits
+        return dict(_DEFAULT_LIMITS_TEMPLATE)
+
+    cache_key = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+    cached = _PARSED_LIMITS_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
+
+    limits: Dict[str, Union[int, float]] = dict(_DEFAULT_LIMITS_TEMPLATE)
 
     parsed_dict: Dict[str, Any] = {}
     try:
@@ -1026,11 +1107,9 @@ def parse_financial_limits(raw_text: str) -> Dict[str, Union[int, float]]:
             target_keys = resolve_limit_keys(k_str)
             for canonical_k in target_keys:
                 spec = FINANCIAL_LIMIT_SPECS[canonical_k]
-                clean_v = str(raw_v).replace("_", "").replace(",", "").strip()
-                if spec["api_format"] == "int64":
-                    limits[canonical_k] = int(float(clean_v))
-                else:
-                    limits[canonical_k] = float(clean_v)
+                parsed_val = _coerce_parsed_limit_value(raw_v, spec["api_format"])
+                if parsed_val is not None:
+                    limits[canonical_k] = parsed_val
         except Exception:
             continue
 
@@ -1038,15 +1117,16 @@ def parse_financial_limits(raw_text: str) -> Dict[str, Union[int, float]]:
         try:
             canonical_k = resolve_limit_key(k_str)
             spec = FINANCIAL_LIMIT_SPECS[canonical_k]
-            clean_v = str(raw_v).replace("_", "").replace(",", "").strip()
-            if spec["api_format"] == "int64":
-                limits[canonical_k] = int(float(clean_v))
-            else:
-                limits[canonical_k] = float(clean_v)
+            parsed_val = _coerce_parsed_limit_value(raw_v, spec["api_format"])
+            if parsed_val is not None:
+                limits[canonical_k] = parsed_val
         except Exception:
             continue
 
-    return limits
+    if len(_PARSED_LIMITS_CACHE) >= 256:
+        _PARSED_LIMITS_CACHE.clear()
+    _PARSED_LIMITS_CACHE[cache_key] = dict(limits)
+    return dict(limits)
 
 
 def read_financial_limits(
@@ -1054,9 +1134,6 @@ def read_financial_limits(
     config_file: Optional[str] = None,
 ) -> Tuple[Dict[str, Union[int, float]], Optional[str]]:
     """Reads the active financial_limits configuration file and returns (limits, active_path)."""
-    defaults: Dict[str, Union[int, float]] = {
-        k: spec["default"] for k, spec in FINANCIAL_LIMIT_SPECS.items()
-    }
     for candidate in get_financial_limits_paths(
         config_dir=config_dir, config_file=config_file
     ):
@@ -1066,7 +1143,7 @@ def read_financial_limits(
                     return parse_financial_limits(f.read()), candidate
             except OSError:
                 continue
-    return defaults, None
+    return dict(_DEFAULT_LIMITS_TEMPLATE), None
 
 
 def format_financial_limits_config(limits: Dict[str, Union[int, float]]) -> str:
@@ -1130,6 +1207,19 @@ def format_financial_limits_config(limits: Dict[str, Union[int, float]]) -> str:
     return "\n".join(lines)
 
 
+def _is_repo_source_plugin_dir(plugin_root: str) -> bool:
+    """Returns True if plugin_root is inside a git repository working tree."""
+    norm = os.path.abspath(plugin_root)
+    parent = os.path.dirname(norm)
+    grandparent = os.path.dirname(parent)
+    if os.path.basename(parent) == "plugins" and (
+        os.path.exists(os.path.join(grandparent, ".git"))
+        or os.path.isfile(os.path.join(grandparent, "install.sh"))
+    ):
+        return True
+    return os.path.exists(os.path.join(norm, ".git"))
+
+
 def write_financial_limits(
     updates: Dict[str, Union[int, float]],
     config_dir: Optional[str] = None,
@@ -1137,9 +1227,6 @@ def write_financial_limits(
     sync_global: bool = True,
 ) -> str:
     """Writes updated financial limits to config/financial_limits and returns the primary path."""
-    current_limits, active_path = read_financial_limits(
-        config_dir=config_dir, config_file=config_file
-    )
     validated_updates: Dict[str, Union[int, float]] = {}
     for raw_k, raw_v in updates.items():
         for canonical_k in resolve_limit_keys(raw_k):
@@ -1147,8 +1234,9 @@ def write_financial_limits(
                 canonical_k, raw_v
             )
 
-    current_limits.update(validated_updates)
-    content = format_financial_limits_config(current_limits)
+    current_limits, active_path = read_financial_limits(
+        config_dir=config_dir, config_file=config_file
+    )
 
     target_paths: List[str] = []
     if config_file:
@@ -1165,44 +1253,75 @@ def write_financial_limits(
             this_dir = os.path.dirname(os.path.abspath(__file__))
             if os.path.basename(this_dir) == "scripts":
                 plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
-                target_paths.append(
-                    os.path.join(plugin_root, "config", FINANCIAL_LIMITS_FILENAME)
+                repo_cfg_path = os.path.join(
+                    plugin_root, "config", FINANCIAL_LIMITS_FILENAME
                 )
             elif os.path.basename(this_dir) == "config":
-                target_paths.append(os.path.join(this_dir, FINANCIAL_LIMITS_FILENAME))
+                plugin_root = os.path.dirname(this_dir)
+                repo_cfg_path = os.path.join(this_dir, FINANCIAL_LIMITS_FILENAME)
             else:
-                target_paths.append(
-                    os.path.join(
-                        this_dir,
-                        "plugins",
-                        "google-ads-api-developer-assistant",
-                        "config",
-                        FINANCIAL_LIMITS_FILENAME,
-                    )
+                plugin_root = os.path.join(
+                    this_dir,
+                    "plugins",
+                    "google-ads-api-developer-assistant",
+                )
+                repo_cfg_path = os.path.join(
+                    plugin_root, "config", FINANCIAL_LIMITS_FILENAME
                 )
 
-            if active_path and os.path.normpath(active_path) not in [
-                os.path.normpath(p) for p in target_paths
-            ]:
-                target_paths.insert(0, active_path)
-
-            if sync_global:
-                for global_dir in (
-                    os.path.expanduser(
-                        "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
-                    ),
-                    os.path.expanduser(
-                        "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
-                    ),
+            is_repo_source = _is_repo_source_plugin_dir(plugin_root)
+            global_paths: List[str] = []
+            for global_dir in (
+                os.path.expanduser(
+                    "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
+                ),
+                os.path.expanduser(
+                    "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
+                ),
+            ):
+                if os.path.isdir(global_dir) or os.path.isdir(
+                    os.path.dirname(global_dir)
                 ):
-                    if os.path.isdir(global_dir) or os.path.isdir(
-                        os.path.dirname(global_dir)
-                    ):
-                        g_path = os.path.join(global_dir, FINANCIAL_LIMITS_FILENAME)
+                    global_paths.append(
+                        os.path.join(global_dir, FINANCIAL_LIMITS_FILENAME)
+                    )
+
+            if is_repo_source and global_paths:
+                # Redirect writes to global installed plugin config dirs so git-tracked
+                # plugins/.../config/financial_limits is not dirtied.
+                if active_path and os.path.normpath(active_path) != os.path.normpath(
+                    repo_cfg_path
+                ):
+                    target_paths.append(active_path)
+                for g_path in global_paths:
+                    if os.path.normpath(g_path) not in [
+                        os.path.normpath(p) for p in target_paths
+                    ]:
+                        target_paths.append(g_path)
+                # Seed current_limits from the first existing target_path so existing global limits are preserved
+                for tp in target_paths:
+                    if os.path.isfile(tp):
+                        try:
+                            with open(tp, "r", encoding="utf-8") as f:
+                                current_limits = parse_financial_limits(f.read())
+                            break
+                        except OSError:
+                            continue
+            else:
+                target_paths.append(repo_cfg_path)
+                if active_path and os.path.normpath(active_path) not in [
+                    os.path.normpath(p) for p in target_paths
+                ]:
+                    target_paths.insert(0, active_path)
+                if sync_global:
+                    for g_path in global_paths:
                         if os.path.normpath(g_path) not in [
                             os.path.normpath(p) for p in target_paths
                         ]:
                             target_paths.append(g_path)
+
+    current_limits.update(validated_updates)
+    content = format_financial_limits_config(current_limits)
 
     primary_written: Optional[str] = None
     for path in target_paths:
@@ -1210,7 +1329,8 @@ def write_financial_limits(
             parent_dir = os.path.dirname(os.path.abspath(path))
             if parent_dir:
                 os.makedirs(parent_dir, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(content)
             if sys.platform != "win32" and os.path.isfile(path):
                 try:

@@ -14,7 +14,10 @@ google-ads-api-developer-assistant/
 ├── README.md                                <-- Installation Guide & Usage Reference
 ├── config/
 │   ├── assistant_config                     <-- Unified TOML config (api_version, customer_id, execute_mutates)
-│   └── config_init.py                       <-- Credential sync, TOML config manager, and PreToolUse guard
+│   ├── config_init.py                       <-- Credential sync, TOML config manager, and PreToolUse guard
+│   ├── financial_limits                     <-- Per-service financial upper limits (Service.field)
+│   ├── set_financial_limits.py              <-- CLI wrapper to list, set, or reset financial limits
+│   └── sitecustomize.py                     <-- Runtime config path resolution shim
 ├── commands/                                <-- Slash commands for Claude Code & agy
 │   ├── assistant-tutorial.md
 │   ├── execute-mutation.md
@@ -34,7 +37,13 @@ google-ads-api-developer-assistant/
 │   │   └── SKILL.md
 │   ├── execute-mutation/                    <-- 4-Step HITL mutation verification, consequence disclosure, and runner
 │   │   ├── SKILL.md
-│   │   └── scripts/run_mutation.py
+│   │   └── scripts/
+│   │       ├── create_account.py
+│   │       ├── create_ad.py
+│   │       ├── create_ad_group.py
+│   │       ├── create_campaign.py
+│   │       ├── run_mutation.py
+│   │       └── set_financial_limits.py
 │   ├── explain/                             <-- 4-part explanations with analogies
 │   │   └── SKILL.md
 │   ├── ext-version/                         <-- Extension and latest API version lookup
@@ -70,7 +79,8 @@ google-ads-api-developer-assistant/
 │   └── google-ads-a2a-service/              <-- A2A Daemon Service
 │       ├── sidecar.json
 │       └── server.py
-└── mcp_config.json                          <-- MCP Server configuration
+├── mcp_config.json                          <-- MCP Server configuration
+└── set_financial_limits.py                  <-- Installed root CLI wrapper for financial limits
 ```
 
 ---

@@ -23,7 +23,12 @@ Retrieves the complete account hierarchy and child CIDs under a Google Ads Manag
      python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id "<mcc_customer_id>" --api_version "<api_version>" --save_csv
      ```
 
+   - If the user requested structured JSON output:
+     ```bash
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id "<mcc_customer_id>" --api_version "<api_version>" --json
+     ```
+
 3. **Output Format**:
    - Total number of child accounts found.
-   - Hierarchical list with depth level, CID, descriptive name, and account type (client vs. sub-manager).
+   - Hierarchical list with CID (`customer_client.id`), depth level (`customer_client.level`), and account type (client vs. sub-manager via `customer_client.manager`).
    - If saved to CSV, provide the file path in `saved/data/`.

@@ -15,7 +15,22 @@
 import argparse
 import os
 import re
+import sys
 from typing import List, Optional
+
+
+def _is_git_tracked_plugin_config_dir(cfg_dir: str) -> bool:
+    """Returns True if cfg_dir is <repo>/plugins/google-ads-api-developer-assistant/config inside a git repo."""
+    abs_cfg = os.path.abspath(cfg_dir)
+    plugin_dir = os.path.dirname(abs_cfg)
+    plugins_parent = os.path.dirname(plugin_dir)
+    repo_root = os.path.dirname(plugins_parent)
+    return (
+        os.path.basename(abs_cfg) == "config"
+        and os.path.basename(plugin_dir) == "google-ads-api-developer-assistant"
+        and os.path.basename(plugins_parent) == "plugins"
+        and os.path.isdir(os.path.join(repo_root, ".git"))
+    )
 
 
 def update_assistant_config_api_version(
@@ -27,6 +42,16 @@ def update_assistant_config_api_version(
     ver_clean = latest_version.strip().strip("'\"")
     if ver_clean and not ver_clean.startswith("v") and ver_clean.isdigit():
         ver_clean = f"v{ver_clean}"
+
+    global_cfg_dirs = [
+        os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
+        ),
+        os.path.expanduser(
+            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
+        ),
+    ]
+    has_global_cfg = any(os.path.isdir(d) for d in global_cfg_dirs)
 
     if config_dir:
         candidate_configs = [
@@ -44,6 +69,9 @@ def update_assistant_config_api_version(
             os.path.expanduser(
                 "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/assistant_config"
             ),
+            os.path.expanduser(
+                "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/assistant_config"
+            ),
         ]
 
     updated_paths: List[str] = []
@@ -56,6 +84,12 @@ def update_assistant_config_api_version(
 
         cfg_parent = os.path.dirname(norm_path)
         if not config_dir and not os.path.isdir(cfg_parent):
+            continue
+        if (
+            config_dir is None
+            and has_global_cfg
+            and _is_git_tracked_plugin_config_dir(cfg_parent)
+        ):
             continue
         os.makedirs(cfg_parent, exist_ok=True)
 
@@ -170,9 +204,12 @@ def detect_latest_api_version(
                 "../../../client_libs/google-ads-python/google/ads/googleads",
             )
         ),
-        # Global plugin installation directory
+        # Global plugin installation directories
         os.path.expanduser(
             "~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python/google/ads/googleads"
+        ),
+        os.path.expanduser(
+            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python/google/ads/googleads"
         ),
     ]
 
@@ -240,10 +277,14 @@ def main() -> None:
         help="Optional target config directory containing assistant_config.",
     )
     args = parser.parse_args()
-    version = detect_latest_api_version(
-        update_config=not args.no_update,
-        config_dir=args.config_dir,
-    )
+    try:
+        version = detect_latest_api_version(
+            update_config=not args.no_update,
+            config_dir=args.config_dir,
+        )
+    except RuntimeError as e:
+        sys.stderr.write(f"ERROR: {e}\n")
+        sys.exit(1)
     print(version)
 
 

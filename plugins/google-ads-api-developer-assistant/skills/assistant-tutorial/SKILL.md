@@ -32,8 +32,8 @@ When a user invokes `/assistant-tutorial` or requests this tutorial:
 - **4-Step HITL Mutation Workflow (`run_mutation.py`):**
   1. **GAQL Before-State & Blast-Radius Lookup:** Query current resource state and active child counts (`ad_group`, `ad_group_ad`), converting `micros` fields to standard currency (`/ 1,000,000`).
   2. **Cryptographically Bound `validate_only=True` Dry-Run:** Run `run_mutation.py --script saved/code/<script>.py --dry-run ...` to intercept serialized protobuf RPC payloads, strip `validate_only`, and write a tamper-evident receipt (`saved/data/last_dry_run.json`) binding both `script_sha256` and `request_sha256` (30-minute TTL, single-use replay protection).
-  3. **5-Category Consequence Matrix & Verification Card:** Disclose specific impacts across *Budgets & Bidding*, *Status Changes (`PAUSED` / `ENABLED`)*, *Irreversible `REMOVE` Operations*, *Targeting & Exclusions*, and *Conversion Actions & Goals*, and wait for explicit user confirmation.
-  4. **Hook-Gated Live Execution (`Mutate-to-Get`) & Audit Trail:** Execute with `--execute` (using `ResponseContentType.MUTABLE_RESOURCE` when supported) and record lifecycle events (`DRY_RUN_PASSED`, `DRY_RUN_FAILED`, `SUCCESS`, `FAILED`, `BLOCKED_MUTATES_DISABLED`, `BLOCKED_SHA256_MISMATCH`) to the append-only JSONL audit log at `saved/logs/mutation_audit.jsonl`.
+  3. **6-Category Consequence Matrix & Verification Card:** Disclose specific impacts across *Budgets & Bidding*, *Account Billing, Reservations, Credits & Value Restatements*, *Status Changes (`PAUSED` / `ENABLED`)*, *Deletion / `remove` Operations — PROHIBITED (HARD BLOCKED)*, *Targeting & Exclusions*, and *Conversion Actions & Goals*, and wait for explicit user confirmation.
+  4. **Hook-Gated Live Execution (`Mutate-to-Get`) & Audit Trail:** Execute with `--execute` (using `ResponseContentTypeEnum.MUTABLE_RESOURCE` when supported) and record lifecycle events (`DRY_RUN_PASSED`, `DRY_RUN_FAILED`, `SUCCESS`, `FAILED`, `BLOCKED_MUTATES_DISABLED`, `BLOCKED_SHA256_MISMATCH`) to the append-only JSONL audit log at `saved/logs/mutation_audit.jsonl`.
 
 ### Topic 3: Shared Sets (Exclusion Lists)
 - Explain `SharedSet` (reusable keyword/placement exclusion folders), `SharedCriterion` (items), and `CampaignSharedSet` (connector).
@@ -74,7 +74,7 @@ When a user invokes `/assistant-tutorial` or requests this tutorial:
 - **Runtime vs. `client_libs` Version Parity (`check_version_parity`):** Automatically compares the installed `google-ads` Python package version against `client_libs/google-ads-python` metadata and warns if a version mismatch could cause schema or descriptor discrepancies.
 
 ### Topic 11: Creating a Listing Filter for a Performance Max (PMax) Campaign (`/pmax-filter`)
-- **Webpage Listing Filter:** Configure webpage exclusion listing trees (`vertical = WEBPAGE`) on PMax Asset Groups using `create_pmax_webpage_filter.py` (enforcing `SUBDIVISION` parent nodes with an explicit "Everything else" sibling node).
+- **Webpage Listing Filter:** Configure root-level `UNIT_EXCLUDED` `AssetGroupListingGroupFilter` webpage exclusion nodes (`listing_source = WEBPAGE`) on PMax Asset Groups using `create_pmax_webpage_filter.py` via `run_mutation.py` (noting that Shopping `SUBDIVISION` parent nodes require an explicit `"Everything else"` sibling child node).
 
 ### Topic 12: Synchronizing Client Libraries & Assistant Releases (`/sync-client-libs`)
 - **Protocol 1.0 Startup Check:** Runs `sync_client_libs.py --check_only --json` at session startup to check installed `google-ads` packages, the assistant repository, and cloned `client_libs/` (`google-ads-python`, `google-ads-php`, `google-ads-ruby`, `google-ads-java`, `google-ads-dotnet`) against upstream GitHub releases in parallel (`ThreadPoolExecutor`).
@@ -82,7 +82,7 @@ When a user invokes `/assistant-tutorial` or requests this tutorial:
 
 ### Topic 13: Extension & Dynamic API Version Resolution (`/ext-version`)
 - **Version Scripts:** `get_extension_version.py` reports the assistant plugin version from `plugin.json`; `get_latest_api_version.py` resolves and caches the active Google Ads API version.
-- **5-Tier API Version Hierarchy:** Resolves API version via: (1) explicit caller/env override (`GOOGLE_ADS_API_VERSION`), (2) `config/assistant_config` (`api_version`), (3) local `client_libs/google-ads-python/google/ads/googleads/v*` directory discovery, (4) installed `google.ads.googleads` package inspection, and (5) fallback default (`v25`).
+- **5-Tier API Version Hierarchy:** Resolves API version via: (1) explicit caller/env override (`GOOGLE_ADS_API_VERSION`), (2) `config/assistant_config` (`api_version`), (3) local `client_libs/google-ads-python/google/ads/googleads/v*` directory discovery, (4) installed `google.ads.googleads` package inspection, and (5) fallback default (`v26`).
 
 ### Topic 14: Step-by-Step Workflow Breakdown (`/step-by-step`)
 - **3-Phase Actionable Plans:** Breaks down complex Google Ads implementations into:

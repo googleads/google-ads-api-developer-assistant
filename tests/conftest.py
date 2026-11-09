@@ -62,12 +62,23 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="Skip 119 redundant parametrized iterations of test_each_financial_limit_value_enforcement.",
     )
+    group.addoption(
+        "--no-clean",
+        action="store_true",
+        default=False,
+        help="Preserve prior coverage hit files for incremental union across runs.",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
     global _COVERAGE_ACTIVE, _INPROC_HITS, _INPROC_CACHE
     if not config.getoption("--coverage"):
         return
+
+    if not config.getoption("--no-clean") and run_coverage.COV_DATA_DIR.exists():
+        import shutil
+
+        shutil.rmtree(run_coverage.COV_DATA_DIR)
 
     target_files = run_coverage.get_target_files()
     target_paths_list = [str(p.resolve()) for p in target_files]
@@ -78,9 +89,9 @@ def pytest_configure(config: pytest.Config) -> None:
 
     existing_pp = os.environ.get("PYTHONPATH", "")
     hook_dir_str = str(run_coverage.COV_HOOK_DIR)
-    if hook_dir_str not in existing_pp.split(":"):
+    if hook_dir_str not in existing_pp.split(os.pathsep):
         os.environ["PYTHONPATH"] = (
-            f"{hook_dir_str}:{existing_pp}" if existing_pp else hook_dir_str
+            f"{hook_dir_str}{os.pathsep}{existing_pp}" if existing_pp else hook_dir_str
         )
     os.environ["PYTHONNOUSERSITE"] = "0"
 

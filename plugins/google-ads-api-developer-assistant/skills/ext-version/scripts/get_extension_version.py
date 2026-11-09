@@ -17,29 +17,58 @@ import os
 import sys
 
 
-def get_extension_version() -> None:
-    """Reads agent.json or plugin.json and prints the version."""
+def get_extension_version() -> bool:
+    """Reads plugin.json or agent.json, prints the version (or 'Unknown'), and returns True if found."""
     try:
-        # Search for plugin.json, plugin.json.disabled, or agent.json in parent directories
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        target_files = ["plugin.json", "plugin.json.disabled", "agent.json"]
-        
-        found = False
-        while current_dir and current_dir != os.path.dirname(current_dir):
-            for file_name in target_files:
-                candidate = os.path.join(current_dir, file_name)
-                if os.path.exists(candidate):
-                    with open(candidate, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        print(data.get("version", "Version not found"))
-                        found = True
-                        break
-            if found:
-                break
-            current_dir = os.path.dirname(current_dir)
+        target_files = [
+            "plugin.json",
+            "plugin.json.disabled",
+            "agent.json",
+            os.path.join("plugins", "google-ads-api-developer-assistant", "plugin.json"),
+            os.path.join(
+                "plugins", "google-ads-api-developer-assistant", "plugin.json.disabled"
+            ),
+        ]
 
-        if not found:
-            print("Unknown")
+        candidate_roots: list[str] = []
+        walk_dir = current_dir
+        while walk_dir and walk_dir != os.path.dirname(walk_dir):
+            candidate_roots.append(walk_dir)
+            walk_dir = os.path.dirname(walk_dir)
+
+        for env_key in ("GOOGLE_ADS_ASSISTANT_DIR", "CLAUDE_PLUGIN_ROOT"):
+            env_dir = os.environ.get(env_key, "").strip()
+            if env_dir:
+                candidate_roots.append(env_dir)
+
+        candidate_roots.extend(
+            [
+                os.path.expanduser(
+                    "~/.gemini/config/plugins/google-ads-api-developer-assistant"
+                ),
+                os.path.expanduser(
+                    "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"
+                ),
+            ]
+        )
+
+        for root in candidate_roots:
+            for file_name in target_files:
+                candidate = os.path.join(root, file_name)
+                if os.path.exists(candidate):
+                    try:
+                        with open(candidate, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        ver = str(data.get("version") or "").strip()
+                        if ver:
+                            print(ver)
+                            return True
+                    except Exception:
+                        continue
+
+        print("Unknown")
+        return False
 
     except Exception as e:
         print(f"An unexpected error occurred: {e}", file=sys.stderr)
@@ -47,4 +76,5 @@ def get_extension_version() -> None:
 
 
 if __name__ == "__main__":
-    get_extension_version()
+    if not get_extension_version():
+        sys.exit(1)

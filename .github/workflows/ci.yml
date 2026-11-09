@@ -8,13 +8,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  test-linux:
-    name: Linux (Ubuntu) - Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+  test-unix:
+    name: ${{ matrix.os }} - Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
 
     steps:
@@ -36,14 +37,18 @@ jobs:
         run: |
           ruff check .
 
-      - name: Run unit tests with pytest
+      - name: Run unit tests and enforce 80% coverage gate
         run: |
-          pytest
+          python tests/run_coverage.py --fast
+          pytest tests/run_coverage.py
 
       - name: Run lifecycle & platform script tests (Bash)
         run: |
-          chmod +x ./tests/test_plugin_scripts.sh
-          ./tests/test_plugin_scripts.sh
+          bash tests/test_plugin_scripts.sh
+
+      - name: Run quick benchmark smoke checks
+        run: |
+          python tests/benchmark_suite.py --run-current --quick
 
   test-windows:
     name: Windows - Python ${{ matrix.python-version }}
@@ -73,11 +78,16 @@ jobs:
         run: |
           ruff check .
 
-      - name: Run unit tests with pytest
+      - name: Run unit tests and enforce 80% coverage gate
         run: |
-          pytest
+          python tests/run_coverage.py --fast
+          pytest tests/run_coverage.py
 
       - name: Run lifecycle & platform script tests (PowerShell)
         shell: pwsh
         run: |
-          ./tests/test_plugin_scripts.ps1
+          pwsh -File tests/test_plugin_scripts.ps1
+
+      - name: Run quick benchmark smoke checks
+        run: |
+          python tests/benchmark_suite.py --run-current --quick

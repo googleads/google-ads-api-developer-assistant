@@ -265,6 +265,9 @@ def _percentile(sorted_vals: List[float], pct: float) -> float:
     return sorted_vals[lo] * (1.0 - frac) + sorted_vals[hi] * frac
 
 
+_QUICK_MODE: bool = False
+
+
 def _measure_benchmark(
     name: str,
     description: str,
@@ -274,6 +277,7 @@ def _measure_benchmark(
     verify_fn: Callable[[], Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Runs functional verification followed by timed iterations and returns metrics."""
+    effective_iterations = max(1, iterations // 5) if _QUICK_MODE else iterations
     functional_passed = False
     functional_details: Dict[str, Any] = {}
     error_msg: Optional[str] = None
@@ -287,7 +291,7 @@ def _measure_benchmark(
     samples_ms: List[float] = []
     if functional_passed:
         try:
-            for i in range(iterations):
+            for i in range(effective_iterations):
                 t0 = time.perf_counter()
                 step_fn(i)
                 samples_ms.append((time.perf_counter() - t0) * 1000.0)
@@ -300,13 +304,13 @@ def _measure_benchmark(
     mean_ms = statistics.mean(samples_ms) if samples_ms else 0.0
     p50_ms = _percentile(sorted_samples, 50.0)
     p95_ms = _percentile(sorted_samples, 95.0)
-    ops_per_sec = (iterations / (total_ms / 1000.0)) if total_ms > 0 else 0.0
+    ops_per_sec = (effective_iterations / (total_ms / 1000.0)) if total_ms > 0 else 0.0
     perf_passed = functional_passed and (total_ms <= max_total_ms)
 
     return {
         "name": name,
         "description": description,
-        "iterations": iterations,
+        "iterations": effective_iterations,
         "functional_passed": functional_passed,
         "functional_details": functional_details,
         "performance_passed": perf_passed,
@@ -792,12 +796,27 @@ def _bench_hitl_mutation_receipt_and_sha256() -> Optional[Dict[str, Any]]:
 
     tmp_dir = tempfile.mkdtemp(prefix="gads_bench_hitl_")
     orig_get_receipt_paths = run_mutation.get_receipt_paths
+    orig_get_fin_paths = getattr(run_mutation, "get_financial_limits_paths", None)
+    sfl_mod = getattr(run_mutation, "_SFL_MOD", None)
+    orig_sfl_get_fin_paths = (
+        getattr(sfl_mod, "get_financial_limits_paths", None)
+        if sfl_mod is not None
+        else None
+    )
     try:
         script_path = os.path.join(tmp_dir, "mutate_budget.py")
         with open(script_path, "w", encoding="utf-8") as f:
             f.write("print('dry run mutation script')\n")
         receipt_path = os.path.join(tmp_dir, "last_dry_run.json")
         run_mutation.get_receipt_paths = lambda: [receipt_path]
+
+        fin_limits_path = os.path.join(tmp_dir, "financial_limits")
+        with open(fin_limits_path, "w", encoding="utf-8") as f:
+            f.write("CampaignBudgetService.amount_micros = 100000000\n")
+        if orig_get_fin_paths is not None:
+            run_mutation.get_financial_limits_paths = lambda *_a, **_kw: [fin_limits_path]
+        if sfl_mod is not None and orig_sfl_get_fin_paths is not None:
+            sfl_mod.get_financial_limits_paths = lambda *_a, **_kw: [fin_limits_path]
 
         dry_payload = {
             "customer_id": "1234567890",
@@ -912,22 +931,32 @@ def _bench_hitl_mutation_receipt_and_sha256() -> Optional[Dict[str, Any]]:
         )
     finally:
         run_mutation.get_receipt_paths = orig_get_receipt_paths
+        if orig_get_fin_paths is not None:
+            run_mutation.get_financial_limits_paths = orig_get_fin_paths
+        if sfl_mod is not None and orig_sfl_get_fin_paths is not None:
+            sfl_mod.get_financial_limits_paths = orig_sfl_get_fin_paths
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def run_all_benchmarks() -> Dict[str, Any]:
+def run_all_benchmarks(quick: bool = False) -> Dict[str, Any]:
     """Executes all applicable functional & performance benchmarks and returns a structured report."""
+    global _QUICK_MODE
+    prev_quick = _QUICK_MODE
+    _QUICK_MODE = bool(quick)
     suite_start = time.perf_counter()
-    raw_benchmarks = [
-        _bench_version_resolution(),
-        _bench_config_sync_and_migration(),
-        _bench_hook_interception(),
-        _bench_gaql_static_analysis(),
-        _bench_protobuf_inspection(),
-        _bench_client_libs_parallel_sync(),
-        _bench_conversion_csv_validation(),
-        _bench_hitl_mutation_receipt_and_sha256(),
-    ]
+    try:
+        raw_benchmarks = [
+            _bench_version_resolution(),
+            _bench_config_sync_and_migration(),
+            _bench_hook_interception(),
+            _bench_gaql_static_analysis(),
+            _bench_protobuf_inspection(),
+            _bench_client_libs_parallel_sync(),
+            _bench_conversion_csv_validation(),
+            _bench_hitl_mutation_receipt_and_sha256(),
+        ]
+    finally:
+        _QUICK_MODE = prev_quick
     benchmarks = [b for b in raw_benchmarks if b is not None]
     suite_total_ms = round((time.perf_counter() - suite_start) * 1000.0, 2)
 
@@ -941,6 +970,7 @@ def run_all_benchmarks() -> Dict[str, Any]:
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "python_version": platform.python_version(),
         "platform": platform.system(),
+        "quick": bool(quick),
         "suite_total_ms": suite_total_ms,
         "all_functional_passed": all_functional_passed,
         "all_performance_passed": all_performance_passed,
@@ -1167,7 +1197,7 @@ def _resolve_git_ref_name(spec: str) -> Optional[str]:
     return None
 
 
-def run_against_git_ref(git_ref: str) -> Dict[str, Any]:
+def run_against_git_ref(git_ref: str, quick: bool = False) -> Dict[str, Any]:
     """Exports `git_ref` to a temporary directory and runs this benchmark suite against it."""
     tmp_wt = tempfile.mkdtemp(prefix="gads_bench_gitref_")
     try:
@@ -1183,8 +1213,11 @@ def run_against_git_ref(git_ref: str) -> Dict[str, Any]:
         wt_script = os.path.join(wt_tests, "_run_bench_ref.py")
         shutil.copy2(os.path.abspath(__file__), wt_script)
 
+        cmd = [sys.executable, wt_script, "--run-current", "--json"]
+        if quick:
+            cmd.append("--quick")
         proc = subprocess.run(
-            [sys.executable, wt_script, "--run-current", "--json"],
+            cmd,
             cwd=tmp_wt,
             check=False,
             capture_output=True,
@@ -1208,7 +1241,7 @@ def run_against_git_ref(git_ref: str) -> Dict[str, Any]:
         shutil.rmtree(tmp_wt, ignore_errors=True)
 
 
-def resolve_version_report(version_spec: str) -> Dict[str, Any]:
+def resolve_version_report(version_spec: str, quick: bool = False) -> Dict[str, Any]:
     """Resolves a user-supplied version specifier into a benchmark report without any fallback.
 
     A version specifier can be:
@@ -1231,7 +1264,7 @@ def resolve_version_report(version_spec: str) -> Dict[str, Any]:
 
     # 2. Explicit current working tree specifier
     if spec.lower() in WORKSPACE_SPECIFIERS:
-        return run_all_benchmarks()
+        return run_all_benchmarks(quick=quick)
 
     # 3. Saved baseline file in DEFAULT_BASELINE_DIR matching the version specifier
     normalized = spec[1:] if spec.startswith("v") else spec
@@ -1248,7 +1281,7 @@ def resolve_version_report(version_spec: str) -> Dict[str, Any]:
     # 4. Valid Git ref (tag, branch, or commit)
     resolved_ref = _resolve_git_ref_name(spec)
     if resolved_ref is not None:
-        return run_against_git_ref(resolved_ref)
+        return run_against_git_ref(resolved_ref, quick=quick)
 
     raise ValueError(
         f"Unable to resolve version specifier '{version_spec}': not a valid baseline JSON file, "
@@ -1361,6 +1394,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Run benchmarks on the current working tree only without comparing two versions.",
     )
     parser.add_argument(
+        "--quick",
+        action="store_true",
+        help="Scale benchmark iterations down 5x for fast CI smoke checks.",
+    )
+    parser.add_argument(
         "--save-baseline",
         metavar="PATH",
         help="Write the current working tree benchmark report as a JSON baseline to PATH.",
@@ -1386,7 +1424,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.save_git_ref_baseline:
         ref_name, ref_out = args.save_git_ref_baseline
-        ref_report = run_against_git_ref(ref_name)
+        ref_report = run_against_git_ref(ref_name, quick=args.quick)
         out_path = os.path.abspath(ref_out)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
@@ -1404,7 +1442,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
 
     if args.save_baseline:
-        current_report = run_all_benchmarks()
+        current_report = run_all_benchmarks(quick=args.quick)
         out_path = os.path.abspath(args.save_baseline)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
@@ -1454,8 +1492,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if base_spec is not None and target_spec is not None:
         try:
-            baseline_report = resolve_version_report(base_spec)
-            target_report = resolve_version_report(target_spec)
+            baseline_report = resolve_version_report(base_spec, quick=args.quick)
+            target_report = resolve_version_report(target_spec, quick=args.quick)
         except ValueError as exc:
             parser.error(str(exc))
 
@@ -1478,7 +1516,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0 if comparison["passed"] else 1
 
     # Single-tree execution when --run-current is explicitly passed
-    current_report = run_all_benchmarks()
+    current_report = run_all_benchmarks(quick=args.quick)
     if args.json:
         print(json.dumps({"current": current_report}, indent=2))
     else:

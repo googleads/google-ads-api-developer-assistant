@@ -24,7 +24,7 @@ Live mutations without both `execute_mutates = true` in `config/assistant_config
 ## Step 1: Pre-Mutation State & Blast Radius Lookup (Mandatory Read)
 
 Before writing or running any mutation code:
-1. Query the target resource(s) via `GoogleAdsService.search_stream` to capture the **Before State**:
+1. Query the target resource(s) via `GoogleAdsService.search_stream` to capture the **Before State** (always validate that numeric IDs match `^\d+$` and escape single quotes `\'` in string literals before interpolating into GAQL `WHERE` clauses):
    - Exact resource name(s) (e.g., `customers/1234567890/campaigns/987654321`).
    - Current `status` (`ENABLED`, `PAUSED`, `REMOVED`).
    - Current financial/bidding settings (`campaign_budget.amount_micros`, `ad_group.cpc_bid_micros`, `bidding_strategy_type`). Convert all `micros` values to local currency by dividing by `1,000,000`.
@@ -42,14 +42,14 @@ Evaluate and articulate the exact consequences of the requested change across th
 | **Account Billing, Reservations, Credits & Value Restatements** (`BillingSetup`, `AccountBudgetProposal`, `ReservationService.book_campaigns`, `IncentiveService.apply_incentive`, `LocalServicesLeadService.provide_lead_feedback`, `ConversionValueRule`, `ConversionAdjustmentUploadService`, `CustomerService.create_customer_client`, `ExperimentService.graduate_experiment` / `promote_experiment`, `CampaignDraftService.promote_campaign_draft`) | • **Mandatory monetary/financial disclosure** (enforced by `run_mutation.py` and `PreToolUse` hook): explicitly state payment account linkage, account spending limit in local currency, guaranteed-spend booking commitment, promotional credit/incentive amount, LSA lead credit request, or restated conversion value / Target ROAS revenue impact. |
 | **Status Changes** (`PAUSED` $\leftrightarrow$ `ENABLED`) | • Count of child entities affected (e.g., *"Pausing this campaign immediately halts ad serving for N active Ad Groups and M active Ads"*).<br>• Immediate spend/traffic resumption warning when changing `PAUSED` $\rightarrow$ `ENABLED`. |
 | **Deletion / `remove` Operations** (`remove` / `REMOVE` / `REMOVED`) | • **PROHIBITED (HARD BLOCKED):** Deletion (`remove` / `remove_all` operations, `remove_*` RPCs, or setting `status = REMOVED`) is strictly prohibited; only `create` and `update` mutations are allowed. Recommend updating `status = PAUSED` instead. |
-| **Targeting & Exclusions** (`CampaignCriterion`, `AssetGroupListingGroupFilter`) | • Traffic expansion vs. restriction impact (e.g., adding or updating a negative keyword or webpage filter restricts or expands budget exposure across queries/URLs).<br>• For `AssetGroupListingGroupFilter`, verify atomic listing tree completeness (root `SUBDIVISION` + sibling `"Everything else"` node). |
+| **Targeting & Exclusions** (`CampaignCriterion`, `AssetGroupListingGroupFilter`) | • Traffic expansion vs. restriction impact (e.g., adding or updating a negative keyword or webpage filter restricts or expands budget exposure across queries/URLs).<br>• For `AssetGroupListingGroupFilter`, use root-level `UNIT_EXCLUDED` nodes with `listing_source = WEBPAGE` for webpage URL exclusions, and verify atomic listing tree completeness (root `SUBDIVISION` + sibling `"Everything else"` node) for Shopping product partitions (`listing_source = SHOPPING`). |
 | **Conversions & Goals** (`ConversionAction`, `CampaignConversionGoal`) | • Automated bidding impact: warn that changing primary conversion goals alters `MaximizeConversions` / `TargetCPA` / `TargetROAS` optimization signals across campaigns. |
 
 ---
 
 ## Step 3: Mandatory `validate_only=True` Dry-Run & Signed Receipt
 
-1. Generate the mutation script in `saved/code/<mutation_name>.py` following the standard template below (supporting `--dry-run` with `validate_only=True` by default, and `--execute` with `validate_only=False` and `response_content_type = ResponseContentType.MUTABLE_RESOURCE`).
+1. Generate the mutation script in `saved/code/<mutation_name>.py` following the standard template below (supporting `--dry-run` with `validate_only=True` by default, `--execute` with `validate_only=False`, and `request.response_content_type = client.enums.ResponseContentTypeEnum.MUTABLE_RESOURCE` set unconditionally on both so canonical dry-run and live request digests match).
    - **Non-`validate_only` Financial RPCs** (`BillingSetupService.mutate_billing_setup`, `ReservationService.book_campaigns`, `IncentiveService.apply_incentive`, `LocalServicesLeadService.provide_lead_feedback`): Because these request messages have no `validate_only` field, `--dry-run` deterministically blocks any attempt to invoke the write RPC directly. During `--dry-run`, execute read-only preflight validation (`ReservationService.quote_campaigns`, `IncentiveService.fetch_incentive`, `PaymentsAccountService.list_payments_accounts`, or GAQL `search_stream`) and guard the live write call behind `if not validate_only:`.
 2. Lint the generated script with `ruff check --fix saved/code/<mutation_name>.py`.
 3. Execute the dry-run via `run_mutation.py` to validate against the Google Ads API and generate the signed verification receipt (`saved/data/last_dry_run.json`):
@@ -71,7 +71,7 @@ Evaluate and articulate the exact consequences of the requested change across th
 
 1. After `--dry-run` succeeds, present the **Mutation & Consequence Verification Card** output to the user and ask for explicit confirmation (`ask_question` in `agy` or an explicit confirmation prompt in `Claude Code CLI`).
 2. **Wait for the user's response.** Do NOT invoke `--execute` in the same turn as `--dry-run`.
-3. Verify that `config/assistant_config` contains `execute_mutates = true` (or update it via `python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/config/config_init.py" --execute-mutates true` if the user explicitly requests enabling mutations). Once confirmed by the user, execute the live mutation:
+3. Verify that `config/assistant_config` contains `execute_mutates = true` (or update it via `python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/config/config_init.py" --execute-mutates true` if the user explicitly requests enabling mutations). Once confirmed by the user, execute the live mutation (including `--script-args "..."` if extra CLI arguments were passed during `--dry-run`):
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
      --script saved/code/<mutation_name>.py \
@@ -108,10 +108,7 @@ def run_mutation(client: GoogleAdsClient, customer_id: str, validate_only: bool 
     request.customer_id = customer_id
     request.operations = [operation]
     request.validate_only = validate_only
-    if not validate_only:
-        request.response_content_type = (
-            client.enums.ResponseContentTypeEnum.ResponseContentType.MUTABLE_RESOURCE
-        )
+    request.response_content_type = client.enums.ResponseContentTypeEnum.MUTABLE_RESOURCE
 
     try:
         response = service.mutate_campaign_budgets(request=request)
@@ -129,7 +126,7 @@ def run_mutation(client: GoogleAdsClient, customer_id: str, validate_only: bool 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--customer-id", required=True)
-    parser.add_argument("--api-version", default="v25")
+    parser.add_argument("--api-version", default="v26")
     parser.add_argument("--dry-run", action="store_true", default=True)
     parser.add_argument("--execute", action="store_true", help="Run live (validate_only=False)")
     args = parser.parse_args()
@@ -145,46 +142,57 @@ if __name__ == "__main__":
 
 ## Built-In Resource Creation Scripts (`skills/execute-mutation/scripts/`)
 
-The skill includes ready-to-use, HITL-compliant creation scripts supporting `--dry-run` (`validate_only=True`, default), `--execute` (`validate_only=False`), and `--json`:
+The skill includes ready-to-use, HITL-compliant creation scripts supporting `--dry-run` (`validate_only=True`, default), `--execute` (`validate_only=False`), and `--json`. Direct `--dry-run` invocation works for standalone preview, while running through `run_mutation.py --script ... --dry-run --script-args "..."` writes the mandatory `saved/data/last_dry_run.json` receipt required before live `--execute` (pass the same `--script-args "..."` on `--execute`):
 
 1. **Create Account under MCC (`create_account.py`)** — `CustomerService.create_customer_client`
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_account.py" \
-     --manager-customer-id "<mcc_customer_id>" \
-     --descriptive-name "<account_name>" \
-     --currency-code "USD" \
-     --time-zone "America/New_York" \
-     --dry-run
+   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
+     --script "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_account.py" \
+     --dry-run \
+     --customer-id "<mcc_customer_id>" \
+     --operation "CustomerService.create_customer_client under MCC <mcc_customer_id>" \
+     --before "No child account named '<account_name>'" \
+     --after "New child account '<account_name>' (USD, America/New_York)" \
+     --consequences "Creates a permanent child Google Ads account linked to MCC <mcc_customer_id> with USD billing currency" \
+     --reversibility "IRREVERSIBLE" \
+     --script-args '--descriptive-name "<account_name>" --currency-code "USD" --time-zone "America/New_York"'
    ```
 2. **Create Campaign (`create_campaign.py`)** — `CampaignBudgetService.mutate_campaign_budgets` + `CampaignService.mutate_campaigns`
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_campaign.py" \
+   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
+     --script "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_campaign.py" \
+     --dry-run \
      --customer-id "<customer_id>" \
-     --campaign-name "<campaign_name>" \
-     --budget-amount-micros 5000000 \
-     --channel-type "SEARCH" \
-     --status "PAUSED" \
-     --dry-run
+     --operation "CampaignBudgetService + CampaignService.mutate_campaigns" \
+     --before "No campaign named '<campaign_name>'" \
+     --after "PAUSED SEARCH campaign '<campaign_name>' with $5.00/day budget" \
+     --consequences "Creates a $5.00/day ($152.00/month max) CampaignBudget; campaign starts PAUSED with $0.00 immediate spend" \
+     --reversibility "REVERSIBLE" \
+     --script-args '--campaign-name "<campaign_name>" --budget-amount-micros 5000000 --channel-type "SEARCH" --status "PAUSED"'
    ```
 3. **Create Ad Group (`create_ad_group.py`)** — `AdGroupService.mutate_ad_groups`
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_ad_group.py" \
+   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
+     --script "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_ad_group.py" \
+     --dry-run \
      --customer-id "<customer_id>" \
-     --campaign-id "<campaign_id>" \
-     --ad-group-name "<ad_group_name>" \
-     --cpc-bid-micros 1000000 \
-     --status "ENABLED" \
-     --dry-run
+     --operation "AdGroupService.mutate_ad_groups under Campaign <campaign_id>" \
+     --before "No ad group named '<ad_group_name>' in campaign <campaign_id>" \
+     --after "ENABLED ad group '<ad_group_name>' with $1.00 max CPC bid" \
+     --consequences "Sets default ad group max CPC bid to $1.00 (1000000 micros) under campaign <campaign_id>" \
+     --reversibility "REVERSIBLE" \
+     --script-args '--campaign-id "<campaign_id>" --ad-group-name "<ad_group_name>" --cpc-bid-micros 1000000 --status "ENABLED"'
    ```
 4. **Create Responsive Search Ad (`create_ad.py`)** — `AdGroupAdService.mutate_ad_group_ads`
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_ad.py" \
+   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
+     --script "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_ad.py" \
+     --dry-run \
      --customer-id "<customer_id>" \
-     --ad-group-id "<ad_group_id>" \
-     --final-url "https://www.example.com" \
-     --headline "Headline 1" --headline "Headline 2" --headline "Headline 3" \
-     --description "Description 1" --description "Description 2" \
-     --status "PAUSED" \
-     --dry-run
+     --operation "AdGroupAdService.mutate_ad_group_ads in AdGroup <ad_group_id>" \
+     --before "Existing ads in ad group <ad_group_id>" \
+     --after "New PAUSED Responsive Search Ad pointing to https://www.example.com" \
+     --consequences "Creates a PAUSED RSA in ad group <ad_group_id>; no impressions or spend until enabled" \
+     --reversibility "REVERSIBLE" \
+     --script-args '--ad-group-id "<ad_group_id>" --final-url "https://www.example.com" --headline "Headline 1" --headline "Headline 2" --headline "Headline 3" --description "Description 1" --description "Description 2" --status "PAUSED"'
    ```
-

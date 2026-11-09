@@ -100,6 +100,7 @@ usage() {
   echo "    --disable, --disabled      Install the plugin in disabled state so it is not invoked on startup"
   echo "    --status                   Show the current enabled/disabled status of the plugin and exit"
   echo "    --all                      Include all client libraries (Python, PHP, Ruby, Java, .NET)"
+  echo "    --python                   Include google-ads-python client library (included by default)"
   echo "    --php                      Include google-ads-php client library"
   echo "    --ruby                     Include google-ads-ruby client library"
   echo "    --java                     Include google-ads-java client library"
@@ -123,8 +124,8 @@ while [[ $# -gt 0 ]]; do
       usage
       exit 0
       ;;
-    agy|claude|claudecode)
-      TYPE="$1"
+    [aA][gG][yY]|[cC][lL][aA][uU][dD][eE]|[cC][lL][aA][uU][dD][eE][cC][oO][dD][eE]|[aA][lL][lL])
+      TYPE=$(echo "$1" | tr '[:upper:]' '[:lower:]')
       if [[ "${TYPE}" == "claudecode" ]]; then
         TYPE="claude"
       fi
@@ -182,10 +183,16 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --all)
+      INSTALL_PYTHON=true
       INSTALL_PHP=true
       INSTALL_RUBY=true
       INSTALL_JAVA=true
       INSTALL_DOTNET=true
+      ANY_SELECTED=true
+      shift
+      ;;
+    --python)
+      INSTALL_PYTHON=true
       ANY_SELECTED=true
       shift
       ;;
@@ -428,7 +435,8 @@ clone_or_update() {
   local clone_path="$2"
   local log_file="$3"
   local repo_name
-  
+  local clone_failed=false
+
   repo_name=$(basename "${clone_path}")
 
   {
@@ -444,66 +452,176 @@ clone_or_update() {
        echo "WARN: Directory ${clone_path} exists but is not a git repo. Skipping."
     else
       echo "Cloning ${repo_url} into ${clone_path}"
-      if ! git -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false clone --depth 1 "${repo_url}" "${clone_path}"; then
-        err "ERROR: Failed to clone ${repo_url}"
-        exit 1
+      if ! git -c core.longpaths=true -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false clone --depth 1 "${repo_url}" "${clone_path}"; then
+        clone_failed=true
+      else
+        echo "Successfully cloned ${repo_name}."
       fi
-      echo "Successfully cloned ${repo_name}."
     fi
   } > "${log_file}" 2>&1
+
+  if [[ "${clone_failed}" == "true" ]]; then
+    if [[ -f "${log_file}" ]]; then
+      cat "${log_file}" >&2
+    fi
+    err "ERROR: Failed to clone ${repo_url}"
+    exit 1
+  fi
+}
+
+# Helper to merge non-zero user-configured key=value overrides onto the newly copied financial_limits template
+merge_financial_limits() {
+  local template_file="$1"
+  local backup_file="$2"
+  if [[ ! -f "${backup_file}" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${template_file}" ]]; then
+    cp "${backup_file}" "${template_file}"
+    chmod 600 "${template_file}" 2>/dev/null || true
+    return 0
+  fi
+
+  local py_cmd=""
+  for cmd in python3 python; do
+    if command -v "${cmd}" &>/dev/null && "${cmd}" -c "import sys" &>/dev/null; then
+      py_cmd="${cmd}"
+      break
+    fi
+  done
+
+  if [[ -n "${py_cmd}" ]]; then
+    "${py_cmd}" - "${template_file}" "${backup_file}" <<'PYEOF'
+import os
+import re
+import sys
+
+template_path, backup_path = sys.argv[1], sys.argv[2]
+overrides = {}
+section = ""
+
+with open(backup_path, "r", encoding="utf-8") as bf:
+    for raw in bf:
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        sec_m = re.match(r"^\[([A-Za-z0-9_.]+)\]$", line)
+        if sec_m:
+            section = sec_m.group(1)
+            continue
+        kv_m = re.match(r"^([A-Za-z0-9_.]+)\s*=\s*(.+)$", line)
+        if kv_m:
+            key = kv_m.group(1).strip()
+            val_str = kv_m.group(2).strip().strip("\"'")
+            if section and "." not in key:
+                key = f"{section}.{key}"
+            try:
+                if float(val_str) != 0.0:
+                    overrides[key] = val_str
+            except ValueError:
+                pass
+
+if overrides:
+    with open(template_path, "r", encoding="utf-8") as tf:
+        t_lines = tf.readlines()
+    applied = set()
+    out_lines = []
+    line_re = re.compile(r"^(\s*)([A-Za-z0-9_.]+)(\s*=\s*)([^#\r\n]+?)(\s*#.*)?(\r?\n?)$")
+    for raw in t_lines:
+        m = line_re.match(raw)
+        if m and m.group(2) in overrides:
+            key = m.group(2)
+            applied.add(key)
+            comment = m.group(5) or ""
+            nl = m.group(6) or "\n"
+            out_lines.append(f"{m.group(1)}{key}{m.group(3)}{overrides[key]}{comment}{nl}")
+        else:
+            out_lines.append(raw)
+    for k, v in overrides.items():
+        if k not in applied:
+            if out_lines and not out_lines[-1].endswith("\n"):
+                out_lines[-1] += "\n"
+            out_lines.append(f"{k} = {v}\n")
+    with open(template_path, "w", encoding="utf-8") as tf:
+        tf.writelines(out_lines)
+    try:
+        os.chmod(template_path, 0o600)
+    except OSError:
+        pass
+PYEOF
+  fi
+  chmod 600 "${template_file}" 2>/dev/null || true
 }
 
 # Helper to detect latest API version from client_libs and pre-seed config/assistant_config
 detect_and_seed_api_version() {
   local search_dir="$1"
   local target_config_dir="$2"
-  
+  local latest_v=""
+
   if [[ -d "${search_dir}" ]]; then
-    local latest_v=""
-    latest_v=$(find "${search_dir}" -mindepth 1 -maxdepth 1 -type d -name 'v*' 2>/dev/null | sed 's/.*\/v//' | grep -E '^[0-9]+$' | sort -n | tail -n 1)
+    latest_v=$(find "${search_dir}" -mindepth 1 -maxdepth 1 -type d -name 'v*' 2>/dev/null | sed 's/.*\/v//' | grep -E '^[0-9]+$' | sort -n | tail -n 1 || true)
+  fi
+
+  if [[ -n "${latest_v}" || -n "${CUSTOMER_ID}" ]]; then
+    mkdir -p "${target_config_dir}"
+    local cfg_file="${target_config_dir}/assistant_config"
+    local api_ver="v26"
     if [[ -n "${latest_v}" ]]; then
-      mkdir -p "${target_config_dir}"
-      local cfg_file="${target_config_dir}/assistant_config"
-      local cid="12345678"
-      local exec_mutates="false"
-      local plugin_enabled="true"
-      if [[ -f "${cfg_file}" ]]; then
-        local existing_cid=""
-        existing_cid=$(grep -E '^[[:space:]]*customer_id[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*customer_id[[:space:]]*=[[:space:]]*["'\'']?([^"'\''#[:space:]]+)["'\'']?.*$/\1/' || true)
-        if [[ -n "${existing_cid}" ]]; then
-          cid="${existing_cid}"
-        fi
-        local existing_em=""
-        existing_em=$(grep -E '^[[:space:]]*execute_mutates[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*execute_mutates[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\1/' | tr '[:upper:]' '[:lower:]' || true)
-        if [[ "${existing_em}" == "true" || "${existing_em}" == "false" ]]; then
-          exec_mutates="${existing_em}"
+      api_ver="v${latest_v}"
+    fi
+    local cid="12345678"
+    local exec_mutates="false"
+    local plugin_enabled="true"
+    if [[ -f "${cfg_file}" ]]; then
+      if [[ -z "${latest_v}" ]]; then
+        local existing_ver=""
+        existing_ver=$(grep -E '^[[:space:]]*api_version[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*api_version[[:space:]]*=[[:space:]]*["'\'']?([^"'\''#[:space:]]+)["'\'']?.*$/\1/' || true)
+        if [[ -n "${existing_ver}" ]]; then
+          api_ver="${existing_ver}"
         fi
       fi
-      if [[ -n "${PLUGIN_ENABLED_OPT}" ]]; then
-        plugin_enabled="${PLUGIN_ENABLED_OPT}"
+      local existing_cid=""
+      existing_cid=$(grep -E '^[[:space:]]*customer_id[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*customer_id[[:space:]]*=[[:space:]]*["'\'']?([^"'\''#[:space:]]+)["'\'']?.*$/\1/' || true)
+      if [[ -n "${existing_cid}" ]]; then
+        cid="${existing_cid}"
       fi
-      if [[ -n "${CUSTOMER_ID}" ]]; then
-        cid=$(echo "${CUSTOMER_ID}" | sed -E 's/^[[:space:]"'\'']+|[[:space:]"'\'']+$//g; s/-//g')
-      elif [[ "${cid}" == "12345678" ]]; then
-        for legacy_file in "${target_config_dir}/customer_id" "${target_config_dir}/customer_id.txt" "${PLUGIN_SOURCE_DIR}/config/customer_id" "${PLUGIN_SOURCE_DIR}/config/customer_id.txt"; do
-          if [[ -f "${legacy_file}" ]]; then
-            local legacy_cid=""
-            legacy_cid=$(head -n 1 "${legacy_file}" 2>/dev/null | sed -E 's/^[[:space:]"'\'']+|[[:space:]"'\'']+$//g' || true)
-            if [[ -n "${legacy_cid}" && "${legacy_cid}" != "12345678" ]]; then
-              cid="${legacy_cid}"
-              break
-            fi
+      local existing_em=""
+      existing_em=$(grep -E '^[[:space:]]*execute_mutates[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*execute_mutates[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\1/' | tr '[:upper:]' '[:lower:]' || true)
+      if [[ "${existing_em}" == "true" || "${existing_em}" == "false" ]]; then
+        exec_mutates="${existing_em}"
+      fi
+      local existing_en=""
+      existing_en=$(grep -E '^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\2/' | tr '[:upper:]' '[:lower:]' || true)
+      if [[ "${existing_en}" == "true" || "${existing_en}" == "false" ]]; then
+        plugin_enabled="${existing_en}"
+      fi
+    fi
+    if [[ -n "${PLUGIN_ENABLED_OPT}" ]]; then
+      plugin_enabled="${PLUGIN_ENABLED_OPT}"
+    fi
+    if [[ -n "${CUSTOMER_ID}" ]]; then
+      cid=$(echo "${CUSTOMER_ID}" | sed -E 's/^[[:space:]"'\'']+|[[:space:]"'\'']+$//g; s/-//g')
+    elif [[ "${cid}" == "12345678" ]]; then
+      for legacy_file in "${target_config_dir}/customer_id" "${target_config_dir}/customer_id.txt" "${PLUGIN_SOURCE_DIR}/config/customer_id" "${PLUGIN_SOURCE_DIR}/config/customer_id.txt"; do
+        if [[ -f "${legacy_file}" ]]; then
+          local legacy_cid=""
+          legacy_cid=$(head -n 1 "${legacy_file}" 2>/dev/null | sed -E 's/^[[:space:]"'\'']+|[[:space:]"'\'']+$//g' || true)
+          if [[ -n "${legacy_cid}" && "${legacy_cid}" != "12345678" ]]; then
+            cid="${legacy_cid}"
+            break
           fi
-        done
-      fi
-      cat <<EOF > "${cfg_file}"
-api_version = "v${latest_v}"
+        fi
+      done
+    fi
+    cat <<EOF > "${cfg_file}"
+api_version = "${api_ver}"
 customer_id = "${cid}"
 execute_mutates = ${exec_mutates}
 enabled = ${plugin_enabled}
 EOF
-      echo "Configured API version v${latest_v} in ${cfg_file}"
-    fi
+    chmod 600 "${cfg_file}" 2>/dev/null || true
+    echo "Configured API version ${api_ver} in ${cfg_file}"
   fi
 }
 
@@ -526,18 +644,100 @@ trap cleanup EXIT
 
 install_plugin_copy() {
   local target_dir="$1"
-  rm -rf "${target_dir}"
+  local backup_root="${TEMP_LOG_DIR}/target_backup"
+  local backup_cfg_dir="${backup_root}/config"
+  local backup_libs_dir="${backup_root}/client_libs"
+  local backup_saved_dir="${backup_root}/saved"
+  local was_disabled="false"
+
+  rm -rf "${backup_root}"
+  mkdir -p "${backup_cfg_dir}" "${backup_libs_dir}"
+
+  if [[ -L "${target_dir}" ]]; then
+    rm -f "${target_dir}"
+  elif [[ -d "${target_dir}" ]]; then
+    if [[ -f "${target_dir}/plugin.json.disabled" && ! -f "${target_dir}/plugin.json" ]]; then
+      was_disabled="true"
+    elif [[ -f "${target_dir}/config/assistant_config" ]]; then
+      local prior_en=""
+      prior_en=$(grep -E '^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=' "${target_dir}/config/assistant_config" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\2/' | tr '[:upper:]' '[:lower:]' || true)
+      if [[ "${prior_en}" == "false" ]]; then
+        was_disabled="true"
+      fi
+    fi
+
+    for cfg_name in assistant_config financial_limits google-ads.yaml customer_id customer_id.txt; do
+      if [[ -f "${target_dir}/config/${cfg_name}" ]]; then
+        cp "${target_dir}/config/${cfg_name}" "${backup_cfg_dir}/${cfg_name}"
+      fi
+    done
+
+    if [[ -d "${target_dir}/saved" ]]; then
+      mv "${target_dir}/saved" "${backup_saved_dir}" 2>/dev/null || safe_copy_dir "${target_dir}/saved" "${backup_saved_dir}"
+    fi
+
+    if [[ -d "${target_dir}/client_libs" ]]; then
+      for existing_lib in "${target_dir}/client_libs"/google-ads-*; do
+        if [[ -d "${existing_lib}" ]]; then
+          local existing_lib_name
+          existing_lib_name=$(basename "${existing_lib}")
+          mv "${existing_lib}" "${backup_libs_dir}/${existing_lib_name}" 2>/dev/null || safe_copy_dir "${existing_lib}" "${backup_libs_dir}/${existing_lib_name}"
+        fi
+      done
+    fi
+
+    rm -rf "${target_dir}"
+  fi
+
   mkdir -p "$(dirname "${target_dir}")"
   safe_copy_dir "${PLUGIN_SOURCE_DIR}" "${target_dir}"
+
+  # Exclude gitignored repo credentials and saved artifacts from copied plugin source
+  mkdir -p "${target_dir}/config"
+  rm -f \
+    "${target_dir}/config/google-ads.yaml" \
+    "${target_dir}/config/.repo_root" \
+    "${target_dir}/config/google_ads_php.ini" \
+    "${target_dir}/config/google_ads_config.rb" \
+    "${target_dir}/config/ads.properties" \
+    "${target_dir}/config/App.config" \
+    "${target_dir}/config/appsettings.json"
+  rm -rf "${target_dir}/saved"
+
+  # Restore backed-up config files, saved directory, and previously cloned client_libs
+  for restore_cfg_name in assistant_config google-ads.yaml customer_id customer_id.txt; do
+    if [[ -f "${backup_cfg_dir}/${restore_cfg_name}" ]]; then
+      cp "${backup_cfg_dir}/${restore_cfg_name}" "${target_dir}/config/${restore_cfg_name}"
+    fi
+  done
+  if [[ -f "${backup_cfg_dir}/financial_limits" ]]; then
+    merge_financial_limits "${target_dir}/config/financial_limits" "${backup_cfg_dir}/financial_limits"
+  fi
+  if [[ -d "${backup_saved_dir}" ]]; then
+    mv "${backup_saved_dir}" "${target_dir}/saved" 2>/dev/null || safe_copy_dir "${backup_saved_dir}" "${target_dir}/saved"
+  fi
+
   for helper_script in plugin.sh update.sh set_financial_limits.py; do
     if [[ -f "${PROJECT_DIR_ABS}/${helper_script}" ]]; then
       cp "${PROJECT_DIR_ABS}/${helper_script}" "${target_dir}/${helper_script}"
       chmod +x "${target_dir}/${helper_script}" 2>/dev/null || true
     fi
   done
-  mkdir -p "${target_dir}/config"
-  echo "${PROJECT_DIR_ABS}" > "${target_dir}/config/.repo_root"
+  local repo_root_for_file
+  repo_root_for_file="$(cd "${PROJECT_DIR_ABS}" && (pwd -W 2>/dev/null || pwd))"
+  echo "${repo_root_for_file}" > "${target_dir}/config/.repo_root"
   mkdir -p "${target_dir}/client_libs"
+
+  for bak_lib in "${backup_libs_dir}"/google-ads-*; do
+    if [[ -d "${bak_lib}" ]]; then
+      local bak_lib_name
+      bak_lib_name=$(basename "${bak_lib}")
+      if [[ ! -d "${target_dir}/client_libs/${bak_lib_name}" ]]; then
+        mv "${bak_lib}" "${target_dir}/client_libs/${bak_lib_name}" 2>/dev/null || safe_copy_dir "${bak_lib}" "${target_dir}/client_libs/${bak_lib_name}"
+        rm -f "${target_dir}/client_libs/${bak_lib_name}/google-ads.yaml"
+      fi
+    fi
+  done
 
   for lang in python php ruby java dotnet; do
     if is_enabled "$lang"; then
@@ -565,11 +765,17 @@ install_plugin_copy() {
   done
 
   detect_and_seed_api_version "${target_dir}/client_libs/google-ads-python/google/ads/googleads" "${target_dir}/config"
-  if [[ "${PLUGIN_ENABLED_OPT}" == "false" ]]; then
+  if [[ "${PLUGIN_ENABLED_OPT}" == "false" ]] || [[ -z "${PLUGIN_ENABLED_OPT}" && "${was_disabled}" == "true" ]]; then
     "${PROJECT_DIR_ABS}/plugin.sh" disable --config-dir "${target_dir}/config" --quiet
   else
     "${PROJECT_DIR_ABS}/plugin.sh" enable --config-dir "${target_dir}/config" --quiet
   fi
+
+  for perm_file in "google-ads.yaml" "assistant_config" "financial_limits"; do
+    if [[ -f "${target_dir}/config/${perm_file}" ]]; then
+      chmod 600 "${target_dir}/config/${perm_file}" 2>/dev/null || true
+    fi
+  done
 }
 
 if [[ "${TYPE}" == "claude" ]]; then

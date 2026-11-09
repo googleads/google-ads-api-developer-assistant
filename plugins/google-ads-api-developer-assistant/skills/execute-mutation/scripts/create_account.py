@@ -20,7 +20,6 @@ live execution (--execute) under the 4-Step HITL Mutation Protocol.
 """
 
 import argparse
-from datetime import datetime
 import json
 import os
 import re
@@ -43,13 +42,15 @@ def _get_config_path() -> str:
     if config_path and os.path.isfile(config_path):
         return config_path
 
+    plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
     candidates = [
+        os.path.abspath("config/google-ads.yaml"),
+        os.path.join(plugin_root, "config", "google-ads.yaml"),
         os.path.expanduser(
             "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
-        os.path.abspath("config/google-ads.yaml"),
-        os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../../../config/google-ads.yaml")
+        os.path.expanduser(
+            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.abspath(
             os.path.join(os.path.dirname(__file__), "../../../../config/google-ads.yaml")
@@ -60,6 +61,8 @@ def _get_config_path() -> str:
             return candidate
 
     try:
+        if plugin_root not in sys.path:
+            sys.path.insert(0, plugin_root)
         from config.config_init import sync_and_set_config_kv
 
         return sync_and_set_config_kv()
@@ -76,12 +79,12 @@ def handle_googleads_exception(exception: GoogleAdsException) -> None:
         f"FAILURE: Account creation failed with Request ID {req_id}",
         file=sys.stderr,
     )
-    if hasattr(exception, "failure") and hasattr(exception.failure, "errors"):
-        for error in exception.failure.errors:
-            print(f"  - {error.message}", file=sys.stderr)
-            if getattr(error, "location", None):
-                for element in error.location.field_path_elements:
-                    print(f"    On field: {element.field_name}", file=sys.stderr)
+    failure = getattr(exception, "failure", None)
+    for error in getattr(failure, "errors", []) or []:
+        print(f"  - {error.message}", file=sys.stderr)
+        if getattr(error, "location", None):
+            for element in getattr(error.location, "field_path_elements", []) or []:
+                print(f"    On field: {element.field_name}", file=sys.stderr)
 
 
 def create_account_under_mcc(
@@ -138,7 +141,20 @@ def create_account_under_mcc(
         print("Error: time_zone must not be empty.", file=sys.stderr)
         sys.exit(1)
 
+    role_upper: Optional[str] = None
+    if access_role is not None and str(access_role).strip():
+        role_upper = str(access_role).strip().upper()
+        if role_upper in ("UNSPECIFIED", "UNKNOWN"):
+            print(
+                f"Error: Invalid access_role '{access_role}'. Must be a concrete role (e.g., ADMIN, STANDARD, READ_ONLY).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     if client is None:
+        if GoogleAdsClient is None:
+            sys.stderr.write("ERROR: google-ads package is not installed.\n")
+            sys.exit(1)
         try:
             cfg_path = _get_config_path()
             client = GoogleAdsClient.load_from_storage(
@@ -151,13 +167,11 @@ def create_account_under_mcc(
             )
             sys.exit(1)
 
-    if not descriptive_name:
-        now_str = datetime.now().strftime("%Y%m%d %H:%M:%S")
-        descriptive_name = f"Account created with CustomerService on {now_str}"
+    resolved_name = (descriptive_name or "").strip() or "New Sub-Account"
 
     customer_service = client.get_service("CustomerService")
     customer = client.get_type("Customer")
-    customer.descriptive_name = descriptive_name
+    customer.descriptive_name = resolved_name
     customer.currency_code = clean_currency
     customer.time_zone = clean_tz
 
@@ -173,8 +187,7 @@ def create_account_under_mcc(
 
     if email_address:
         request.email_address = email_address.strip()
-    if access_role:
-        role_upper = access_role.strip().upper()
+    if role_upper:
         role_enum = getattr(client.enums.AccessRoleEnum, role_upper, None)
         if role_enum is None:
             print(
@@ -193,7 +206,7 @@ def create_account_under_mcc(
             "status": "DRY_RUN_PASSED" if validate_only else "CREATED",
             "validate_only": bool(validate_only),
             "manager_customer_id": clean_mcc_id,
-            "descriptive_name": descriptive_name,
+            "descriptive_name": resolved_name,
             "currency_code": clean_currency,
             "time_zone": clean_tz,
             "resource_name": resource_name,
@@ -206,7 +219,7 @@ def create_account_under_mcc(
         elif validate_only:
             print(
                 f"SUCCESS (validate_only=True): Verified creation of client account "
-                f"'{descriptive_name}' ({clean_currency}, {clean_tz}) under MCC {clean_mcc_id}."
+                f"'{resolved_name}' ({clean_currency}, {clean_tz}) under MCC {clean_mcc_id}."
             )
         else:
             print(
@@ -307,7 +320,7 @@ def main() -> None:
         "--execute",
         action="store_true",
         default=False,
-        help="Execute live account creation (validate_only=False).",
+        help="Execute live account creation against Google Ads.",
     )
     parser.add_argument(
         "--json",

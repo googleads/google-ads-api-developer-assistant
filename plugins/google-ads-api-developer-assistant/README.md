@@ -48,7 +48,7 @@ The **Google Ads API Developer Assistant** plugin helps developers build and tes
 - **Protobuf Object Inspection**: Reads API resources, messages, and Enums directly from the Python client library descriptors.
 - **Conversion Upload Troubleshooting**: Checks `offline_conversion_upload_client_summary`, compares click timestamps with conversion timestamps, samples GCLIDs, and validates CSV files before upload.
 - **MCC Account Hierarchy Lookup**: Finds child Customer IDs (CIDs) and sub-manager accounts, and prints a console tree or saves a CSV file.
-- **Performance Max Webpage Exclusions**: Creates scripts for asset group webpage listing filter trees (`vertical = WEBPAGE`).
+- **Performance Max Webpage Exclusions**: Creates scripts for asset group webpage exclusion filters (`listing_source = WEBPAGE`).
 - **Code Linting & Error Handling**: Formats and checks all generated Python scripts with `ruff`, adds Python type hints, and catches `GoogleAdsException` errors.
 - **A2A Sidecar & MCP Service**: Runs a background HTTP server for Agent-to-Agent (A2A) tasks and Model Context Protocol (MCP) tools.
 
@@ -152,10 +152,10 @@ In Claude Code, use these slash commands to run specific tools:
 | **`inspect-object`** | Shows Protobuf fields, field types, labels (`OPTIONAL` or `REPEATED`), and Enum values. | `skills/inspect-object/scripts/inspect_object.py` |
 | **`troubleshoot-conversions`** | Checks conversion upload errors, reads upload summaries, samples GCLIDs, and validates CSV files. | `skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py` |
 | **`get-cids-under-mcc`** | Finds child CIDs under a Manager Account (MCC) and prints a tree or saves a CSV file. | `skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py` |
-| **`pmax-listing-filter`** | Builds asset group webpage exclusion filter trees (`vertical = WEBPAGE`) for PMax campaigns. | `skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py` |
+| **`pmax-listing-filter`** | Builds asset group webpage exclusion filters (`listing_source = WEBPAGE`) for PMax campaigns. | `skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py` |
 | **`ext-version`** | Reads current version numbers for diagnostic reports. | `skills/ext-version/scripts/get_extension_version.py` |
 | **`explain`** | Explains topics in 4 parts: *Big Picture*, *Analogy*, *Interconnectedness*, and *Simple Language*. | `skills/explain/SKILL.md` |
-| **`assistant-tutorial`** | Guides you through 11 Google Ads API topics in an interactive tutorial. | `skills/assistant-tutorial/SKILL.md` |
+| **`assistant-tutorial`** | Guides you through 16 Google Ads API topics in an interactive tutorial. | `skills/assistant-tutorial/SKILL.md` |
 | **`sync-client-libs`** | Checks client libraries in `client_libs/` against GitHub releases and updates older libraries. | `skills/sync-client-libs/scripts/sync_client_libs.py` |
 | **`execute-mutation`** | Runs Google Ads API `create` and `update` mutations (blocks delete / `remove` operations) with the 4-Step HITL protocol. | `skills/execute-mutation/scripts/run_mutation.py` |
 | **`step-by-step`** | Divides complex tasks into numbered steps with verification checks. | `skills/step-by-step/SKILL.md` |
@@ -206,23 +206,23 @@ All write and mutation requests use the [`execute-mutation` skill](skills/execut
 
 ### 2. Plugin Installation
 
-Copy the plugin into your agent directory:
+Run the installation script from the root directory of the repository:
 
 #### For Antigravity / agy:
 ```bash
-mkdir -p ~/.gemini/config/plugins
-cp -r google-ads-api-developer-assistant ~/.gemini/config/plugins/
+./install.sh agy
 ```
+This command installs a standalone copy into `~/.gemini/config/plugins/google-ads-api-developer-assistant`.
 
 #### For Claude Desktop / Claude Code:
 ```bash
-mkdir -p ~/.claude/plugins/marketplaces
-cp -r google-ads-api-developer-assistant ~/.claude/plugins/marketplaces/
+./install.sh claude
 ```
+This command installs a standalone copy into `~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant` and registers the local marketplace.
 
 ### 3. Credentials Configuration
 
-Create a `google-ads.yaml` file at `config/google-ads.yaml` (or `~/.config/google-ads/google-ads.yaml`):
+Create a `google-ads.yaml` file at `~/google-ads.yaml` (or `config/google-ads.yaml`):
 
 ```yaml
 client_id: "INSERT_OAUTH_CLIENT_ID"
@@ -447,7 +447,7 @@ Keep these points in mind when you run the plugin across different agent environ
 
 - **Virtual Environments**: Make sure you install `google-ads` and `ruff` in the active Python environment that your host agent uses.
 - **Interactive Prompts**: Antigravity shows interactive questions as UI modal dialogs. Claude Desktop and Claude Code CLI show questions as text in the chat.
-- **Saved File Paths**: Executable code must be saved in the `saved` subdirectory of your current working directory (for example, `./saved/` or `./saved/code/`). The assistant saves generated code, CSV exports, diagnostic reports/receipts, and mutation audit logs in `saved/code/`, `saved/csv/`, `saved/data/`, and `saved/logs/`.
+- **Saved File Paths**: Executable code must be saved in the `saved` subdirectory of your current working directory (for example, `./saved/` or `./saved/code/`). The assistant saves generated code, CSV exports, diagnostic reports/receipts, and mutation audit logs in `saved/code/`, `saved/data/`, and `saved/logs/`.
 
 See [migration.md](migration.md) for more details on runtime behavior.
 

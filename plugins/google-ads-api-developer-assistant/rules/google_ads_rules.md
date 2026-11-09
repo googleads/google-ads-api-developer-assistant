@@ -76,7 +76,7 @@ Before presenting or executing ANY GAQL query, pass this sequence:
 1. **Schema Discovery:** Use `GoogleAdsFieldService.search_google_ads_fields` to verify field existence, selectability, and filterability.
 2. **Compatibility Check:** Verify all selected fields are compatible using `selectable_with`.
 3. **Static Analysis:**
-   - `WHERE` fields MUST be in `SELECT` (unless core date segments).
+   - All fields in `SELECT`, `WHERE`, and `ORDER BY` must exist on and be compatible (`selectable_with`) with the `FROM` resource (`WHERE` fields do not need to appear in `SELECT`, while core date segments in `SELECT` such as `segments.date` require a finite date filter in `WHERE`).
    - `OR` operator is forbidden.
    - Metadata queries MUST NOT contain `FROM`.
    - In v23+, `segments.hour` was renamed to `segments.hour_of_day`.
@@ -109,7 +109,7 @@ Python is the mandatory default language for all code generation and execution a
 - **Version Parity Check & Warning:** When discovering a new version of the python client library or `google-ads`, check the versions in the system site-directory. If the installed `google-ads` version does not match the latest upstream release or the `client_libs/google-ads-python` version used for Protobuf inspection, issue an explicit warning/alert to the user, ask if they would like Gemini to upgrade the system version, and update it upon confirmation.
 
 #### 4.2. Performance Max URL Filters
-- Use `python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py` to configure webpage exclusion listing trees (`vertical = WEBPAGE`).
+- Use `python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py` (invoked via `skills/execute-mutation/scripts/run_mutation.py` for HITL execution) to configure Asset Group webpage exclusion filters (`AssetGroupListingGroupFilter` with `listing_source = WEBPAGE` and root-level `UNIT_EXCLUDED` nodes; note that Shopping `SUBDIVISION` nodes require an explicit `"Everything else"` sibling child).
 
 #### 4.3. 4-Step HITL Mutation & Consequence Verification Protocol [MANDATORY]
 When a user requests any write/mutation operation (`create`, `update`, `apply_recommendation`, or conversion upload; note that deletion/`remove` operations are strictly prohibited), verify whether live mutations are enabled in `config/assistant_config` (`execute_mutates = <true, false>`, default `execute_mutates = false`) and execute this exact sequence (see `skills/execute-mutation/SKILL.md`):
@@ -124,7 +124,7 @@ When a user requests any write/mutation operation (`create`, `update`, `apply_re
 4. **Step 4 — Hook-Gated Live Execution (`Mutate-to-Get`):**
    - Ensure `execute_mutates = true` is set in `config/assistant_config` (by default `execute_mutates = false` blocks all live mutations).
    - Only after the user explicitly confirms, run `python3 skills/execute-mutation/scripts/run_mutation.py --script saved/code/<script>.py --execute`.
-   - Use `response_content_type = ResponseContentType.MUTABLE_RESOURCE` when supported so the updated resource state is returned immediately without an extra read call.
+   - Use `request.response_content_type = client.enums.ResponseContentTypeEnum.MUTABLE_RESOURCE` when supported (set identically on both dry-run and live requests) so the updated resource state is returned immediately without an extra read call.
 
 ---
 

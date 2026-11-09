@@ -24,6 +24,9 @@ def _load_impl():
         os.path.expanduser(
             "~/.gemini/config/plugins/google-ads-api-developer-assistant/skills/execute-mutation/scripts/set_financial_limits.py"
         ),
+        os.path.expanduser(
+            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/skills/execute-mutation/scripts/set_financial_limits.py"
+        ),
     ]
     for path in candidates:
         if os.path.isfile(path):
@@ -50,6 +53,8 @@ format_financial_limits_config = _MOD.format_financial_limits_config
 write_financial_limits = _MOD.write_financial_limits
 format_limit_display_value = _MOD.format_limit_display_value
 format_limits_table = _MOD.format_limits_table
+run_interactive_prompt = _MOD.run_interactive_prompt
+build_arg_parser = _MOD.build_arg_parser
 main = _MOD.main
 
 

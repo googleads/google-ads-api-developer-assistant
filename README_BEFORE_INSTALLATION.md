@@ -29,7 +29,7 @@ You can upgrade from `v4.0.0` to `v4.1.0` in place. The update script keeps your
 2. **Check Your Settings in `config/assistant_config`:**
    The update script creates `config/assistant_config` (in TOML format). It copies your `customer_id` from `config/customer_id` (or `config/customer_id.txt`) and finds the latest `api_version`:
    ```toml
-   api_version = "v25"
+   api_version = "v26"
    customer_id = "1234567890"
    execute_mutates = false
    ```
@@ -109,7 +109,7 @@ Run the update script at any time to update client libraries or add more languag
 ## 6. Optional Configuration (`config/assistant_config`)
 The `config/assistant_config` file stores all assistant settings in TOML format:
 ```toml
-api_version = "v25"
+api_version = "v26"
 customer_id = "12345678"
 execute_mutates = false
 ```

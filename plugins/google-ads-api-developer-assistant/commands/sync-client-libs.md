@@ -11,9 +11,9 @@ Updates and synchronizes Google Ads API client libraries in `client_libs/`.
 1. **Extract Parameters**:
    - Extract target language from `$ARGUMENTS` (`python`, `php`, `ruby`, `java`, `dotnet`, or `all`).
 2. **Execute Sync**:
-   - Run the client library synchronization script:
+   - Run the client library synchronization script (passing `--library "$ARGUMENTS"` when a specific language or library argument is provided, or omitting `--library` when `$ARGUMENTS` is empty or `all`):
      ```bash
-     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/sync-client-libs/scripts/sync_client_libs.py"
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/sync-client-libs/scripts/sync_client_libs.py" --library "$ARGUMENTS"
      ```
    - Or pull the specified repository in `client_libs/`.
 3. **Verify System Site-Directory & Alert**:

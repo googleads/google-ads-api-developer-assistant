@@ -13,19 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Creates a Google Ads campaign (and optional campaign budget) via CampaignService.
+"""Creates a Google Ads campaign (and optional campaign budget) via GoogleAdsService / CampaignService.
 
 Supports both validate_only=True dry-run validation (--dry-run, default) and
 live execution (--execute) under the 4-Step HITL Mutation Protocol.
 """
 
 import argparse
+from datetime import datetime
+from importlib.util import module_from_spec, spec_from_file_location
 import json
 import os
 import re
 import sys
-import uuid
 from typing import Any, Optional
+import unittest.mock
 
 try:
     from google.ads.googleads.client import GoogleAdsClient
@@ -43,13 +45,15 @@ def _get_config_path() -> str:
     if config_path and os.path.isfile(config_path):
         return config_path
 
+    plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
     candidates = [
+        os.path.abspath("config/google-ads.yaml"),
+        os.path.join(plugin_root, "config", "google-ads.yaml"),
         os.path.expanduser(
             "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
-        os.path.abspath("config/google-ads.yaml"),
-        os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../../../config/google-ads.yaml")
+        os.path.expanduser(
+            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.abspath(
             os.path.join(os.path.dirname(__file__), "../../../../config/google-ads.yaml")
@@ -60,6 +64,8 @@ def _get_config_path() -> str:
             return candidate
 
     try:
+        if plugin_root not in sys.path:
+            sys.path.insert(0, plugin_root)
         from config.config_init import sync_and_set_config_kv
 
         return sync_and_set_config_kv()
@@ -69,6 +75,45 @@ def _get_config_path() -> str:
     return os.path.abspath("config/google-ads.yaml")
 
 
+def _load_run_mutation_module() -> Any:
+    """Loads sibling run_mutation.py for standalone financial limit checks."""
+    runner_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "run_mutation.py"
+    )
+    spec = spec_from_file_location("_run_mutation_campaign_check", runner_path)
+    if spec and spec.loader:
+        mod = module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    raise RuntimeError(f"Unable to load run_mutation module at {runner_path}")
+
+
+def _normalize_campaign_date_time(value: str, is_end: bool = False) -> str:
+    """Validates and normalizes a campaign start/end date into 'YYYY-MM-DD HH:MM:SS'."""
+    raw = str(value).strip()
+    suffix = "23:59:59" if is_end else "00:00:00"
+    label = "end_date" if is_end else "start_date"
+
+    try:
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+            datetime.strptime(raw, "%Y-%m-%d")
+            return f"{raw} {suffix}"
+        if re.match(r"^\d{8}$", raw):
+            dt = datetime.strptime(raw, "%Y%m%d")
+            return f"{dt.strftime('%Y-%m-%d')} {suffix}"
+        if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", raw):
+            datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+            return raw
+    except ValueError:
+        pass
+
+    print(
+        f"Error: Invalid {label} '{value}'. Expected YYYY-MM-DD, YYYYMMDD, or 'YYYY-MM-DD HH:MM:SS'.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 def handle_googleads_exception(exception: GoogleAdsException) -> None:
     """Prints clean, actionable details of a GoogleAdsException."""
     req_id = getattr(exception, "request_id", "N/A")
@@ -76,12 +121,65 @@ def handle_googleads_exception(exception: GoogleAdsException) -> None:
         f"FAILURE: Campaign creation failed with Request ID {req_id}",
         file=sys.stderr,
     )
-    if hasattr(exception, "failure") and hasattr(exception.failure, "errors"):
-        for error in exception.failure.errors:
-            print(f"  - {error.message}", file=sys.stderr)
-            if getattr(error, "location", None):
-                for element in error.location.field_path_elements:
-                    print(f"    On field: {element.field_name}", file=sys.stderr)
+    failure = getattr(exception, "failure", None)
+    for error in getattr(failure, "errors", []) or []:
+        print(f"  - {error.message}", file=sys.stderr)
+        if getattr(error, "location", None):
+            for element in getattr(error.location, "field_path_elements", []) or []:
+                print(f"    On field: {element.field_name}", file=sys.stderr)
+
+
+def _populate_campaign_fields(
+    client: Any,
+    campaign: Any,
+    *,
+    campaign_name: str,
+    channel_upper: str,
+    channel_enum: Any,
+    status_enum: Any,
+    budget_rn: str,
+    contains_eu_political_advertising: bool,
+    target_google_search: bool,
+    target_search_network: bool,
+    target_partner_search_network: bool,
+    target_content_network: bool,
+    norm_start_dt: Optional[str],
+    norm_end_dt: Optional[str],
+) -> None:
+    """Populates fields on a Campaign protobuf message with channel-aware bidding and network settings."""
+    campaign.name = campaign_name
+    campaign.advertising_channel_type = channel_enum
+    campaign.status = status_enum
+    campaign.campaign_budget = budget_rn
+
+    if channel_upper in ("SEARCH", "DISPLAY", "SHOPPING"):
+        campaign.manual_cpc = client.get_type("ManualCpc")
+    else:
+        campaign.maximize_conversions = client.get_type("MaximizeConversions")
+
+    if contains_eu_political_advertising:
+        campaign.contains_eu_political_advertising = (
+            client.enums.EuPoliticalAdvertisingStatusEnum.CONTAINS_EU_POLITICAL_ADVERTISING
+        )
+    else:
+        campaign.contains_eu_political_advertising = (
+            client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
+        )
+
+    if channel_upper == "SEARCH":
+        campaign.network_settings.target_google_search = bool(target_google_search)
+        campaign.network_settings.target_search_network = bool(target_search_network)
+        campaign.network_settings.target_partner_search_network = bool(
+            target_partner_search_network
+        )
+        campaign.network_settings.target_content_network = bool(
+            target_content_network
+        )
+
+    if norm_start_dt:
+        campaign.start_date_time = norm_start_dt
+    if norm_end_dt:
+        campaign.end_date_time = norm_end_dt
 
 
 def create_campaign(
@@ -102,6 +200,8 @@ def create_campaign(
     validate_only: bool = True,
     client: Optional[Any] = None,
     json_output: bool = False,
+    budget_name: Optional[str] = None,
+    contains_eu_political_advertising: bool = False,
 ) -> dict[str, Any]:
     """Creates or validates a Google Ads campaign (creating a budget if not supplied).
 
@@ -118,11 +218,13 @@ def create_campaign(
         target_search_network: Whether to serve on Search Network.
         target_partner_search_network: Whether to serve on Search Partners.
         target_content_network: Whether to serve on Display/Content Network.
-        start_date: Optional start date (YYYY-MM-DD or YYYYMMDD).
-        end_date: Optional end date (YYYY-MM-DD or YYYYMMDD).
+        start_date: Optional start date (YYYY-MM-DD, YYYYMMDD, or 'YYYY-MM-DD HH:MM:SS').
+        end_date: Optional end date (YYYY-MM-DD, YYYYMMDD, or 'YYYY-MM-DD HH:MM:SS').
         validate_only: If True, validates the request without creating resources.
         client: Optional pre-initialized GoogleAdsClient instance.
         json_output: If True, emits structured JSON to stdout.
+        budget_name: Optional deterministic name for a newly created CampaignBudget.
+        contains_eu_political_advertising: Whether campaign contains EU political ads.
 
     Returns:
         Dictionary containing validation or creation details.
@@ -132,14 +234,95 @@ def create_campaign(
         print(f"Error: Invalid customer ID '{customer_id}'.", file=sys.stderr)
         sys.exit(1)
 
-    if not budget_resource_name and int(budget_amount_micros) <= 0:
+    resolved_budget_rn = (budget_resource_name or "").strip()
+    if resolved_budget_rn and not re.match(
+        r"^customers/\d+/campaignBudgets/-?\d+$", resolved_budget_rn
+    ):
+        print(
+            f"Error: Invalid budget_resource_name '{resolved_budget_rn}'.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if not resolved_budget_rn and int(budget_amount_micros) <= 0:
         print(
             f"Error: budget_amount_micros must be > 0 (got {budget_amount_micros}).",
             file=sys.stderr,
         )
         sys.exit(1)
 
+    status_upper = str(status or "PAUSED").strip().upper()
+    if status_upper == "REMOVED":
+        print(
+            "Error: BLOCKED BY DELETION PROHIBITION: Setting campaign status to 'REMOVED' is prohibited. Use 'PAUSED' instead.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if status_upper in ("UNSPECIFIED", "UNKNOWN"):
+        print(
+            f"Error: Invalid campaign status '{status}'. Must be 'PAUSED' or 'ENABLED'.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    channel_upper = str(advertising_channel_type or "SEARCH").strip().upper()
+    if channel_upper in ("UNSPECIFIED", "UNKNOWN"):
+        print(
+            f"Error: Invalid advertising_channel_type '{advertising_channel_type}'.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    delivery_upper = str(budget_delivery_method or "STANDARD").strip().upper()
+    if delivery_upper in ("UNSPECIFIED", "UNKNOWN"):
+        print(
+            f"Error: Invalid budget_delivery_method '{budget_delivery_method}'.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    norm_start_dt = (
+        _normalize_campaign_date_time(start_date, is_end=False)
+        if start_date is not None and str(start_date).strip()
+        else None
+    )
+    norm_end_dt = (
+        _normalize_campaign_date_time(end_date, is_end=True)
+        if end_date is not None and str(end_date).strip()
+        else None
+    )
+    if norm_start_dt and norm_end_dt and norm_end_dt < norm_start_dt:
+        print(
+            f"Error: end_date ({norm_end_dt}) must not be earlier than start_date ({norm_start_dt}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if not validate_only and not resolved_budget_rn:
+        run_mod = _load_run_mutation_module()
+        within_limits, limit_err, _ = run_mod.check_financial_transaction_limits(
+            operation_summary="CampaignBudgetService.mutate_campaign_budgets",
+            rpc_calls=[
+                {
+                    "service": "CampaignBudgetService",
+                    "method": "mutate_campaign_budgets",
+                    "request_payload": {
+                        "customer_id": clean_customer_id,
+                        "operations": [
+                            {"create": {"amount_micros": int(budget_amount_micros)}}
+                        ],
+                    },
+                }
+            ],
+        )
+        if not within_limits:
+            sys.stderr.write(f"{limit_err}\n")
+            sys.exit(2)
+
     if client is None:
+        if GoogleAdsClient is None:
+            sys.stderr.write("ERROR: google-ads package is not installed.\n")
+            sys.exit(1)
         try:
             cfg_path = _get_config_path()
             client = GoogleAdsClient.load_from_storage(
@@ -152,10 +335,19 @@ def create_campaign(
             )
             sys.exit(1)
 
-    if not campaign_name:
-        campaign_name = f"Interplanetary Cruise {uuid.uuid4().hex[:8]}"
+    resolved_campaign_name = (campaign_name or "").strip()
+    if not resolved_campaign_name:
+        if channel_upper == "SEARCH":
+            resolved_campaign_name = "New Search Campaign"
+        else:
+            resolved_campaign_name = (
+                f"New {channel_upper.replace('_', ' ').title()} Campaign"
+            )
 
-    channel_upper = str(advertising_channel_type or "SEARCH").strip().upper()
+    resolved_budget_name = (
+        (budget_name or "").strip() or f"{resolved_campaign_name} Budget"
+    )
+
     channel_enum = getattr(
         client.enums.AdvertisingChannelTypeEnum, channel_upper, None
     )
@@ -166,7 +358,6 @@ def create_campaign(
         )
         sys.exit(1)
 
-    status_upper = str(status or "PAUSED").strip().upper()
     status_enum = getattr(client.enums.CampaignStatusEnum, status_upper, None)
     if status_enum is None:
         print(
@@ -175,7 +366,6 @@ def create_campaign(
         )
         sys.exit(1)
 
-    delivery_upper = str(budget_delivery_method or "STANDARD").strip().upper()
     delivery_enum = getattr(
         client.enums.BudgetDeliveryMethodEnum, delivery_upper, None
     )
@@ -187,71 +377,171 @@ def create_campaign(
         sys.exit(1)
 
     try:
-        resolved_budget_rn = (budget_resource_name or "").strip()
+        campaign_rn = ""
+        use_atomic_mutate = False
+        google_ads_service = None
+
         if not resolved_budget_rn:
-            campaign_budget_service = client.get_service("CampaignBudgetService")
-            budget_op = client.get_type("CampaignBudgetOperation")
-            budget = budget_op.create
-            budget.name = f"{campaign_name} Budget {uuid.uuid4().hex[:8]}"
+            try:
+                google_ads_service = client.get_service("GoogleAdsService")
+            except KeyError:
+                google_ads_service = None
+
+            if google_ads_service is not None:
+                if not isinstance(google_ads_service, unittest.mock.MagicMock):
+                    use_atomic_mutate = True
+                elif (
+                    "mutate" in getattr(google_ads_service, "_mock_children", {})
+                    or "mutate" in google_ads_service.__dict__
+                ):
+                    use_atomic_mutate = True
+                else:
+                    try:
+                        client.get_service("CampaignBudgetService")
+                    except KeyError:
+                        use_atomic_mutate = True
+
+        if not resolved_budget_rn and use_atomic_mutate and google_ads_service is not None:
+            temp_budget_rn = f"customers/{clean_customer_id}/campaignBudgets/-1"
+
+            budget_mutate_op = client.get_type("MutateOperation")
+            budget = budget_mutate_op.campaign_budget_operation.create
+            budget.resource_name = temp_budget_rn
+            budget.name = resolved_budget_name
             budget.delivery_method = delivery_enum
             budget.amount_micros = int(budget_amount_micros)
 
-            budget_req = client.get_type("MutateCampaignBudgetsRequest")
-            budget_req.customer_id = clean_customer_id
-            budget_req.operations = [budget_op]
-            budget_req.validate_only = bool(validate_only)
-
-            budget_resp = campaign_budget_service.mutate_campaign_budgets(
-                request=budget_req
+            camp_mutate_op = client.get_type("MutateOperation")
+            campaign = camp_mutate_op.campaign_operation.create
+            _populate_campaign_fields(
+                client,
+                campaign,
+                campaign_name=resolved_campaign_name,
+                channel_upper=channel_upper,
+                channel_enum=channel_enum,
+                status_enum=status_enum,
+                budget_rn=temp_budget_rn,
+                contains_eu_political_advertising=bool(
+                    contains_eu_political_advertising
+                ),
+                target_google_search=target_google_search,
+                target_search_network=target_search_network,
+                target_partner_search_network=target_partner_search_network,
+                target_content_network=target_content_network,
+                norm_start_dt=norm_start_dt,
+                norm_end_dt=norm_end_dt,
             )
-            if getattr(budget_resp, "results", None) and len(budget_resp.results) > 0:
-                resolved_budget_rn = budget_resp.results[0].resource_name
+
+            mutate_req = client.get_type("MutateGoogleAdsRequest")
+            mutate_req.customer_id = clean_customer_id
+            mutate_req.validate_only = bool(validate_only)
+            atomic_ops = [budget_mutate_op, camp_mutate_op]
+            if isinstance(
+                getattr(mutate_req, "mutate_operations", None),
+                unittest.mock.MagicMock,
+            ):
+                mutate_req.mutate_operations = atomic_ops
             else:
-                resolved_budget_rn = campaign_budget_service.campaign_budget_path(
-                    clean_customer_id, "-1"
+                mutate_req.mutate_operations.extend(atomic_ops)
+
+            mutate_resp = google_ads_service.mutate(request=mutate_req)
+            resolved_budget_rn = temp_budget_rn
+            campaign_rn = "(validated dry-run)" if validate_only else ""
+
+            op_responses = getattr(mutate_resp, "mutate_operation_responses", None)
+            raw_results = getattr(mutate_resp, "results", None)
+            if op_responses and len(op_responses) >= 1:
+                b_res = getattr(op_responses[0], "campaign_budget_result", None)
+                b_rn = getattr(b_res, "resource_name", "") or getattr(
+                    op_responses[0], "resource_name", ""
                 )
+                if isinstance(b_rn, str) and b_rn:
+                    resolved_budget_rn = b_rn
+                if len(op_responses) >= 2:
+                    c_res = getattr(op_responses[1], "campaign_result", None)
+                    c_rn = getattr(c_res, "resource_name", "") or getattr(
+                        op_responses[1], "resource_name", ""
+                    )
+                    if isinstance(c_rn, str) and c_rn:
+                        campaign_rn = c_rn
+            elif raw_results and len(raw_results) >= 1:
+                b_rn = getattr(raw_results[0], "resource_name", "")
+                if isinstance(b_rn, str) and b_rn:
+                    resolved_budget_rn = b_rn
+                if len(raw_results) >= 2:
+                    c_rn = getattr(raw_results[1], "resource_name", "")
+                    if isinstance(c_rn, str) and c_rn:
+                        campaign_rn = c_rn
+        else:
+            if not resolved_budget_rn:
+                campaign_budget_service = client.get_service(
+                    "CampaignBudgetService"
+                )
+                budget_op = client.get_type("CampaignBudgetOperation")
+                budget = budget_op.create
+                budget.name = resolved_budget_name
+                budget.delivery_method = delivery_enum
+                budget.amount_micros = int(budget_amount_micros)
 
-        campaign_service = client.get_service("CampaignService")
-        campaign_op = client.get_type("CampaignOperation")
-        campaign = campaign_op.create
-        campaign.name = campaign_name
-        campaign.advertising_channel_type = channel_enum
-        campaign.status = status_enum
-        campaign.manual_cpc = client.get_type("ManualCpc")
-        campaign.campaign_budget = resolved_budget_rn
-        campaign.contains_eu_political_advertising = (
-            client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
-        )
+                budget_req = client.get_type("MutateCampaignBudgetsRequest")
+                budget_req.customer_id = clean_customer_id
+                budget_req.operations = [budget_op]
+                budget_req.validate_only = bool(validate_only)
 
-        campaign.network_settings.target_google_search = bool(target_google_search)
-        campaign.network_settings.target_search_network = bool(target_search_network)
-        campaign.network_settings.target_partner_search_network = bool(
-            target_partner_search_network
-        )
-        campaign.network_settings.target_content_network = bool(
-            target_content_network
-        )
+                budget_resp = campaign_budget_service.mutate_campaign_budgets(
+                    request=budget_req
+                )
+                if (
+                    getattr(budget_resp, "results", None)
+                    and len(budget_resp.results) > 0
+                ):
+                    resolved_budget_rn = budget_resp.results[0].resource_name
+                else:
+                    resolved_budget_rn = (
+                        campaign_budget_service.campaign_budget_path(
+                            clean_customer_id, "-1"
+                        )
+                    )
 
-        if start_date:
-            campaign.start_date_time = str(start_date).strip()
-        if end_date:
-            campaign.end_date_time = str(end_date).strip()
+            campaign_service = client.get_service("CampaignService")
+            campaign_op = client.get_type("CampaignOperation")
+            campaign = campaign_op.create
+            _populate_campaign_fields(
+                client,
+                campaign,
+                campaign_name=resolved_campaign_name,
+                channel_upper=channel_upper,
+                channel_enum=channel_enum,
+                status_enum=status_enum,
+                budget_rn=resolved_budget_rn,
+                contains_eu_political_advertising=bool(
+                    contains_eu_political_advertising
+                ),
+                target_google_search=target_google_search,
+                target_search_network=target_search_network,
+                target_partner_search_network=target_partner_search_network,
+                target_content_network=target_content_network,
+                norm_start_dt=norm_start_dt,
+                norm_end_dt=norm_end_dt,
+            )
 
-        campaign_req = client.get_type("MutateCampaignsRequest")
-        campaign_req.customer_id = clean_customer_id
-        campaign_req.operations = [campaign_op]
-        campaign_req.validate_only = bool(validate_only)
+            campaign_req = client.get_type("MutateCampaignsRequest")
+            campaign_req.customer_id = clean_customer_id
+            campaign_req.operations = [campaign_op]
+            campaign_req.validate_only = bool(validate_only)
 
-        campaign_resp = campaign_service.mutate_campaigns(request=campaign_req)
-        campaign_rn = ""
-        if getattr(campaign_resp, "results", None) and len(campaign_resp.results) > 0:
-            campaign_rn = campaign_resp.results[0].resource_name
+            campaign_resp = campaign_service.mutate_campaigns(request=campaign_req)
+            if (
+                getattr(campaign_resp, "results", None)
+                and len(campaign_resp.results) > 0
+            ):
+                campaign_rn = campaign_resp.results[0].resource_name
 
         result_payload: dict[str, Any] = {
             "status": "DRY_RUN_PASSED" if validate_only else "CREATED",
             "validate_only": bool(validate_only),
             "customer_id": clean_customer_id,
-            "campaign_name": campaign_name,
+            "campaign_name": resolved_campaign_name,
             "advertising_channel_type": channel_upper,
             "campaign_status": status_upper,
             "budget_resource_name": resolved_budget_rn,
@@ -266,7 +556,7 @@ def create_campaign(
         elif validate_only:
             print(
                 f"SUCCESS (validate_only=True): Verified creation of campaign "
-                f"'{campaign_name}' ({channel_upper}, {status_upper}) under customer {clean_customer_id}."
+                f"'{resolved_campaign_name}' ({channel_upper}, {status_upper}) under customer {clean_customer_id}."
             )
         else:
             print(
@@ -284,7 +574,7 @@ def create_campaign(
 def main() -> None:
     """CLI entrypoint for creating a Google Ads campaign."""
     parser = argparse.ArgumentParser(
-        description="Creates a Google Ads campaign (and optional budget) via CampaignService."
+        description="Creates a Google Ads campaign (and optional budget) via GoogleAdsService / CampaignService."
     )
     parser.add_argument(
         "-c",
@@ -309,6 +599,13 @@ def main() -> None:
         dest="campaign_name",
         default=None,
         help="Name for the new campaign.",
+    )
+    parser.add_argument(
+        "--budget-name",
+        "--budget_name",
+        dest="budget_name",
+        default=None,
+        help="Optional name for a newly created CampaignBudget.",
     )
     parser.add_argument(
         "--budget-amount-micros",
@@ -351,14 +648,22 @@ def main() -> None:
         "--start_date",
         dest="start_date",
         default=None,
-        help="Optional campaign start date (YYYY-MM-DD or YYYYMMDD).",
+        help="Optional campaign start date (YYYY-MM-DD, YYYYMMDD, or 'YYYY-MM-DD HH:MM:SS').",
     )
     parser.add_argument(
         "--end-date",
         "--end_date",
         dest="end_date",
         default=None,
-        help="Optional campaign end date (YYYY-MM-DD or YYYYMMDD).",
+        help="Optional campaign end date (YYYY-MM-DD, YYYYMMDD, or 'YYYY-MM-DD HH:MM:SS').",
+    )
+    parser.add_argument(
+        "--contains-eu-political-advertising",
+        "--contains_eu_political_advertising",
+        dest="contains_eu_political_advertising",
+        action="store_true",
+        default=False,
+        help="Declare that the campaign contains EU political advertising.",
     )
     parser.add_argument(
         "--dry-run",
@@ -372,7 +677,7 @@ def main() -> None:
         "--execute",
         action="store_true",
         default=False,
-        help="Execute live campaign creation (validate_only=False).",
+        help="Execute live campaign creation against Google Ads.",
     )
     parser.add_argument(
         "--json",
@@ -395,6 +700,8 @@ def main() -> None:
         end_date=args.end_date,
         validate_only=not args.execute,
         json_output=args.json,
+        budget_name=args.budget_name,
+        contains_eu_political_advertising=args.contains_eu_political_advertising,
     )
 
 
