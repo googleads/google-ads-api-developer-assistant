@@ -207,17 +207,29 @@ def get_available_types(api_version: str) -> Dict[str, str]:
             "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python"
         ),
     ]
-    base_dir = None
+    v_dir = None
     for cand in candidates:
-        if os.path.isdir(os.path.join(cand, "google", "ads", "googleads", version_clean)):
-            base_dir = cand
+        cand_v_dir = os.path.join(cand, "google", "ads", "googleads", version_clean)
+        if os.path.isdir(cand_v_dir):
+            v_dir = cand_v_dir
             break
 
+    if v_dir is None:
+        try:
+            import google.ads.googleads as _gads_pkg  # type: ignore[import-untyped]
+
+            for pkg_root in getattr(_gads_pkg, "__path__", []):
+                cand_v_dir = os.path.join(pkg_root, version_clean)
+                if os.path.isdir(cand_v_dir):
+                    v_dir = cand_v_dir
+                    break
+        except Exception:
+            pass
+
     type_map: Dict[str, str] = {}
-    if not base_dir:
+    if not v_dir:
         return type_map
 
-    v_dir = os.path.join(base_dir, "google", "ads", "googleads", version_clean)
     try:
         dir_mtime = round(os.path.getmtime(v_dir), 3)
     except OSError:

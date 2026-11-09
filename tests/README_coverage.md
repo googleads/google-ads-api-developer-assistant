@@ -84,7 +84,7 @@ The report shows two tables:
 | :--- | :--- | :--- |
 | **`Module` / `Category`** | Relative path of the Python module (or component category name) | Tracked `.py` files (excludes empty `__init__.py` files) |
 | **`Stmts`** | Total number of **executable Python statements** (lines) in the file or category | Found with Python's `trace._find_executable_linenos()` (excludes comments, blank lines, and docstrings) |
-| **`InProc`** | Number of executable lines that ran **in-process** inside `pytest` | Tracked with `sys.monitoring` (`PEP 669`) inside the `pytest` process |
+| **`InProc`** | Number of executable lines that ran **in-process** inside `pytest` | Tracked with `sys.monitoring` (`PEP 669`, Python 3.12+) or `sys.settrace` / `threading.settrace` (Python 3.11) inside the `pytest` process |
 | **`InProc%`** | Percentage of executable lines that ran in-process | $\frac{\text{InProc}}{\text{Stmts}} \times 100\%$ |
 | **`Combined`** | Total executable lines that ran across **both** in-process `pytest` tests **and** child CLI subprocesses | Union of `InProc` lines and subprocess line hits (`cov_*.json`) |
 | **`Miss`** | Number of executable lines that **did not run** in any test (in-process or subprocess) | $\text{Stmts} - \text{Combined}$ |
@@ -95,7 +95,7 @@ The report shows two tables:
 Many tests in [`tests/test_components.py`](./test_components.py), [`tests/test_hitl_mutation_guard.py`](./test_hitl_mutation_guard.py), [`tests/test_python_315.py`](./test_python_315.py), and [`tests/test_plugin_scripts.sh`](./test_plugin_scripts.sh) start the plugin scripts as child CLI processes (`subprocess.run([sys.executable, ...])`). This method tests command-line arguments, exit codes, and `sitecustomize.py` or `PreToolUse` hooks:
 
 - **`InProc`** counts only the lines that run when `pytest` imports a module directly. For example, tests run the CLI wrapper `config/set_financial_limits.py` only as a child process. Because of this, its `InProc%` is `0.0%`, but its `Comb%` is `97.7%`.
-- **`Combined`** merges in-process line hits with child process line hits from the injected `sitecustomize.py` hook (`sys.monitoring`). This column shows the true end-to-end coverage (`Comb%`).
+- **`Combined`** merges in-process line hits with child process line hits from the injected `sitecustomize.py` hook (`sys.monitoring` on Python 3.12+, or `sys.settrace` / `threading.settrace` on Python 3.11). This column shows the true end-to-end coverage (`Comb%`).
 
 ---
 

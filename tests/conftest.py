@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
@@ -30,9 +31,8 @@ if _THIS_DIR not in sys.path:
 import run_coverage  # noqa: E402
 
 
-
 _INPROC_HITS: dict[str, set[int]] = {}
-_INPROC_CACHE: dict[str, str | None] = {}
+_STOP_INPROC: Callable[[], None] | None = None
 _COVERAGE_ACTIVE = False
 
 
@@ -71,7 +71,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    global _COVERAGE_ACTIVE, _INPROC_HITS, _INPROC_CACHE
+    global _COVERAGE_ACTIVE, _INPROC_HITS, _STOP_INPROC
     if not config.getoption("--coverage"):
         return
 
@@ -83,7 +83,6 @@ def pytest_configure(config: pytest.Config) -> None:
     target_files = run_coverage.get_target_files()
     target_paths_list = [str(p.resolve()) for p in target_files]
     _INPROC_HITS = {p: set() for p in target_paths_list}
-    _INPROC_CACHE = {}
 
     run_coverage._write_subprocess_coverage_hooks(target_paths_list)
 
@@ -95,29 +94,10 @@ def pytest_configure(config: pytest.Config) -> None:
         )
     os.environ["PYTHONNOUSERSITE"] = "0"
 
-    tool_id = sys.monitoring.COVERAGE_ID
-    try:
-        sys.monitoring.use_tool_id(tool_id, "pytest_conftest_coverage")
-    except ValueError:
-        return
-
-    def _on_line(code: Any, line_number: int) -> Any:
-        raw = code.co_filename
-        resolved = _INPROC_CACHE.get(raw, False)
-        if resolved is False:
-            try:
-                p = str(Path(raw).resolve())
-            except OSError:
-                p = None
-            resolved = p if p in _INPROC_HITS else None
-            _INPROC_CACHE[raw] = resolved
-        if resolved is not None:
-            _INPROC_HITS[resolved].add(line_number)
-        return sys.monitoring.DISABLE
-
-    sys.monitoring.register_callback(tool_id, sys.monitoring.events.LINE, _on_line)
-    sys.monitoring.set_events(tool_id, sys.monitoring.events.LINE)
-    _COVERAGE_ACTIVE = True
+    _STOP_INPROC = run_coverage.start_inproc_coverage(
+        _INPROC_HITS, tool_name="pytest_conftest_coverage"
+    )
+    _COVERAGE_ACTIVE = _STOP_INPROC is not None
 
 
 def pytest_collection_modifyitems(
@@ -141,18 +121,15 @@ def pytest_collection_modifyitems(
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    global _COVERAGE_ACTIVE
+    global _COVERAGE_ACTIVE, _STOP_INPROC
     if _COVERAGE_ACTIVE:
         print(
             "\n[coverage] Saving and merging in-process coverage data — process is still working, please wait...",
             flush=True,
         )
-        tool_id = sys.monitoring.COVERAGE_ID
-        try:
-            sys.monitoring.set_events(tool_id, 0)
-            sys.monitoring.free_tool_id(tool_id)
-        except Exception:
-            pass
+        if _STOP_INPROC is not None:
+            _STOP_INPROC()
+            _STOP_INPROC = None
         _COVERAGE_ACTIVE = False
 
         run_coverage.COV_DATA_DIR.mkdir(parents=True, exist_ok=True)

@@ -1011,8 +1011,22 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         assert io_mod.inspect_from_source(str(map_py), "MapHolder") is True
         assert "[MAP" in capsys.readouterr().out
 
+        # Verify get_available_types falls back to installed site-packages when client_libs is absent
+        orig_isdir = io_mod.os.path.isdir
+        with patch.object(
+            io_mod.os.path,
+            "isdir",
+            side_effect=lambda p: False if "client_libs" in str(p) else orig_isdir(p),
+        ):
+            io_mod._AVAILABLE_TYPES_CACHE.clear()
+            sp_types = io_mod.get_available_types("v26")
+            assert "CampaignStatusEnum" in sp_types
+            assert "Campaign" in sp_types
+
+        bad_client = MagicMock()
+        bad_client.get_type.side_effect = ValueError("Unknown type")
         with pytest.raises(SystemExit):
-            io_mod.inspect_protobuf("CompletelyNonExistentXyzType", "v26", client=MagicMock())
+            io_mod.inspect_protobuf("CompletelyNonExistentXyzType", "v26", client=bad_client)
 
         # 2. validate_gaql: GoogleAdsFieldService metadata query, change_status LIMIT 0 error, customer_id cache key
         mock_gads_client = MagicMock()
@@ -1820,6 +1834,75 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         )
         assert conv_res["status"] == "COMPLETED"
 
+    def test_run_coverage_python_311_settrace_fallback(self, tmp_path, monkeypatch):
+        """Verifies run_coverage works when sys.monitoring is absent (Python 3.11)."""
+        import os
+        import run_coverage
 
+        sample_mod = tmp_path / "py311_cov_sample.py"
+        sample_mod.write_text(
+            "import threading\n"
+            "def compute(x):\n"
+            "    out = [x + 1]\n"
+            "    def worker():\n"
+            "        out.append(x + 2)\n"
+            "    t = threading.Thread(target=worker)\n"
+            "    t.start()\n"
+            "    t.join()\n"
+            "    return sum(out)\n"
+            "if __name__ == '__main__':\n"
+            "    print(compute(10))\n",
+            encoding="utf-8",
+        )
+        abs_sample = str(sample_mod.resolve())
+        hits = {abs_sample: set()}
 
+        prev_sys_trace = sys.gettrace()
+        # Simulate Python < 3.12 where sys.monitoring does not exist
+        with patch.object(run_coverage, "sys", wraps=sys) as fake_sys:
+            if hasattr(fake_sys, "monitoring"):
+                delattr(fake_sys, "monitoring")
+            stop_fn = run_coverage.start_inproc_coverage(
+                hits, tool_name="test_py311_fallback", force_settrace=True
+            )
+            assert callable(stop_fn)
+            try:
+                ns = {"__file__": abs_sample, "__name__": "py311_cov_sample"}
+                exec(compile(sample_mod.read_text(encoding="utf-8"), abs_sample, "exec"), ns)
+                assert ns["compute"](5) == 13
+            finally:
+                stop_fn()
 
+        assert sys.gettrace() is prev_sys_trace
+        # Verify both main-thread and worker-thread lines were recorded
+        assert {2, 3, 5, 8, 9}.issubset(hits[abs_sample])
+
+        # Verify subprocess hook with GADS_COVERAGE_FORCE_SETTRACE=1 writes cov_*.json
+        fake_hook_dir = tmp_path / "cov_hook"
+        fake_data_dir = tmp_path / "cov_data"
+        monkeypatch.setattr(run_coverage, "COV_HOOK_DIR", fake_hook_dir)
+        monkeypatch.setattr(run_coverage, "COV_DATA_DIR", fake_data_dir)
+        run_coverage._write_subprocess_coverage_hooks([abs_sample])
+
+        sub_env = os.environ.copy()
+        sub_env["PYTHONPATH"] = (
+            f"{fake_hook_dir}{os.pathsep}{sub_env.get('PYTHONPATH', '')}"
+            if sub_env.get("PYTHONPATH")
+            else str(fake_hook_dir)
+        )
+        sub_env["PYTHONNOUSERSITE"] = "0"
+        sub_env["GADS_COVERAGE_FORCE_SETTRACE"] = "1"
+
+        proc = subprocess.run(
+            [sys.executable, abs_sample],
+            env=sub_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == "23"
+        cov_files = list(fake_data_dir.glob("cov_*.json"))
+        assert len(cov_files) == 1
+        sub_hits = json.loads(cov_files[0].read_text(encoding="utf-8"))
+        assert {2, 3, 5, 8, 9, 11}.issubset(set(sub_hits[abs_sample]))

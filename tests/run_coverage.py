@@ -15,9 +15,10 @@
 
 """Command-line line-coverage runner and reporter for the Google Ads API Developer Assistant.
 
-Measures both in-process (`pytest`) and subprocess (`sys.monitoring` via `sitecustomize.py`)
-line execution across all plugin Python modules and prints per-module and per-category
-coverage tables.
+Measures both in-process (`pytest`) and subprocess (`sitecustomize.py`) line execution
+using `sys.monitoring` on Python 3.12+ (with automatic `sys.settrace` + `threading.settrace`
+fallback on Python 3.11) across all plugin Python modules and prints per-module and
+per-category coverage tables.
 
 Usage:
     # Full coverage run (pytest + CLI integration scripts):
@@ -36,12 +37,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 import trace
 from typing import Any
 import pytest
@@ -79,57 +82,112 @@ import json
 import os
 from pathlib import Path
 import sys
+import threading
 import uuid
 
-TARGET_PATHS = set({target_paths_list!r})
-COV_DATA_DIR = Path({str(COV_DATA_DIR)!r})
-_hits = {{p: set() for p in TARGET_PATHS}}
-_cache = {{}}
+if not getattr(sys, "_gads_subproc_cov_installed", False):
+    sys._gads_subproc_cov_installed = True
+    TARGET_PATHS = {target_paths_list!r}
+    _NORM_TO_CANON = {{os.path.normcase(os.path.realpath(p)): p for p in TARGET_PATHS}}
+    COV_DATA_DIR = Path({str(COV_DATA_DIR)!r})
+    _hits = {{p: set() for p in TARGET_PATHS}}
+    _cache = {{}}
+    _force_settrace = os.environ.get("GADS_COVERAGE_FORCE_SETTRACE") == "1"
+    _used_settrace = False
 
-try:
-    TOOL_ID = 4
-    sys.monitoring.use_tool_id(TOOL_ID, "subproc_cov")
-
-    def _on_line(code, line_number):
-        raw = code.co_filename
-        resolved = _cache.get(raw, False)
-        if resolved is False:
+    try:
+        _mon_attached = False
+        if hasattr(sys, "monitoring") and not _force_settrace:
             try:
-                p = str(Path(raw).resolve())
-            except OSError:
-                p = None
-            resolved = p if p in TARGET_PATHS else None
-            _cache[raw] = resolved
-        if resolved is not None:
-            _hits[resolved].add(line_number)
-        return sys.monitoring.DISABLE
+                TOOL_ID = 4
+                sys.monitoring.use_tool_id(TOOL_ID, "subproc_cov")
 
-    sys.monitoring.register_callback(TOOL_ID, sys.monitoring.events.LINE, _on_line)
-    sys.monitoring.set_events(TOOL_ID, sys.monitoring.events.LINE)
+                def _on_line(code, line_number):
+                    raw = code.co_filename
+                    resolved = _cache.get(raw, False)
+                    if resolved is False:
+                        try:
+                            p = os.path.normcase(os.path.realpath(raw))
+                        except OSError:
+                            p = ""
+                        resolved = _NORM_TO_CANON.get(p)
+                        _cache[raw] = resolved
+                    if resolved is not None:
+                        _hits[resolved].add(line_number)
+                    return sys.monitoring.DISABLE
 
-    @atexit.register
-    def _dump():
-        non_empty = {{k: list(v) for k, v in _hits.items() if v}}
-        if non_empty:
-            out_file = COV_DATA_DIR / f"cov_{{os.getpid()}}_{{uuid.uuid4().hex[:8]}}.json"
-            try:
-                out_file.write_text(json.dumps(non_empty), encoding="utf-8")
-            except OSError:
-                pass
-except Exception:
-    pass
+                sys.monitoring.register_callback(TOOL_ID, sys.monitoring.events.LINE, _on_line)
+                sys.monitoring.set_events(TOOL_ID, sys.monitoring.events.LINE)
+                _mon_attached = True
+            except ValueError:
+                _mon_attached = False
+
+        if not _mon_attached:
+            _used_settrace = True
+
+            def _make_local_trace(hit_set):
+                def _local_trace(frame, event, arg):
+                    if event == "line":
+                        hit_set.add(frame.f_lineno)
+                    return _local_trace
+
+                return _local_trace
+
+            _local_tracers = {{
+                norm_p: _make_local_trace(_hits[canon_p])
+                for norm_p, canon_p in _NORM_TO_CANON.items()
+            }}
+
+            def _global_trace(frame, event, arg):
+                if event != "call":
+                    return None
+                raw = frame.f_code.co_filename
+                lt = _cache.get(raw, False)
+                if lt is False:
+                    try:
+                        p = os.path.normcase(os.path.realpath(raw))
+                    except OSError:
+                        p = ""
+                    lt = _local_tracers.get(p)
+                    _cache[raw] = lt
+                return lt
+
+            sys.settrace(_global_trace)
+            threading.settrace(_global_trace)
+
+        @atexit.register
+        def _dump():
+            if _used_settrace:
+                sys.settrace(None)
+                threading.settrace(None)
+            non_empty = {{k: list(v) for k, v in _hits.items() if v}}
+            if non_empty:
+                out_file = COV_DATA_DIR / f"cov_{{os.getpid()}}_{{uuid.uuid4().hex[:8]}}.json"
+                try:
+                    out_file.write_text(json.dumps(non_empty), encoding="utf-8")
+                except OSError:
+                    pass
+    except Exception:
+        pass
 """
     (COV_HOOK_DIR / "usercustomize.py").write_text(usercustomize_code, encoding="utf-8")
     (COV_HOOK_DIR / "sitecustomize.py").write_text(
         usercustomize_code
-        + "\n# Chain to next sitecustomize on sys.path if present\n"
+        + "\n# Chain to next sitecustomize on sys.path if present (without cycles)\n"
         + "import importlib.util\n"
-        + "for _p in sys.path:\n"
-        + "    if _p != "
-        + repr(str(COV_HOOK_DIR))
-        + ":\n"
-        + "        _cand = os.path.join(_p, 'sitecustomize.py')\n"
-        + "        if os.path.isfile(_cand):\n"
+        + "_seen_sc = getattr(sys, '_gads_chained_sitecustomizes', None)\n"
+        + "if _seen_sc is None:\n"
+        + "    _seen_sc = set()\n"
+        + "    sys._gads_chained_sitecustomizes = _seen_sc\n"
+        + "_seen_sc.add(os.path.normcase(os.path.realpath(__file__)))\n"
+        + "for _p in list(sys.path):\n"
+        + "    if not _p:\n"
+        + "        continue\n"
+        + "    _cand = os.path.join(_p, 'sitecustomize.py')\n"
+        + "    if os.path.isfile(_cand):\n"
+        + "        _real_cand = os.path.normcase(os.path.realpath(_cand))\n"
+        + "        if _real_cand not in _seen_sc:\n"
+        + "            _seen_sc.add(_real_cand)\n"
         + "            _spec = importlib.util.spec_from_file_location('_chained_sitecustomize', _cand)\n"
         + "            if _spec and _spec.loader:\n"
         + "                _m = importlib.util.module_from_spec(_spec)\n"
@@ -139,8 +197,104 @@ except Exception:
     )
 
 
+def start_inproc_coverage(
+    inproc_hits: dict[str, set[int]],
+    tool_name: str = "pytest_coverage",
+    force_settrace: bool | None = None,
+) -> Callable[[], None] | None:
+    """Starts in-process line coverage using sys.monitoring (3.12+) or sys.settrace (<3.12).
+
+    Returns a cleanup callable that stops tracing and restores prior state.
+    """
+    if force_settrace is None:
+        force_settrace = os.environ.get("GADS_COVERAGE_FORCE_SETTRACE") == "1"
+
+    norm_to_canonical: dict[str, str] = {
+        os.path.normcase(os.path.realpath(p)): p for p in inproc_hits
+    }
+    inproc_cache: dict[str, Any] = {}
+
+    if hasattr(sys, "monitoring") and not force_settrace:
+        tool_id = sys.monitoring.COVERAGE_ID
+        try:
+            sys.monitoring.use_tool_id(tool_id, tool_name)
+        except ValueError:
+            tool_id = -1
+
+        if tool_id >= 0:
+
+            def on_line(code: Any, line_number: int) -> Any:
+                raw = code.co_filename
+                resolved = inproc_cache.get(raw, False)
+                if resolved is False:
+                    try:
+                        p = os.path.normcase(os.path.realpath(raw))
+                    except OSError:
+                        p = ""
+                    resolved = norm_to_canonical.get(p)
+                    inproc_cache[raw] = resolved
+                if resolved is not None:
+                    inproc_hits[resolved].add(line_number)
+                return sys.monitoring.DISABLE
+
+            sys.monitoring.register_callback(
+                tool_id, sys.monitoring.events.LINE, on_line
+            )
+            sys.monitoring.set_events(tool_id, sys.monitoring.events.LINE)
+
+            def _stop_monitoring() -> None:
+                try:
+                    sys.monitoring.set_events(tool_id, 0)
+                    sys.monitoring.free_tool_id(tool_id)
+                except Exception:
+                    pass
+
+            return _stop_monitoring
+
+    prev_sys_trace = sys.gettrace()
+    prev_thread_trace = (
+        threading.gettrace() if hasattr(threading, "gettrace") else None
+    )
+
+    def _make_local_trace(hit_set: set[int]) -> Any:
+        def _local_trace(frame: Any, event: str, arg: Any) -> Any:
+            if event == "line":
+                hit_set.add(frame.f_lineno)
+            return _local_trace
+
+        return _local_trace
+
+    local_tracers: dict[str, Any] = {
+        norm_p: _make_local_trace(inproc_hits[canon_p])
+        for norm_p, canon_p in norm_to_canonical.items()
+    }
+
+    def _global_trace(frame: Any, event: str, arg: Any) -> Any:
+        if event != "call":
+            return None
+        raw = frame.f_code.co_filename
+        lt = inproc_cache.get(raw, False)
+        if lt is False:
+            try:
+                p = os.path.normcase(os.path.realpath(raw))
+            except OSError:
+                p = ""
+            lt = local_tracers.get(p)
+            inproc_cache[raw] = lt
+        return lt
+
+    sys.settrace(_global_trace)
+    threading.settrace(_global_trace)
+
+    def _stop_settrace() -> None:
+        sys.settrace(prev_sys_trace)
+        threading.settrace(prev_thread_trace)
+
+    return _stop_settrace
+
+
 def run_coverage_collection(fast_mode: bool = True, clean: bool = True) -> int:
-    """Runs pytest (and platform CLI script tests when not in fast mode) under sys.monitoring."""
+    """Runs pytest (and platform CLI script tests when not in fast mode) under line coverage."""
     target_files = get_target_files()
     target_paths_list = [str(p.resolve()) for p in target_files]
     inproc_hits: dict[str, set[int]] = {p: set() for p in target_paths_list}
@@ -160,26 +314,7 @@ def run_coverage_collection(fast_mode: bool = True, clean: bool = True) -> int:
         )
     os.environ["PYTHONNOUSERSITE"] = "0"
 
-    tool_id = sys.monitoring.COVERAGE_ID
-    sys.monitoring.use_tool_id(tool_id, "pytest_coverage")
-    inproc_cache: dict[str, str | None] = {}
-
-    def on_line(code: Any, line_number: int) -> Any:
-        raw = code.co_filename
-        resolved = inproc_cache.get(raw, False)
-        if resolved is False:
-            try:
-                p = str(Path(raw).resolve())
-            except OSError:
-                p = None
-            resolved = p if p in inproc_hits else None
-            inproc_cache[raw] = resolved
-        if resolved is not None:
-            inproc_hits[resolved].add(line_number)
-        return sys.monitoring.DISABLE
-
-    sys.monitoring.register_callback(tool_id, sys.monitoring.events.LINE, on_line)
-    sys.monitoring.set_events(tool_id, sys.monitoring.events.LINE)
+    stop_inproc = start_inproc_coverage(inproc_hits, tool_name="pytest_coverage")
 
     pytest_args = ["-q", "--ignore=tests/run_coverage.py"]
     if fast_mode:
@@ -199,9 +334,8 @@ def run_coverage_collection(fast_mode: bool = True, clean: bool = True) -> int:
         exit_code = int(pytest.main(pytest_args))
     finally:
         os.environ.pop("GADS_RUNNING_FROM_RUN_COVERAGE", None)
-
-    sys.monitoring.set_events(tool_id, 0)
-    sys.monitoring.free_tool_id(tool_id)
+        if stop_inproc is not None:
+            stop_inproc()
 
     if not fast_mode:
         env = os.environ.copy()
