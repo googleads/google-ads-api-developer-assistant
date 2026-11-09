@@ -4,51 +4,53 @@
 [![Target Runtimes](https://img.shields.io/badge/runtimes-Antigravity%20%7C%20Claude%20Desktop%20%7C%20Claude%20Code-brightgreen.svg)](plugin.json)
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](rules/google_ads_rules.md)
 
-An agentic developer assistant plugin for the **Google Ads API**. This plugin equips AI assistants in **Antigravity (agy)**, **Claude Desktop**, and **Claude Code CLI** with deep domain intelligence, executable diagnostic tools, static analysis pipelines, Protobuf object inspectors, conversion validators, and strict HITL API mutation guardrails.
+This plugin adds **Google Ads API** tools to AI assistants in **Antigravity (`agy`)**, **Claude Desktop**, and **Claude Code CLI**. It includes diagnostic scripts, static analysis tools, Protobuf object inspectors, conversion validators, and a 4-Step Human-in-the-Loop (HITL) mutation guard.
 
 ---
 
 ## 📑 Table of Contents
 
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [Plugin Architecture](#plugin-architecture)
-- [Skills Reference](#skills-reference)
-- [Core Directives & Guardrails](#core-directives--guardrails)
+- [Overview](#-overview)
+- [Key Features](#-key-features)
+- [Plugin Architecture](#-plugin-architecture)
+- [Claude Code Custom Slash Commands](#-claude-code-custom-slash-commands)
+- [Skills Reference](#-skills-reference)
+- [Core Directives & Guardrails](#-core-directives--guardrails)
 - [Mutate Operations (4-Step HITL & Consequence Verification)](#-mutate-operations-4-step-hitl--consequence-verification)
-- [Installation & Setup](#installation--setup)
+- [Installation & Setup](#-installation--setup)
   - [1. Prerequisites](#1-prerequisites)
   - [2. Plugin Installation](#2-plugin-installation)
   - [3. Credentials Configuration](#3-credentials-configuration)
-  - [4. Assistant Configuration (`config/assistant_config`)](#4-assistant-configuration-configassistant_config)
-- [CLI Scripts & Usage](#cli-scripts--usage)
+  - [4. Assistant Configuration (`config/assistant_config`) & Startup Synchronization](#4-assistant-configuration-configassistant_config--startup-synchronization)
+- [CLI Scripts & Usage](#-cli-scripts--usage)
   - [GAQL Validation](#gaql-validation)
   - [Protobuf Object & Enum Inspection](#protobuf-object--enum-inspection)
   - [Manager Account (MCC) Hierarchy](#manager-account-mcc-hierarchy)
   - [Conversion Troubleshooting & CSV Validation](#conversion-troubleshooting--csv-validation)
   - [Performance Max Webpage Exclusion Filter](#performance-max-webpage-exclusion-filter)
-- [Sidecar Daemon & MCP Integration](#sidecar-daemon--mcp-integration)
-- [Migration & Environment Notes](#migration--environment-notes)
-- [License](#license)
+  - [Client Libraries Discovery & Upstream GitHub Sync](#client-libraries-discovery--upstream-github-sync)
+- [Sidecar Daemon & MCP Integration](#-sidecar-daemon--mcp-integration)
+- [Migration & Environment Notes](#-migration--environment-notes)
+- [License](#-license)
 
 ---
 
 ## 🎯 Overview
 
-The **Google Ads API Developer Assistant** plugin is engineered specifically for developers building against the Google Ads API. It combines deep schema inspection and read-only diagnostics with a **4-Step Human-in-the-Loop (HITL) Mutation & Consequence Verification Protocol**—ensuring any API write is first dry-run validated (`validate_only=True`), cryptographically signed (`saved/data/last_dry_run.json`), and explicitly approved by the user after reviewing its financial and operational consequences.
+The **Google Ads API Developer Assistant** plugin helps developers build and test code for the Google Ads API. It combines schema inspection and read-only diagnostics with a **4-Step Human-in-the-Loop (HITL) Mutation & Consequence Verification Protocol**. Before any live API write runs, the plugin validates the request with `validate_only=True`, writes a SHA-256 receipt to `saved/data/last_dry_run.json`, shows the financial and serving effects, and waits for your approval.
 
 ---
 
 ## 🚀 Key Features
 
-- **4-Step HITL Mutation & Consequence Verification (`execute-mutation` — `create` & `update` Only)**: Two-phase `--dry-run` (`validate_only=True`) and `--execute` workflow for `create` and `update` operations (deletion / `remove` is strictly prohibited) with SHA-256 tamper-evident receipts (`saved/data/last_dry_run.json`), financial/serving consequence analysis, and deterministic `PreToolUse` hook confirmation (`"decision": "force_ask"`).
-- **Programmatic GAQL Validation**: 4-step sequence (Schema Discovery, Compatibility Checking, Static Analysis, and Runtime Dry-Runs using `validate_only=True`). Enforces strict rules such as zero `OR` operator tolerance.
-- **Dynamic Protobuf Object Inspection**: Real-time inspection of API resources, messages, and Enums from the official Python client library descriptors without guessing schema structures.
-- **Conversion Upload Troubleshooting**: Diagnostic reporting against `offline_conversion_upload_client_summary`, click timestamp vs. conversion timestamp logic validation, GCLID sampling, and pre-upload CSV structure checks.
-- **MCC Account Hierarchy Exploration**: Recursive discovery of child Customer IDs (CIDs) and sub-manager structures with console trees or CSV exports.
-- **Performance Max Webpage Exclusions**: Scripting for asset group webpage listing filter trees (`vertical = WEBPAGE`).
-- **Automated Linting & Typing**: Automatic code formatting and linting via `ruff`, full Python type hinting, and standard `GoogleAdsException` traceback suppression wrappers.
-- **A2A Sidecar & MCP Service**: Background HTTP daemon supporting agent-to-agent task execution and Model Context Protocol (MCP) tool integration.
+- **4-Step HITL Mutation & Consequence Verification (`execute-mutation` — `create` & `update` Only)**: Runs a two-step `--dry-run` (`validate_only=True`) and `--execute` workflow for `create` and `update` operations. Delete (`remove`) operations are always blocked. It writes SHA-256 receipts (`saved/data/last_dry_run.json`), shows financial and serving effects, and prompts for `PreToolUse` hook confirmation (`"decision": "force_ask"`).
+- **GAQL Validation**: Checks queries in 4 steps (Schema Lookup, Compatibility Check, Static Analysis, and Live Dry-Run with `validate_only=True`). It blocks invalid syntax such as the `OR` operator.
+- **Protobuf Object Inspection**: Reads API resources, messages, and Enums directly from the Python client library descriptors.
+- **Conversion Upload Troubleshooting**: Checks `offline_conversion_upload_client_summary`, compares click timestamps with conversion timestamps, samples GCLIDs, and validates CSV files before upload.
+- **MCC Account Hierarchy Lookup**: Finds child Customer IDs (CIDs) and sub-manager accounts, and prints a console tree or saves a CSV file.
+- **Performance Max Webpage Exclusions**: Creates scripts for asset group webpage listing filter trees (`vertical = WEBPAGE`).
+- **Code Linting & Error Handling**: Formats and checks all generated Python scripts with `ruff`, adds Python type hints, and catches `GoogleAdsException` errors.
+- **A2A Sidecar & MCP Service**: Runs a background HTTP server for Agent-to-Agent (A2A) tasks and Model Context Protocol (MCP) tools.
 
 ---
 
@@ -56,16 +58,16 @@ The **Google Ads API Developer Assistant** plugin is engineered specifically for
 
 ```
 google-ads-api-developer-assistant/
-├── plugin.json                              # Plugin manifest registering metadata & capabilities
-├── README.md                                # Documentation & usage guide
-├── migration.md                             # Platform migration notes & runtime limitations
+├── plugin.json                              # Plugin manifest for metadata and features
+├── README.md                                # Documentation and usage guide
+├── migration.md                             # Platform migration notes
 ├── mcp_config.json                          # MCP server configuration
 ├── config/
 │   ├── assistant_config                     # Unified TOML config (api_version, customer_id, execute_mutates)
-│   └── config_init.py                       # Session config initializer & PreInvocation/PreToolUse hook
+│   └── config_init.py                       # Session config initializer and PreInvocation/PreToolUse hook
 ├── rules/
-│   └── google_ads_rules.md                  # Mandatory system directives & safety constraints
-├── commands/                               # Claude Code custom slash commands
+│   └── google_ads_rules.md                  # System directives and safety rules
+├── commands/                               # Claude Code slash commands
 │   ├── validate-gaql.md                     # /validate-gaql [query]
 │   ├── inspect-object.md                    # /inspect-object <name>
 │   ├── troubleshoot-conversions.md          # /troubleshoot-conversions [cid] [csv]
@@ -76,38 +78,38 @@ google-ads-api-developer-assistant/
 │   ├── step-by-step.md                      # /step-by-step <task>
 │   ├── sync-client-libs.md                  # /sync-client-libs [lang]
 │   └── ext-version.md                       # /ext-version
-├── skills/                                  # Bundled skills and executable diagnostic scripts
-│   ├── assistant-tutorial/                  # Interactive guided walkthrough
+├── skills/                                  # Skills and diagnostic scripts
+│   ├── assistant-tutorial/                  # Interactive user tutorial
 │   │   └── SKILL.md
-│   ├── execute-mutation/                    # 4-Step HITL mutation runner & consequence verifier
+│   ├── execute-mutation/                    # 4-Step HITL mutation runner and consequence verifier
 │   │   ├── SKILL.md
 │   │   └── scripts/run_mutation.py
-│   ├── explain/                             # Conceptual 4-part explanations with real-world analogies
+│   ├── explain/                             # 4-part explanations with analogies
 │   │   └── SKILL.md
-│   ├── ext-version/                         # Assistant & API version discovery
+│   ├── ext-version/                         # Assistant and API version lookup
 │   │   ├── SKILL.md
 │   │   └── scripts/
 │   │       ├── get_extension_version.py
 │   │       └── get_latest_api_version.py
-│   ├── get-cids-under-mcc/                  # Account hierarchy resolution & CID listing
+│   ├── get-cids-under-mcc/                  # Account hierarchy lookup and CID list
 │   │   ├── SKILL.md
 │   │   └── scripts/get_cids_under_mcc.py
-│   ├── inspect-object/                      # Dynamic Protobuf message and Enum inspector
+│   ├── inspect-object/                      # Protobuf message and Enum inspector
 │   │   ├── SKILL.md
 │   │   └── scripts/inspect_object.py
 │   ├── pmax-listing-filter/                 # Performance Max asset group webpage listing filters
 │   │   ├── SKILL.md
 │   │   └── scripts/create_pmax_webpage_filter.py
-│   ├── step-by-step/                        # Structured multi-phase task breakdown
+│   ├── step-by-step/                        # Multi-step task list
 │   │   └── SKILL.md
-│   ├── troubleshoot-conversions/            # Conversion diagnostics, CSV validation & GCLID sampling
+│   ├── troubleshoot-conversions/            # Conversion diagnostics, CSV checks, and GCLID sampling
 │   │   ├── SKILL.md
 │   │   ├── references/report_template.md
 │   │   └── scripts/
 │   │       ├── get_recent_gclids.py
 │   │       ├── troubleshoot_conversions.py
 │   │       └── validate_conversion_upload.py
-│   ├── sync-client-libs/                    # Automated client library discovery & GitHub sync
+│   ├── sync-client-libs/                    # Client library lookup and GitHub sync
 │   │   ├── SKILL.md
 │   │   └── scripts/sync_client_libs.py
 │   └── validate-gaql/                       # 4-step GAQL validation and live dry-run runner
@@ -117,7 +119,7 @@ google-ads-api-developer-assistant/
 │   └── google-ads-a2a-service/              # Agent-to-Agent (A2A) HTTP sidecar service
 │       ├── sidecar.json
 │       └── server.py
-└── client_libs/                             # Source-of-truth Google Ads Python client library & protos
+└── client_libs/                             # Local Google Ads Python client library and protos
     └── google-ads-python/
 ```
 
@@ -125,20 +127,20 @@ google-ads-api-developer-assistant/
 
 ## ⚡ Claude Code Custom Slash Commands
 
-When installed in Claude Code, the plugin provides custom slash commands with built-in parameter extraction:
+In Claude Code, use these slash commands to run specific tools:
 
 | Slash Command | Description | Example Usage |
 | :--- | :--- | :--- |
-| **`/validate-gaql`** | Validates GAQL queries via 4-step static analysis and API dry-runs. | `/validate-gaql SELECT campaign.id FROM campaign` |
-| **`/inspect-object`** | Inspects Protobuf fields, field types, labels, and Enum values. | `/inspect-object Campaign` or `/inspect-object CampaignStatusEnum` |
-| **`/troubleshoot-conversions`** | Diagnoses conversion upload failures, validates CSV format, samples GCLIDs. | `/troubleshoot-conversions 1234567890 uploads.csv` |
-| **`/get-cids`** | Retrieves child account hierarchy under an MCC account. | `/get-cids 1234567890` |
-| **`/pmax-filter`** | Generates Asset Group webpage exclusion filter trees for PMax. | `/pmax-filter 1234567890 987654321` |
-| **`/explain`** | Formats conceptual topics into 4 sections (*Big Picture*, *Analogy*, *Interconnectedness*, *Simple Language*). | `/explain click_view` |
-| **`/assistant-tutorial`** | Starts an interactive, progressive conversational guide. | `/assistant-tutorial` |
-| **`/step-by-step`** | Breaks complex Google Ads API tasks into structured sequential phases. | `/step-by-step Create an AI Max for Search campaign` |
-| **`/sync-client-libs`** | Synchronizes local client libraries in `client_libs/` with latest GitHub releases. | `/sync-client-libs python` |
-| **`/ext-version`** | Displays the assistant plugin version and active API version. | `/ext-version` |
+| **`/validate-gaql`** | Checks GAQL queries with 4-step static analysis and API dry-runs. | `/validate-gaql SELECT campaign.id FROM campaign` |
+| **`/inspect-object`** | Shows Protobuf fields, field types, labels, and Enum values. | `/inspect-object Campaign` or `/inspect-object CampaignStatusEnum` |
+| **`/troubleshoot-conversions`** | Checks conversion upload errors, validates CSV format, and samples GCLIDs. | `/troubleshoot-conversions 1234567890 uploads.csv` |
+| **`/get-cids`** | Lists child accounts under an MCC account. | `/get-cids 1234567890` |
+| **`/pmax-filter`** | Creates Asset Group webpage exclusion filter trees for PMax. | `/pmax-filter 1234567890 987654321` |
+| **`/explain`** | Explains a topic in 4 parts (*Big Picture*, *Analogy*, *Interconnectedness*, *Simple Language*). | `/explain click_view` |
+| **`/assistant-tutorial`** | Starts an interactive tutorial. | `/assistant-tutorial` |
+| **`/step-by-step`** | Breaks complex Google Ads API tasks into numbered steps. | `/step-by-step Create an AI Max for Search campaign` |
+| **`/sync-client-libs`** | Updates local client libraries in `client_libs/` from the latest GitHub releases. | `/sync-client-libs python` |
+| **`/ext-version`** | Shows the plugin version and the active API version. | `/ext-version` |
 
 ---
 
@@ -146,49 +148,49 @@ When installed in Claude Code, the plugin provides custom slash commands with bu
 
 | Skill Name | Description | Key Script / Asset |
 | :--- | :--- | :--- |
-| **`validate-gaql`** | Validates GAQL queries via 4-step static analysis and runtime dry-runs with `validate_only=True`. | `skills/validate-gaql/scripts/validate_gaql.py` |
-| **`inspect-object`** | Inspects Protobuf fields, field types, labels (`OPTIONAL`/`REPEATED`), and Enum values dynamically. | `skills/inspect-object/scripts/inspect_object.py` |
-| **`troubleshoot-conversions`** | Diagnoses conversion upload failures, verifies upload summaries, samples GCLIDs, and pre-validates CSVs. | `skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py` |
-| **`get-cids-under-mcc`** | Traverses Manager Account (MCC) hierarchy to list child CIDs with tree depth and export to CSV. | `skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py` |
-| **`pmax-listing-filter`** | Generates asset group webpage exclusion listing filter trees (`vertical = WEBPAGE`) for PMax campaigns. | `skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py` |
-| **`ext-version`** | Retrieves current version information for diagnostic reports. | `skills/ext-version/scripts/get_extension_version.py` |
-| **`explain`** | Formats conceptual topics into 4 mandatory sections: *Big Picture*, *Analogy*, *Interconnectedness*, *Simple Language*. | `skills/explain/SKILL.md` |
-| **`assistant-tutorial`** | Interactive, progressive conversational guide covering 11 core Google Ads API topics. | `skills/assistant-tutorial/SKILL.md` |
-| **`sync-client-libs`** | Discovers client libraries under `client_libs/`, verifies installed releases against GitHub, and automatically syncs outdated codebases. | `skills/sync-client-libs/scripts/sync_client_libs.py` |
-| **`execute-mutation`** | Executes Google Ads API `create` and `update` mutation operations (deletion / `remove` is strictly prohibited) using the 4-Step HITL Verification & Consequence Disclosure Protocol. | `skills/execute-mutation/scripts/run_mutation.py` |
-| **`step-by-step`** | Breaks complex multi-part procedures into numbered phases with verification checkpoints. | `skills/step-by-step/SKILL.md` |
+| **`validate-gaql`** | Checks GAQL queries with 4-step static analysis and `validate_only=True` dry-runs. | `skills/validate-gaql/scripts/validate_gaql.py` |
+| **`inspect-object`** | Shows Protobuf fields, field types, labels (`OPTIONAL` or `REPEATED`), and Enum values. | `skills/inspect-object/scripts/inspect_object.py` |
+| **`troubleshoot-conversions`** | Checks conversion upload errors, reads upload summaries, samples GCLIDs, and validates CSV files. | `skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py` |
+| **`get-cids-under-mcc`** | Finds child CIDs under a Manager Account (MCC) and prints a tree or saves a CSV file. | `skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py` |
+| **`pmax-listing-filter`** | Builds asset group webpage exclusion filter trees (`vertical = WEBPAGE`) for PMax campaigns. | `skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py` |
+| **`ext-version`** | Reads current version numbers for diagnostic reports. | `skills/ext-version/scripts/get_extension_version.py` |
+| **`explain`** | Explains topics in 4 parts: *Big Picture*, *Analogy*, *Interconnectedness*, and *Simple Language*. | `skills/explain/SKILL.md` |
+| **`assistant-tutorial`** | Guides you through 11 Google Ads API topics in an interactive tutorial. | `skills/assistant-tutorial/SKILL.md` |
+| **`sync-client-libs`** | Checks client libraries in `client_libs/` against GitHub releases and updates older libraries. | `skills/sync-client-libs/scripts/sync_client_libs.py` |
+| **`execute-mutation`** | Runs Google Ads API `create` and `update` mutations (blocks delete / `remove` operations) with the 4-Step HITL protocol. | `skills/execute-mutation/scripts/run_mutation.py` |
+| **`step-by-step`** | Divides complex tasks into numbered steps with verification checks. | `skills/step-by-step/SKILL.md` |
 
 ---
 
 ## 🔒 Core Directives & Guardrails
 
-The assistant strictly complies with [google_ads_rules.md](rules/google_ads_rules.md):
+The assistant follows the rules in [google_ads_rules.md](rules/google_ads_rules.md):
 
 1. **Validate Before Act Protocol**:
-   - Reads the target Google Ads API version (`api_version`) from `config/assistant_config`. If unset, identifies the latest stable release, presents it for user confirmation, and persists it.
-2. **4-Step HITL Mutation & Consequence Verification Mandate (`create` and `update` Only — Deletion Prohibited)**:
-   - Only **`create`** and **`update`** mutations are allowed; deletion (`remove` / `remove_all` operations, `remove_*` RPCs, or `status = REMOVED`) is strictly prohibited. Executing live `create` or `update` mutations requires `execute_mutates = true` in `config/assistant_config`, a verified `validate_only=True` dry-run receipt (`saved/data/last_dry_run.json`), and explicit consequence confirmation via the `PreToolUse` hook (`config/config_init.py`).
-3. **GAQL Syntax Strictness**:
-   - **No `OR` operator**: The `OR` operator is strictly forbidden in GAQL. The assistant rewrites queries using `IN` or splits them into separate requests.
-   - **No `FROM` clause in metadata**: Queries against `GoogleAdsFieldService` must not contain a `FROM` clause.
-   - **Bare field names**: Metadata queries use un-prefixed field names (`name`, `category`).
+   - Reads the active Google Ads API version (`api_version`) from `config/assistant_config`. If `api_version` is not set, the assistant finds the latest stable release, asks for your confirmation, and saves it.
+2. **4-Step HITL Mutation Mandate (`create` and `update` Only — Deletion Prohibited)**:
+   - Allows only **`create`** and **`update`** mutations. It blocks all delete operations (`remove` / `remove_all` operations, `remove_*` RPCs, or `status = REMOVED`). To run a live `create` or `update` mutation, you must set `execute_mutates = true` in `config/assistant_config`, have a valid `validate_only=True` dry-run receipt (`saved/data/last_dry_run.json`), and approve the `PreToolUse` hook prompt (`config/config_init.py`).
+3. **GAQL Syntax Rules**:
+   - **No `OR` operator**: GAQL does not allow the `OR` operator. The assistant rewrites queries to use `IN` or splits them into separate queries.
+   - **No `FROM` clause in metadata**: Queries to `GoogleAdsFieldService` must not contain a `FROM` clause.
+   - **Bare field names**: Metadata queries use field names without prefixes (`name`, `category`).
 4. **Source of Truth**:
-   - The local `client_libs/google-ads-python/` repository provides the ultimate local source of truth for `.proto` definitions and official examples. Client library files are strictly read-only.
-5. **Traceback Suppression**:
-   - All generated Python scripts wrap calls in `try...except GoogleAdsException` to suppress verbose gRPC call stack dumps and output clean, actionable error messages.
+   - The local `client_libs/google-ads-python/` directory is the primary reference for `.proto` definitions and code examples. The assistant never modifies files in `client_libs/`.
+5. **Clean Error Output**:
+   - Generated Python scripts catch `GoogleAdsException` errors to hide long gRPC stack traces and print clear error messages.
 
 ---
 
 ## 🛡️ Mutate Operations (4-Step HITL & Consequence Verification)
 
-> **Create & Update Only (Deletion Prohibited):** Mutations are strictly limited to **`create`** and **`update`** operations. Any deletion (`remove` / `remove_all` operation fields, `remove_*` / `delete_*` RPC methods, or `status = REMOVED`) is hard-blocked (`BLOCKED_PROHIBITED_DELETION`) across the `PreToolUse` hook, `run_mutation.py`, and the A2A sidecar before any RPC is transmitted. To stop ad serving without deleting a resource, update its `status` to `PAUSED`.
+> **Create & Update Only (Deletion Prohibited):** You can run only **`create`** and **`update`** mutations. The `PreToolUse` hook, `run_mutation.py`, and the A2A sidecar block any delete operation (`remove` or `remove_all` fields, `remove_*` or `delete_*` RPC methods, or `status = REMOVED`) with `BLOCKED_PROHIBITED_DELETION` before any RPC call. To stop ad serving without deleting a resource, update its `status` to `PAUSED`.
 
-All write/mutation requests follow a strict two-gate defense-in-depth architecture combining the [`execute-mutation` skill](skills/execute-mutation/SKILL.md) with deterministic `PreToolUse` lifecycle interception in [`config/config_init.py`](config/config_init.py):
+All write and mutation requests use the [`execute-mutation` skill](skills/execute-mutation/SKILL.md) and the `PreToolUse` hook in [`config/config_init.py`](config/config_init.py):
 
-1. **Pre-Mutation State & Blast Radius Lookup (GAQL Read):** Queries target resource state (`status`, `amount_micros`, `cpc_bid_micros` converted from `micros` by dividing by `1,000,000`) and active child entity counts (`ad_group`, `ad_group_ad`).
-2. **Mandatory `validate_only=True` Dry-Run & Signed Receipt:** Executes the script in `--dry-run` mode via `skills/execute-mutation/scripts/run_mutation.py --dry-run` to validate schema, `FieldMask` paths, and policy compliance against the live Google Ads API, writing a SHA-256 signed receipt to `saved/data/last_dry_run.json`.
-3. **Structured Consequence Disclosure & User Prompt:** Presents the **Mutation & Consequence Verification Card** detailing financial deltas, ad-serving blast radius, and reversibility (`REVERSIBLE` vs. `IRREVERSIBLE`), pausing for explicit user confirmation.
-4. **Deterministic `PreToolUse` Hook Gate & `Mutate-to-Get` Execution:** When `--execute` runs, `config/config_init.py` verifies `execute_mutates = true` in `config/assistant_config` and checks the freshness ($\le 30\text{ min}$), `script_sha256`, and `request_sha256` of `saved/data/last_dry_run.json`. Unverified or modified scripts are hard-blocked (`"decision": "deny"`), while verified mutations trigger a native CLI confirmation prompt (`"decision": "force_ask"` in `agy` and `"permissionDecision": "ask"` in `Claude Code CLI`) displaying the consequence summary before executing with `ResponseContentType.MUTABLE_RESOURCE`.
+1. **Pre-Mutation State & Blast Radius Lookup (GAQL Read):** Reads the current resource state (`status`, `amount_micros`, and `cpc_bid_micros` divided by `1,000,000`) and counts active child entities (`ad_group` and `ad_group_ad`).
+2. **Mandatory `validate_only=True` Dry-Run & Signed Receipt:** Runs the script in `--dry-run` mode with `skills/execute-mutation/scripts/run_mutation.py --dry-run`. This step checks the schema, `FieldMask` paths, and policy rules against the Google Ads API, and writes a SHA-256 receipt to `saved/data/last_dry_run.json`.
+3. **Consequence Disclosure & User Prompt:** Shows the **Mutation & Consequence Verification Card** with financial changes, affected child entities, and reversibility (`REVERSIBLE` or `IRREVERSIBLE`). Then it waits for your confirmation.
+4. **`PreToolUse` Hook Gate & Live Execution:** When `--execute` runs, `config/config_init.py` checks that `execute_mutates = true` in `config/assistant_config`. It also checks the age ($\le 30\text{ min}$), `script_sha256`, and `request_sha256` of `saved/data/last_dry_run.json`. The hook blocks unverified or changed scripts (`"decision": "deny"`). For verified mutations, the hook shows a CLI confirmation prompt (`"decision": "force_ask"` in `agy` and `"permissionDecision": "ask"` in `Claude Code CLI`) and runs the request with `ResponseContentType.MUTABLE_RESOURCE`.
 
 ---
 
@@ -196,15 +198,15 @@ All write/mutation requests follow a strict two-gate defense-in-depth architectu
 
 ### 1. Prerequisites
 
-- Python 3.11+
-- Install required Python packages:
+- Install Python 3.11 or later.
+- Install the required Python packages:
   ```bash
   pip install google-ads ruff pytest
   ```
 
 ### 2. Plugin Installation
 
-Copy or symlink the plugin into your target agent environment:
+Copy the plugin into your agent directory:
 
 #### For Antigravity / agy:
 ```bash
@@ -220,7 +222,7 @@ cp -r google-ads-api-developer-assistant ~/.claude/plugins/marketplaces/
 
 ### 3. Credentials Configuration
 
-Create a `google-ads.yaml` configuration file at `config/google-ads.yaml` (or `~/.config/google-ads/google-ads.yaml`):
+Create a `google-ads.yaml` file at `config/google-ads.yaml` (or `~/.config/google-ads/google-ads.yaml`):
 
 ```yaml
 client_id: "INSERT_OAUTH_CLIENT_ID"
@@ -237,7 +239,7 @@ export GOOGLE_ADS_CONFIGURATION_FILE_PATH="config/google-ads.yaml"
 
 ### 4. Assistant Configuration (`config/assistant_config`) & Startup Synchronization
 
-Configure your API version, default Customer ID, mutate switch, and plugin activation state in `config/assistant_config` (TOML format):
+Set your API version, default Customer ID, mutate switch, and plugin state in `config/assistant_config` (in TOML format):
 ```toml
 api_version = "<api_version> (e.g., vXX)"
 customer_id = "12345678"
@@ -245,18 +247,20 @@ execute_mutates = false
 enabled = true
 ```
 
-To turn off the plugin so that it is not invoked every time you launch `jetski`/`agy`, run `./plugin.sh disable` (or `.\plugin.ps1 disable` on Windows). To re-enable it or test its current status, run `./plugin.sh enable`, `./plugin.sh status`, or `./plugin.sh test`.
+To turn off the plugin so `jetski`/`agy` does not load it, run `./plugin.sh disable` (or `.\plugin.ps1 disable` on Windows). To turn it on again or check its status, run `./plugin.sh enable`, `./plugin.sh status`, or `./plugin.sh test`.
 
 #### Financial Transaction Upper Limits (`config/financial_limits` & `set_financial_limits.py`)
 
-Configure per-service, per-field upper limits for all financial Google Ads API mutate operations in [`config/financial_limits`](config/financial_limits) using `Service.field` keys. Every value is specified in the exact numeric format required by the API call for each service and field, and each entry notes the monetary/numeric unit used (`micros` (`int64`), `currency_units` (`double`), `decimal_ratio` (`double`), or `micros_proportion` (`int64`)). By default, each value is set to `0` (`int64`) or `0.0` (`double`) so that financial fields are **not modifiable by default**. You must supply a value **greater than zero (`> 0`)** to make a field modifiable; the supplied value is the **upper limit**. Any mutation that attempts to modify a field whose value is `0` / `0.0` (not modifiable by default) or exceeds its configured upper limit (`> 0`) returns an error, informs the user at the HITL step, logs `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`, and refuses to execute.
+Set upper limits for financial Google Ads API mutate operations in [`config/financial_limits`](config/financial_limits) with `Service.field` keys. Write each value in the exact numeric unit that the API field uses: `micros` (`int64`), `currency_units` (`double`), `decimal_ratio` (`double`), or `micros_proportion` (`int64`).
+
+By default, every value is `0` (`int64`) or `0.0` (`double`). A value of `0` or `0.0` means that the field **cannot be changed**. To allow changes to a field, set a value **greater than zero (`> 0`)** as its **upper limit**. If a mutation tries to change a `0` / `0.0` field or exceeds a configured upper limit (`> 0`), the plugin blocks the command at the HITL step, shows an error, and writes `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`.
 
 Use [`config/set_financial_limits.py`](config/set_financial_limits.py) (or `skills/execute-mutation/scripts/set_financial_limits.py`) to list, set (`> 0`), or reset (`0` / `0.0`) financial limits:
 ```bash
-# List all Service.field financial limits, monetary units, and configured limits
+# List all Service.field financial limits, units, and current values
 python3 config/set_financial_limits.py --list
 
-# Supply a value > 0 in exact API format to make fields modifiable up to that upper limit
+# Set a value > 0 in the API unit to allow changes up to that limit
 python3 config/set_financial_limits.py \
   --set CampaignBudgetService.amount_micros=50000000 \
   --set AssetService.amount_micros=20000000 \
@@ -264,38 +268,37 @@ python3 config/set_financial_limits.py \
   --set ConversionUploadService.conversion_value=500.0 \
   --set BiddingStrategyService.target_roas=10.0
 
-# Reset a limit (or all limits) back to 0 / 0.0 (not modifiable by default)
+# Reset one limit or all limits to 0 / 0.0 (not modifiable)
 python3 config/set_financial_limits.py --reset CampaignBudgetService.amount_micros
 python3 config/set_financial_limits.py --reset-all
 ```
 
-When `enabled = true` and the user enters their first prompt in an Antigravity (`agy`) session, or in Claude Code CLI (`claude`), the `PreInvocation` hook (`python3 config/config_init.py --hook`) normalizes credentials into `config/google-ads.yaml` (`0600` permissions), advances `api_version` in `config/assistant_config`, and executes the **5-Step Client Library & API Version Verification Workflow**:
-1. **Check Python Site-Directory Version Against PyPI:** Inspects the version of `google-ads` installed in the Python site directory (`site.getsitepackages()`, `importlib.metadata.version("google-ads")`) against `pypi.org` (`https://pypi.org/pypi/google-ads/json`).
-2. **Check Latest GitHub Release:** Queries the latest release version of the client library on GitHub (`googleads/google-ads-python/releases/latest`).
-3. **Determine Active Google Ads API Version:** Determines the Google Ads API version to use based on (1) and (2).
-4. **Present Results in a Formatted Table:** Displays the 3-component parity report table at the very top of the first response to the user.
-5. **Prompt User When Any Version Outdated:** If any component is not the latest version, asks the user if they want to update them before proceeding:
-   - **If the User Replies `Yes` (`sync_client_libs.py --upgrade_system`):** Installs the latest version of `google-ads` from `pypi.org` into the site directory, installs the latest version of the client library into the site directory, updates `client_libs/google-ads-python` in the Assistant directory structure, updates `api_version` in `config/assistant_config` (and `config/api_version.txt` if present) to the latest version, and prints the results table to the screen.
-   - **If the User Replies `No` (`sync_client_libs.py --check_only`):** Retains currently installed versions and proceeds.
-
+When `enabled = true` and you enter your first prompt in Antigravity (`agy`) or Claude Code CLI (`claude`), the `PreInvocation` hook (`python3 config/config_init.py --hook`) copies your credentials to `config/google-ads.yaml` (`0600` permissions), updates `api_version` in `config/assistant_config`, and runs a 5-step version check:
+1. **Check Python Site-Directory Version Against PyPI:** Compares the installed `google-ads` package in `site.getsitepackages()` against `pypi.org` (`https://pypi.org/pypi/google-ads/json`).
+2. **Check Latest GitHub Release:** Checks the latest release of `googleads/google-ads-python` on GitHub.
+3. **Select Active Google Ads API Version:** Selects the Google Ads API version from steps 1 and 2.
+4. **Show Results Table:** Shows the 3-component version table at the top of the first response.
+5. **Ask to Update Outdated Packages:** If any component is outdated, the assistant asks if you want to update it before continuing:
+   - **If You Reply `Yes` (`sync_client_libs.py --upgrade_system`):** Installs the latest `google-ads` package from `pypi.org`, updates `client_libs/google-ads-python`, updates `api_version` in `config/assistant_config`, and prints the updated table.
+   - **If You Reply `No` (`sync_client_libs.py --check_only`):** Keeps the installed versions and continues.
 
 ---
 
 ## 💻 CLI Scripts & Usage
 
-All skill scripts can be invoked directly from the command line (replace `<api_version>` with your target version, e.g., `vXX`):
+You can run all skill scripts from the command line. Replace `<api_version>` with your target version (for example, `vXX`).
 
 ### GAQL Validation
 
-Pass a query directly via `--query` / `-q` or pipe via `stdin`:
+Pass a query with `--query` / `-q` or through `stdin`:
 ```bash
-# Pass query via CLI flag
+# Pass query with CLI flag
 python3 skills/validate-gaql/scripts/validate_gaql.py \
   --customer_id 1234567890 \
   --api_version <api_version> \
   --query "SELECT campaign.id, campaign.name, metrics.impressions FROM campaign WHERE segments.date DURING LAST_30_DAYS"
 
-# Or pipe query via stdin
+# Or pipe query through stdin
 echo "SELECT campaign.id, campaign.name, metrics.impressions FROM campaign WHERE segments.date DURING LAST_30_DAYS" | \
   python3 skills/validate-gaql/scripts/validate_gaql.py \
     --customer_id 1234567890 \
@@ -304,14 +307,14 @@ echo "SELECT campaign.id, campaign.name, metrics.impressions FROM campaign WHERE
 
 ### Protobuf Object & Enum Inspection
 
-Inspect field definitions, labels (`OPTIONAL` vs `REPEATED`), and nested types:
+Check field definitions, labels (`OPTIONAL` or `REPEATED`), and nested types:
 ```bash
-# Inspect a resource message
+# Check a resource message
 python3 skills/inspect-object/scripts/inspect_object.py \
   --object_name Campaign \
   --api_version <api_version>
 
-# Inspect an Enum
+# Check an Enum
 python3 skills/inspect-object/scripts/inspect_object.py \
   --object_name CampaignStatusEnum.CampaignStatus \
   --api_version <api_version>
@@ -319,7 +322,7 @@ python3 skills/inspect-object/scripts/inspect_object.py \
 
 ### Manager Account (MCC) Hierarchy
 
-Traverse and list all client accounts under an MCC:
+List all client accounts under an MCC:
 ```bash
 # Print account tree to console
 python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py \
@@ -327,7 +330,7 @@ python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py \
   --api_version <api_version> \
   --print_cids
 
-# Export to CSV under saved/data/
+# Save to CSV under saved/data/
 python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py \
   --customer_id 1234567890 \
   --api_version <api_version> \
@@ -337,12 +340,12 @@ python3 skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py \
 ### Conversion Troubleshooting & CSV Validation
 
 ```bash
-# Generate comprehensive conversion diagnostic report
+# Create conversion diagnostic report
 python3 skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py \
   --customer_id 1234567890 \
   --api_version <api_version>
 
-# Pre-validate offline conversion upload CSV before sending to API
+# Validate offline conversion upload CSV before upload
 python3 skills/troubleshoot-conversions/scripts/validate_conversion_upload.py \
   --csv_path data/conversions.csv \
   --api_version <api_version>
@@ -355,7 +358,7 @@ python3 skills/troubleshoot-conversions/scripts/get_recent_gclids.py \
 
 ### Performance Max Webpage Exclusion Filter
 
-Generate listing filter exclusion trees for PMax asset groups:
+Create listing filter exclusion trees for PMax asset groups:
 ```bash
 python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py \
   --customer_id 1234567890 \
@@ -366,18 +369,18 @@ python3 skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py \
 
 ### Client Libraries Discovery & Upstream GitHub Sync
 
-Automatically inspect and synchronize all client libraries in `client_libs/` with latest GitHub releases and verify system site-packages parity:
+Check and update client libraries in `client_libs/` from GitHub releases, and check system `site-packages` versions:
 ```bash
-# Check versions and system site-packages parity without updating (dry-run)
+# Check versions without updating (dry-run)
 python3 skills/sync-client-libs/scripts/sync_client_libs.py --check_only
 
-# Automatically sync outdated client libraries to latest GitHub releases
+# Update outdated client libraries to the latest GitHub releases
 python3 skills/sync-client-libs/scripts/sync_client_libs.py
 
-# Upgrade system site-packages package (google-ads) to latest release
+# Upgrade the system site-packages package (google-ads) to the latest release
 python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system
 
-# Output structured JSON
+# Print JSON output
 python3 skills/sync-client-libs/scripts/sync_client_libs.py --json
 ```
 
@@ -387,27 +390,27 @@ python3 skills/sync-client-libs/scripts/sync_client_libs.py --json
 
 ### What Is a Sidecar?
 
-In software architecture—borrowed from the analogy of a sidecar attached to a motorcycle—a **sidecar** is a separate companion process or service that runs alongside a primary application on the same host. The sidecar shares the primary application's local execution environment (loopback network, local filesystem, and lifecycle) and offloads supporting responsibilities such as protocol translation, local API serving, configuration synchronization, or policy enforcement without coupling that logic into the main process.
+A **sidecar** is a separate helper process that runs next to a main application on the same computer. It shares the local network (`127.0.0.1`), local files, and session lifecycle with the main application.
 
-In CLI agent environments such as **Antigravity (`agy`)** and **Claude Code CLI**, tools execute in one of two ways:
-- **Ephemeral Skill Scripts & Hooks (One-Shot Subprocesses)**: When the agent runs a skill script (under `skills/`) or a lifecycle hook (`config_init.py`), the host spawns a new OS process for that single invocation, reads its output, and the process exits immediately.
-- **Sidecar Daemons (Persistent Background Services)**: A sidecar is a long-running background server process that the host CLI launches automatically when the plugin is loaded and keeps running for the duration of the session.
+In CLI agent environments such as **Antigravity (`agy`)** and **Claude Code CLI**, tools run in two ways:
+- **Skill Scripts & Hooks (One-Time Subprocesses)**: When the agent runs a skill script (in `skills/`) or a hook (`config_init.py`), the host starts a new OS process for that command, reads the output, and stops the process.
+- **Sidecar Daemons (Background Services)**: The host CLI starts a sidecar server in the background when the plugin loads and keeps it running during the session.
 
-Using a sidecar daemon in an agent plugin provides three main architectural advantages over one-shot scripts:
-1. **Persistent Process & Low Latency**: Because the Python interpreter and imported libraries stay resident in memory, requests handled by the sidecar avoid repeated process startup and module import overhead.
-2. **Structured Inter-Process Communication (HTTP & MCP)**: A sidecar listens on a local loopback port (`127.0.0.1`) or stdio pipe and exposes structured endpoints—such as Agent-to-Agent (A2A) HTTP routes or Model Context Protocol (MCP) tools—allowing the primary agent, subagents, or external tools to exchange typed JSON payloads rather than constructing ad-hoc shell commands.
-3. **Host-Supervised Lifecycle**: Rather than requiring the user or the LLM to manually start, monitor, or kill background servers in a terminal, the host CLI runtime supervises the sidecar process automatically via its manifest (`sidecar.json` or `mcp_config.json`), handling port assignment, log capture, automatic restarts on crash, and clean shutdown when the plugin is disabled.
+A sidecar daemon gives you three benefits:
+1. **Low Latency**: The Python interpreter and libraries stay in memory, so requests do not wait for process startup.
+2. **Structured HTTP & MCP Requests**: The sidecar listens on a local port (`127.0.0.1`) and accepts typed JSON requests over HTTP or Model Context Protocol (MCP).
+3. **Automatic Lifecycle Control**: The host CLI starts, monitors, restarts, and stops the sidecar automatically using `sidecar.json` or `mcp_config.json`.
 
-### How the Sidecar Functions Within the Assistant
+### How the Sidecar Works in the Assistant
 
-The plugin includes an Agent-to-Agent (A2A) HTTP service located in `sidecars/google-ads-a2a-service/` (`sidecar.json` and `server.py`).
+The plugin includes an Agent-to-Agent (A2A) HTTP service in `sidecars/google-ads-a2a-service/` (`sidecar.json` and `server.py`).
 
-1. **Host Lifecycle Management**: When the plugin is enabled (`enabled = true` in `config/assistant_config`), the host reads `sidecars/google-ads-a2a-service/sidecar.json`, starts `python3 server.py` automatically in the background, assigns its loopback port via `ANTIGRAVITY_SIDECAR_WEB_PORT` (or falls back to `A2A_PORT`, default `8900`), and restarts it if it exits (`"restart_policy": "always"`). Running `./plugin.sh disable` renames `sidecar.json` and `mcp_config.json` to `.disabled`, stopping the background daemon.
-2. **Startup Credential & Config Synchronization**: On startup (and before executing incoming tasks), `server.py` calls `config_init.sync_and_set_config_kv()` to synchronize credentials from `~/google-ads.yaml` into `config/google-ads.yaml` (`0600` permissions) and load the active `customer_id`, `api_version`, and `execute_mutates` settings from `config/assistant_config`.
-3. **Dynamic API Version Resolution**: For each incoming task, `get_effective_api_version()` resolves the target Google Ads API version across the request payload / `GOOGLE_ADS_API_VERSION` env var, `config/assistant_config`, local `client_libs/google-ads-python` `v<N>` directories, and installed `google.ads.googleads` packages.
-4. **A2A HTTP Endpoints**: The daemon listens on `127.0.0.1:8900` (or `ANTIGRAVITY_SIDECAR_WEB_PORT`):
-   - `GET /` or `GET /health`: Health check endpoint returning service status, active plugin version, and listening port.
-   - `POST /v1/a2a/tasks`: Handles structured task payloads for `GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION` (writes a SHA-256 signed `validate_only=True` receipt to `saved/data/last_dry_run.json` and returns the **Mutation & Consequence Verification Card**), and `EXECUTE_MUTATION` (verifies `execute_mutates = true`, user confirmation, and the SHA-256 dry-run receipt before recording execution in `saved/logs/mutation_audit.jsonl`).
+1. **Lifecycle Control**: When `enabled = true` in `config/assistant_config`, the host reads `sidecars/google-ads-a2a-service/sidecar.json` and starts `python3 server.py` in the background. It sets the port through `ANTIGRAVITY_SIDECAR_WEB_PORT` (or `A2A_PORT`, default `8900`) and restarts the process if it stops (`"restart_policy": "always"`). When you run `./plugin.sh disable`, the script renames `sidecar.json` and `mcp_config.json` to `.disabled` and stops the background server.
+2. **Startup Credential & Config Sync**: At startup (and before each task), `server.py` runs `config_init.sync_and_set_config_kv()`. This function copies credentials from `~/google-ads.yaml` to `config/google-ads.yaml` (`0600` permissions) and reads `customer_id`, `api_version`, and `execute_mutates` from `config/assistant_config`.
+3. **API Version Selection**: For each task, `get_effective_api_version()` checks the request payload, the `GOOGLE_ADS_API_VERSION` environment variable, `config/assistant_config`, local `client_libs/google-ads-python` `v<N>` directories, and installed `google.ads.googleads` packages.
+4. **A2A HTTP Endpoints**: The server listens on `127.0.0.1:8900` (or `ANTIGRAVITY_SIDECAR_WEB_PORT`):
+   - `GET /` or `GET /health`: Returns service status, active plugin version, and listening port.
+   - `POST /v1/a2a/tasks`: Runs structured tasks for `GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION` (writes a SHA-256 `validate_only=True` receipt to `saved/data/last_dry_run.json` and returns the **Mutation & Consequence Verification Card**), and `EXECUTE_MUTATION` (checks `execute_mutates = true`, user confirmation, and the SHA-256 dry-run receipt before writing to `saved/logs/mutation_audit.jsonl`).
 
 To start or test the sidecar manually:
 ```bash
@@ -417,7 +420,7 @@ curl http://127.0.0.1:8900/health
 
 ### Model Context Protocol (MCP)
 
-The plugin exposes tools via MCP as defined in `mcp_config.json`:
+The `mcp_config.json` file configures the MCP server:
 ```json
 {
   "mcpServers": {
@@ -440,16 +443,16 @@ The plugin exposes tools via MCP as defined in `mcp_config.json`:
 
 ## ℹ️ Migration & Environment Notes
 
-When running this plugin across different agent runtimes, keep the following platform considerations in mind:
+Keep these points in mind when you run the plugin across different agent environments:
 
-- **Virtual Environments**: In custom IDE environments, ensure `google-ads` and `ruff` are installed in the active environment used by the host agent.
-- **Interactive UI Modals**: In Antigravity environments, interactive questions render as modal selections; in standard Claude Desktop / CLI sessions, questions are presented directly in conversation text.
-- **Directory Layouts**: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called `saved` (e.g. `./saved/` or `./saved/code/`). Generated code, CSV exports, diagnostic reports/receipts, and mutation audit logs are saved to `saved/code/`, `saved/csv/`, `saved/data/`, and `saved/logs/`.
+- **Virtual Environments**: Make sure you install `google-ads` and `ruff` in the active Python environment that your host agent uses.
+- **Interactive Prompts**: Antigravity shows interactive questions as UI modal dialogs. Claude Desktop and Claude Code CLI show questions as text in the chat.
+- **Saved File Paths**: Executable code must be saved in the `saved` subdirectory of your current working directory (for example, `./saved/` or `./saved/code/`). The assistant saves generated code, CSV exports, diagnostic reports/receipts, and mutation audit logs in `saved/code/`, `saved/csv/`, `saved/data/`, and `saved/logs/`.
 
-For comprehensive details on runtime adaptations, refer to [migration.md](migration.md).
+See [migration.md](migration.md) for more details on runtime behavior.
 
 ---
 
 ## 📄 License
 
-This project is licensed under the Apache License 2.0. See the [LICENSE](../../LICENSE) file for details.
+This project uses the Apache License 2.0. See the [LICENSE](../../LICENSE) file for details.

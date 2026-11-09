@@ -2,253 +2,153 @@
 
 ## 4.1.0
 
-- **Strict `create` / `update` Mutation Allowance & Deterministic Deletion (`remove`) Prohibition (`execute-mutation` & `config/config_init.py`):**
-  - Enforced across all mutation execution, interception, sidecar, and verification layers that only **`create`** and **`update`** mutation operations are allowed and all deletion (**`remove`**) operations are strictly prohibited.
-  - Added `check_prohibited_deletion_mutation()` and `_extract_payload_deletion_violations()` in `skills/execute-mutation/scripts/run_mutation.py` to inspect Protobuf/dict/string operation payloads (`remove`, `remove_all`, `status = REMOVED`, `proposal_type = REMOVE`), dedicated removal RPC methods (`remove_*` and `delete_*`, added to `_MUTATION_METHOD_PREFIXES`), target Python script source code, `operation_summary`, and `after_state`.
-  - Enforced pre-RPC deletion blocking in `_wrap_service_for_audit()`, `write_dry_run_receipt()`, `load_and_verify_receipt()`, and `main()` (`--dry-run` and `--execute` phases) in `run_mutation.py`, recording `BLOCKED_PROHIBITED_DELETION` in `saved/logs/mutation_audit.jsonl` and recommending `status = PAUSED` via an `update` operation instead.
-  - Updated `MUTATION_CALL_PATTERN`, `_check_prohibited_deletion_for_hook()`, `_verify_dry_run_receipt_for_hook()`, and `evaluate_mutation_guard()` in `config/config_init.py` to deny deletion mutations at the `PreToolUse` hook layer across `run_mutation.py --dry-run`, `run_mutation.py --execute`, direct script execution, and inline `python3 -c` invocations (even when `validate_only=True` is present).
-  - Updated `handle_prepare_mutation()` and `handle_execute_mutation()` in `sidecars/google-ads-a2a-service/server.py` to block prohibited deletions with `"status": "HITL_BLOCKED"` and log `BLOCKED_PROHIBITED_DELETION`.
-  - Updated `rules/google_ads_rules.md`, `skills/execute-mutation/SKILL.md`, `commands/execute-mutation.md`, `plugins/google-ads-api-developer-assistant/README.md`, and `README.md`, and added end-to-end multi-layer tests (`test_only_allow_create_or_update_and_prohibit_deletion_across_all_layers`) in `tests/test_hitl_mutation_guard.py`.
+- **Strict `create` / `update` Mutation Policy & Delete (`remove`) Block (`execute-mutation` & `config/config_init.py`):**
+  - Allows only **`create`** and **`update`** mutations across all execution, hook, sidecar, and verification layers. Blocks all delete (**`remove`**) operations.
+  - Added `check_prohibited_deletion_mutation()` and `_extract_payload_deletion_violations()` in `skills/execute-mutation/scripts/run_mutation.py` to check Protobuf, dict, and string payloads (`remove`, `remove_all`, `status = REMOVED`, and `proposal_type = REMOVE`), removal RPC methods (`remove_*` and `delete_*`, added to `_MUTATION_METHOD_PREFIXES`), target Python script source code, `operation_summary`, and `after_state`.
+  - Blocked delete operations before any RPC in `_wrap_service_for_audit()`, `write_dry_run_receipt()`, `load_and_verify_receipt()`, and `main()` (`--dry-run` and `--execute`) in `run_mutation.py`. Writes `BLOCKED_PROHIBITED_DELETION` to `saved/logs/mutation_audit.jsonl` and recommends `status = PAUSED` with an `update` operation.
+  - Updated `MUTATION_CALL_PATTERN`, `_check_prohibited_deletion_for_hook()`, `_verify_dry_run_receipt_for_hook()`, and `evaluate_mutation_guard()` in `config/config_init.py` to block delete mutations at the `PreToolUse` hook across `run_mutation.py --dry-run`, `run_mutation.py --execute`, direct script execution, and `python3 -c` calls (even when `validate_only=True` is set).
+  - Updated `handle_prepare_mutation()` and `handle_execute_mutation()` in `sidecars/google-ads-a2a-service/server.py` to return `"status": "HITL_BLOCKED"` and write `BLOCKED_PROHIBITED_DELETION`.
+  - Updated `rules/google_ads_rules.md`, `skills/execute-mutation/SKILL.md`, `commands/execute-mutation.md`, `plugins/google-ads-api-developer-assistant/README.md`, and `README.md`. Added multi-layer tests (`test_only_allow_create_or_update_and_prohibit_deletion_across_all_layers`) in `tests/test_hitl_mutation_guard.py`.
 - **Account, Campaign, Ad Group, and Ad Creation Scripts & A2A Intents (`execute-mutation`):**
-  - Added `create_account.py` (`CustomerService.CreateCustomerClient`), `create_campaign.py` (`CampaignBudgetService.MutateCampaignBudgets` + `CampaignService.MutateCampaigns`), `create_ad_group.py` (`AdGroupService.MutateAdGroups`), and `create_ad.py` (`AdGroupAdService.MutateAdGroupAds` for Responsive Search Ads) under `skills/execute-mutation/scripts/`, all integrated with the mandatory 4-Step HITL verification protocol, `validate_only=True` dry-run receipts, and `config/financial_limits` upper-limit enforcement.
-  - Added `CREATE_ACCOUNT`, `CREATE_CAMPAIGN`, `CREATE_AD_GROUP`, and `CREATE_AD` intents to the A2A sidecar (`sidecars/google-ads-a2a-service/server.py`) with `_check_live_execution_gate` enforcement.
-  - Updated `skills/execute-mutation/SKILL.md`, `commands/execute-mutation.md`, and `README.md` with CLI and A2A usage documentation.
+  - Added `create_account.py` (`CustomerService.CreateCustomerClient`), `create_campaign.py` (`CampaignBudgetService.MutateCampaignBudgets` + `CampaignService.MutateCampaigns`), `create_ad_group.py` (`AdGroupService.MutateAdGroups`), and `create_ad.py` (`AdGroupAdService.MutateAdGroupAds` for Responsive Search Ads) in `skills/execute-mutation/scripts/`. All scripts use the 4-Step HITL verification protocol, `validate_only=True` dry-run receipts, and `config/financial_limits` upper-limit checks.
+  - Added `CREATE_ACCOUNT`, `CREATE_CAMPAIGN`, `CREATE_AD_GROUP`, and `CREATE_AD` intents to the A2A sidecar (`sidecars/google-ads-a2a-service/server.py`) with `_check_live_execution_gate` checks.
+  - Updated `skills/execute-mutation/SKILL.md`, `commands/execute-mutation.md`, and `README.md` with CLI and A2A usage examples.
 - **Line & Category Coverage Runner (`tests/run_coverage.py`, `tests/conftest.py`, `tests/README_coverage.md`) & >80% Coverage Across All Categories:**
-  - Added `tests/run_coverage.py` and `tests/conftest.py` (`pytest --coverage`, `pytest --coverage-report`, `pytest --show-missed`, `pytest --fast`, and `pytest tests/run_coverage.py`) to collect in-process + subprocess line coverage via `sys.monitoring` and display per-module and per-category coverage tables with step-by-step progress output.
-  - Added `tests/README_coverage.md` documenting coverage CLI usage, progress output, column definitions, and what `Miss` and `-> MISSED` line numbers indicate.
-  - Added unit tests in `tests/test_components.py` (`TestCreateAccountCampaignAdGroupAd` and `TestRemainingModulesAbove80Coverage`) and `tests/test_python_315.py` so every individual module and every category exceeds 80% coverage (84.5% overall across 9,448 executable statements, 300 passed tests).
+  - Added `tests/run_coverage.py` and `tests/conftest.py` (`pytest --coverage`, `pytest --coverage-report`, `pytest --show-missed`, `pytest --fast`, and `pytest tests/run_coverage.py`) to collect in-process and subprocess line coverage with `sys.monitoring` and print module and category coverage tables.
+  - Added `tests/README_coverage.md` to explain coverage CLI flags, progress messages, table columns, and `Miss` / `-> MISSED` line numbers.
+  - Added unit tests in `tests/test_components.py` (`TestCreateAccountCampaignAdGroupAd` and `TestRemainingModulesAbove80Coverage`) and `tests/test_python_315.py` so every module and category exceeds 80% coverage (84.5% total across 9,448 statements, 300 passed tests).
 - **Financial Transaction Upper Limits by `Service.field` (`config/financial_limits` & `set_financial_limits.py`):**
-  - Added `config/financial_limits` and the `set_financial_limits.py` helper script (`skills/execute-mutation/scripts/set_financial_limits.py`, `config/set_financial_limits.py`, and top-level `./set_financial_limits.py`) to configure financial transaction upper limits via `<Service>.<field>` combinations across all 20 Google Ads API services with mutable financial fields (118 verified mutable `Service.field` entries plus 2 optional global fallbacks `all_micros_transactions` and `all_currency_unit_transactions`).
-  - Audited all `Service.field` entries against Google Ads API v26 Protobuf request descriptors and `proto-plus` attribute docstrings, removing all immutable, output-only, and non-existent fields so that `config/financial_limits` contains strictly mutable financial fields.
-  - Defaulted every entry in `config/financial_limits` to `0` (for `int64` fields) or `0.0` (for `double`/`float` fields) so financial fields are **not modifiable by default**; users must supply a value `> 0` in the exact numeric format required by the Google Ads API call (`micros`, `currency_units`, `decimal_ratio`, or `micros_proportion`) to make a `Service.field` modifiable up to that upper limit.
-  - Enforced `Service.field` modifiability and upper limits across all HITL and RPC guard layers (`check_financial_transaction_limits`, `_wrap_service_for_audit`, `write_dry_run_receipt`, `load_and_verify_receipt` in `run_mutation.py`, `evaluate_mutation_guard` in `config/config_init.py`, and `PREPARE_MUTATION` / `EXECUTE_MUTATION` in `sidecars/google-ads-a2a-service/server.py`), returning a clear error at the HITL step, logging `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`, and refusing to execute commands that modify a `0`-valued field or exceed a configured upper limit.
-  - Added explicit, parametrized unit tests in `tests/test_hitl_mutation_guard.py` (`_ALL_FINANCIAL_LIMIT_TEST_CASES`, `test_all_financial_limits_have_explicit_test_cases_and_v26_mutability`, and `test_each_financial_limit_value_enforcement`) covering every value in `config/financial_limits` (expanding total passed tests across the repository to 267).
-- **Standalone Mutate & Write Test Harness (`tests/mutate_test_harness.py`) & Benchmark Enhancements:**
-  - Added `tests/mutate_test_harness.py` providing a standalone CLI test runner (`--list`, `--category`, `--case`, `--json`, `--verbose`) exercising 27 end-to-end test cases across 8 categories (master switch & config, financial upper limits, command interception, financial consequence disclosures, receipt & SHA-256 verification, RPC interceptor & audit log, A2A sidecar, and live v26 Protobuf serialization).
-  - Updated `tests/benchmark_suite.py` to require explicit two-version comparison (`--version-a` and `--version-b`) without silent fallbacks or hardcoded versions, and simplified OAuth credential parsing in `config/config_init.py` (`_extract_yaml_credentials`).
-  - Updated `install.sh` and `install.ps1` to copy `update.sh`, `update.ps1`, `plugin.sh`, `plugin.ps1`, and `config/financial_limits` into the installed global plugin directory.
-- **Plugin Enable/Disable Option & Status Helper Scripts (`plugin.sh` / `plugin.ps1`):**
-  - Added `enabled = true|false` configuration support in `config/assistant_config` (and `GOOGLE_ADS_ASSISTANT_ENABLED` environment variable override) along with `parse_plugin_enabled_value()`, `is_plugin_enabled()`, `set_plugin_enabled()`, `get_plugin_status()`, and `format_plugin_status_text()` in `config/config_init.py`.
-  - Updated `handle_hook()` in `config/config_init.py` to short-circuit immediately when the plugin is disabled (`{}` for `PreInvocation` and `{"decision": "allow"}` without command rewriting for `PreToolUse`).
-  - Added manifest and hook toggling (`_toggle_installed_plugin_manifests`, `_set_hooks_json_enabled`) for installed plugin directories (`~/.gemini/config/plugins/google-ads-api-developer-assistant` and `~/.claude/plugins/google-ads-assistant-local`) so `jetski`/`agy` does not load or invoke the plugin when disabled.
-  - Added `plugin.sh` (Linux/macOS) and `plugin.ps1` (Windows PowerShell) helper scripts supporting `enable`, `disable`, `status`, `test` (with live `PreInvocation`/`PreToolUse` hook verification and `--expect`), and `is-enabled` commands, plus `--enable`, `--disable`, and `--status` flags in `config/config_init.py`, `install.sh`, `update.sh`, `install.ps1`, and `update.ps1`.
-- **System Site-Directory & Client Library Version Parity Protocol (First Prompt Execution & Display):**
-
-  - Added PyPI release querying (`fetch_latest_pypi_python_version` against `https://pypi.org/pypi/google-ads/json`) in `config/config_init.py` and `skills/sync-client-libs/scripts/sync_client_libs.py`.
-  - Added `determine_api_version()`, `format_parity_table_markdown()`, and `format_parity_table_text()` in `config/config_init.py` to check: (1) `google-ads` in site directory against `pypi.org`, (2) `google-ads-python` in `client_libs/` against GitHub, and (3) determine active Google Ads API version based on (1) and (2).
-  - Executed parity checking automatically upon the first prompt entered in the session via `PreInvocation` in `hooks.json`. The hook injects the comparison table into the agent's context, and the assistant renders the table at the very top of its first response.
-  - Mandated that the assistant present the 3-component parity table at the beginning of the first response and, if any component is not the latest version, ask the user if they want to update them before proceeding. On subsequent turns, the table is not re-displayed.
-  - Added system site-directory package inspection (`detect_system_package_version`, `check_system_package_parity`, `upgrade_system_package`) to `skills/sync-client-libs/scripts/sync_client_libs.py` to detect `google-ads` in Python system site-packages (`site.getsitepackages()` and `importlib.metadata.version('google-ads')`).
-  - Added automatic version parity checking against latest upstream GitHub/PyPI releases in `process_client_libs` with structured metadata (`system_version`, `system_site_dirs`, `system_version_matches`, `pypi_version`, `site_version_less_than_pypi`) in CLI and JSON outputs (`--json`).
-  - Added prominent CLI alert reporting in `print_table` when the system site-directory version does not match the upstream release.
-  - Implemented `--upgrade_system` CLI flag in `sync_client_libs.py` to upgrade the system package via `pip` upon confirmation.
-  - Updated agent behavioral rules in `rules/google_ads_rules.md` (Section 1.0 item 2, Section 1.2, and Section 4.1), skill instructions in `skills/sync-client-libs/SKILL.md`, and Claude Code slash command in `commands/sync-client-libs.md`.
-  - Added unit test suite in `tests/test_components.py` covering PyPI release fetching, API version determination, SessionStart/PreInvocation hook injection, system package detection, parity validation, pip upgrade execution, and alert rendering (expanding total passed tests to 137).
-- **Runnable Code Storage Mandate (`saved/` Sub-Directory):**
-  - Mandated that whenever asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called `saved` (e.g., `./saved/` or `./saved/code/`).
-  - Updated `rules/google_ads_rules.md` (Hard Constraints Section 1.2, Project Structure Section 2.1, and Code Generation Protocol Section 3.2).
-  - Integrated the mandate into the `PreInvocation` hook prompt injection in `config/config_init.py` (`handle_hook`).
-- **Python Runtime Support & Baseline Modernization (Python >= 3.11):**
-  - Removed support for Python 3.10 across the project and bumped the minimum required Python runtime to Python >= 3.11 (`requires-python = ">=3.11"` in `pyproject.toml`).
-  - Updated package classifiers in `pyproject.toml` and set Ruff linting target version to `target-version = "py311"`.
-  - Updated GitHub Actions CI test matrix (`.github/workflows/ci.yml`) to run across Python 3.11 through 3.15, dropping Python 3.10 on both Linux and Windows runners.
-  - Updated host environment runtime checks in `install.sh` and `install.ps1` to require Python >= 3.11.
-  - Updated documentation across `README.md`, `plugins/google-ads-api-developer-assistant/README.md`, and `FAQ.md` to document the minimum Python >= 3.11 requirement.
-- **Global Plugin Availability, Direct Customer ID Pre-Seeding & Config Path Resolution:**
-  - Added `--cid` / `--customer-id` flag to `install.sh` (`./install.sh agy --cid <id>`) and `-CustomerId` / `-Cid` to `install.ps1` (`.\install.ps1 -Type agy -Cid <id>`) to directly pre-seed default `customer_id` into `assistant_config` at install time.
-  - Updated documentation across `README.md`, `FAQ.md`, and `skills/execute-mutation/SKILL.md` to document the plugin source path `plugins/google-ads-api-developer-assistant/config/config_init.py` and global plugin path `~/.gemini/config/plugins/...` for post-install CLI configuration.
-  - Added `--link` / `--symlink` support to `install.sh` (`./install.sh agy --link`) and `-Link` support to `install.ps1` (`.\install.ps1 -Type agy -Link`) to symlink `~/.gemini/config/plugins/google-ads-api-developer-assistant` directly to `plugins/google-ads-api-developer-assistant` in the repository, and updated `update.sh` and `update.ps1` to detect and preserve symlinked plugin directories.
-  - Updated `handle_hook()` in `config/config_init.py` to export `GOOGLE_ADS_ASSISTANT_DIR` and automatically rewrite relative `skills/<skill>/(scripts|references)/<file>` paths to the active plugin root when commands are invoked from workspaces outside the repository.
-  - Updated skill definitions (`skills/*/SKILL.md`) and Claude Code slash commands (`commands/*.md`) to resolve script paths via `${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}` so skill scripts are globally executable from any working directory.
+  - Added `config/financial_limits` and `set_financial_limits.py` (`skills/execute-mutation/scripts/set_financial_limits.py`, `config/set_financial_limits.py`, and `./set_financial_limits.py`) to set financial transaction upper limits with `<Service>.<field>` keys across all 20 Google Ads API services that have mutable financial fields (118 `Service.field` entries and 2 global fallbacks: `all_micros_transactions` and `all_currency_unit_transactions`).
+  - Checked all `Service.field` entries against Google Ads API v26 Protobuf request descriptors and removed all immutable, output-only, and invalid fields.
+  - Set the default for every entry in `config/financial_limits` to `0` (for `int64` fields) or `0.0` (for `double`/`float` fields) so financial fields cannot be changed by default. Set a value `> 0` in the API numeric unit (`micros`, `currency_units`, `decimal_ratio`, or `micros_proportion`) to allow changes up to that upper limit.
+  - Enforced `Service.field` upper limits in `check_financial_transaction_limits`, `_wrap_service_for_audit`, `write_dry_run_receipt`, and `load_and_verify_receipt` (`run_mutation.py`), `evaluate_mutation_guard` (`config/config_init.py`), and `PREPARE_MUTATION` / `EXECUTE_MUTATION` (`sidecars/google-ads-a2a-service/server.py`). Writes `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl` when a command changes a `0`-valued field or exceeds an upper limit.
+  - Added parametrized unit tests in `tests/test_hitl_mutation_guard.py` (`_ALL_FINANCIAL_LIMIT_TEST_CASES`, `test_all_financial_limits_have_explicit_test_cases_and_v26_mutability`, and `test_each_financial_limit_value_enforcement`) for every entry in `config/financial_limits`.
+- **Standalone Mutate & Write Test Harness (`tests/mutate_test_harness.py`) & Benchmark Updates:**
+  - Added `tests/mutate_test_harness.py` (`--list`, `--category`, `--case`, `--json`, and `--verbose`) with 27 end-to-end test cases across 8 categories.
+  - Updated `tests/benchmark_suite.py` to require two explicit version arguments (`--version-a` and `--version-b`) without fallback versions, and simplified OAuth credential parsing in `config/config_init.py` (`_extract_yaml_credentials`).
+  - Updated `install.sh` and `install.ps1` to copy `update.sh`, `update.ps1`, `plugin.sh`, `plugin.ps1`, and `config/financial_limits` into the installed plugin directory.
+- **Plugin Enable/Disable Option & Status Scripts (`plugin.sh` / `plugin.ps1`):**
+  - Added `enabled = true|false` support in `config/assistant_config` (and the `GOOGLE_ADS_ASSISTANT_ENABLED` environment variable) with `parse_plugin_enabled_value()`, `is_plugin_enabled()`, `set_plugin_enabled()`, `get_plugin_status()`, and `format_plugin_status_text()` in `config/config_init.py`.
+  - Updated `handle_hook()` in `config/config_init.py` to exit immediately when the plugin is off (`{}` for `PreInvocation` and `{"decision": "allow"}` for `PreToolUse`).
+  - Added manifest and hook toggling (`_toggle_installed_plugin_manifests`, `_set_hooks_json_enabled`) for installed plugin directories (`~/.gemini/config/plugins/google-ads-api-developer-assistant` and `~/.claude/plugins/google-ads-assistant-local`).
+  - Added `plugin.sh` (Linux/macOS) and `plugin.ps1` (Windows PowerShell) with `enable`, `disable`, `status`, `test`, and `is-enabled` commands, plus `--enable`, `--disable`, and `--status` flags in `config/config_init.py`, `install.sh`, `update.sh`, `install.ps1`, and `update.ps1`.
+- **System Site-Directory & Client Library Version Parity Protocol:**
+  - Added `fetch_latest_pypi_python_version` (queries `https://pypi.org/pypi/google-ads/json`) in `config/config_init.py` and `skills/sync-client-libs/scripts/sync_client_libs.py`.
+  - Added `determine_api_version()`, `format_parity_table_markdown()`, and `format_parity_table_text()` in `config/config_init.py` to check `google-ads` in `site-packages` against `pypi.org`, check `google-ads-python` in `client_libs/` against GitHub, and select the active Google Ads API version.
+  - Configured `PreInvocation` in `hooks.json` to run the version parity check on the first prompt of a session and show the 3-component table at the top of the first response.
+  - Added `detect_system_package_version`, `check_system_package_parity`, `upgrade_system_package`, and `--upgrade_system` to `skills/sync-client-libs/scripts/sync_client_libs.py`.
+  - Updated `rules/google_ads_rules.md`, `skills/sync-client-libs/SKILL.md`, `commands/sync-client-libs.md`, and `tests/test_components.py`.
+- **Runnable Code Storage Rule (`saved/` Sub-Directory):**
+  - Required all saved executable scripts to be written in the `saved` subdirectory of the current working directory (`./saved/` or `./saved/code/`).
+  - Updated `rules/google_ads_rules.md` and `config/config_init.py` (`handle_hook`).
+- **Python Runtime Requirement (Python >= 3.11):**
+  - Dropped Python 3.10 support and set `requires-python = ">=3.11"` and `target-version = "py311"` in `pyproject.toml`.
+  - Updated `.github/workflows/ci.yml` to test Python 3.11 through 3.15 on Linux and Windows.
+  - Updated `install.sh`, `install.ps1`, `README.md`, `plugins/google-ads-api-developer-assistant/README.md`, and `FAQ.md` to require Python >= 3.11.
+- **Global Plugin Availability, Customer ID Flag & Path Resolution:**
+  - Added `--cid` / `--customer-id` to `install.sh` and `-CustomerId` / `-Cid` to `install.ps1` to set `customer_id` in `assistant_config` during installation.
+  - Added `--link` / `--symlink` to `install.sh` and `-Link` to `install.ps1` to symlink the installed plugin directory to the repository, and updated `update.sh` and `update.ps1` to keep symlinks.
+  - Updated `handle_hook()` in `config/config_init.py`, `skills/*/SKILL.md`, and `commands/*.md` to resolve skill script paths through `GOOGLE_ADS_ASSISTANT_DIR` and `CLAUDE_PLUGIN_ROOT`.
 - **Unified TOML Assistant Configuration (`config/assistant_config`):**
-  - Consolidated `config/api_version.txt`, `config/customer_id`, and `config/execute_mutates` into a single TOML configuration file `config/assistant_config` containing `api_version`, `customer_id`, and `execute_mutates` (defaulting to `execute_mutates = false`).
-  - Added TOML configuration helpers in `config/config_init.py` (`parse_assistant_config`, `format_assistant_config`, `read_assistant_config`, `write_assistant_config`, `get_configured_customer_id`, `get_configured_api_version`, `is_execute_mutates_enabled`, and `sync_api_version`) with workspace-first precedence (`./config/assistant_config` overriding the plugin's `config/assistant_config`) and automatic fallback migration from legacy single-value files.
-  - Updated `get_latest_api_version.py` (`update_assistant_config_api_version`) and `sync_client_libs.py` (`update_api_version_cache_if_needed`) to automatically update `api_version` in `config/assistant_config` across workspace and plugin config directories while preserving `customer_id` and `execute_mutates`.
-  - Updated `install.sh`, `install.ps1`, `update.sh`, and `update.ps1` to seed, back up, and restore `config/assistant_config` across installations and updates.
+  - Combined `config/api_version.txt`, `config/customer_id`, and `config/execute_mutates` into `config/assistant_config` (with `api_version`, `customer_id`, and `execute_mutates = false`).
+  - Added TOML read/write helpers in `config/config_init.py`, `get_latest_api_version.py`, `sync_client_libs.py`, `install.sh`, `install.ps1`, `update.sh`, and `update.ps1`.
 - **4-Step HITL Mutation & Consequence Verification Protocol (`execute-mutation`):**
-  - Replaced the blanket `NO MUTATE` / `READ-ONLY` hard prohibition in `rules/google_ads_rules.md` (Section 1.2 & Section 4.3) with the mandatory **4-Step HITL Mutation & Consequence Verification Protocol**: (1) GAQL Before-State & blast-radius lookup, (2) live `validate_only=True` dry-run with a SHA-256 signed verification receipt (`saved/data/last_dry_run.json`), (3) structured Consequence & Impact Disclosure to the user with explicit confirmation, and (4) `PreToolUse` hook-gated live execution (`--execute` with `ResponseContentType.MUTABLE_RESOURCE`).
-  - Added user-configurable `execute_mutates` master switch (`execute_mutates = false` by default in `config/assistant_config`) enforced across `evaluate_mutation_guard()` (`PreToolUse` hook), `run_mutation.py` (`--execute`), and the A2A sidecar (`handle_execute_mutation`), while always permitting `--dry-run` (`validate_only=True`) validations.
-  - Added the `execute-mutation` skill (`skills/execute-mutation/SKILL.md`) defining the Google Ads Consequence Matrix across Budgets & Bidding, Status Changes (`PAUSED` / `ENABLED`), Destructive `REMOVE` Operations, Targeting & Exclusions, and Conversion Actions & Goals, alongside a standard `--dry-run` / `--execute` Python mutation script template.
-  - Implemented `skills/execute-mutation/scripts/run_mutation.py` (`write_dry_run_receipt`, `load_and_verify_receipt`, `format_verification_card`, `mark_receipt_executed`) to run `validate_only=True` dry-runs, generate SHA-256 tamper-evident receipts (`saved/data/last_dry_run.json`), bind serialized protobuf RPC request payloads (`request_sha256` / `request_sha256_list` via gRPC client interceptor), render the **Mutation & Consequence Verification Card**, and enforce one-time receipt replay protection on live execution.
-  - Added append-only JSONL mutation audit logging (`saved/logs/mutation_audit.jsonl`, `append_mutation_audit_log`) recording `DRY_RUN_PASSED`, `DRY_RUN_FAILED`, `SUCCESS`, `FAILED`, `BLOCKED_MUTATES_DISABLED`, and `BLOCKED_SHA256_MISMATCH` lifecycle events.
-- **Deterministic `PreToolUse` Mutation Guard (`config/config_init.py`):**
-  - Added `evaluate_mutation_guard()` and `_verify_dry_run_receipt_for_hook()` to `handle_hook()` in `config/config_init.py`:
-    - Automatically allows read-only queries (`search`, `search_stream`, diagnostic/validation skill scripts) and `validate_only=True` / `--dry-run` executions (`"decision": "allow"`).
-    - Hard-blocks (`"decision": "deny"` / `"permissionDecision": "deny"`) any live `.mutate*()`, `.apply_recommendation()`, conversion upload, or batch job execution when `execute_mutates = false` in `config/assistant_config`, or when lacking a fresh ($\le 30\text{ min}$) `DRY_RUN_PASSED` receipt in `saved/data/last_dry_run.json`, missing consequence disclosures, or exhibiting a script or protobuf RPC payload SHA-256 mismatch.
-    - Hardened direct script and inline code inspection (`evaluate_mutation_guard`) to prevent CLI `--dry-run` flag spoofing when the script itself lacks `validate_only=True` or sets `validate_only=False`, and extended command inspection to catch direct `./script.py` executable invocations (without a `python` prefix).
-    - Forces an interactive CLI confirmation prompt (`"decision": "force_ask"` in `agy` and `"permissionDecision": "ask"` in `Claude Code CLI`) displaying the full Consequence Summary (`Customer ID`, `Operation`, `Before -> After` state delta, `Reversibility`, and `Consequences`) when a verified live mutation executes.
-  - Updated `PreInvocation` ephemeral prompt injection in `config/config_init.py` to surface the active `execute_mutates` state from `config/assistant_config` and enforce the 4-step HITL mutation requirement on every turn.
-- **A2A Sidecar, Documentation & Testing:**
-  - Added `PREPARE_MUTATION` and `EXECUTE_MUTATION` intent handlers (`handle_prepare_mutation`, `handle_execute_mutation` with `destructive_hint: True`) in `sidecars/google-ads-a2a-service/server.py`, enforcing `is_execute_mutates_enabled()` gating and recording `DRY_RUN_PASSED`, `BLOCKED_MUTATES_DISABLED`, and `SUCCESS` entries in `saved/logs/mutation_audit.jsonl`.
-  - Added the **How Mutates Work** and `config/assistant_config` documentation sections to `README.md` and `plugins/google-ads-api-developer-assistant/README.md`, and updated `README_BEFORE_INSTALLATION.md` and `FAQ.md`.
-  - Added and expanded unit and integration test suites in `tests/test_hitl_mutation_guard.py`, `tests/test_components.py`, `tests/test_validate_gaql_cache.py`, and `tests/test_plugin_scripts.sh` covering `config/assistant_config` parsing/precedence, `execute_mutates` gating, direct script `--dry-run` spoofing prevention, `./script.py` executable interception, sidecar mutation audit logging, symlinked plugin installation (`--link`), global skill script execution outside the repository, read-only/dry-run allowance, unverified live mutation denial, verified receipt `"force_ask"` prompting, script & protobuf RPC payload SHA-256 tamper detection, and audit trail logging.
-- **Configuration Management & Session Initialization (`config_init.py`):**
-  - Implemented `config/config_init.py` with automated multi-format configuration parsing (`parse_ruby_config`, `parse_ini_config`, `parse_properties_config`, `write_yaml_config`) to support fallback credentials from PHP, Ruby, and Java setups.
-  - Added automatic extension version discovery (`get_version`) and idempotent `copy_and_append_version()` to append or update `ads_assistant: {version}` without duplicating lines across restarts.
-  - Added `sync_and_set_config_kv()` and `get_config_file_path()` to reconstruct `config/google-ads.yaml` from `~/google-ads.yaml` (or fallbacks) at session start, enforce POSIX `0600` permissions with cross-platform error handling, and bind `GOOGLE_ADS_CONFIGURATION_FILE_PATH`.
-  - Added CLI `main()` entry point supporting `--key`, `--value`, `--config-dir`, and `--source-yaml` flags with automatic test customer ID discovery from `config/assistant_config`.
-  - Added plugin lifecycle hook definitions (`hooks.json`) configuring `PreInvocation` and `PreToolUse` hooks (supporting `run_command`, `Bash`, and `bash` tools) to inject ephemeral configuration notices and rewrite commands before execution.
-  - Added command interception in `handle_hook()` to automatically rewrite references from `~/google-ads.yaml`, `os.path.expanduser('~/google-ads.yaml')`, and user home directory paths to `config/google-ads.yaml`, rewrite `GoogleAdsClient.load_from_storage()` calls to pass `path="config/google-ads.yaml"`, resolve relative `skills/` script paths to the global plugin directory, and prepend `export GOOGLE_ADS_CONFIGURATION_FILE_PATH=...` and `export GOOGLE_ADS_ASSISTANT_DIR=...`.
-  - Added automatic cleanup of dummy upstream `google-ads.yaml` files inside `client_libs/` in `sync_and_set_config_kv()`, `install.sh`, `update.sh`, `install.ps1`, and `update.ps1` to prevent multiple configuration file discovery and isolate `GOOGLE_ADS_CONFIGURATION_FILE_PATH` strictly to `config/google-ads.yaml`.
-- **Client Configuration & Home Directory Isolation:**
-  - Enforced strict isolation requirement that all Python client initializations, skill scripts, and generated code must load configuration from `config/google-ads.yaml` and NEVER default to or reference the user's home directory (`~/google-ads.yaml`).
-  - Added `_get_config_path()` helper across all skill scripts (`validate_gaql.py`, `inspect_object.py`, `create_pmax_webpage_filter.py`, `troubleshoot_conversions.py`, `get_recent_gclids.py`, `get_cids_under_mcc.py`) to pass `path=cfg_path` to `GoogleAdsClient.load_from_storage`, prioritizing plugin configuration and preventing fallbacks to default arguments.
-  - Updated `server.py` generated code template to output `GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version="{api_version}")`.
-  - Added per-request configuration synchronization in `server.py` `do_POST` when A2A tasks arrive.
-  - Added mandatory Protocol 1.0 step 3 and Rule 2.2 to `rules/google_ads_rules.md` requiring `config/google-ads.yaml` usage and forbidding inspection of `os.path.expanduser('~/google-ads.yaml')`.
-- **Diagnostic Collector Hardening & Isolation:**
-  - Added bounded buffer reads (64KB) and nested history stripping in `troubleshoot_conversions.py` (`merge_previous_findings`) to prevent exponential memory allocation and file growth across consecutive diagnostic runs, and added configurable `output_dir` support.
-  - Added isolated test fixtures with `tmp_path` in `tests/test_components.py`.
-- **Performance Optimizations:**
-  - Replaced recursive `glob.glob("**/google-ads.yaml", recursive=True)` traversal across `client_libs/` in `config/config_init.py` (`sync_and_set_config_kv`) with direct $O(1)$ top-level `os.scandir()` checks, eliminating tens of thousands of filesystem `stat`/`readdir` syscalls on every `PreInvocation` and `PreToolUse` hook invocation.
-  - Replaced out-of-process `subprocess.run` execution of `get_extension_version.py` in `config/config_init.py` (`get_version`) with direct in-process `plugin.json` parsing and module-level caching (`_CACHED_VERSION`), and added in-memory version caching (`_CACHED_PLUGIN_VERSION`) in `sidecars/google-ads-a2a-service/server.py` (`get_plugin_version`).
-  - Pre-compiled all hot-path regular expressions at module level in `config/config_init.py` (`evaluate_mutation_guard`, `handle_hook`) and `skills/inspect-object/scripts/inspect_object.py`.
-  - Added two-tier (in-memory `_AVAILABLE_TYPES_CACHE` and on-disk `tempfile.gettempdir()/gads_assistant_types_<version>.json`) caching keyed by directory modification time (`mtime`) in `skills/inspect-object/scripts/inspect_object.py` (`get_available_types`) to avoid re-scanning and regex-parsing ~450 Python protobuf definition files on repeated inspections.
-  - Added two-tier (in-memory `_GAQL_MEMORY_CACHE` and on-disk `saved/data/gaql_validation_cache.json`) GAQL validation response caching keyed by `SHA-256(query + api_version)` in `skills/validate-gaql/scripts/validate_gaql.py` (`compute_gaql_cache_key`, `get_cached_validation`, `set_cached_validation`, `invalidate_gaql_cache`) with configurable TTL (`--cache-ttl`) and cache control flags (`--no-cache`, `--clear-cache`, `--cache-path`).
-  - Parallelized upstream GitHub release checks (`fetch_github_latest_release`) across multiple client libraries in `skills/sync-client-libs/scripts/sync_client_libs.py` (`process_client_libs`) using `concurrent.futures.ThreadPoolExecutor`.
-- **Cross-Version Performance & Functionality Benchmark Suite (`tests/benchmark_suite.py`):**
-  - Added `tests/benchmark_suite.py` and `TestPerformanceRegressions` (`tests/test_components.py`) with saved baselines (`tests/benchmarks/baseline_v4.0.0.json` captured from git tag `v4.0.0`, and `tests/benchmarks/baseline_v4.1.0.json`) and live git worktree comparison (`--compare-git-ref v4.0.0`):
-    - `version_resolution_in_process` (1,000 iters): `119.87 ms` in `v4.0.0` $\rightarrow$ `0.57 ms` in `v4.1.0` (**211.41x speedup**).
-    - `gaql_static_analysis` (200 iters): `42.79 ms` in `v4.0.0` $\rightarrow$ `4.68 ms` in `v4.1.0` (**9.15x speedup** with SHA-256 validation caching).
-    - `protobuf_type_discovery_and_inspection` (200 iters): `99.53 ms` in `v4.0.0` $\rightarrow$ `10.30 ms` in `v4.1.0` (**9.66x speedup** with memory + disk caching).
-    - `client_libs_parallel_release_sync` (5 iters, 5 repos @ 25ms RTT): `632.77 ms` in `v4.0.0` $\rightarrow$ `145.02 ms` in `v4.1.0` (**4.36x speedup** via `ThreadPoolExecutor`).
-    - `conversion_csv_validation` (50 iters, 100 rows/batch): `101.16 ms` in `v4.0.0` $\rightarrow$ `91.35 ms` in `v4.1.0` (**1.11x speedup**).
-    - New `v4.1.0` subsystem benchmarks: `config_sync_and_legacy_migration` (`99.31 ms` / 50 iters), `hook_pre_tool_use_interception` (`49.63 ms` / 500 iters), and `hitl_mutation_receipt_and_sha256_normalization` (`82.47 ms` / 100 iters).
+  - Replaced the `NO MUTATE` rule in `rules/google_ads_rules.md` with the 4-Step HITL Mutation Protocol: (1) GAQL before-state lookup, (2) `validate_only=True` dry-run with a SHA-256 receipt (`saved/data/last_dry_run.json`), (3) consequence disclosure and user confirmation, and (4) `PreToolUse` hook-gated live execution (`--execute` with `ResponseContentType.MUTABLE_RESOURCE`).
+  - Added the `execute_mutates` switch (`execute_mutates = false` by default in `config/assistant_config`).
+  - Added `skills/execute-mutation/SKILL.md` and `skills/execute-mutation/scripts/run_mutation.py` (`write_dry_run_receipt`, `load_and_verify_receipt`, `format_verification_card`, `mark_receipt_executed`, and `append_mutation_audit_log` for `saved/logs/mutation_audit.jsonl`).
+- **`PreToolUse` Mutation Guard (`config/config_init.py`):**
+  - Added `evaluate_mutation_guard()` and `_verify_dry_run_receipt_for_hook()` to `handle_hook()` in `config/config_init.py` to allow read-only and `--dry-run` calls, block unverified live mutations (`"decision": "deny"`), and prompt for confirmation (`"decision": "force_ask"` / `"permissionDecision": "ask"`) when a verified live mutation runs.
+- **A2A Sidecar, Documentation & Tests:**
+  - Added `PREPARE_MUTATION` and `EXECUTE_MUTATION` handlers in `sidecars/google-ads-a2a-service/server.py`.
+  - Updated `README.md`, `plugins/google-ads-api-developer-assistant/README.md`, `README_BEFORE_INSTALLATION.md`, and `FAQ.md`.
+  - Added test suites in `tests/test_hitl_mutation_guard.py`, `tests/test_components.py`, `tests/test_validate_gaql_cache.py`, and `tests/test_plugin_scripts.sh`.
+- **Configuration Management & Session Startup (`config_init.py`):**
+  - Added `config/config_init.py` (`parse_ruby_config`, `parse_ini_config`, `parse_properties_config`, `write_yaml_config`, `sync_and_set_config_kv`, and `copy_and_append_version`) and `hooks.json` to sync credentials from `$HOME` into `config/google-ads.yaml` (`0600` permissions) and set `GOOGLE_ADS_CONFIGURATION_FILE_PATH`.
+  - Updated all skill scripts and `server.py` to load credentials from `config/google-ads.yaml` instead of `~/google-ads.yaml`.
+- **Diagnostic Collector Updates:**
+  - Added 64KB buffer limits and nested history cleanup in `troubleshoot_conversions.py` (`merge_previous_findings`).
+- **Performance Optimizations & Benchmark Suite (`tests/benchmark_suite.py`):**
+  - Replaced recursive `glob.glob` in `config/config_init.py` with top-level `os.scandir()` checks.
+  - Added in-process version caching (`_CACHED_VERSION`), pre-compiled regular expressions, two-tier Protobuf type caching (`inspect_object.py`), two-tier SHA-256 GAQL validation caching (`validate_gaql.py`), and parallel `ThreadPoolExecutor` release checks (`sync_client_libs.py`).
+  - Added `tests/benchmark_suite.py` and `TestPerformanceRegressions` (`tests/test_components.py`) with baseline files in `tests/benchmarks/`.
 
 ## 4.0.0
 
 - **Plugin Architecture & Migration:**
-  - Migrated from legacy project-based structure (`.agents/skills`, `api_examples/`, `update_project_context.py`, `AGENTS.md`) to a unified multi-platform plugin architecture under `plugins/google-ads-api-developer-assistant/`.
-  - Configured repository with `.claude-plugin/marketplace.json` for native Claude Code marketplace discovery and installation (`claude plugin marketplace add` / `claude plugin install`).
-  - Implemented dual-contract governance (`rules/google_ads_rules.md`) across both Antigravity and Claude Code agent environments.
-  - Added mandatory `DEFAULT TO PYTHON FOR EXECUTION` hard constraint directive in `rules/google_ads_rules.md` requiring the assistant to always use Python for executing code and running tasks across the project unless explicitly requested otherwise by the user.
+  - Moved from the legacy project layout (`.agents/skills`, `api_examples/`, `update_project_context.py`, `AGENTS.md`) to a multi-platform plugin layout under `plugins/google-ads-api-developer-assistant/`.
+  - Added `.claude-plugin/marketplace.json` for Claude Code marketplace installation.
+  - Added `rules/google_ads_rules.md` for Antigravity and Claude Code, including the rule to use Python by default for code execution.
 - **Lifecycle & Maintenance Scripts:**
-  - Updated install scripts (`install.sh`, `install.ps1`) and update scripts (`update.sh`, `update.ps1`) to require a target platform argument (`agy` or `claude`).
-  - Added host environment verification in install scripts for Python >= 3.10 and host CLI availability (Antigravity CLI or Claude Code CLI).
-  - Ensured Python client library (`google-ads-python`) is cloned by default alongside optional library flags (`--php`, `--ruby`, `--java`, `--dotnet`, `--all`).
-  - Enhanced update scripts with resilient `git pull` handling (warning on client library pull failures without aborting) and dynamic plugin asset discovery/syncing.
-  - Implemented robust `config/customer_id` and `config/customer_id.txt` backup and restoration across git operations using isolated temporary directories with guaranteed trap cleanup.
-  - Replaced standalone uninstall scripts with native platform uninstallation mechanisms (`/plugin uninstall` in Claude Code, plugin directory deletion in Antigravity).
-- **Synchronization & Versioning:**
-  - Implemented automated client library discovery and sync tool (`sync_client_libs.py`) and Claude Code slash command (`/sync-client-libs`).
-  - Added support for verifying and syncing the assistant repository itself (`google-ads-api-developer-assistant`) against upstream GitHub releases.
-  - Added Protocol 1.0 "Validate Before Act & Interactive Sync" directive to agent rules: checks for upstream releases at startup in check-only mode and prompts the user before upgrading.
-  - Implemented 5-tier dynamic API version resolution hierarchy in `get_latest_api_version.py` and A2A sidecar (`server.py`).
-- **Version Parity & Verification:**
-  - Added `check_version_parity()` in `inspect_object.py` across plugin locations to compare the installed environment package (`google-ads`) against local `client_libs/google-ads-python` source metadata (`pyproject.toml` / `ChangeLog`) and output an explicit warning banner on version discrepancies.
-  - Added mandatory `CLIENT LIBS & RUNTIME VERSION MISMATCH WARNING` hard constraint directive to `rules/google_ads_rules.md` requiring agents to explicitly warn users of potential schema or descriptor differences when installed packages differ from cloned client libraries.
-  - Mandated checking installed `google-ads` version against the latest upstream release in `rules/google_ads_rules.md`.
-  - Updated `inspect-object` skill documentation (`SKILL.md`) to document the version parity checking requirement and field discrepancy handling.
-- **Skills & Slash Commands:**
-  - Added 10 native Claude Code slash commands under `commands/`: `/validate-gaql`, `/inspect-object`, `/troubleshoot-conversions`, `/get-cids`, `/pmax-filter`, `/explain`, `/assistant-tutorial`, `/step-by-step`, `/sync-client-libs`, and `/ext-version`.
-  - Added CLI parameter support (`--query` / `-q`) to `validate_gaql.py` with automatic stdin fallback and prioritized static analysis before API client initialization.
-  - Added static GAQL lint checks in `validate_gaql.py` and A2A sidecar (`server.py`) flagging deprecated `segments.hour` in favor of `segments.hour_of_day` for Google Ads API v23+.
-  - Added case-insensitive matching, normalized lookups, fuzzy suggestions (`difflib`), and source definition parsing fallback (`inspect_from_source`) to `inspect_object.py`.
-  - Added structured `--json` output flags to `troubleshoot_conversions.py`, `get_cids_under_mcc.py`, and `sync_client_libs.py`.
-- **Sidecar & Microservices:**
-  - Configured `mcp_config.json` and background A2A HTTP sidecar (`server.py`) on port 8900 for Agent-to-Agent task delegation (`GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`).
-- **Testing & Tooling:**
-  - Added top-level `requirements.txt` and `pyproject.toml` specifying `google-ads`, `ruff`, and `pytest`.
-  - Added GitHub Actions CI workflow (`.github/workflows/ci.yml`) with Linux (Ubuntu) and Windows test matrices across Python 3.10 through 3.14 running linting, unit tests, and lifecycle validation scripts.
-  - Added dedicated unit test suite in `tests/test_components.py` with mocked `GoogleAdsClient` and network fixtures.
-- **Documentation:**
-  - Updated documentation across `README.md` (including "Stay in sync" section), `plugins/google-ads-api-developer-assistant/README.md`, `FAQ.md`, `README_BEFORE_INSTALLATION.md`, and `migration.md`.
+  - Updated `install.sh`, `install.ps1`, `update.sh`, and `update.ps1` to take a platform argument (`agy` or `claude`), check Python and CLI prerequisites, clone `google-ads-python` by default, and support `--php`, `--ruby`, `--java`, `--dotnet`, and `--all`.
+  - Added backup and restore for `config/customer_id` and `config/customer_id.txt` during updates.
+- **Sync & Versioning:**
+  - Added `sync_client_libs.py` and `/sync-client-libs` to check and update client libraries and the assistant repository against GitHub releases.
+  - Added 5-tier API version lookup in `get_latest_api_version.py` and `server.py`.
+  - Added `check_version_parity()` in `inspect_object.py` to compare the installed `google-ads` package with `client_libs/google-ads-python`.
+- **Skills, Slash Commands & Sidecar:**
+  - Added 10 Claude Code slash commands under `commands/`.
+  - Added `--query` / `-q` and `segments.hour` lint checks to `validate_gaql.py`.
+  - Added case-insensitive matching, fuzzy suggestions (`difflib`), and `inspect_from_source` to `inspect_object.py`.
+  - Added `--json` output flags to `troubleshoot_conversions.py`, `get_cids_under_mcc.py`, and `sync_client_libs.py`.
+  - Added `mcp_config.json` and the A2A HTTP sidecar (`server.py`) on port 8900.
+- **Tests & Documentation:**
+  - Added `requirements.txt`, `pyproject.toml`, `.github/workflows/ci.yml`, and `tests/test_components.py`.
+  - Updated `README.md`, `plugins/google-ads-api-developer-assistant/README.md`, `FAQ.md`, `README_BEFORE_INSTALLATION.md`, and `migration.md`.
 
 ## 3.0.0
 
-- Fixed a breaking bug in `install.ps1` and `tests/test_install.ps1` where legacy `settings.json` references caused the Windows installation to crash.
-- Changed the assistant's role description in `AGENTS.md` to "Expert Developer for the Google Ads API".
-- Added a rule to `AGENTS.md` requiring report-type queries to print retrieved results to stdout in a structured table format.
-- Migrate from `gemini-cli` to `antigravity`.
-- Moved GAQL validation to a skill.
-- Added skill to fetch all child accounts under an MCC.
-- Added rule to `AGENTS.md` to always check Devsite first for current version.
-- Added rule to `AGENTS.md` to prevent using SQL aggregate functions in GAQL queries.
-- Converted `explain` command to a skill.
-- Converted `step_by_step` command to a skill.
-- Replaced `conversions_support_package` with `troubleshoot_conversions` skill.
-- Relocated conversion troubleshooting and upload summary scripts and tests into `troubleshoot_conversions` skill directory.
-- Added `troubleshoot_conversions` skill with `EVAL.txtpb` evaluation definitions and `TEST.md` test documentation.
-- Added datetime stamps to all log messages.
-- Log file is now written to `.agents/` directory and is not reset on each run.
-- Made structure of directory and files Antigravity compliant.
-- Added required `api_version` argument to `get_cids_under_mcc`, `validate_gaql`, and `troubleshoot_conversions` skills.
-- Added static query checks to `validate_gaql` for date segments, `click_view`, and `change_status`.
-- Added new `inspect_object` skill for dynamically looking up Protobuf messages and Enums.
-- Added new `pmax_listing_filter` skill for creating Performance Max webpage URL exclusions.
-- Added `validate_conversion_upload` helper script to `troubleshoot_conversions` skill to pre-validate upload file formatting.
-- Streamlined `AGENTS.md` and de-duplicated `conversions/AGENTS.md` to use new programmatic skills.
-- Resolved `Namespace AttributeError` bug in `api_examples/conversion_reports.py` by adding the `limit` argument.
-- Renamed skill simply to `explain`.
-- Drastically reduced the size of `conversions/AGENTS.md` by migrating most of the functionality to a skill.
-- Created cache file for current API version with TTL of 19 hours.
-- `.venv` is not deleted at the end of the session. Its Python version is checked on startup and if a newer version is available a new `.venv` is created.
+- Fixed a bug in `install.ps1` and `tests/test_install.ps1` where old `settings.json` references caused Windows installation to fail.
+- Changed the assistant role in `AGENTS.md` to "Expert Developer for the Google Ads API".
+- Added a rule in `AGENTS.md` to print report query results as tables to `stdout`.
+- Migrated from `gemini-cli` to `antigravity`.
+- Moved GAQL validation to a skill and added a skill to list child accounts under an MCC.
+- Added rules in `AGENTS.md` to check Devsite for the current API version and block SQL aggregate functions in GAQL queries.
+- Converted `explain` and `step_by_step` commands into skills.
+- Replaced `conversions_support_package` with the `troubleshoot_conversions` skill and added `validate_conversion_upload`.
+- Added timestamps to log messages and kept `.agents/` log files and `.venv` across runs.
+- Added the required `api_version` argument to `get_cids_under_mcc`, `validate_gaql`, and `troubleshoot_conversions`.
+- Added static checks to `validate_gaql` for date segments, `click_view`, and `change_status`.
+- Added the `inspect_object` and `pmax_listing_filter` skills.
+- Fixed the `Namespace AttributeError` bug in `api_examples/conversion_reports.py`.
+- Added a 19-hour cache file for the current API version.
 
 ## 2.3.0
 
-- Added `context_dir` argument to update scripts to add additional directories (e.g., your codebase).
-- When the assistant executes Python code it is in a virtual environment that has the Google Ads API Client Libraries installed.
-- At init check the current version of the extension against the latest on GitHub. Display a message if an update is available.
-- Silenced extraneous startup messages.
-- Changed name of startup hook to `configure_environment.py`.
-- Changed name of cleanup hook to `cleanup_environment.py`.
-- Removed placeholders from `GEMINI.md`.
-- Optimized code to retrieve disapproved ads.
-- Silenced automated `pip install` screen output telemetry noise.
-- Attached diagnostic dynamic path traces logs auditing isolation `SessionStart` traversals.
-- Documented Rule 4.5 Workspace Isolation Compliance enforcing explicit binary pointers.
-- Zero tolerance rule to prevent `OR` operator in GAQL.
-- Zero tolerance rule to prevent `FROM` operator in metadata queries.
-- Fix formatting in `README.md`.
+- Added the `context_dir` argument to the update scripts.
+- Configured Python code execution to run in a virtual environment with the Google Ads client libraries installed.
+- Added a startup version check against GitHub releases.
+- Renamed the startup and cleanup hooks to `configure_environment.py` and `cleanup_environment.py`.
+- Removed placeholders from `GEMINI.md` and reduced startup log noise.
+- Added rules to block the `OR` operator in GAQL and block the `FROM` clause in metadata queries.
+- Fixed formatting in `README.md`.
 
 ## 2.2.0
 
-- `api_examples`: `api_version` is a required argument with no default value.
-- Modified `/explain` to make output more structured.
-- Added license to all files.
-- Fixed bug in `configure_environment.py` hook script and added modifying policy files.
-- Surgical update rules.
-- Rule to prohibit dummy credentials.
-- Rule for Asset Group URL Filtering.
+- Required the `api_version` argument in `api_examples` with no default value.
+- Updated `/explain` output formatting and added license headers to all files.
+- Fixed `configure_environment.py` and added rules to block dummy credentials and configure Asset Group URL filtering.
 
 ## 2.1.0
 
-- Updated Workflow: API Versioning & Pre-Task Validation.
-- Added anti-pattern to Configuration Protocol.
-- Modified `explain` command to return structured explanations.
+- Updated the API versioning and pre-task validation workflow.
+- Updated the `explain` command to return structured explanations.
 
 ## 2.0.1
 
-- Added unit tests for `configure_environment.py` hook script.
-- Added unit tests for `cleanup_config.py` hook script.
-- Verified project tests pass by isolating from `client_libs` collection errors.
-- Fixed linting errors in new test files.
+- Added unit tests for `configure_environment.py` and `cleanup_config.py`.
+- Isolated project tests from `client_libs` collection errors and fixed lint errors.
 
 ## 2.0.0
 
-- Hierarchical context file for conversions troubleshooting.
-- Added Conversion Troubleshooting & Diagnostics functionality (`api_examples/collect_conversions_troubleshooting_data.py`).
-- Updated examples to use Google Ads API v23.
-- Updated `README.md`.
-- Changed directory structure to use a single sub-directory for all saved data.
-- Added unit test coverage for new diagnostic tools and examples.
-- Reformatted `GEMINI.md` for better clarity on conversion types and autonomous diagnostic prompts.
-- `install-deps` option to `install.sh` and `install.ps1`.
-- `skills/ext_version` to get the extension version.
-- `gemini-extension.json` to register extensions with `https://geminicli.com/extensions/`.
-- Documentation resource for public protos.
-- Hooks for start and end of a session.
-- Mandatory GAQL validation rules to `GEMINI.md`.
-- Dynamic gRPC interceptor for Python calls within extension.
-- Python is installed by default with `install.sh` and `install.ps1`.
-- Updated update process to allow for adding additional client libraries.
-- Changed name of setup files to `install` and provided an uninstall procedure.
-- Added additional rules for GAQL edge cases to `GEMINI.md`.
-- Added command `conversions_support_data`.
+- Added conversion troubleshooting and diagnostics (`api_examples/collect_conversions_troubleshooting_data.py`).
+- Updated examples to Google Ads API v23 and moved saved files into a single subdirectory.
+- Added `install-deps` to `install.sh` and `install.ps1`, added `skills/ext_version`, and added `gemini-extension.json`.
+- Added session start/end hooks, GAQL validation rules in `GEMINI.md`, and a gRPC interceptor for Python calls.
+- Installed Python by default in `install.sh` and `install.ps1` and renamed setup scripts to `install`.
 
 ## 1.5.0
 
-- Added rigorous GAQL validation rules to `GEMINI.md`.
+- Added GAQL validation rules to `GEMINI.md`.
 
 ## 1.4.2
 
@@ -256,37 +156,24 @@
 
 ## 1.4.1
 
-- Fixed minor bugs in tests for `api_examples`.
-- Added test `api_examples/tests/test_get_conversion_upload_summary.py`.
+- Fixed bugs in `api_examples` tests and added `api_examples/tests/test_get_conversion_upload_summary.py`.
 
 ## 1.4.0
 
-- Modified `ChangeLog` so changes are listed in reverse chronological order.
-- Added `step_by_step` custom command.
+- Listed `ChangeLog` entries in reverse chronological order and added the `step_by_step` command.
 
 ## 1.3.0
 
-- Added `explain` command.
-- Placed client libraries in a sub-directory of the project directory.
-- Updated setup and update scripts.
-- Added constraint to `GEMINI.md` to never modify files in `api_examples`.
+- Added the `explain` command, placed client libraries in a project subdirectory, and blocked edits to `api_examples`.
 
 ## 1.2.0
 
-- Updated `README.md` for clarity.
-- Modified `setup.sh` to work with Linux and macOS.
-- Modified `update.sh` to work with Linux and macOS.
-- Added PowerShell scripts for Windows.
-- Removed extension installation to manifest since it regularly hangs.
-- Modified logic in setup and update scripts.
-- Added tests for setup and update scripts.
+- Updated `README.md`, `setup.sh`, and `update.sh` for Linux and macOS, and added PowerShell scripts for Windows.
 
 ## 1.1.0
 
-- Added support for PHP, Ruby, Java, and C#.
-- Find latest version of the API and prompt user whether to use this version.
-- Modified `setup.sh` to clone copies of the client libraries.
+- Added support for PHP, Ruby, Java, and C#, added latest API version lookup, and cloned client libraries in `setup.sh`.
 
 ## 1.0.0
 
-- Release of version 1.0.
+- Released version 1.0.
