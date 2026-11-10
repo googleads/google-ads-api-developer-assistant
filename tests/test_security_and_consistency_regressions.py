@@ -1715,6 +1715,122 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
             )
         assert (arch_dst / ".sync_version").read_text(encoding="utf-8").strip() == "37.2.0"
 
+    def test_sync_client_libs_discovery_search_order(self, tmp_path, monkeypatch):
+        """discover_client_libs_dir() checks plugin, Antigravity, Claude Code, then workspace dirs."""
+        scl = _load_module(
+            "skills/sync-client-libs/scripts/sync_client_libs.py", "scl_discovery_order"
+        )
+        plugin_dir = tmp_path / "plugin"
+        monkeypatch.setattr(
+            scl,
+            "__file__",
+            str(plugin_dir / "skills" / "sync-client-libs" / "scripts" / "sync_client_libs.py"),
+        )
+        fake_home = tmp_path / "home"
+        _set_fake_home(monkeypatch, fake_home)
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        monkeypatch.chdir(workspace)
+
+        with pytest.raises(FileNotFoundError):
+            scl.discover_client_libs_dir()
+
+        # Highest priority first. Create them in reverse order so each new directory must win.
+        candidates = [
+            plugin_dir / "client_libs",
+            fake_home / ".gemini/config/plugins/google-ads-api-developer-assistant/client_libs",
+            fake_home
+            / ".claude/plugins/google-ads-assistant-local/plugins"
+            / "google-ads-api-developer-assistant/client_libs",
+            workspace / "client_libs",
+        ]
+        for candidate in reversed(candidates):
+            candidate.mkdir(parents=True)
+            assert Path(scl.discover_client_libs_dir()) == candidate
+
+    def test_safe_extract_tar_rejects_devices_and_escaping_links(self, tmp_path):
+        """_safe_extract_tar() rejects device files and links that point outside the target dir."""
+        scl = _load_module(
+            "skills/sync-client-libs/scripts/sync_client_libs.py", "scl_tar_members"
+        )
+
+        def _member(name: str, member_type: bytes, linkname: str = "") -> tarfile.TarInfo:
+            info = tarfile.TarInfo(name)
+            info.type = member_type
+            info.linkname = linkname
+            return info
+
+        unsafe_members = [
+            (_member("dev_node", tarfile.CHRTYPE), "device file"),
+            (_member("pkg/link_out", tarfile.SYMTYPE, "../../outside.txt"), "link target"),
+            (_member("hard_out", tarfile.LNKTYPE, "../outside.txt"), "link target"),
+        ]
+        for idx, (member, reason) in enumerate(unsafe_members):
+            archive = tmp_path / f"unsafe_{idx}.tar"
+            with tarfile.open(archive, "w") as tf:
+                tf.addfile(member)
+            extract_dir = tmp_path / f"extract_{idx}"
+            extract_dir.mkdir()
+            with tarfile.open(archive, "r") as tf, pytest.raises(ValueError, match=reason):
+                scl._safe_extract_tar(tf, str(extract_dir))
+            assert list(extract_dir.iterdir()) == []
+
+        # TarFile.extractall() in Python 3.11.0-3.11.3 has no filter= argument.
+        class _TarWithoutFilterArg:
+            def __init__(self) -> None:
+                self.extracted_to: list[str] = []
+
+            @staticmethod
+            def getmembers() -> list[tarfile.TarInfo]:
+                return [tarfile.TarInfo("pkg/ok.txt")]
+
+            def extractall(self, path: str, members=None, **kwargs) -> None:
+                if "filter" in kwargs:
+                    raise TypeError("extractall() got an unexpected keyword argument 'filter'")
+                self.extracted_to.append(path)
+
+        old_tar = _TarWithoutFilterArg()
+        scl._safe_extract_tar(old_tar, str(tmp_path / "old_python_out"))
+        assert old_tar.extracted_to == [str(tmp_path / "old_python_out")]
+
+    def test_update_codebase_via_archive_retries_clone_with_v_prefixed_tag(
+        self, tmp_path, monkeypatch
+    ):
+        """A failed clone of tag 'X.Y.Z' is retried as 'vX.Y.Z' before any tarball download."""
+        from types import SimpleNamespace
+
+        scl = _load_module(
+            "skills/sync-client-libs/scripts/sync_client_libs.py", "scl_clone_retry"
+        )
+        cloned_branches: list[str] = []
+
+        def _fake_git_clone(cmd, **_kwargs):
+            branch = cmd[cmd.index("--branch") + 1]
+            cloned_branches.append(branch)
+            if branch != "v37.2.0":
+                return SimpleNamespace(returncode=128, stdout="", stderr="Remote branch not found")
+            clone_dir = Path(cmd[-1])
+            clone_dir.mkdir(parents=True)
+            (clone_dir / "pyproject.toml").write_text('version = "37.2.0"\n', encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(scl.subprocess, "run", _fake_git_clone)
+        monkeypatch.setattr(
+            scl.urllib.request,
+            "urlopen",
+            lambda *_a, **_kw: pytest.fail("No tarball download after a successful clone."),
+        )
+        lib_dir = tmp_path / "google-ads-python"
+        assert (
+            scl.update_codebase_via_archive(
+                str(lib_dir), "googleads/google-ads-python", "37.2.0", None
+            )
+            is True
+        )
+        assert cloned_branches == ["37.2.0", "v37.2.0"]
+        assert (lib_dir / "pyproject.toml").is_file()
+        assert (lib_dir / ".sync_version").read_text(encoding="utf-8").strip() == "37.2.0"
+
     def test_additional_audit_remediations(self, tmp_path, monkeypatch):
         # 1. Every skill has a matching command file in commands/<skill>.md
         skill_names = {
