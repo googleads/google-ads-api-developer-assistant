@@ -45,6 +45,10 @@
   - [3. Run the Functional Test Suite](#3-run-the-functional-test-suite)
   - [4. Inspect & Filter the JSONL Audit Log](#4-inspect--filter-the-jsonl-audit-log)
   - [5. Read the End-of-Run Results Tables](#5-read-the-end-of-run-results-tables)
+- [Audit Logs](#audit-logs)
+  - [1. Runtime HITL Mutation Audit Log (`mutation_audit.jsonl`)](#1-runtime-hitl-mutation-audit-log-mutation_auditjsonl)
+  - [2. HITL Policy Functional Test Audit Log (`<UTC_TIMESTAMP>_hitl_policy_functional_audit.jsonl`)](#2-hitl-policy-functional-test-audit-log-utc_timestamp_hitl_policy_functional_auditjsonl)
+  - [3. Live Mutate RPC Test Harness Audit Log (`<UTC_TIMESTAMP>_<conversation_id>.jsonl`)](#3-live-mutate-rpc-test-harness-audit-log-utc_timestamp_conversation_idjsonl)
 - [Maintenance](#maintenance)
 - [Uninstallation](#uninstallation)
   - [Antigravity](#antigravity)
@@ -1062,7 +1066,7 @@ pytest tests/test_hitl_functional_suite.py -v
 
 ### 4. Inspect & Filter the JSONL Audit Log
 
-Every run writes a structured JSON Lines (`.jsonl`) audit log (by default `saved/mutate_test_logs/hitl_policy_functional_audit_<UTC_TIMESTAMP>.jsonl`, or the path passed to `--audit-log`, with `0600` permissions and automatic credential redaction):
+Every run writes a structured JSON Lines (`.jsonl`) audit log (by default `saved/mutate_test_logs/<UTC_TIMESTAMP>_hitl_policy_functional_audit.jsonl`, or the path passed to `--audit-log`, with `0600` permissions and automatic credential redaction):
 * **Unique Record Identifier (`record_id`):** Every JSONL record has its own unique UUIDv4 `record_id`.
 * **Record Type Discriminator (`record_type`):** Identifies each record as `"SUITE_START"`, `"REQUEST"`, `"RESPONSE"`, `"ERROR"`, `"TEST_RESULT"`, or `"SUITE_SUMMARY"`.
 * **Request $\rightarrow$ Response Correlation (`request_record_id`):** Every `"RESPONSE"` record includes `request_record_id` containing the exact `record_id` of the `"REQUEST"` record that generated it.
@@ -1094,6 +1098,172 @@ At the conclusion of every run, the runner prints three formatted tables to `std
 **Exit Codes:**
 * **`0`**: All executed tests passed.
 * **`1`**: One or more tests failed (inspect the **Failed Test Cases** table or run `--filter-errors` on the `.jsonl` audit log).
+
+## Audit Logs
+
+The assistant and its test suites produce **three append-only JSON Lines (`.jsonl`) audit logs** (one JSON object per line, UTF-8 encoded, enforced to `0600` file permissions on POSIX systems, with OAuth secrets and private keys automatically redacted). All default log directories under `saved/` are gitignored.
+
+| Audit Log | Producer(s) | Default Location(s) | Override | Purpose |
+| :--- | :--- | :--- | :--- | :--- |
+| **`mutation_audit.jsonl`** | [`run_mutation.py`](plugins/google-ads-api-developer-assistant/skills/execute-mutation/scripts/run_mutation.py), [`server.py`](plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/server.py) | `saved/logs/mutation_audit.jsonl` (mirrored to plugin & installed `~/.gemini` / `~/.claude` `saved/logs/`) | `GOOGLE_ADS_MUTATION_AUDIT_LOG` | Runtime HITL audit trail for every `--dry-run`, `--execute`, sidecar mutation task, and guardrail block. |
+| **`<UTC_TIMESTAMP>_hitl_policy_functional_audit.jsonl`** | [`tests/hitl_policy_functional_suite.py`](tests/hitl_policy_functional_suite.py) ([`tests/hitl_audit_logger.py`](tests/hitl_audit_logger.py)) | `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_hitl_policy_functional_audit.jsonl` | `--audit-log PATH` or `audit_log` in [`tests/test_account_config.yaml`](tests/test_account_config.yaml) | Correlated `REQUEST` / `RESPONSE` / `ERROR` / `TEST_RESULT` audit trail for the 72-test HITL & Post-MCP policy functional suite. |
+| **`<UTC_TIMESTAMP>_<conversation_id>.jsonl`** | [`tests/mutate_test_harness.py`](tests/mutate_test_harness.py) | `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_<conversation_id>.jsonl` | `--log-dir DIR` & `--conversation-id ID` | Per-RPC audit trail for GAPIC write-RPC discovery, topological fixture provisioning, and `validate_only` / live test-account validation. |
+
+---
+
+### 1. Runtime HITL Mutation Audit Log (`mutation_audit.jsonl`)
+
+* **Description:** Append-only runtime audit trail written by `append_mutation_audit_log()` in [`skills/execute-mutation/scripts/run_mutation.py`](plugins/google-ads-api-developer-assistant/skills/execute-mutation/scripts/run_mutation.py) and by the A2A sidecar ([`sidecars/google-ads-a2a-service/server.py`](plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/server.py)) during `PREPARE_MUTATION`, `EXECUTE_MUTATION`, and live `CREATE_*` intents. It records every `DRY_RUN` and `EXECUTE` attempt, including pre-RPC blocks (`BLOCKED_MUTATES_DISABLED`, `BLOCKED_PROHIBITED_DELETION`, `BLOCKED_FINANCIAL_LIMIT_EXCEEDED`, `BLOCKED_FINANCIAL_CONSEQUENCE_MISSING`, `BLOCKED_MISSING_VALIDATE_ONLY`, `BLOCKED_SHA256_MISMATCH`), API dry-run outcomes (`DRY_RUN_PASSED`, `DRY_RUN_FAILED`), and live execution outcomes (`SUCCESS`, `FAILED`). Direct agent file edits to `mutation_audit.jsonl` are blocked (`"decision": "deny"`) by the `PreToolUse` hook in [`config/config_init.py`](plugins/google-ads-api-developer-assistant/config/config_init.py).
+* **Locations:**
+  * When `GOOGLE_ADS_MUTATION_AUDIT_LOG` is **unset**, each entry is appended to every accessible candidate path returned by `get_audit_log_paths()`:
+    1. `./saved/logs/mutation_audit.jsonl` (active workspace directory)
+    2. `plugins/google-ads-api-developer-assistant/saved/logs/mutation_audit.jsonl` (plugin source directory)
+    3. `~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/logs/mutation_audit.jsonl` (installed Antigravity plugin)
+    4. `~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/saved/logs/mutation_audit.jsonl` (installed Claude Code plugin)
+  * When `GOOGLE_ADS_MUTATION_AUDIT_LOG=<path>` is **set**, entries are written exclusively to `<path>`.
+  * *Companion Verification Receipt:* Each record's `receipt_id` correlates with the single-use `0600` JSON dry-run receipt at `saved/data/last_dry_run.json` (mirrored across the corresponding `saved/data/` directories).
+* **Record Format (JSONL):** Each line is a JSON object with the following top-level and nested fields:
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `audit_id` | `string` (UUIDv4) | Unique identifier for this audit log entry. |
+| `receipt_id` | `string` (UUIDv4) | Identifier of the associated `saved/data/last_dry_run.json` dry-run receipt. |
+| `phase` | `string` | Execution phase: `"DRY_RUN"` or `"EXECUTE"`. |
+| `status` | `string` | Outcome code (`"DRY_RUN_PASSED"`, `"DRY_RUN_FAILED"`, `"SUCCESS"`, `"FAILED"`, `"BLOCKED_MUTATES_DISABLED"`, `"BLOCKED_SHA256_MISMATCH"`, `"BLOCKED_MISSING_VALIDATE_ONLY"`, `"BLOCKED_FINANCIAL_CONSEQUENCE_MISSING"`, `"BLOCKED_FINANCIAL_LIMIT_EXCEEDED"`, or `"BLOCKED_PROHIBITED_DELETION"`). |
+| `actor` | `object` | Identity and session metadata: `os_user`, `hostname`, `login_customer_id`, `target_customer_id`, `auth_type` (`"oauth2"` \| `"service_account"` \| `"unknown"`), `impersonated_email`, `client_id_masked`, `ads_assistant_version`, `cli_conversation_id`, `cli_transcript_path`, and `model_name`. |
+| `request` | `object` | Outbound call metadata and SHA-256 digests: `sent_at_iso`, `customer_id`, `validate_only`, `is_financial_transaction`, `operation_summary`, `script_path`, `script_sha256`, `request_sha256`, `request_sha256_list`, `expected_request_sha256`, `request_sha256_verified`, `command`, `payload`, and `rpc_calls[]` (`service`, `method`, `sent_at_iso`, `request_sha256`, `expected_request_sha256`, `request_sha256_verified`, `request_payload`). |
+| `approval` | `object` | HITL disclosure and approval timestamps: `dry_run_validated_at_iso`, `hook_prompted_at_iso`, `user_approved_at_iso`, `is_financial_transaction`, `before_state`, `after_state`, `consequences[]`, and `reversibility` (`"REVERSIBLE"` \| `"IRREVERSIBLE"`). |
+| `response` | `object` | API/process result: `received_at_iso`, `duration_ms`, `exit_code`, `google_ads_request_ids[]`, `payload`, `rpc_responses[]` (`service`, `method`, `received_at_iso`, `duration_ms`, `status`, `google_ads_request_id`, `response_payload`, `error`), `stdout`, `stderr`, and `error`. |
+
+```json
+{
+  "audit_id": "9f12c4e0-71a4-4f29-9c83-2d1a0b7e4c11",
+  "receipt_id": "3a84e7b2-109c-48d2-b6e1-7f23a9d80154",
+  "phase": "EXECUTE",
+  "status": "SUCCESS",
+  "actor": {
+    "os_user": "alice",
+    "hostname": "dev-workstation",
+    "login_customer_id": "9876543210",
+    "target_customer_id": "1234567890",
+    "auth_type": "oauth2",
+    "impersonated_email": null,
+    "client_id_masked": "12345678...",
+    "ads_assistant_version": "4.1.0",
+    "cli_conversation_id": "conv-8842",
+    "cli_transcript_path": "/tmp/session_transcript.jsonl",
+    "model_name": "gemini-2.5-pro"
+  },
+  "request": {
+    "sent_at_iso": "2026-11-10T16:10:02.114+00:00",
+    "customer_id": "1234567890",
+    "validate_only": false,
+    "is_financial_transaction": true,
+    "operation_summary": "Update CampaignBudget amount_micros",
+    "script_path": "saved/code/update_budget.py",
+    "script_sha256": "e3b0c44298fc1c149afbf4c8996fb924...",
+    "request_sha256": "8f4e2b9a1c3d5e7f0a2b4c6d8e0f1a3b...",
+    "request_sha256_list": ["8f4e2b9a1c3d5e7f0a2b4c6d8e0f1a3b..."],
+    "expected_request_sha256": "8f4e2b9a1c3d5e7f0a2b4c6d8e0f1a3b...",
+    "request_sha256_verified": true,
+    "command": ["python3", "saved/code/update_budget.py", "--execute"],
+    "payload": {"customer_id": "1234567890", "operations": [{"update": {"amount_micros": "7000000"}}]},
+    "rpc_calls": []
+  },
+  "approval": {
+    "dry_run_validated_at_iso": "2026-11-10T16:09:40.002+00:00",
+    "hook_prompted_at_iso": "2026-11-10T16:09:58.510+00:00",
+    "user_approved_at_iso": "2026-11-10T16:10:01.900+00:00",
+    "is_financial_transaction": true,
+    "before_state": "$5.00/day",
+    "after_state": "$7.00/day",
+    "consequences": ["Increases daily budget cap by +$2.00/day"],
+    "reversibility": "REVERSIBLE"
+  },
+  "response": {
+    "received_at_iso": "2026-11-10T16:10:02.490+00:00",
+    "duration_ms": 376.0,
+    "exit_code": 0,
+    "google_ads_request_ids": ["AbCdEfGhIjKlMnOpQrStUv"],
+    "payload": {"results": [{"resource_name": "customers/1234567890/campaignBudgets/101"}]},
+    "rpc_responses": [],
+    "stdout": "Updated customers/1234567890/campaignBudgets/101",
+    "stderr": "",
+    "error": null
+  }
+}
+```
+
+---
+
+### 2. HITL Policy Functional Test Audit Log (`<UTC_TIMESTAMP>_hitl_policy_functional_audit.jsonl`)
+
+* **Description:** Event-stream JSONL audit log generated by `FunctionalAuditLogger` ([`tests/hitl_audit_logger.py`](tests/hitl_audit_logger.py)) when running [`tests/hitl_policy_functional_suite.py`](tests/hitl_policy_functional_suite.py). Every line is flushed immediately with `os.fsync()`, assigned a unique UUIDv4 `record_id`, tagged with `record_type` for deterministic filtering, and verified at end-of-run by `verify_audit_log_integrity()`.
+* **Locations:**
+  * Default: `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_hitl_policy_functional_audit.jsonl` (configured via `audit_log.directory` and `audit_log.filename_prefix` in [`tests/test_account_config.yaml`](tests/test_account_config.yaml)).
+  * Override: `--audit-log <path>` on `tests/hitl_policy_functional_suite.py`.
+* **Record Format (JSONL):** Every record shares seven base fields plus `record_type`-specific fields:
+  * **Common Base Fields (all 6 record types):** `record_id` (`string`, unique UUIDv4), `record_type` (`"SUITE_START"` \| `"REQUEST"` \| `"RESPONSE"` \| `"ERROR"` \| `"TEST_RESULT"` \| `"SUITE_SUMMARY"`), `is_error` (`boolean`, `true` iff `record_type == "ERROR"`), `level` (`"INFO"` \| `"ERROR"`), `timestamp` (UTC ISO-8601 `YYYY-MM-DDTHH:MM:SS.mmmZ`), `run_id` (UUIDv4 shared across the run), and `operator` (OS username).
+
+| `record_type` | Type-Specific Fields |
+| :--- | :--- |
+| **`"SUITE_START"`** | `target_customer_id`, `login_customer_id`, `api_version`, `config` (resolved test-run configuration summary). |
+| **`"REQUEST"`** | `test_id`, `suite`, `action`, `target_customer_id`, `login_customer_id`, `api_version`, `payload`, and optional `service`, `method`. |
+| **`"RESPONSE"`** | **`request_record_id`** (UUIDv4 of the `"REQUEST"` record that generated this response), `test_id`, `suite`, `status`, `duration_ms`, `google_ads_request_id`, `payload`. |
+| **`"ERROR"`** | `is_error: true`, `level: "ERROR"`, `test_id`, `suite`, `error_code`, `error_message`, `request_record_id`, `response_record_id`, `details` (filterable via `--filter-errors <path.jsonl>` or `jq 'select(.record_type == "ERROR")'`). |
+| **`"TEST_RESULT"`** | `test_id`, `suite`, `name`, `passed` (`boolean`), `outcome` (`"PASSED"` \| `"FAILED"`), `duration_ms`, `details`, `last_request_record_id`, `error_record_id`. |
+| **`"SUITE_SUMMARY"`** | `target_customer_id`, `total_tests`, `passed_tests`, `failed_tests`, `error_records_logged`, `duration_ms`, `failed_test_details[]`. |
+
+```json
+{"record_id": "0b0a420a-df1e-4fec-9b80-3b9186f1da13", "record_type": "REQUEST", "is_error": false, "level": "INFO", "timestamp": "2026-11-10T16:20:01.104Z", "run_id": "619e2bb3-924c-4b4d-a07d-a28560cace8b", "operator": "alice", "test_id": "PF-03", "suite": "PREFLIGHT", "action": "GoogleAdsService.search", "target_customer_id": "1234567890", "login_customer_id": "9876543210", "api_version": "v26", "payload": {"query": "SELECT customer.id, customer.test_account FROM customer LIMIT 1"}, "service": "GoogleAdsService", "method": "search"}
+{"record_id": "84c91d52-3b18-4a77-8d12-90f312ab4401", "record_type": "RESPONSE", "request_record_id": "0b0a420a-df1e-4fec-9b80-3b9186f1da13", "is_error": false, "level": "INFO", "timestamp": "2026-11-10T16:20:01.289Z", "run_id": "619e2bb3-924c-4b4d-a07d-a28560cace8b", "operator": "alice", "test_id": "PF-03", "suite": "PREFLIGHT", "status": "OK", "duration_ms": 185.2, "google_ads_request_id": "ReqId987654", "payload": {"test_account": true}}
+```
+
+---
+
+### 3. Live Mutate RPC Test Harness Audit Log (`<UTC_TIMESTAMP>_<conversation_id>.jsonl`)
+
+* **Description:** Per-RPC JSONL audit log written by `AuditLogger` in [`tests/mutate_test_harness.py`](tests/mutate_test_harness.py). It records pre-flight `customer.test_account == true` verification, dependency-ordered GAPIC write-RPC validation (`validate_only=True` and controlled live test-account writes), client-side financial guardrail checks, and teardown operations with `os.fsync()` durability and secret redaction.
+* **Locations:**
+  * Default: `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_<conversation_id>.jsonl` (`<conversation_id>` defaults to `standalone` when `--conversation-id` is omitted).
+  * Override: `--log-dir <directory>` and `--conversation-id <id>` on `tests/mutate_test_harness.py`.
+* **Record Format (JSONL):** Each line represents one pre-flight check, guardrail check, or RPC invocation:
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `datetime` | `string` | UTC timestamp in `YYYY-MM-DDTHH:MM:SS.mmmZ` format. |
+| `username` | `string` | Local OS username running the test harness. |
+| `service` | `string` | Google Ads API service name (for example, `"CampaignBudgetService"` or `"GoogleAdsService"`). |
+| `test_case` | `object` | Scenario metadata: `scenario` (`string`), `assertion_passed` (`boolean`), plus optional scenario-specific fields. |
+| `request` | `object` | Request details: `method`, `api_version`, `gcp_project_number`, `login_customer_id`, and redacted `payload`. |
+| `response` | `object` | Response details: `grpc_status`, `request_id`, `duration_ms` (`int`), redacted `payload`, and `error` (or `null`). |
+| `status` | `string` *(optional)* | Optional top-level lifecycle status (for example, `"ABORTED_NON_TEST_ACCOUNT"` or `"BLOCKED_PROHIBITED_DELETION"`). |
+
+```json
+{
+  "datetime": "2026-11-10T16:25:14.082Z",
+  "username": "alice",
+  "service": "CampaignBudgetService",
+  "test_case": {
+    "scenario": "validate_only_positive",
+    "assertion_passed": true
+  },
+  "request": {
+    "method": "mutate_campaign_budgets",
+    "api_version": "v26",
+    "gcp_project_number": "123456789012",
+    "login_customer_id": "9876543210",
+    "payload": {"customer_id": "1234567890", "validate_only": true, "operations": []}
+  },
+  "response": {
+    "grpc_status": "OK",
+    "request_id": "XyZaBcDeFgHiJkLmNoPqRs",
+    "duration_ms": 142,
+    "payload": {"results": []},
+    "error": null
+  }
+}
+```
 
 ## Maintenance
 
