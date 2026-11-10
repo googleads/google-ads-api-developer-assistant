@@ -39,6 +39,12 @@
 - [Performance & Functionality Benchmarks](#performance--functionality-benchmarks)
   - [How to Run the Benchmarks](#how-to-run-the-benchmarks)
   - [How to Read the Benchmark Results](#how-to-read-the-benchmark-results)
+- [Functional Tests Against a Test Account](#functional-tests-against-a-test-account)
+  - [1. Prerequisites & Test Account Access](#1-prerequisites--test-account-access)
+  - [2. Configure the Test Account (`tests/test_account_config.yaml`)](#2-configure-the-test-account-teststest_account_configyaml)
+  - [3. Run the Functional Test Suite](#3-run-the-functional-test-suite)
+  - [4. Inspect & Filter the JSONL Audit Log](#4-inspect--filter-the-jsonl-audit-log)
+  - [5. Read the End-of-Run Results Tables](#5-read-the-end-of-run-results-tables)
 - [Maintenance](#maintenance)
 - [Uninstallation](#uninstallation)
   - [Antigravity](#antigravity)
@@ -480,6 +486,12 @@ To prevent schema mismatches or missing fields:
     *   `saved/` (or `saved/code/`): Executable Python scripts saved for later use.
     *   `saved/data/`: GAQL validation cache, CSV exports, diagnostic reports, and mutation dry-run receipts.
     *   `saved/logs/`: Append-only audit logs (`mutation_audit.jsonl`).
+*   `tests/`: Unit, coverage, benchmark, and functional test suites:
+    *   `tests/test_account_config.yaml`: Test Account configuration file for live HITL & mutation functional tests.
+    *   `tests/hitl_policy_functional_suite.py`: End-to-end HITL & mutation policy functional test runner against a Google Ads Test Account.
+    *   `tests/hitl_audit_logger.py`: Correlated JSONL audit logger (`0600` permissions), error filter, and results table formatter.
+    *   `tests/test_hitl_functional_suite.py`: Offline `pytest` unit and simulated Test Account verification suite.
+    *   `tests/benchmark_suite.py`: Two-version performance and functionality benchmark runner.
 
 ## Plugin Architecture
 
@@ -935,6 +947,153 @@ The runner marks a benchmark as **`REGRESS`** (and exits with code **`1`**) if *
 | **`client_libs_parallel_release_sync`** | Checks client library repositories against GitHub releases (`check_only=True`) with simulated `25 ms` network latency per repo (5 iterations). | Tests concurrent `ThreadPoolExecutor` release checks. |
 | **`conversion_csv_validation`** | Validates a 100-row offline conversion CSV file (headers, ISO-8601 timestamps with timezones, and GCLIDs) (50 iterations). | Checks CSV validation speed across 5,000 rows. |
 | **`hitl_mutation_receipt_and_sha256_normalization`** | Calculates normalized Protobuf SHA-256 hashes, writes signed `last_dry_run.json` receipts, and checks receipt integrity (100 iterations). | Tests the receipt verification pipeline that gates live mutations. |
+
+## Functional Tests Against a Test Account
+
+The repository includes a 72-test functional verification suite in [`tests/hitl_policy_functional_suite.py`](tests/hitl_policy_functional_suite.py) (backed by [`tests/hitl_audit_logger.py`](tests/hitl_audit_logger.py) and [`tests/test_account_config.yaml`](tests/test_account_config.yaml)) that exercises the assistant's Human-in-the-Loop (HITL) mutation guardrails, configuration gates, `PreToolUse` hooks, SHA-256 dry-run receipts, A2A sidecar endpoints, tiered mutation controls (`Tier 1`–`Tier 4`), and end-to-end prompt scenarios (`H1`–`H10`) against a **Google Ads Test Account**.
+
+Every test case runs inside an isolated temporary sandbox directory so your workspace `config/assistant_config`, `config/financial_limits`, and `saved/` files are never modified.
+
+### 1. Prerequisites & Test Account Access
+
+> **N.B. — Mandatory Operator Access & Test Account Verification:**
+> 1. **Active Account Access Required:** The person running these functional tests **must** have active OAuth 2.0 or Service Account access to the configured `test_customer_id` (and to `login_customer_id` when authenticating through a Google Ads Manager / MCC account).
+> 2. **Test Account Only (`customer.test_account == true`):** Never point this suite at a live production ad-serving account. Preflight gates `PF-01`–`PF-03` call `CustomerService.list_accessible_customers()` to verify caller access and query `SELECT customer.id, customer.test_account FROM customer` to confirm `customer.test_account == true`. If the caller lacks access or `customer.test_account` is `false`, the runner aborts all live mutation RPCs immediately (fail-closed).
+
+Before running the functional tests, make sure:
+1. Python `>= 3.11` is active with dependencies installed (`pip install google-ads pyyaml pytest ruff`).
+2. Your OAuth 2.0 or Service Account credentials file (`~/google-ads.yaml` or `config/google-ads.yaml`) exists with `0600` permissions (`chmod 600 config/google-ads.yaml`) and `use_proto_plus: true`.
+
+---
+
+### 2. Configure the Test Account (`tests/test_account_config.yaml`)
+
+Edit [`tests/test_account_config.yaml`](tests/test_account_config.yaml) to set your 10-digit Google Ads Test Client Customer ID (hyphens are stripped automatically) and optional Test Manager (`MCC`) `login_customer_id`:
+
+```yaml
+# N.B. The person running these tests MUST have OAuth 2.0 / Service Account access
+# to `test_customer_id` (and `login_customer_id` if accessed via an MCC).
+test_account:
+  test_customer_id: "123-456-7890"     # Required: 10-digit Google Ads Test Account CID
+  login_customer_id: "987-654-3210"    # Optional: 10-digit Manager (MCC) CID, or ""
+  credentials_yaml_path: "config/google-ads.yaml"
+  api_version: "v26"
+
+execution:
+  allow_live_execute: true             # Allows reversible/PAUSED test-account writes after PF-03
+  auto_provision_fixtures: true        # Discovers or creates PAUSED HITL_Functional_Test_* fixtures
+
+safety:
+  require_test_account: true           # Hard invariant: aborts unless customer.test_account == true
+  max_daily_budget_micros: 10000000    # Hard cap ($10.00/day) for test budget mutations
+  max_cpc_bid_micros: 2000000          # Hard cap ($2.00) for test CPC bid mutations
+
+audit_log:
+  directory: "saved/mutate_test_logs"
+  filename_prefix: "hitl_policy_functional_audit"
+```
+
+| Configuration Key | Env Var / CLI Override | Description |
+| :--- | :--- | :--- |
+| **`test_account.test_customer_id`** | `GOOGLE_ADS_TEST_CUSTOMER_ID` / `--customer-id` | Target 10-digit Google Ads Test Client Customer ID (`customer.test_account == true` required). |
+| **`test_account.login_customer_id`** | `GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID` / `--login-customer-id` | Optional 10-digit Manager (MCC) Customer ID set as `login-customer-id` on API requests. |
+| **`test_account.credentials_yaml_path`** | `GOOGLE_ADS_CONFIGURATION_FILE_PATH` / `--credentials-yaml` | Path to `google-ads.yaml` (resolves workspace `config/google-ads.yaml`, plugin `config/google-ads.yaml`, or `~/google-ads.yaml`). |
+| **`test_account.api_version`** | `--api-version` | Target Google Ads API version (for example, `v26`). |
+| **`execution.allow_live_execute`** | `--validate-only` / `--dry-run-only` (sets `false`) | Enables live reversible/`PAUSED` writes against the verified Test Account during `TC-RUN` and `H1`–`H4`. |
+| **`audit_log.directory` / `filename_prefix`** | `--audit-log PATH` | Directory and filename prefix for timestamped `.jsonl` audit logs (`0600` permissions). |
+
+---
+
+### 3. Run the Functional Test Suite
+
+#### Run All Suites Against Your Configured Test Account
+```bash
+# Run using settings in tests/test_account_config.yaml
+python3 tests/hitl_policy_functional_suite.py
+
+# Or pass Customer IDs and an explicit JSONL audit log path on the CLI
+python3 tests/hitl_policy_functional_suite.py \
+  --config tests/test_account_config.yaml \
+  --customer-id 123-456-7890 \
+  --login-customer-id 987-654-3210 \
+  --audit-log saved/mutate_test_logs/hitl_functional_audit.jsonl
+```
+
+#### List Suites, Run Specific Suites/Tests, or Validate-Only (`--list-suites`, `--suite`, `--test-id`, `--validate-only`)
+```bash
+# List all available --suite values, test counts, and test ID ranges
+python3 tests/hitl_policy_functional_suite.py --list-suites
+
+# Run a single suite (accepts short names like hook/scenarios or full names like TC-HOOK/SCENARIOS)
+python3 tests/hitl_policy_functional_suite.py --suite hook
+python3 tests/hitl_policy_functional_suite.py --suite TC-HOOK
+python3 tests/hitl_policy_functional_suite.py --suite scenarios
+
+# Run individual test case IDs
+python3 tests/hitl_policy_functional_suite.py --test-id TC-CFG-01 --test-id TC-HOOK-03
+
+# Force validate_only=True across all test cases (disables live --execute writes)
+python3 tests/hitl_policy_functional_suite.py --validate-only
+```
+
+#### Run Offline Unit & Simulated Test Account Verification (`pytest`)
+To verify configuration parsing, JSONL correlation invariants, error-only log filtering, fail-closed non-test-account aborts, and all 72 functional cases offline without live network credentials:
+```bash
+pytest tests/test_hitl_functional_suite.py -v
+```
+
+#### CLI Options Summary (`tests/hitl_policy_functional_suite.py`)
+
+| Flag | Description |
+| :--- | :--- |
+| `--config PATH` | Path to YAML config file (default: `tests/test_account_config.yaml`). |
+| `--customer-id CID` | Overrides `test_customer_id` (10-digit Test Account ID, with or without dashes). |
+| `--login-customer-id CID` | Overrides `login_customer_id` (10-digit Manager / MCC ID). |
+| `--credentials-yaml PATH` | Overrides `credentials_yaml_path`. |
+| `--api-version VER` | Overrides `api_version` (for example, `v26`). |
+| `--audit-log PATH` | Explicit output path for the `0600`-permissioned `.jsonl` audit log. |
+| `--suite SUITE` | Runs `all` (default) or a specific suite (`preflight`, `cfg`/`TC-CFG`, `hook`/`TC-HOOK`, `run`/`TC-RUN`, `msg`/`TC-MSG`, `aud`/`TC-AUD`, `a2a`/`TC-A2A`, `t1`/`TC-T1`..`t4`/`TC-T4`, `scenarios`). |
+| `--list-suites` | Lists all available `--suite` values, test counts, and test ID ranges, then exits. |
+| `--test-id ID` | Runs specific test ID(s) (repeatable, e.g. `--test-id TC-CFG-01 --test-id TC-T1-03`). |
+| `--validate-only`, `--dry-run-only` | Disables live `--execute` writes and runs strictly `validate_only=True` + read-only RPCs. |
+| `--filter-errors JSONL_PATH` | Filters an existing `.jsonl` audit log and prints **only** `ERROR` records as JSONL to `stdout`. |
+
+---
+
+### 4. Inspect & Filter the JSONL Audit Log
+
+Every run writes a structured JSON Lines (`.jsonl`) audit log (by default `saved/mutate_test_logs/hitl_policy_functional_audit_<UTC_TIMESTAMP>.jsonl`, or the path passed to `--audit-log`, with `0600` permissions and automatic credential redaction):
+* **Unique Record Identifier (`record_id`):** Every JSONL record has its own unique UUIDv4 `record_id`.
+* **Record Type Discriminator (`record_type`):** Identifies each record as `"SUITE_START"`, `"REQUEST"`, `"RESPONSE"`, `"ERROR"`, `"TEST_RESULT"`, or `"SUITE_SUMMARY"`.
+* **Request $\rightarrow$ Response Correlation (`request_record_id`):** Every `"RESPONSE"` record includes `request_record_id` containing the exact `record_id` of the `"REQUEST"` record that generated it.
+* **Filterable Error Records (`record_type == "ERROR"`):** Every test failure or exception emits an `"ERROR"` record (`"record_type": "ERROR"`, `"is_error": true`, `"level": "ERROR"`) linked to `request_record_id` (and `response_record_id` when applicable).
+
+Filter an audit log down to **just the error records** with the built-in CLI flag or `jq`:
+```bash
+# Built-in CLI error filter (outputs only ERROR JSONL lines)
+python3 tests/hitl_policy_functional_suite.py \
+  --filter-errors saved/mutate_test_logs/hitl_functional_audit.jsonl
+
+# Filter ERROR records with jq
+jq 'select(.record_type == "ERROR")' saved/mutate_test_logs/hitl_functional_audit.jsonl
+
+# Join a RESPONSE or ERROR record back to its originating REQUEST record
+jq 'select(.record_id == "<request_record_id>" or .request_record_id == "<request_record_id>")' \
+  saved/mutate_test_logs/hitl_functional_audit.jsonl
+```
+
+---
+
+### 5. Read the End-of-Run Results Tables
+
+At the conclusion of every run, the runner prints three formatted tables to `stdout`:
+1. **Overall Summary Table:** Total tests executed, number **Passed**, number **Failed**, and overall pass rate.
+2. **Suite Breakdown Table:** Per-suite totals, passed counts, and failed counts (`PREFLIGHT`, `TC-CFG`, `TC-HOOK`, `TC-RUN`, `TC-MSG`, `TC-AUD`, `TC-A2A`, `TC-T1`–`TC-T4`, and `SCENARIOS`).
+3. **Failed Test Cases Detail Table:** Lists every failed test's `Test ID`, `Suite`, `Test Name`, failure diagnostic message, and correlated `error_record_id` in the `.jsonl` audit log.
+
+**Exit Codes:**
+* **`0`**: All executed tests passed.
+* **`1`**: One or more tests failed (inspect the **Failed Test Cases** table or run `--filter-errors` on the `.jsonl` audit log).
 
 ## Maintenance
 

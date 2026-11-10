@@ -1,0 +1,73 @@
+# ==============================================================================
+# Google Ads API Developer Assistant — Functional Test Account Configuration
+# ==============================================================================
+# N.B. ACCESS & TEST ACCOUNT PREREQUISITES:
+#   1. The person running these functional tests MUST have active OAuth 2.0 or
+#      Service Account access to `test_customer_id` (and `login_customer_id`, if
+#      accessing the client account via a Test Manager / MCC account) in their
+#      configured `google-ads.yaml` credentials file.
+#   2. The OAuth 2.0 client or Service Account in `google-ads.yaml` MUST belong
+#      to a Google Cloud project with the Google Ads API enabled.
+#   3. `test_customer_id` MUST be a dedicated Google Ads Test Client Account
+#      (`customer.test_account = true`). The pre-flight gate verifies both caller
+#      access and `customer.test_account == true` via live GAQL and aborts
+#      fail-closed before any mutation RPC if either check fails.
+#   4. Never place OAuth client secrets, refresh tokens, or private keys in this
+#      file; credentials are loaded strictly from `credentials_yaml_path`.
+# ==============================================================================
+
+test_account:
+  # Required: 10-digit Google Ads Test Client Account ID (hyphens optional, e.g. "123-456-7890" or "1234567890").
+  # Can also be overridden via CLI (`--customer-id`) or env (`GOOGLE_ADS_TEST_CUSTOMER_ID`).
+  test_customer_id: "REPLACE_WITH_TEST_CUSTOMER_ID"
+
+  # Optional: 10-digit Google Ads Test Manager Account (MCC) ID used as `login-customer-id`
+  # when the authenticated user accesses `test_customer_id` through a manager hierarchy.
+  # Leave empty ("") if the authenticated user has direct access to `test_customer_id`.
+  # Can also be overridden via CLI (`--login-customer-id`) or env (`GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID`).
+  login_customer_id: ""
+
+  # Path to the operator's Google Ads API credentials YAML file (0600 permissions).
+  # Relative paths resolve against workspace `config/google-ads.yaml`, plugin `config/google-ads.yaml`,
+  # or `~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml`.
+  credentials_yaml_path: "config/google-ads.yaml"
+
+  # Active Google Ads API version under test.
+  api_version: "v26"
+
+execution:
+  # Allow controlled live `--execute` mutations (with immediate state revert) on
+  # PAUSED resources after `customer.test_account == true` is verified.
+  # Set to false to restrict live Google Ads RPCs to `validate_only=True` and read-only queries.
+  allow_live_execute: true
+
+  # Automatically discover existing Section 2.2 test entities via GAQL or provision
+  # missing PAUSED test fixtures (Search campaign, AdGroup, 2 RSAs, keyword, negative
+  # criterion, PMax campaign + AssetGroup, Label, SharedSet, UPLOAD_CLICKS ConversionAction,
+  # CRM_BASED UserList) on the verified test account.
+  auto_provision_fixtures: true
+
+fixtures:
+  test_campaign_name: "HITL_Functional_Test_Search_Paused"
+  test_pmax_campaign_name: "HITL_Functional_Test_PMax_Paused"
+  test_ad_group_name: "HITL_Functional_Test_AdGroup"
+  test_asset_group_name: "HITL_Functional_Test_AssetGroup"
+  test_keyword_text: "hitl policy functional test keyword"
+  test_negative_keyword_text: "hitl_negative_check_term"
+  test_label_name: "HITL_Functional_Test_Label"
+  test_shared_set_name: "HITL_Functional_Test_NegKeywordList"
+  test_conversion_action_name: "HITL_Functional_Test_UploadClicks"
+  test_user_list_name: "HITL_Functional_Test_CRM_UserList"
+  ato_probe_email: "qa.ato.check@example.com"
+
+safety:
+  # Hard invariant: never execute write RPCs unless `customer.test_account == true`.
+  require_test_account: true
+  # Upper safety caps enforced on live test fixtures ($10.00/day budget, $2.00 max CPC).
+  max_daily_budget_micros: 10000000
+  max_cpc_bid_micros: 2000000
+
+audit_log:
+  # Directory and filename prefix for the 0600-permissioned JSONL audit trail.
+  directory: "saved/mutate_test_logs"
+  filename_prefix: "hitl_policy_functional_audit"
