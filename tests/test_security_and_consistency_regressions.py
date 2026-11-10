@@ -33,6 +33,15 @@ def _load_module(rel_path: str, mod_name: str):
     return mod
 
 
+def _set_fake_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+    """Points os.path.expanduser("~") at `home` on all platforms.
+
+    POSIX reads HOME. Windows (Python 3.8+) reads USERPROFILE and ignores HOME.
+    """
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
 class TestHooksJsonAndGuardrailSecurity:
     """Verifies real hooks.json schema handling and PreToolUse guardrail bypass mitigations."""
 
@@ -1162,7 +1171,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
             parents=True
         )
         monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-        monkeypatch.setenv("HOME", str(fake_home))
+        _set_fake_home(monkeypatch, fake_home)
         tok1 = srv._resolve_a2a_auth_token()
         tok2 = srv._resolve_a2a_auth_token()
         assert len(tok1) == 64 and tok1 == tok2
@@ -1311,7 +1320,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
 
         fake_home = tmp_path / "isolated_home"
         fake_home.mkdir()
-        monkeypatch.setenv("HOME", str(fake_home))
+        _set_fake_home(monkeypatch, fake_home)
         monkeypatch.delenv("GOOGLE_ADS_CONFIGURATION_FILE_PATH", raising=False)
         monkeypatch.chdir(tmp_path)
 
@@ -1403,7 +1412,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         (agy_p / "config").mkdir(parents=True)
         (claude_p / "config").mkdir(parents=True)
         (claude_mkt / ".claude-plugin").mkdir(parents=True)
-        monkeypatch.setenv("HOME", str(home2))
+        _set_fake_home(monkeypatch, home2)
         monkeypatch.delenv("GOOGLE_ADS_ASSISTANT_CONFIG_DIR", raising=False)
 
         written_global = config_init.write_assistant_config({"api_version": "v26"})
@@ -1606,7 +1615,10 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         (dst_s / "config").mkdir(parents=True)
         (dst_s / "config" / "google-ads.yaml").write_text("login_customer_id: '111'\n", encoding="utf-8")
         (src_s / "README.md").write_text("hi\n", encoding="utf-8")
-        (src_s / "link_readme").symlink_to("README.md")
+        try:
+            (src_s / "link_readme").symlink_to("README.md")
+        except OSError:
+            pass  # Windows needs Developer Mode or admin rights to create symlinks.
         assert scl.sync_directories(str(src_s), str(dst_s)) is True
         assert (dst_s / "config" / "google-ads.yaml").is_file()
 

@@ -1130,7 +1130,10 @@ def test_handle_hook_command_rewriting_and_dual_host_payloads(
     out_agy = json.loads(capsys.readouterr().out)
     assert out_agy["decision"] == "allow"
     rewritten = out_agy["overwrite"]["CommandLine"]
-    assert f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{fake_cfg}" &&' in rewritten
+    # handle_hook() escapes backslashes inside the double-quoted export value, so Windows
+    # paths such as C:\Users\... appear with doubled backslashes.
+    escaped_cfg = fake_cfg.replace("\\", "\\\\")
+    assert f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{escaped_cfg}" &&' in rewritten
     assert 'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml")' in rewritten
     assert 'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version=\'v25\')' in rewritten
     assert "/home/testuser/google-ads.yaml" not in rewritten
