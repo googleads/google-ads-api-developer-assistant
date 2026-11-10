@@ -37,16 +37,19 @@ import argparse
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
+from http.server import HTTPServer
 from importlib.util import module_from_spec, spec_from_file_location
 import json
 import os
 import pkgutil
 import secrets
 import socket
+import socketserver
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, Callable
 import urllib.request
@@ -112,7 +115,18 @@ def _load_run_mutation_module() -> Any:
     return mod
 
 
+def _load_sidecar_module() -> Any:
+    spec = spec_from_file_location("_functional_sidecar_server", SIDECAR_SERVER_SCRIPT)
+    if not spec or not spec.loader:
+        raise RuntimeError(f"Unable to load {SIDECAR_SERVER_SCRIPT}")
+    mod = module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 RUN_MUTATION_MOD = _load_run_mutation_module()
+SIDECAR_MOD = _load_sidecar_module()
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 # ==============================================================================
 # Policy 4-Tier 111-Service Catalog (Post MCP Policy HITL §4.1–§4.4)
@@ -542,19 +556,24 @@ class FunctionalTestContext:
         env = os.environ.copy()
         env.pop("PYTEST_CURRENT_TEST", None)
         env.pop("GOOGLE_ADS_EXECUTE_MUTATES", None)
+        env.pop("ANTIGRAVITY_SIDECAR_WEB_PORT", None)
         env["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = self.sandbox_yaml
         env["GOOGLE_ADS_ASSISTANT_CONFIG_DIR"] = self.sandbox_cfg_dir
         env["GOOGLE_ADS_ASSISTANT_DIR"] = PLUGIN_ROOT
         env["GOOGLE_ADS_FINANCIAL_LIMITS_FILE"] = self.sandbox_fin_limits
         env["GOOGLE_ADS_MUTATION_AUDIT_LOG"] = self.sandbox_plugin_audit
 
-        pp_entries: list[str] = []
+        existing_parts = [
+            p for p in env.get("PYTHONPATH", "").strip().split(os.pathsep) if p
+        ]
+        cov_parts = [p for p in existing_parts if "cov_hook" in p]
+        other_parts = [p for p in existing_parts if "cov_hook" not in p]
+
+        pp_entries: list[str] = [*cov_parts]
         if self._extra_pythonpath:
             pp_entries.append(self._extra_pythonpath)
         pp_entries.append(os.path.join(PLUGIN_ROOT, "config"))
-        existing_pp = env.get("PYTHONPATH", "").strip()
-        if existing_pp:
-            pp_entries.append(existing_pp)
+        pp_entries.extend(other_parts)
         env["PYTHONPATH"] = os.pathsep.join(pp_entries)
 
         if extra:
@@ -1481,7 +1500,7 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
             "toolCall": {
                 "name": "run_command",
                 "args": {
-                    "CommandLine": f"python3 {RUN_MUTATION_SCRIPT} --script {noop_script} --execute",
+                    "CommandLine": f'python3 "{RUN_MUTATION_SCRIPT}" --script "{noop_script}" --execute',
                     "Cwd": ctx.sandbox_dir,
                 },
             }
@@ -1642,7 +1661,7 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
             for name, snippet in tier4_calls.items():
                 sp = ctx.write_sandbox_script(f"t4_{name}.py", f"{snippet}\n")
                 dec, _ = config_init.evaluate_mutation_guard(
-                    f"python3 {sp}", workspace_cwd=ctx.sandbox_dir
+                    f'python3 "{sp}"', workspace_cwd=ctx.sandbox_dir
                 )
                 outcomes[name] = dec
             return outcomes
@@ -1687,7 +1706,7 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
             {"script": sp},
             lambda: {
                 "decision": config_init.evaluate_mutation_guard(
-                    f"python3 {sp} --dry-run", workspace_cwd=ctx.sandbox_dir
+                    f'python3 "{sp}" --dry-run', workspace_cwd=ctx.sandbox_dir
                 )[0]
             },
         )
@@ -1706,7 +1725,7 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
             {"script": sp},
             lambda: {
                 "decision": config_init.evaluate_mutation_guard(
-                    f"python3 {sp}", workspace_cwd=ctx.sandbox_dir
+                    f'python3 "{sp}"', workspace_cwd=ctx.sandbox_dir
                 )[0]
             },
         )
@@ -1734,7 +1753,7 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
                     f"other_req.validate_only = True\nsvc.{m}(request=req)\n",
                 )
                 dec, _ = config_init.evaluate_mutation_guard(
-                    f"python3 {sp}", workspace_cwd=ctx.sandbox_dir
+                    f'python3 "{sp}"', workspace_cwd=ctx.sandbox_dir
                 )
                 out[m] = dec
             return out
@@ -1759,7 +1778,7 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
                 sp = ctx.write_sandbox_script(f"gap01_{verb}.py", code)
                 pat_matched = bool(config_init.MUTATION_CALL_PATTERN.search(code))
                 dec, _ = config_init.evaluate_mutation_guard(
-                    f"python3 {sp}", workspace_cwd=ctx.sandbox_dir
+                    f'python3 "{sp}"', workspace_cwd=ctx.sandbox_dir
                 )
                 results[verb] = {"pattern_matched": pat_matched, "decision": dec}
             return results
@@ -1810,7 +1829,7 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
             "modelName": "gemini-pro-test",
             "tool_name": "Bash",
             "tool_input": {
-                "command": f"python3 {RUN_MUTATION_SCRIPT} --script {sp} --execute",
+                "command": f'python3 "{RUN_MUTATION_SCRIPT}" --script "{sp}" --execute',
                 "cwd": ctx.sandbox_dir,
             },
         })
@@ -1876,7 +1895,7 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
                     zip(
                         ("decision", "reason"),
                         config_init.evaluate_mutation_guard(
-                            f"python3 {RUN_MUTATION_SCRIPT} --script {sp} --execute",
+                            f'python3 "{RUN_MUTATION_SCRIPT}" --script "{sp}" --execute',
                             workspace_cwd=ctx.sandbox_dir,
                         ),
                     )
@@ -2026,7 +2045,7 @@ svc.mutate_billing_setup(request=req)
         with open(sp, "a", encoding="utf-8") as f:
             f.write("#")
         dec, _ = config_init.evaluate_mutation_guard(
-            f"python3 {RUN_MUTATION_SCRIPT} --script {sp} --execute",
+            f'python3 "{RUN_MUTATION_SCRIPT}" --script "{sp}" --execute',
             workspace_cwd=ctx.sandbox_dir,
         )
         exec_proc = ctx.logged_subprocess(
@@ -2163,7 +2182,7 @@ svc.mutate_billing_setup(request=req)
                 with open(p, "w", encoding="utf-8") as f:
                     json.dump(data, f)
         dec, _ = config_init.evaluate_mutation_guard(
-            f"python3 {RUN_MUTATION_SCRIPT} --script {sp} --execute",
+            f'python3 "{RUN_MUTATION_SCRIPT}" --script "{sp}" --execute',
             workspace_cwd=ctx.sandbox_dir,
         )
         e_proc = ctx.logged_subprocess(
@@ -2655,7 +2674,7 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
                 "toolCall": {
                     "name": "run_command",
                     "args": {
-                        "CommandLine": f"python3 {RUN_MUTATION_SCRIPT} --script {sp} --execute",
+                        "CommandLine": f'python3 "{RUN_MUTATION_SCRIPT}" --script "{sp}" --execute',
                         "Cwd": ctx.sandbox_dir,
                     },
                 },
@@ -2717,7 +2736,7 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
                 "toolCall": {
                     "name": "run_command",
                     "args": {
-                        "CommandLine": f"python3 {RUN_MUTATION_SCRIPT} --script {sp} --execute",
+                        "CommandLine": f'python3 "{RUN_MUTATION_SCRIPT}" --script "{sp}" --execute',
                         "Cwd": ctx.sandbox_dir,
                     },
                 },
@@ -2776,46 +2795,56 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
     # Section 3.6: A2A Sidecar Mutate Endpoints (TC-A2A)
     # --------------------------------------------------------------------------
 
+    class _FastLoopbackHTTPServer(HTTPServer):
+        """Loopback HTTPServer that skips socket.getfqdn() mDNS delays on macOS CI runners."""
+
+        def server_bind(self) -> None:
+            socketserver.TCPServer.server_bind(self)
+            host, port = self.server_address[:2]
+            self.server_name = str(host)
+            self.server_port = int(port)
+
+    class _QuietA2AHandler(SIDECAR_MOD.A2AHandler):  # type: ignore[misc]
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+            return
+
     def _with_loopback_sidecar(
         ctx: FunctionalTestContext,
         fn: Callable[[str, str], str],
     ) -> str:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            port = s.getsockname()[1]
         token = secrets.token_hex(32)
-        proc = subprocess.Popen(
-            [sys.executable, SIDECAR_SERVER_SCRIPT],
-            cwd=ctx.sandbox_dir,
-            env=ctx.subprocess_env({
-                "A2A_PORT": str(port),
-                "A2A_AUTH_TOKEN": token,
-            }),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        prev_cwd = os.getcwd()
+        prev_tok = os.environ.get("A2A_AUTH_TOKEN")
+        os.environ["A2A_AUTH_TOKEN"] = token
+        os.chdir(ctx.sandbox_dir)
+        httpd = _FastLoopbackHTTPServer(("127.0.0.1", 0), _QuietA2AHandler)
+        httpd.auth_token = token  # type: ignore[attr-defined]
+        httpd.require_auth = True  # type: ignore[attr-defined]
+        httpd.timeout = 30
+        port = int(httpd.server_port)
+        srv_thread = threading.Thread(
+            target=httpd.serve_forever,
+            kwargs={"poll_interval": 0.05},
+            daemon=True,
         )
+        srv_thread.start()
         base_url = f"http://127.0.0.1:{port}"
         try:
-            deadline = time.time() + 10.0
-            ready = False
-            while time.time() < deadline:
-                try:
-                    with urllib.request.urlopen(f"{base_url}/health", timeout=1.0) as r:
-                        if r.status == 200:
-                            ready = True
-                            break
-                except Exception:
-                    time.sleep(0.1)
-            if not ready:
-                raise AssertionError("Loopback A2A sidecar failed to start on 127.0.0.1.")
+            with _NO_PROXY_OPENER.open(f"{base_url}/health", timeout=5.0) as r:
+                if r.status != 200:
+                    raise AssertionError(
+                        f"Loopback A2A sidecar /health returned HTTP {r.status}."
+                    )
             return fn(base_url, token)
         finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            httpd.shutdown()
+            httpd.server_close()
+            srv_thread.join(timeout=5.0)
+            os.chdir(prev_cwd)
+            if prev_tok is None:
+                os.environ.pop("A2A_AUTH_TOKEN", None)
+            else:
+                os.environ["A2A_AUTH_TOKEN"] = prev_tok
 
     def _post_a2a(
         ctx: FunctionalTestContext,
@@ -2840,7 +2869,7 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=15.0) as resp:
+        with _NO_PROXY_OPENER.open(req, timeout=15.0) as resp:
             parsed = json.loads(resp.read().decode("utf-8"))
         dur = (time.perf_counter() - t0) * 1000.0
         ctx.audit.log_response(
@@ -3700,7 +3729,7 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
         if d_proc.returncode != 0 or "execute_mutates = false" not in d_proc.stdout:
             raise AssertionError(f"H1 dry-run card invalid: {d_proc.stdout} {d_proc.stderr}")
         dec, reason = config_init.evaluate_mutation_guard(
-            f"python3 {RUN_MUTATION_SCRIPT} --script {sp} --execute",
+            f'python3 "{RUN_MUTATION_SCRIPT}" --script "{sp}" --execute',
             workspace_cwd=ctx.sandbox_dir,
         )
         ctx.clear_all_receipts()
