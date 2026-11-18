@@ -468,6 +468,134 @@ def parse_dotnet_config(path: str) -> Dict[str, str]:
     return data
 
 
+def _format_versioned_content(
+    content: str, version: str, lang: str = "YAML"
+) -> str:
+    """Formats config text with the extension version marker for `lang`."""
+    if lang == "YAML":
+        # Strip legacy sunset developer_token lines so sunset tokens are not propagated
+        content = re.sub(r"(?m)^[ \t]*developer_token\s*:.*\r?\n?", "", content)
+        pattern = r"(?m)^ads_assistant\s*:.*$"
+        line = f"ads_assistant: {version}"
+        if re.search(pattern, content):
+            return re.sub(pattern, line, content)
+        separator = "" if (not content or content.endswith("\n")) else "\n"
+        return f"{content}{separator}{line}\n"
+    if lang == "PHP":
+        pattern = r"(?m)^\s*ads_assistant\s*=.*$"
+        line = f'ads_assistant = "{version}"'
+        if re.search(pattern, content):
+            return re.sub(pattern, line, content)
+        separator = "" if content.endswith("\n") else "\n"
+        return f"{content}{separator}{line}\n"
+    if lang == "Ruby":
+        pattern = r"(?m)^\s*ENV\['ADS_ASSISTANT'\]\s*=.*$"
+        line = f"ENV['ADS_ASSISTANT'] = '{version}'"
+        if re.search(pattern, content):
+            return re.sub(pattern, line, content)
+        separator = "" if content.endswith("\n") else "\n"
+        return f"{content}{separator}{line}\n"
+    if lang == "Java":
+        pattern = r"(?m)^\s*api\.googleads\.ads_assistant\s*=.*$"
+        line = f"api.googleads.ads_assistant={version}"
+        if re.search(pattern, content):
+            return re.sub(pattern, line, content)
+        separator = "" if content.endswith("\n") else "\n"
+        return f"{content}{separator}{line}\n"
+    if lang in ("DotNet", ".NET"):
+        stripped = content.lstrip()
+        if stripped.startswith("{"):
+            try:
+                parsed_json = json.loads(content)
+                if isinstance(parsed_json, dict):
+                    if isinstance(parsed_json.get("GoogleAdsApi"), dict):
+                        parsed_json["GoogleAdsApi"]["ads_assistant"] = version
+                    else:
+                        parsed_json["ads_assistant"] = version
+                    return json.dumps(parsed_json, indent=2) + "\n"
+                return content
+            except Exception:
+                separator = "" if content.endswith("\n") else "\n"
+                return f"{content}{separator}ads_assistant: {version}\n"
+        if "<" in content:
+            xml_key_pattern = r'(<add\b[^>]*?\bkey\s*=\s*[\'"]ads_assistant[\'"][^>]*?\bvalue\s*=\s*[\'"])(.*?)([\'"])'
+            if re.search(xml_key_pattern, content, flags=re.IGNORECASE):
+                return re.sub(
+                    xml_key_pattern,
+                    rf"\g<1>{version}\g<3>",
+                    content,
+                    flags=re.IGNORECASE,
+                )
+            xml_entry = f'    <add key="ads_assistant" value="{version}"/>\n'
+            closing_tag_match = re.search(
+                r"(?i)(</(?:GoogleAdsApi|appSettings|configuration)>)",
+                content,
+            )
+            if closing_tag_match:
+                idx = closing_tag_match.start(1)
+                return content[:idx] + xml_entry + content[idx:]
+            separator = "" if content.endswith("\n") else "\n"
+            return f"{content}{separator}{xml_entry}"
+        separator = "" if content.endswith("\n") else "\n"
+        return f"{content}{separator}ads_assistant: {version}\n"
+
+    content = re.sub(r"(?m)^[ \t]*developer_token\s*:.*\r?\n?", "", content)
+    separator = "" if (not content or content.endswith("\n")) else "\n"
+    return f"{content}{separator}ads_assistant: {version}\n"
+
+
+def _write_private_text_if_changed(target_path: str, new_content: str) -> None:
+    """Writes `new_content` with 0600 permissions, skipping O_TRUNC if unchanged."""
+    if os.path.isfile(target_path):
+        try:
+            with open(target_path, "r", encoding="utf-8") as f:
+                if f.read() == new_content:
+                    if sys.platform != "win32":
+                        try:
+                            if (os.stat(target_path).st_mode & 0o777) != 0o600:
+                                os.chmod(target_path, 0o600)
+                        except OSError:
+                            pass
+                    return
+        except OSError:
+            pass
+
+    fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    if sys.platform != "win32" and os.path.isfile(target_path):
+        try:
+            os.chmod(target_path, 0o600)
+        except OSError:
+            pass
+
+
+def _apply_yaml_kv(content: str, key: str, value: Any) -> str:
+    """Updates or appends a top-level `key: value` entry in YAML text."""
+    if isinstance(value, str):
+        clean_val = value.replace("\r", "").replace("\n", "")
+        if len(clean_val) >= 2 and (
+            (clean_val.startswith('"') and clean_val.endswith('"'))
+            or (clean_val.startswith("'") and clean_val.endswith("'"))
+        ):
+            formatted_val = clean_val
+        else:
+            escaped_val = clean_val.replace("\\", "\\\\").replace('"', '\\"')
+            formatted_val = f'"{escaped_val}"'
+    elif isinstance(value, bool):
+        formatted_val = "true" if value else "false"
+    else:
+        formatted_val = str(value)
+
+    new_entry = f"{key}: {formatted_val}"
+    pattern = rf"(?m)^{re.escape(key)}\s*:.*$"
+    if re.search(pattern, content):
+        return re.sub(pattern, lambda _m: new_entry, content)
+    separator = "" if content.endswith("\n") else "\n"
+    return f"{content}{separator}{new_entry}\n"
+
+
 def copy_and_append_version(
     home_config: str,
     target_config: str,
@@ -489,95 +617,8 @@ def copy_and_append_version(
         with open(home_config, "r", encoding="utf-8-sig") as f:
             content = f.read()
 
-        if lang == "YAML":
-            # Strip legacy sunset developer_token lines so sunset tokens are not propagated
-            content = re.sub(r"(?m)^[ \t]*developer_token\s*:.*\r?\n?", "", content)
-            pattern = r"(?m)^ads_assistant\s*:.*$"
-            line = f"ads_assistant: {version}"
-            if re.search(pattern, content):
-                new_content = re.sub(pattern, line, content)
-            else:
-                separator = "" if (not content or content.endswith("\n")) else "\n"
-                new_content = f"{content}{separator}{line}\n"
-        elif lang == "PHP":
-            pattern = r'(?m)^\s*ads_assistant\s*=.*$'
-            line = f'ads_assistant = "{version}"'
-            if re.search(pattern, content):
-                new_content = re.sub(pattern, line, content)
-            else:
-                separator = "" if content.endswith("\n") else "\n"
-                new_content = f"{content}{separator}{line}\n"
-        elif lang == "Ruby":
-            pattern = r"(?m)^\s*ENV\['ADS_ASSISTANT'\]\s*=.*$"
-            line = f"ENV['ADS_ASSISTANT'] = '{version}'"
-            if re.search(pattern, content):
-                new_content = re.sub(pattern, line, content)
-            else:
-                separator = "" if content.endswith("\n") else "\n"
-                new_content = f"{content}{separator}{line}\n"
-        elif lang == "Java":
-            pattern = r"(?m)^\s*api\.googleads\.ads_assistant\s*=.*$"
-            line = f"api.googleads.ads_assistant={version}"
-            if re.search(pattern, content):
-                new_content = re.sub(pattern, line, content)
-            else:
-                separator = "" if content.endswith("\n") else "\n"
-                new_content = f"{content}{separator}{line}\n"
-        elif lang in ("DotNet", ".NET"):
-            stripped = content.lstrip()
-            if stripped.startswith("{"):
-                try:
-                    parsed_json = json.loads(content)
-                    if isinstance(parsed_json, dict):
-                        if isinstance(parsed_json.get("GoogleAdsApi"), dict):
-                            parsed_json["GoogleAdsApi"]["ads_assistant"] = version
-                        else:
-                            parsed_json["ads_assistant"] = version
-                        new_content = json.dumps(parsed_json, indent=2) + "\n"
-                    else:
-                        new_content = content
-                except Exception:
-                    separator = "" if content.endswith("\n") else "\n"
-                    new_content = f"{content}{separator}ads_assistant: {version}\n"
-            elif "<" in content:
-                xml_key_pattern = r'(<add\b[^>]*?\bkey\s*=\s*[\'"]ads_assistant[\'"][^>]*?\bvalue\s*=\s*[\'"])(.*?)([\'"])'
-                if re.search(xml_key_pattern, content, flags=re.IGNORECASE):
-                    new_content = re.sub(
-                        xml_key_pattern,
-                        rf"\g<1>{version}\g<3>",
-                        content,
-                        flags=re.IGNORECASE,
-                    )
-                else:
-                    xml_entry = f'    <add key="ads_assistant" value="{version}"/>\n'
-                    closing_tag_match = re.search(
-                        r"(?i)(</(?:GoogleAdsApi|appSettings|configuration)>)",
-                        content,
-                    )
-                    if closing_tag_match:
-                        idx = closing_tag_match.start(1)
-                        new_content = content[:idx] + xml_entry + content[idx:]
-                    else:
-                        separator = "" if content.endswith("\n") else "\n"
-                        new_content = f"{content}{separator}{xml_entry}"
-            else:
-                separator = "" if content.endswith("\n") else "\n"
-                new_content = f"{content}{separator}ads_assistant: {version}\n"
-        else:
-            content = re.sub(r"(?m)^[ \t]*developer_token\s*:.*\r?\n?", "", content)
-            separator = "" if (not content or content.endswith("\n")) else "\n"
-            new_content = f"{content}{separator}ads_assistant: {version}\n"
-
-        fd = os.open(target_config, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(new_content)
-
-        if os.path.isfile(target_config):
-            try:
-                os.chmod(target_config, 0o600)
-            except OSError:
-                pass
-
+        new_content = _format_versioned_content(content, version, lang=lang)
+        _write_private_text_if_changed(target_config, new_content)
         return True
     except Exception as e:
         print(f"Error copying config {home_config}: {e}", file=sys.stderr)
@@ -637,6 +678,7 @@ def sync_and_set_config_kv(
         except OSError:
             preserved_login_cid_line = None
 
+    kv_applied_in_memory = False
     if os.path.isfile(src):
         # 1. Read source config and construct own copy in config directory
         src_base = os.path.basename(src).lower()
@@ -663,17 +705,37 @@ def sync_and_set_config_kv(
             )
             write_yaml_config(parse_dotnet_config(src), target_path=target_yaml, version=version)
         else:
-            copy_and_append_version(src, target_yaml, version=version, lang="YAML")
+            eff_ver = version if version is not None else get_version()
+            with open(src, "r", encoding="utf-8-sig") as f_src:
+                yaml_text = _format_versioned_content(
+                    f_src.read(), eff_ver, lang="YAML"
+                )
+            if (
+                preserved_login_cid_line
+                and key != "login_customer_id"
+                and not re.search(r"(?m)^login_customer_id\s*:", yaml_text)
+            ):
+                sep = "" if (not yaml_text or yaml_text.endswith("\n")) else "\n"
+                yaml_text = f"{yaml_text}{sep}{preserved_login_cid_line}\n"
+            if key is not None and value is not None:
+                yaml_text = _apply_yaml_kv(yaml_text, key, value)
+                kv_applied_in_memory = True
+            _write_private_text_if_changed(target_yaml, yaml_text)
 
-        if preserved_login_cid_line and key != "login_customer_id" and os.path.isfile(target_yaml):
+        if (
+            not kv_applied_in_memory
+            and preserved_login_cid_line
+            and key != "login_customer_id"
+            and os.path.isfile(target_yaml)
+        ):
             try:
                 with open(target_yaml, "r", encoding="utf-8") as f:
                     synced_text = f.read()
                 if not re.search(r"(?m)^login_customer_id\s*:", synced_text):
                     sep = "" if (not synced_text or synced_text.endswith("\n")) else "\n"
-                    fd = os.open(target_yaml, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w", encoding="utf-8") as f_out:
-                        f_out.write(f"{synced_text}{sep}{preserved_login_cid_line}\n")
+                    _write_private_text_if_changed(
+                        target_yaml, f"{synced_text}{sep}{preserved_login_cid_line}\n"
+                    )
             except OSError:
                 pass
     elif not os.path.isfile(target_yaml):
@@ -702,45 +764,19 @@ def sync_and_set_config_kv(
                 f"Source '{src}' not found and target '{target_yaml}' does not exist."
             )
 
-    # 2. If a key is provided, update or append it
-    if key is not None and value is not None:
+    # 2. If a key is provided (and not already folded into single-pass YAML sync), update or append it
+    if not kv_applied_in_memory and key is not None and value is not None:
         with open(target_yaml, "r", encoding="utf-8") as f:
             content = f.read()
-
-        # Format value (quote strings safely, lowercase booleans)
-        if isinstance(value, str):
-            clean_val = value.replace("\r", "").replace("\n", "")
-            if len(clean_val) >= 2 and (
-                (clean_val.startswith('"') and clean_val.endswith('"'))
-                or (clean_val.startswith("'") and clean_val.endswith("'"))
-            ):
-                formatted_val = clean_val
-            else:
-                escaped_val = clean_val.replace("\\", "\\\\").replace('"', '\\"')
-                formatted_val = f'"{escaped_val}"'
-        elif isinstance(value, bool):
-            formatted_val = "true" if value else "false"
-        else:
-            formatted_val = str(value)
-
-        new_entry = f"{key}: {formatted_val}"
-
-        # Anchor replacement at column 0 so indented nested keys (e.g. under logging:) are preserved
-        pattern = rf"(?m)^{re.escape(key)}\s*:.*$"
-        if re.search(pattern, content):
-            updated_content = re.sub(pattern, lambda _m: new_entry, content)
-        else:
-            separator = "" if content.endswith("\n") else "\n"
-            updated_content = f"{content}{separator}{new_entry}\n"
-
-        fd = os.open(target_yaml, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(updated_content)
+        _write_private_text_if_changed(
+            target_yaml, _apply_yaml_kv(content, key, value)
+        )
 
     # 3. Enforce 0600 permissions where supported (POSIX)
-    if os.path.isfile(target_yaml):
+    if sys.platform != "win32" and os.path.isfile(target_yaml):
         try:
-            os.chmod(target_yaml, 0o600)
+            if (os.stat(target_yaml).st_mode & 0o777) != 0o600:
+                os.chmod(target_yaml, 0o600)
         except OSError:
             pass
 
@@ -829,12 +865,8 @@ def sync_and_set_config_kv(
     if os.path.isdir(local_config_dir) and os.path.abspath(config_dir) != local_config_dir:
         try:
             local_target = os.path.join(local_config_dir, "google-ads.yaml")
-            shutil.copy2(target_yaml, local_target)
-            if sys.platform != "win32":
-                try:
-                    os.chmod(local_target, 0o600)
-                except OSError:
-                    pass
+            with open(target_yaml, "r", encoding="utf-8") as f_synced:
+                _write_private_text_if_changed(local_target, f_synced.read())
         except Exception:
             pass
 
@@ -881,6 +913,7 @@ DEFAULT_API_VERSION = "v26"
 DEFAULT_CUSTOMER_ID = "12345678"
 DEFAULT_EXECUTE_MUTATES = False
 DEFAULT_PLUGIN_ENABLED = True
+_SITE_PKG_API_VERSION_CACHE: Dict[Tuple[int, Tuple[str, ...]], Optional[str]] = {}
 
 
 def _extract_version_dirs(base_dir: str) -> list[str]:
@@ -928,10 +961,6 @@ def detect_latest_api_version() -> str:
         import importlib
 
         gads_mod = importlib.import_module("google.ads.googleads")
-
-        pkg_versions: list[str] = [
-            attr for attr in dir(gads_mod) if re.match(r"^v\d+$", attr)
-        ]
         pkg_paths: list[str] = []
         raw_path = getattr(gads_mod, "__path__", None)
         if raw_path:
@@ -939,11 +968,24 @@ def detect_latest_api_version() -> str:
         pkg_file = getattr(gads_mod, "__file__", None)
         if pkg_file:
             pkg_paths.append(os.path.dirname(pkg_file))
-        for pkg_dir in pkg_paths:
-            pkg_versions.extend(_extract_version_dirs(pkg_dir))
-        if pkg_versions:
-            pkg_versions.sort(key=lambda x: int(x[1:]))
-            discovered_versions.append(pkg_versions[-1])
+        cache_key = (id(gads_mod), tuple(pkg_paths))
+        if cache_key in _SITE_PKG_API_VERSION_CACHE:
+            cached_pkg_ver = _SITE_PKG_API_VERSION_CACHE[cache_key]
+            if cached_pkg_ver:
+                discovered_versions.append(cached_pkg_ver)
+        else:
+            pkg_versions: list[str] = [
+                attr for attr in dir(gads_mod) if re.match(r"^v\d+$", attr)
+            ]
+            for pkg_dir in pkg_paths:
+                pkg_versions.extend(_extract_version_dirs(pkg_dir))
+            if pkg_versions:
+                pkg_versions.sort(key=lambda x: int(x[1:]))
+                latest_pkg_ver: Optional[str] = pkg_versions[-1]
+                _SITE_PKG_API_VERSION_CACHE[cache_key] = latest_pkg_ver
+                discovered_versions.append(latest_pkg_ver)
+            else:
+                _SITE_PKG_API_VERSION_CACHE[cache_key] = None
     except Exception:
         pass
 
