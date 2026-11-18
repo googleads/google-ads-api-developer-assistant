@@ -21,6 +21,7 @@ Performance Max Asset Group to exclude matching URLs from URL expansion.
 
 import argparse
 import importlib
+import importlib.util
 import json
 import os
 import re
@@ -73,11 +74,43 @@ _SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
 )
 
 
-def _normalize_api_version(api_version: str) -> str:
+def _resolve_default_api_version() -> str:
+    """Resolves the active Google Ads API version dynamically."""
+    env_ver = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip().lower()
+    if env_ver:
+        return f"v{env_ver}" if env_ver.isdigit() else env_ver
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    try:
+        if plugin_root not in sys.path and os.path.isdir(plugin_root):
+            sys.path.insert(0, plugin_root)
+        cfg_mod = importlib.import_module("config.config_init")
+        detected = cfg_mod.get_configured_api_version() or (
+            cfg_mod.detect_latest_api_version()
+        )
+        if detected:
+            return str(detected)
+    except (AttributeError, ImportError, OSError, ValueError):
+        pass
+    spec = importlib.util.find_spec("google.ads.googleads")
+    for loc in (spec.submodule_search_locations or ()) if spec else ():
+        if os.path.isdir(loc):
+            v_dirs = sorted(
+                (d for d in os.listdir(loc) if re.fullmatch(r"v\d+", d)),
+                key=lambda d: int(d[1:]),
+            )
+            if v_dirs:
+                return v_dirs[-1]
+    raise ValueError(
+        "Google Ads API version could not be automatically determined."
+    )
+
+
+def _normalize_api_version(api_version: Optional[str] = None) -> str:
     """Normalizes an API version string to lowercase 'v<N>' format."""
     clean = str(api_version or "").strip().lower()
     if not clean:
-        return "v26"
+        clean = _resolve_default_api_version()
     if not clean.startswith("v") and clean.isdigit():
         return f"v{clean}"
     return clean
@@ -184,7 +217,7 @@ def create_pmax_webpage_filter(
     customer_id: str,
     asset_group_id: str,
     url_exclusion: str,
-    api_version: str = "v26",
+    api_version: Optional[str] = None,
     validate_only: bool = True,
     client: Optional[Any] = None,
     json_output: bool = False,
@@ -195,7 +228,7 @@ def create_pmax_webpage_filter(
         customer_id: The Google Ads Customer ID.
         asset_group_id: The Performance Max Asset Group ID.
         url_exclusion: URL substring to exclude from URL expansion.
-        api_version: Google Ads API version string (e.g., 'v26').
+        api_version: Google Ads API version string (defaults to active version).
         validate_only: If True, validates without creating the filter.
         client: Optional pre-initialized GoogleAdsClient instance.
         json_output: If True, emits structured JSON to stdout.
@@ -242,7 +275,7 @@ def create_pmax_webpage_filter(
     asset_group_service = client.get_service("AssetGroupService")
     asset_group_rn = asset_group_service.asset_group_path(clean_cid, clean_agid)
 
-    # In Google Ads API v23-v26, WEBPAGE listing group filters must be flat
+    # In Google Ads API v23+, WEBPAGE listing group filters must be flat
     # root-level UNIT_EXCLUDED nodes (setting a parent triggers
     # PAGE_FEED_FILTER_HAS_PARENT).
     filter_op = client.get_type("AssetGroupListingGroupFilterOperation")
@@ -349,8 +382,8 @@ def main() -> None:
         "--api-version",
         "--api_version",
         dest="api_version",
-        default="v26",
-        help="The Google Ads API version (default: v26).",
+        default=None,
+        help="The Google Ads API version (defaults to active version).",
     )
     parser.add_argument(
         "--dry-run",

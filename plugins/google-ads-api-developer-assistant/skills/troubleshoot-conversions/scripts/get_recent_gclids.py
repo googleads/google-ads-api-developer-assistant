@@ -207,7 +207,7 @@ def main() -> None:
         "-v",
         "--api_version",
         required=True,
-        help="The Google Ads API version (e.g., v26).",
+        help="The Google Ads API version (format 'v<N>').",
     )
     default_date = (
         datetime.datetime.now() - datetime.timedelta(days=1)

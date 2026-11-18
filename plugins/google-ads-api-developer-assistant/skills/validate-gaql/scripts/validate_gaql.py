@@ -856,7 +856,7 @@ def main() -> None:
     parser.add_argument(
         "--api_version",
         required=True,
-        help="API Version (e.g., v24).",
+        help="API Version (format 'v<N>').",
     )
     parser.add_argument(
         "-q",

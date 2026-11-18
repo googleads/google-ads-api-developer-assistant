@@ -32,8 +32,8 @@ test_account:
   # or `~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml`.
   credentials_yaml_path: "config/google-ads.yaml"
 
-  # Active Google Ads API version under test.
-  api_version: "v26"
+  # Active Google Ads API version under test (leave "" to detect dynamically).
+  api_version: ""
 
 execution:
   # Allow controlled live `--execute` mutations (with immediate state revert) on

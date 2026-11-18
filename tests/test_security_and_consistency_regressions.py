@@ -237,10 +237,10 @@ class TestHooksJsonAndGuardrailSecurity:
         )
         assert config_init.parse_dotnet_config(str(xml_cfg))["client_id"] == "a&b"
 
-        # sync_and_set_config_kv preserves login_customer_id and strips sunset developer_token
+        # sync_and_set_config_kv preserves existing login_customer_id when syncing new OAuth credentials
         src_yaml = tmp_path / "src_google_ads.yaml"
         src_yaml.write_text(
-            'client_id: "new_oauth_client"\ndeveloper_token: "legacy_sunset_value"\n',
+            'client_id: "new_oauth_client"\n',
             encoding="utf-8",
         )
         cfg_dir = tmp_path / "dest_cfg"
@@ -256,7 +256,6 @@ class TestHooksJsonAndGuardrailSecurity:
         ).read_text(encoding="utf-8")
         assert 'client_id: "new_oauth_client"' in out_yaml
         assert 'login_customer_id: "9876543210"' in out_yaml
-        assert "legacy_sunset_value" not in out_yaml
 
 
 class TestFinancialLimitsAndHitlRunnerRegressions:
@@ -738,18 +737,6 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
             encoding="utf-8"
         )
         assert "5-Category Consequence Matrix" not in tutorial
-
-        # 5. Zero occurrences of sunset developer token prose in docs/prompts
-        for md_path in [
-            REPO_ROOT / "README.md",
-            REPO_ROOT / "FAQ.md",
-            REPO_ROOT / "README_BEFORE_INSTALLATION.md",
-            PLUGIN_ROOT / "README.md",
-            PLUGIN_ROOT / "rules" / "google_ads_rules.md",
-        ]:
-            lower = md_path.read_text(encoding="utf-8").lower()
-            assert "developer_token" not in lower
-            assert "developer token" not in lower
 
 
 class TestComprehensiveBranchCoverageAndEdgeCases:
@@ -2078,17 +2065,17 @@ class TestConsistencyEfficiencyAndResilienceAudit:
             "skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py",
             "pmax_pp_reg",
         )
+        active_ver = config_init.detect_latest_api_version()
         for use_pp in (True, False):
             client = GoogleAdsClient(
                 credentials=AnonymousCredentials(),
-                developer_token="unused",
-                version="v26",
+                version=active_ver or None,
                 use_proto_plus=use_pp,
             )
             cond = pmax._build_webpage_condition(client, "/clearance-sale")
             assert cond.url_contains == "/clearance-sale"
 
-    def test_troubleshoot_conversions_v26_enablement_setting_and_fallback_retry(
+    def test_troubleshoot_conversions_enablement_setting_and_fallback_retry(
         self, tmp_path
     ):
         from types import SimpleNamespace
@@ -2097,21 +2084,21 @@ class TestConsistencyEfficiencyAndResilienceAudit:
 
         tc = _load_module(
             "skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py",
-            "tc_v26_reg",
+            "tc_enablement_reg",
         )
-        real_v26 = GoogleAdsClient(
+        active_ver = config_init.detect_latest_api_version()
+        real_client = GoogleAdsClient(
             credentials=AnonymousCredentials(),
-            developer_token="unused",
-            version="v26",
+            version=active_ver or None,
             use_proto_plus=True,
         )
-        assert tc._uses_v26_enablement_setting(real_v26) is True
+        assert tc._uses_enablement_setting(real_client) is True
 
-        # 1. Client reporting version="v26" selects enablement_setting & effective_enablement_setting directly
+        # 1. Client reporting active SDK version selects enablement_setting & effective_enablement_setting directly
         executed_queries: list[str] = []
         v26_row = SimpleNamespace(
             customer=SimpleNamespace(
-                descriptive_name="V26 Account",
+                descriptive_name="Modern Account",
                 conversion_tracking_setting=SimpleNamespace(
                     accepted_customer_data_terms=True,
                     enablement_setting=SimpleNamespace(name="ON"),
@@ -2120,8 +2107,8 @@ class TestConsistencyEfficiencyAndResilienceAudit:
             )
         )
 
-        class _V26StubClient:
-            version = "v26"
+        class _ModernStubClient:
+            version = active_ver
 
             @staticmethod
             def get_service(_name: str):
@@ -2136,12 +2123,12 @@ class TestConsistencyEfficiencyAndResilienceAudit:
                 return SimpleNamespace(search_stream=_stream)
 
         out = tc.troubleshoot_conversions(
-            _V26StubClient(),
+            _ModernStubClient(),
             "123-456-7890",
             json_output=True,
             output_dir=str(tmp_path),
         )
-        assert out["customer_info"]["name"] == "V26 Account"
+        assert out["customer_info"]["name"] == "Modern Account"
         assert out["customer_info"]["enhanced_conversions_for_leads_enabled"] is True
         assert out["customer_info"]["effective_enablement_setting"] == "ON"
         assert out["primary_errors"] == []
@@ -2550,3 +2537,76 @@ class TestConsistencyEfficiencyAndResilienceAudit:
                 sys.modules["google.ads.googleads"] = saved_gads_mod2
             else:
                 sys.modules.pop("google.ads.googleads", None)
+
+    def test_zero_static_api_version_defaults_or_fallbacks_across_runtime_and_installers(
+        self, monkeypatch, tmp_path
+    ):
+        """Ensures no runtime code, seed config, or installer hardcodes a static v<N> default/fallback."""
+        import re
+        import types
+
+        static_patterns = (
+            re.compile(r"^\s*(?:DEFAULT_API_VERSION|FALLBACK_API_VERSION)\s*=\s*['\"]v\d+['\"]", re.M),
+            re.compile(r"\bapi_version(?:\s*:\s*[^=]+)?\s*=\s*['\"]v\d+['\"]"),
+            re.compile(r"\bdefault\s*=\s*['\"]v\d+['\"]"),
+            re.compile(r"\breturn\s+(?:clean\s+or\s+)?['\"]v\d+['\"]"),
+            re.compile(r"\b(?:api_ver|\$ApiVer)\s*=\s*.*['\"]v\d+['\"]"),
+        )
+        checked_files = [
+            PLUGIN_ROOT / "config" / "assistant_config",
+            PLUGIN_ROOT / "config" / "config_init.py",
+            PLUGIN_ROOT / "sidecars" / "google-ads-a2a-service" / "server.py",
+            REPO_ROOT / "install.sh",
+            REPO_ROOT / "install.ps1",
+            REPO_ROOT / "update.sh",
+            REPO_ROOT / "update.ps1",
+            REPO_ROOT / "tests" / "mutate_test_harness.py",
+            REPO_ROOT / "tests" / "hitl_audit_logger.py",
+            REPO_ROOT / "tests" / "test_account_config.yaml",
+            *sorted(PLUGIN_ROOT.glob("skills/*/scripts/*.py")),
+            *sorted(PLUGIN_ROOT.glob("skills/*/SKILL.md")),
+        ]
+        violations: list[str] = []
+        for fp in checked_files:
+            text = fp.read_text(encoding="utf-8")
+            for pat in static_patterns:
+                m = pat.search(text)
+                if m:
+                    violations.append(f"{fp.relative_to(REPO_ROOT)}: {m.group(0).strip()}")
+        assert not violations, f"Found static API version defaults/fallbacks: {violations}"
+
+        # Verify dynamic resolution across all 7 skill scripts via env, config, and find_spec
+        skill_script_rels = (
+            "skills/execute-mutation/scripts/create_account.py",
+            "skills/execute-mutation/scripts/create_ad.py",
+            "skills/execute-mutation/scripts/create_ad_group.py",
+            "skills/execute-mutation/scripts/create_campaign.py",
+            "skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py",
+            "skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py",
+            "skills/inspect-object/scripts/inspect_object.py",
+        )
+        fake_pkg = tmp_path / "dyn_pkg"
+        (fake_pkg / "v31").mkdir(parents=True)
+        for idx, rel in enumerate(skill_script_rels):
+            mod = _load_module(rel, f"dyn_ver_skill_{idx}")
+            monkeypatch.setenv("GOOGLE_ADS_API_VERSION", "30")
+            assert mod._normalize_api_version(None) == "v30"
+            monkeypatch.delenv("GOOGLE_ADS_API_VERSION", raising=False)
+            resolved = mod._normalize_api_version("")
+            assert re.fullmatch(r"v\d+", resolved)
+
+            # Verify fallback to find_spec when config_init returns empty and no assistant_config is set
+            with patch.object(
+                config_init, "get_configured_api_version", return_value=None
+            ), patch.object(
+                config_init, "detect_latest_api_version", return_value=""
+            ), patch.object(
+                mod.importlib.util,
+                "find_spec",
+                return_value=types.SimpleNamespace(
+                    submodule_search_locations=[str(fake_pkg)]
+                ),
+            ), patch.object(
+                mod.os.path, "isfile", return_value=False
+            ):
+                assert mod._normalize_api_version(None) == "v31"

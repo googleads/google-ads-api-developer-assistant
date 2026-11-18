@@ -981,7 +981,7 @@ test_account:
   test_customer_id: "123-456-7890"     # Required: 10-digit Google Ads Test Account CID
   login_customer_id: "987-654-3210"    # Optional: 10-digit Manager (MCC) CID, or ""
   credentials_yaml_path: "config/google-ads.yaml"
-  api_version: "v26"
+  api_version: ""                      # Optional: leave "" to auto-detect latest installed version
 
 execution:
   allow_live_execute: true             # Allows reversible/PAUSED test-account writes after PF-03
@@ -1002,7 +1002,7 @@ audit_log:
 | **`test_account.test_customer_id`** | `GOOGLE_ADS_TEST_CUSTOMER_ID` / `--customer-id` | Target 10-digit Google Ads Test Client Customer ID (`customer.test_account == true` required). |
 | **`test_account.login_customer_id`** | `GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID` / `--login-customer-id` | Optional 10-digit Manager (MCC) Customer ID set as `login-customer-id` on API requests. |
 | **`test_account.credentials_yaml_path`** | `GOOGLE_ADS_CONFIGURATION_FILE_PATH` / `--credentials-yaml` | Path to `google-ads.yaml` (resolves workspace `config/google-ads.yaml`, plugin `config/google-ads.yaml`, or `~/google-ads.yaml`). |
-| **`test_account.api_version`** | `--api-version` | Target Google Ads API version (for example, `v26`). |
+| **`test_account.api_version`** | `--api-version` | Target Google Ads API version (`v<N>`; leave empty to detect dynamically). |
 | **`execution.allow_live_execute`** | `--validate-only` / `--dry-run-only` (sets `false`) | Enables live reversible/`PAUSED` writes against the verified Test Account during `TC-RUN` and `H1`–`H4`. |
 | **`audit_log.directory` / `filename_prefix`** | `--audit-log PATH` | Directory and filename prefix for timestamped `.jsonl` audit logs (`0600` permissions). |
 
@@ -1054,7 +1054,7 @@ pytest tests/test_hitl_functional_suite.py -v
 | `--customer-id CID` | Overrides `test_customer_id` (10-digit Test Account ID, with or without dashes). |
 | `--login-customer-id CID` | Overrides `login_customer_id` (10-digit Manager / MCC ID). |
 | `--credentials-yaml PATH` | Overrides `credentials_yaml_path`. |
-| `--api-version VER` | Overrides `api_version` (for example, `v26`). |
+| `--api-version VER` | Overrides `api_version` (format `v<N>`). |
 | `--audit-log PATH` | Explicit output path for the `0600`-permissioned `.jsonl` audit log. |
 | `--suite SUITE` | Runs `all` (default) or a specific suite (`preflight`, `cfg`/`TC-CFG`, `hook`/`TC-HOOK`, `run`/`TC-RUN`, `msg`/`TC-MSG`, `aud`/`TC-AUD`, `a2a`/`TC-A2A`, `t1`/`TC-T1`..`t4`/`TC-T4`, `scenarios`). |
 | `--list-suites` | Lists all available `--suite` values, test counts, and test ID ranges, then exits. |

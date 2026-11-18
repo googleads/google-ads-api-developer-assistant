@@ -309,7 +309,7 @@ def main() -> None:
         "--csv_path", required=True, help="Path to the conversion CSV file."
     )
     parser.add_argument(
-        "--api_version", required=True, help="API Version (e.g., v26)."
+        "--api_version", required=True, help="API Version (format 'v<N>')."
     )
     args = parser.parse_args()
 

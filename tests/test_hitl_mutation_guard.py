@@ -2784,34 +2784,89 @@ def test_real_v26_financial_protobuf_requests_serialization_sha256_and_intercept
         / "client_libs"
         / "google-ads-python"
     )
-    if (bundled_sdk / "google" / "ads" / "googleads" / "v26").is_dir():
-        monkeypatch.syspath_prepend(str(bundled_sdk))
+    import importlib
+    import importlib.util
+    import re
 
-    _has_v26_sdk = True
+    sdk_ver = ""
+    bundled_gads = bundled_sdk / "google" / "ads" / "googleads"
+    if bundled_gads.is_dir():
+        b_vers = sorted(
+            (d.name for d in bundled_gads.iterdir() if d.is_dir() and re.fullmatch(r"v\d+", d.name)),
+            key=lambda d: int(d[1:]),
+        )
+        if b_vers:
+            monkeypatch.syspath_prepend(str(bundled_sdk))
+            sdk_ver = b_vers[-1]
+    if not sdk_ver:
+        spec = importlib.util.find_spec("google.ads.googleads")
+        for loc in (spec.submodule_search_locations or ()) if spec else ():
+            if os.path.isdir(loc):
+                p_vers = sorted(
+                    (d for d in os.listdir(loc) if re.fullmatch(r"v\d+", d)),
+                    key=lambda d: int(d[1:]),
+                )
+                if p_vers:
+                    sdk_ver = p_vers[-1]
+                    break
+    if not sdk_ver:
+        pytest.skip("Google Ads Python SDK not available in client_libs or site-packages")
+
     try:
-        from google.ads.googleads.v26.services.types import (
-            account_budget_proposal_service,
-            ad_group_bid_modifier_service,
-            bidding_data_exclusion_service,
-            bidding_seasonality_adjustment_service,
-            bidding_strategy_service,
-            billing_setup_service,
-            campaign_bid_modifier_service,
-            campaign_budget_service,
-            campaign_draft_service,
-            conversion_adjustment_upload_service,
-            conversion_value_rule_service,
-            customer_service,
-            experiment_service,
-            google_ads_service,
-            incentive_service,
-            local_services_lead_service,
-            reservation_service,
+        svc_types_pkg = f"google.ads.googleads.{sdk_ver}.services.types"
+        account_budget_proposal_service = importlib.import_module(
+            f"{svc_types_pkg}.account_budget_proposal_service"
+        )
+        ad_group_bid_modifier_service = importlib.import_module(
+            f"{svc_types_pkg}.ad_group_bid_modifier_service"
+        )
+        bidding_data_exclusion_service = importlib.import_module(
+            f"{svc_types_pkg}.bidding_data_exclusion_service"
+        )
+        bidding_seasonality_adjustment_service = importlib.import_module(
+            f"{svc_types_pkg}.bidding_seasonality_adjustment_service"
+        )
+        bidding_strategy_service = importlib.import_module(
+            f"{svc_types_pkg}.bidding_strategy_service"
+        )
+        billing_setup_service = importlib.import_module(
+            f"{svc_types_pkg}.billing_setup_service"
+        )
+        campaign_bid_modifier_service = importlib.import_module(
+            f"{svc_types_pkg}.campaign_bid_modifier_service"
+        )
+        campaign_budget_service = importlib.import_module(
+            f"{svc_types_pkg}.campaign_budget_service"
+        )
+        campaign_draft_service = importlib.import_module(
+            f"{svc_types_pkg}.campaign_draft_service"
+        )
+        conversion_adjustment_upload_service = importlib.import_module(
+            f"{svc_types_pkg}.conversion_adjustment_upload_service"
+        )
+        conversion_value_rule_service = importlib.import_module(
+            f"{svc_types_pkg}.conversion_value_rule_service"
+        )
+        customer_service = importlib.import_module(
+            f"{svc_types_pkg}.customer_service"
+        )
+        experiment_service = importlib.import_module(
+            f"{svc_types_pkg}.experiment_service"
+        )
+        google_ads_service = importlib.import_module(
+            f"{svc_types_pkg}.google_ads_service"
+        )
+        incentive_service = importlib.import_module(
+            f"{svc_types_pkg}.incentive_service"
+        )
+        local_services_lead_service = importlib.import_module(
+            f"{svc_types_pkg}.local_services_lead_service"
+        )
+        reservation_service = importlib.import_module(
+            f"{svc_types_pkg}.reservation_service"
         )
     except ImportError:
-        _has_v26_sdk = False
-    if not _has_v26_sdk:
-        pytest.skip("Google Ads Python v26 SDK not available in client_libs or site-packages")
+        pytest.skip(f"Google Ads Python {sdk_ver} SDK service types could not be imported")
 
     run_mutation = _load_run_mutation_module()
 

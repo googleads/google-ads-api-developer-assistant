@@ -19,6 +19,7 @@ import argparse
 import builtins
 import csv
 import importlib
+import importlib.util
 import json
 import os
 import re
@@ -108,11 +109,43 @@ def handle_googleads_exception(exception: Exception) -> None:
                 print(f"    On field: {element.field_name}", file=sys.stderr)
 
 
-def _normalize_api_version(api_version: str) -> str:
+def _resolve_default_api_version() -> str:
+    """Resolves the active Google Ads API version dynamically."""
+    env_ver = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip().lower()
+    if env_ver:
+        return f"v{env_ver}" if env_ver.isdigit() else env_ver
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    try:
+        if plugin_root not in sys.path and os.path.isdir(plugin_root):
+            sys.path.insert(0, plugin_root)
+        cfg_mod = importlib.import_module("config.config_init")
+        detected = cfg_mod.get_configured_api_version() or (
+            cfg_mod.detect_latest_api_version()
+        )
+        if detected:
+            return str(detected)
+    except (AttributeError, ImportError, OSError, ValueError):
+        pass
+    spec = importlib.util.find_spec("google.ads.googleads")
+    for loc in (spec.submodule_search_locations or ()) if spec else ():
+        if os.path.isdir(loc):
+            v_dirs = sorted(
+                (d for d in os.listdir(loc) if re.fullmatch(r"v\d+", d)),
+                key=lambda d: int(d[1:]),
+            )
+            if v_dirs:
+                return v_dirs[-1]
+    raise ValueError(
+        "Google Ads API version could not be automatically determined."
+    )
+
+
+def _normalize_api_version(api_version: Optional[str] = None) -> str:
     """Normalizes an API version string to lowercase 'v<N>' format."""
     clean = str(api_version or "").strip().lower()
     if not clean:
-        return "v26"
+        clean = _resolve_default_api_version()
     if not clean.startswith("v") and clean.isdigit():
         return f"v{clean}"
     return clean
@@ -161,14 +194,14 @@ def _get_config_path() -> str:
 
 def get_cids_under_mcc(
     customer_id: str,
-    api_version: str = "v26",
+    api_version: Optional[str] = None,
     client: Optional[Any] = None,
 ) -> list[tuple[str, int, bool]]:
     """Retrieves all child customer accounts under an MCC as a list of tuples.
 
     Args:
         customer_id: Google Ads MCC Customer ID.
-        api_version: Google Ads API version string (e.g., 'v26').
+        api_version: Google Ads API version string (defaults to active version).
         client: Optional pre-initialized GoogleAdsClient instance.
 
     Returns:
@@ -277,8 +310,8 @@ def main() -> None:
         "--api-version",
         "--api_version",
         dest="api_version",
-        default="v26",
-        help="API Version (default: v26).",
+        default=None,
+        help="API Version (defaults to active configured version).",
     )
     parser.add_argument(
         "--save-csv",

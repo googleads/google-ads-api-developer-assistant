@@ -35,8 +35,38 @@ import yaml
 
 DEFAULT_CONFIG_PATH = "config/google-ads.yaml"
 DEFAULT_ASSISTANT_CONFIG_PATH = "config/assistant_config"
-DEFAULT_API_VERSION = "v26"
 AUDIT_LOG_DIR = os.path.join(".", "saved", "mutate_test_logs")
+
+
+def _detect_default_api_version() -> str:
+    """Resolves the active Google Ads API version dynamically from SDK or config."""
+    plugin_root = os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "plugins",
+            "google-ads-api-developer-assistant",
+        )
+    )
+    try:
+        if plugin_root not in sys.path and os.path.isdir(plugin_root):
+            sys.path.insert(0, plugin_root)
+        cfg_mod = importlib.import_module("config.config_init")
+        ver = cfg_mod.get_configured_api_version() or cfg_mod.detect_latest_api_version()
+        if ver:
+            return str(ver)
+    except Exception:
+        pass
+    spec = importlib.util.find_spec("google.ads.googleads")
+    for loc in (spec.submodule_search_locations or ()) if spec else ():
+        if os.path.isdir(loc):
+            v_dirs = sorted(
+                (d for d in os.listdir(loc) if re.fullmatch(r"v\d+", d)),
+                key=lambda d: int(d[1:]),
+            )
+            if v_dirs:
+                return v_dirs[-1]
+    return ""
 
 PREFLIGHT_GAQL_QUERY = """
 SELECT customer.id, customer.descriptive_name, customer.test_account, customer.status
@@ -2993,7 +3023,9 @@ def run_harness(
     args = parser.parse_args(argv)
 
     assistant_cfg = parse_assistant_config(args.assistant_config)
-    api_version = str(assistant_cfg.get("api_version") or DEFAULT_API_VERSION).strip()
+    api_version = str(
+        assistant_cfg.get("api_version") or _detect_default_api_version()
+    ).strip()
     customer_id = (
         str(args.customer_id).strip().replace("-", "")
         if args.customer_id

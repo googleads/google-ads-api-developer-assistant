@@ -2649,6 +2649,376 @@ class TestSyncClientLibsExtended:
         assert "[OK] System site-directory package 'google-ads'" in table_out
         assert "Google Ads API Version" in table_out
 
+    def test_cross_platform_fallbacks_and_cli_flows(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Covers platform-independent fallbacks and CLI exit paths in sync_client_libs.py."""
+        import io
+        import tarfile
+        from types import SimpleNamespace
+        import urllib.error
+
+        scl = sync_client_libs
+
+        # 1. Target normalization & VersionFallback / parse_version fallback
+        assert scl._normalize_target_library(None) is None
+        assert scl._normalize_target_library("   ") is None
+        assert scl._normalize_target_library("py") == "google-ads-python"
+        assert scl._normalize_target_library("custom-lib") == "custom-lib"
+
+        vf_nodigits = scl.VersionFallback("release-candidate")
+        assert vf_nodigits.parts == (0,)
+        with patch.object(scl, "_PACKAGING_PARSE", None):
+            parsed_fb = scl.parse_version("26.1.0")
+            assert isinstance(parsed_fb, scl.VersionFallback)
+
+        # 2. PHP GapicClientTrait.php fallback (after malformed composer.json) & .csproj manifest
+        php_dir = tmp_path / "php_trait_lib"
+        trait_file = (
+            php_dir
+            / "src"
+            / "Google"
+            / "Ads"
+            / "GoogleAds"
+            / "Lib"
+            / "V26"
+            / "GapicClientTrait.php"
+        )
+        trait_file.parent.mkdir(parents=True)
+        (php_dir / "composer.json").write_text("{malformed json", encoding="utf-8")
+        trait_file.write_text(
+            "<?php\ntrait GapicClientTrait {\n"
+            "    const LIB_VERSION = 'v35.3.0';\n}\n",
+            encoding="utf-8",
+        )
+        assert scl.detect_installed_version("google-ads-php", str(php_dir)) == "35.3.0"
+
+        dotnet_manifest_dir = tmp_path / "dotnet_manifest"
+        (dotnet_manifest_dir / "src").mkdir(parents=True)
+        (dotnet_manifest_dir / "src" / "Google.Ads.GoogleAds.csproj").write_text(
+            "<Project/>", encoding="utf-8"
+        )
+        assert scl._has_project_manifest(str(dotnet_manifest_dir)) is True
+
+        # 3. Prerelease detection, invalid-version comparison, and GitHub release error paths
+        assert scl._is_prerelease_tag("") is True
+        assert scl._is_prerelease_tag("26.0.0a1") is True
+        assert scl._is_prerelease_tag("not_a_valid_pep440!") is False
+        assert scl.is_update_needed("non_semver_a", "non_semver_b") is True
+        assert scl.is_update_needed("non_semver_a", "non_semver_a") is False
+        assert scl.fetch_github_latest_release("bad slug!") == (None, None)
+
+        with patch.object(
+            scl.urllib.request,
+            "urlopen",
+            side_effect=urllib.error.HTTPError(
+                "https://api.github.com/repos/x/y/releases/latest",
+                429,
+                "Too Many Requests",
+                {},
+                None,
+            ),
+        ), patch.object(
+            scl.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=128, stdout="", stderr="fatal"),
+        ):
+            assert scl.fetch_github_latest_release("googleads/google-ads-python") == (
+                None,
+                None,
+            )
+
+        with patch.object(
+            scl.urllib.request,
+            "urlopen",
+            side_effect=urllib.error.HTTPError(
+                "https://api.github.com/repos/x/y/releases/latest",
+                500,
+                "Server Error",
+                {},
+                None,
+            ),
+        ), patch.object(scl.subprocess, "run", side_effect=OSError("git unavailable")):
+            assert scl.fetch_github_latest_release("googleads/google-ads-python") == (
+                None,
+                None,
+            )
+
+        def _404_then_urlerror(req, timeout=15):
+            if req.full_url.endswith("/releases/latest"):
+                raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+            raise urllib.error.URLError("fallback failed")
+
+        with patch.object(
+            scl.urllib.request, "urlopen", side_effect=_404_then_urlerror
+        ), patch.object(
+            scl.subprocess,
+            "run",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout="111\trefs/tags/weird_unparseable_tag\n222\trefs/tags/v27.1.0\n",
+                stderr="",
+            ),
+        ):
+            assert scl.fetch_github_latest_release("googleads/google-ads-python") == (
+                "v27.1.0",
+                None,
+            )
+
+        # 4. update_codebase_via_git unsafe tag, fetch failure, detached checkout, and OSError
+        assert scl.update_codebase_via_git(str(tmp_path), "--bad-flag") is False
+        with patch.object(
+            scl.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=1, stdout="", stderr="fetch err"),
+        ):
+            assert scl.update_codebase_via_git(str(tmp_path), "v35.0.0") is False
+
+        with patch.object(scl, "_resolve_default_branch", return_value=None), patch.object(
+            scl.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+        ):
+            assert scl.update_codebase_via_git(str(tmp_path), "v35.0.0") is True
+
+        with patch.object(scl.subprocess, "run", side_effect=OSError("git missing")):
+            assert scl.update_codebase_via_git(str(tmp_path), "v35.0.0") is False
+
+        # 5. update_codebase_via_archive with default URL, GH_TOKEN, flat tarball, and URLError
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.setenv("GH_TOKEN", "gho_unit_token")
+        flat_tar_buf = io.BytesIO()
+        with tarfile.open(fileobj=flat_tar_buf, mode="w:gz") as tf:
+            for name, raw in (
+                ("pyproject.toml", b'version = "38.0.0"\n'),
+                ("README.md", b"# Ads\n"),
+            ):
+                ti = tarfile.TarInfo(name=name)
+                ti.size = len(raw)
+                tf.addfile(ti, io.BytesIO(raw))
+        flat_bytes = flat_tar_buf.getvalue()
+
+        class _BytesStream(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_a):
+                return False
+
+        flat_dst = tmp_path / "flat_arch_dst"
+        with patch.object(
+            scl.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=1, stdout="", stderr="no clone"),
+        ), patch.object(
+            scl.urllib.request,
+            "urlopen",
+            side_effect=lambda *_a, **_kw: _BytesStream(flat_bytes),
+        ):
+            assert (
+                scl.update_codebase_via_archive(
+                    str(flat_dst), "googleads/google-ads-python", "38.0.0", None
+                )
+                is True
+            )
+        assert (flat_dst / "pyproject.toml").is_file()
+
+        with patch.object(
+            scl.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=1, stdout="", stderr="no clone"),
+        ), patch.object(
+            scl.urllib.request,
+            "urlopen",
+            side_effect=urllib.error.URLError("archive download failed"),
+        ):
+            assert (
+                scl.update_codebase_via_archive(
+                    str(tmp_path / "err_dst"),
+                    "googleads/google-ads-python",
+                    "38.0.0",
+                    None,
+                )
+                is False
+            )
+
+        # 6. update_api_version_cache_if_needed malformed TOML regex fallback + bool/str extra keys
+        work_root = tmp_path / "toml_fb_work"
+        cfg_dir = work_root / "config"
+        lib_py = work_root / "client_libs" / "google-ads-python"
+        (lib_py / "google" / "ads" / "googleads" / "v29").mkdir(parents=True)
+        cfg_dir.mkdir(parents=True)
+        cfg_path = cfg_dir / "assistant_config"
+        cfg_path.write_text(
+            'customer_id = "9988776655"\nexecute_mutates = true\nenabled = false\nbroken = [\n',
+            encoding="utf-8",
+        )
+        assert scl.update_api_version_cache_if_needed(str(lib_py)) == "v29"
+        repaired_cfg = cfg_path.read_text(encoding="utf-8")
+        assert 'api_version = "v29"' in repaired_cfg
+        assert 'customer_id = "9988776655"' in repaired_cfg
+        assert "execute_mutates = true" in repaired_cfg
+        assert "enabled = false" in repaired_cfg
+
+        cfg_path.write_text(
+            'api_version = "v25"\ncustomer_id = "9988776655"\n'
+            'execute_mutates = false\ncustom_flag = true\ncustom_env = "staging"\n',
+            encoding="utf-8",
+        )
+        assert scl.update_api_version_cache_if_needed(str(lib_py)) == "v29"
+        typed_cfg = cfg_path.read_text(encoding="utf-8")
+        assert "custom_flag = true" in typed_cfg
+        assert 'custom_env = "staging"' in typed_cfg
+
+        # 7. detect_system_package_version None path & upgrade_system_package full failure paths
+        with patch.object(
+            scl.importlib.metadata,
+            "version",
+            side_effect=scl.importlib.metadata.PackageNotFoundError("google-ads"),
+        ), patch.object(
+            scl.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=1, stdout="", stderr="not found"),
+        ):
+            sys_ver_none, _ = scl.detect_system_package_version("google-ads")
+            assert sys_ver_none is None
+
+        local_pkg_dir = tmp_path / "local_gads_pkg"
+        local_pkg_dir.mkdir()
+        (local_pkg_dir / "pyproject.toml").write_text(
+            'version = "38.0.0"\n', encoding="utf-8"
+        )
+        with patch.object(
+            scl.subprocess,
+            "run",
+            return_value=SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr="Ignored versions that require a different python version",
+            ),
+        ):
+            assert (
+                scl.upgrade_system_package(
+                    "google-ads", target_version=None, lib_path=str(local_pkg_dir)
+                )
+                is False
+            )
+        with patch.object(scl.subprocess, "run", side_effect=OSError("pip missing")):
+            assert scl.upgrade_system_package("google-ads", "38.0.0") is False
+
+        # 8. check_assistant_repo candidate discovery, git describe fallback, standalone, and None
+        fake_repo = tmp_path / "fake_assistant_repo"
+        fake_script = (
+            fake_repo
+            / "plugins"
+            / "google-ads-api-developer-assistant"
+            / "skills"
+            / "sync-client-libs"
+            / "scripts"
+            / "sync_client_libs.py"
+        )
+        fake_script.parent.mkdir(parents=True)
+        (fake_repo / ".git").mkdir()
+        p_json = (
+            fake_repo
+            / "plugins"
+            / "google-ads-api-developer-assistant"
+            / "plugin.json"
+        )
+        p_json.write_text("{corrupt json", encoding="utf-8")
+
+        def _fake_assistant_git(cmd, **_kw):
+            if "rev-parse" in cmd:
+                return SimpleNamespace(returncode=1, stdout="", stderr="")
+            if "describe" in cmd:
+                return SimpleNamespace(returncode=0, stdout="v4.0.0\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch.object(scl, "__file__", str(fake_script)), patch.object(
+            scl.subprocess, "run", side_effect=_fake_assistant_git
+        ), patch.object(
+            scl, "fetch_github_latest_release", return_value=("v4.2.0", None)
+        ):
+            repo_res = scl.check_assistant_repo(check_only=True)
+            assert repo_res is not None
+            assert repo_res["installed_version"] == "4.0.0"
+            assert repo_res["status"] == "OUTDATED"
+
+            (fake_repo / ".git").rmdir()
+            standalone_res = scl.check_assistant_repo(check_only=False)
+            assert standalone_res is not None
+            assert standalone_res["status"] == "OUTDATED"
+
+        orphan_script = (
+            tmp_path / "orphan" / "a" / "b" / "c" / "d" / "e" / "sync_client_libs.py"
+        )
+        orphan_script.parent.mkdir(parents=True)
+        with patch.object(scl, "__file__", str(orphan_script)), patch.object(
+            scl.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=1, stdout="", stderr=""),
+        ):
+            assert scl.check_assistant_repo(check_only=True) is None
+
+        # 9. process_client_libs failure/check_only branches + print_table + main() exit code 1
+        libs_root = tmp_path / "proc_libs"
+        (libs_root / "google-ads-python").mkdir(parents=True)
+        (libs_root / "google-ads-python" / "pyproject.toml").write_text(
+            'version = "34.0.0"\n', encoding="utf-8"
+        )
+        (libs_root / "README.txt").write_text("ignore file\n", encoding="utf-8")
+
+        with patch.object(
+            scl, "fetch_github_latest_release", return_value=("v36.0.0", None)
+        ), patch.object(
+            scl, "detect_system_package_version", return_value=(None, [])
+        ), patch.object(
+            scl, "fetch_latest_pypi_python_version", return_value="36.0.0"
+        ), patch.object(
+            scl, "update_codebase_via_archive", return_value=False
+        ), patch.object(
+            scl, "upgrade_system_package", return_value=False
+        ):
+            outdated_res = scl.process_client_libs(
+                str(libs_root),
+                check_only=True,
+                include_assistant=False,
+            )
+            assert outdated_res[0]["status"] == "OUTDATED"
+            scl.print_table(outdated_res)
+
+            failed_res = scl.process_client_libs(
+                str(libs_root),
+                check_only=False,
+                include_assistant=False,
+                upgrade_system=True,
+            )
+            assert failed_res[0]["status"] == "UPDATE_FAILED"
+            assert failed_res[0]["system_upgrade_failed"] is True
+
+        with patch.object(
+            scl, "discover_client_libs_dir", return_value=str(libs_root)
+        ), patch.object(
+            scl, "process_client_libs", return_value=failed_res
+        ), patch.object(
+            scl.sys, "argv", ["sync_client_libs.py"]
+        ), pytest.raises(SystemExit) as exc_fail:
+            scl.main()
+        assert exc_fail.value.code == 1
+        cli_out = capsys.readouterr().out
+        assert "Target client_libs directory:" in cli_out
+        assert "UPDATE_FAILED" in cli_out
+
+        with patch.object(
+            scl,
+            "discover_client_libs_dir",
+            side_effect=FileNotFoundError("no client_libs dir"),
+        ), patch.object(
+            scl.sys, "argv", ["sync_client_libs.py"]
+        ), pytest.raises(SystemExit) as exc_err:
+            scl.main()
+        assert exc_err.value.code == 1
+
 
 class TestGetCidsUnderMCCExtended:
     """Extended unit tests for get_cids_under_mcc.py CLI flags, CSV export, and error handling."""

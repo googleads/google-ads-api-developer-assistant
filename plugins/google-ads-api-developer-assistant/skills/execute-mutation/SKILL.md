@@ -126,7 +126,7 @@ def run_mutation(client: GoogleAdsClient, customer_id: str, validate_only: bool 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--customer-id", required=True)
-    parser.add_argument("--api-version", default="v26")
+    parser.add_argument("--api-version", default=None)
     parser.add_argument("--dry-run", action="store_true", default=True)
     parser.add_argument("--execute", action="store_true", help="Run live (validate_only=False)")
     args = parser.parse_args()

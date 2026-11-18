@@ -313,7 +313,7 @@ def get_effective_api_version(
     if allow_interactive and sys.stdin.isatty():
         try:
             user_input = input(
-                "Google Ads API version could not be automatically determined. Please enter the API version to use (e.g., v26): "
+                "Google Ads API version could not be automatically determined. Please enter the API version to use (for example, v<N>): "
             ).strip()
             if user_input:
                 if not user_input.startswith("v") and user_input.isdigit():
@@ -336,7 +336,7 @@ def get_effective_api_version(
             pass
 
     raise ValueError(
-        "Google Ads API version could not be automatically determined. Please supply an 'api_version' (e.g., 'v26') in the request payload or configure config/assistant_config."
+        "Google Ads API version could not be automatically determined. Please supply an 'api_version' (for example, 'v<N>') in the request payload or configure config/assistant_config."
     )
 
 
@@ -1030,7 +1030,7 @@ class A2AHandler(BaseHTTPRequestHandler):
         api_version = get_effective_api_version(payload, allow_interactive=False)
         if not re.match(r"^v\d+$", api_version):
             raise ValueError(
-                f"Invalid api_version '{api_version}'. Expected 'v<N>' (e.g., 'v26')."
+                f"Invalid api_version '{api_version}'. Expected 'v<N>'."
             )
 
         code_template = (
@@ -1996,7 +1996,7 @@ class A2AHandler(BaseHTTPRequestHandler):
 _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "gaql_validate",
-        "description": "Validates a Google Ads Query Language (GAQL) query against static syntax and v26 schema rules.",
+        "description": "Validates a Google Ads Query Language (GAQL) query against static syntax and active API schema rules.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -2007,7 +2007,7 @@ _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "api_version": {
                     "type": "string",
-                    "description": "Google Ads API version (e.g., 'v26').",
+                    "description": "Google Ads API version (format 'v<N>'; defaults to active version).",
                 },
             },
             "required": ["query"],
@@ -2029,7 +2029,7 @@ _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "api_version": {
                     "type": "string",
-                    "description": "Google Ads API version (e.g., 'v26').",
+                    "description": "Google Ads API version (format 'v<N>'; defaults to active version).",
                 },
             },
         },
@@ -2050,7 +2050,7 @@ _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "api_version": {
                     "type": "string",
-                    "description": "Google Ads API version (e.g., 'v26').",
+                    "description": "Google Ads API version (format 'v<N>'; defaults to active version).",
                 },
             },
         },
@@ -2067,7 +2067,7 @@ _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "api_version": {
                     "type": "string",
-                    "description": "Google Ads API version (e.g., 'v26').",
+                    "description": "Google Ads API version (format 'v<N>'; defaults to active version).",
                 },
             },
         },

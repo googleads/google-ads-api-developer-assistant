@@ -132,10 +132,9 @@ if os.environ.get("_GADS_FAKE_TEST_ACCOUNT_SUBPROC") == "1":
                 return svc
             return orig_cls_get_service(self, name, *args, **kwargs)
 
-        def _fake_load_from_storage(cls, path=None, version="v26"):
+        def _fake_load_from_storage(cls, path=None, version=None):
             return cls(
                 credentials=AnonymousCredentials(),
-                developer_token="",
                 version=version,
                 use_proto_plus=True,
             )
@@ -197,9 +196,10 @@ def _make_fake_live_client(
     accessible_customers: list[str] | None = None,
     mutate_counter: list[str] | None = None,
 ) -> Any:
-    """Builds an in-process fake GoogleAdsClient backed by real v26 Protobuf descriptors."""
+    """Builds an in-process fake GoogleAdsClient backed by active Protobuf descriptors."""
+    active_ver = hpfs.config_init.detect_latest_api_version() or None
     desc = GoogleAdsClient(
-        credentials=AnonymousCredentials(), developer_token="", version="v26"
+        credentials=AnonymousCredentials(), version=active_ver
     )
     if accessible_customers is None:
         accessible_customers = ["customers/4863089361"]

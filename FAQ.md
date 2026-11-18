@@ -84,7 +84,7 @@ All runtime API calls read `config/google-ads.yaml` directly instead of `$HOME`.
 ### What is `config/assistant_config` and which file has priority?
 The `config/assistant_config` file stores runtime settings in TOML format:
 ```toml
-api_version = "v26"
+api_version = "<latest_installed_version>"
 customer_id = "1234567890"
 execute_mutates = false
 ```
@@ -98,7 +98,7 @@ The assistant checks two locations in this order and uses the first file it find
 Set `customer_id` in `config/assistant_config` (for example, `customer_id = "1234567890"`). When you enter a prompt such as *"Get my campaigns"*, the assistant uses this customer ID automatically.
 
 ### Where is the Google Ads API version configured?
-The `config/assistant_config` file stores the active API version (`api_version = "v26"`). When you install, update, or run `get_latest_api_version.py` or `sync_client_libs.py`, the assistant finds the latest stable version. It updates `api_version` in `config/assistant_config` and keeps your `customer_id` and `execute_mutates` values.
+The `config/assistant_config` file stores the active API version (`api_version = "v<N>"`). When you install, update, or run `get_latest_api_version.py` or `sync_client_libs.py`, the assistant finds the latest stable version dynamically. It updates `api_version` in `config/assistant_config` and keeps your `customer_id` and `execute_mutates` values.
 
 ### How do I use the assistant with my existing application code?
 Install the plugin globally with `./install.sh agy` or `./install.sh claude`. Then start your Antigravity (`agy`) or Claude Code (`claude`) session inside your application directory, or include your file paths in your prompt. The `PreInvocation` and `PreToolUse` hooks find the global plugin skills and keep your local `./config/assistant_config` settings.

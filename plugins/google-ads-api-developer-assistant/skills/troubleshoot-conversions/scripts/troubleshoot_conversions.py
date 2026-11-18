@@ -72,26 +72,49 @@ _SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
 _ACTIVE_QUERY_ERRORS: Optional[list[str]] = None
 
 
-def _uses_v26_enablement_setting(client: Any) -> bool:
-    """Returns True when client uses v26+ ConversionTrackingSetting fields."""
-    raw_ver = str(getattr(client, "version", "") or "").strip().lower()
-    if raw_ver.startswith("v") and raw_ver[1:].isdigit():
-        return int(raw_ver[1:]) >= 26
+def _cts_supports_enablement_setting(cts_type: Any) -> bool:
+    """Checks ConversionTrackingSetting descriptor for enablement_setting."""
+    pb_fn = getattr(type(cts_type), "pb", None)
+    desc = getattr(cts_type, "DESCRIPTOR", None)
+    if desc is None and callable(pb_fn):
+        try:
+            desc = getattr(pb_fn(cts_type), "DESCRIPTOR", None)
+        except _SDK_EXCEPTIONS:
+            desc = None
+    fields = getattr(desc, "fields_by_name", None)
+    if isinstance(fields, dict) and fields:
+        return (
+            "effective_enablement_setting" in fields
+            and "enhanced_conversions_for_leads_enabled" not in fields
+        )
+    has_eff = hasattr(cts_type, "effective_enablement_setting")
+    has_legacy = hasattr(cts_type, "enhanced_conversions_for_leads_enabled")
+    return has_eff and not has_legacy
+
+
+def _uses_enablement_setting(client: Any) -> bool:
+    """Returns True when ConversionTrackingSetting uses enablement_setting."""
     if type(client).__module__.startswith("unittest.mock"):
         return False
     get_type = getattr(client, "get_type", None)
     if callable(get_type):
         try:
             cts_type = get_type("ConversionTrackingSetting")
-            if type(cts_type).__module__.startswith("unittest.mock"):
-                return False
-            has_eff = hasattr(cts_type, "effective_enablement_setting")
-            has_legacy = hasattr(
-                cts_type, "enhanced_conversions_for_leads_enabled"
-            )
-            return has_eff and not has_legacy
+            if not type(cts_type).__module__.startswith("unittest.mock"):
+                return _cts_supports_enablement_setting(cts_type)
         except _SDK_EXCEPTIONS:
-            return False
+            pass
+    raw_ver = str(getattr(client, "version", "") or "").strip().lower()
+    if re.fullmatch(r"v\d+", raw_ver):
+        try:
+            cust_mod = importlib.import_module(
+                f"google.ads.googleads.{raw_ver}.resources.types.customer"
+            )
+            cts_cls = getattr(cust_mod, "ConversionTrackingSetting", None)
+            if cts_cls is not None:
+                return _cts_supports_enablement_setting(cts_cls)
+        except (ImportError, AttributeError):
+            pass
     return False
 
 
@@ -372,7 +395,7 @@ def troubleshoot_conversions(
             ".enhanced_conversions_for_leads_enabled "
             "FROM customer"
         )
-        customer_query_v26 = (
+        customer_query_enablement = (
             "SELECT customer.descriptive_name, "
             "customer.conversion_tracking_setting"
             ".accepted_customer_data_terms, "
@@ -381,15 +404,17 @@ def troubleshoot_conversions(
             ".effective_enablement_setting "
             "FROM customer"
         )
-        use_v26_cts = _uses_v26_enablement_setting(client)
+        use_enablement_cts = _uses_enablement_setting(client)
         customer_query = (
-            customer_query_v26 if use_v26_cts else customer_query_legacy
+            customer_query_enablement
+            if use_enablement_cts
+            else customer_query_legacy
         )
         err_len_before = len(query_errors)
         results = run_query(client, clean_cid, customer_query)
         if (
             not results
-            and not use_v26_cts
+            and not use_enablement_cts
             and len(query_errors) > err_len_before
             and any(
                 "enhanced_conversions_for_leads_enabled" in msg
@@ -398,8 +423,8 @@ def troubleshoot_conversions(
             )
         ):
             del query_errors[err_len_before:]
-            use_v26_cts = True
-            results = run_query(client, clean_cid, customer_query_v26)
+            use_enablement_cts = True
+            results = run_query(client, clean_cid, customer_query_enablement)
 
         for row in results:
             cts = row.customer.conversion_tracking_setting
@@ -409,7 +434,7 @@ def troubleshoot_conversions(
             )
             enablement_label: Optional[str] = None
             effective_label: Optional[str] = None
-            if use_v26_cts or (
+            if use_enablement_cts or (
                 not hasattr(cts, "enhanced_conversions_for_leads_enabled")
                 and hasattr(cts, "effective_enablement_setting")
             ):

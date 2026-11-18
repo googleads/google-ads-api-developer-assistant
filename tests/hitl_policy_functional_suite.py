@@ -585,7 +585,6 @@ class FunctionalTestContext:
         if self._descriptor_client is None:
             self._descriptor_client = GoogleAdsClient(
                 credentials=AnonymousCredentials(),
-                developer_token="",
                 version=self.cfg.api_version,
             )
         return self._descriptor_client
@@ -862,7 +861,7 @@ def _budget_mutation_script_source(
     drift_on_execute_micros: int | None = None,
     extra_call_on_execute: bool = False,
     skip_call_on_execute: bool = False,
-    api_version: str = "v26",
+    api_version: str | None = None,
 ) -> str:
     vo_expr = "False" if force_validate_only_false else "not args.execute"
     exec_micros = drift_on_execute_micros if drift_on_execute_micros is not None else amount_micros
@@ -3290,7 +3289,7 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
             raise AssertionError(f"CampaignBidModifier auth failure ({code_bm}): {err_bm}")
         return "Verified all 12 Bidding & Auction Mechanics services and live CPC dry-run."
 
-    @register("TC-T2-03", "TC-T2", "Smart Bidding & Conversion Optimization (15 services, CSV & v26)")
+    @register("TC-T2-03", "TC-T2", "Smart Bidding & Conversion Optimization (15 services & CSV)")
     def tc_t2_03(ctx: FunctionalTestContext) -> str:
         _verify_service_descriptors(ctx, TIER_2_CATEGORIES["Smart Bidding & Conversion Optimization"])
         desc_client = ctx.get_descriptor_client()
@@ -3299,11 +3298,17 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
             raise AssertionError("ClickConversionResult unexpectedly exposed order_id.")
 
         # Verify v22-v24 lifecycle goal services are removed in v25+
-        import google.ads.googleads.v26.services.services as v26_svcs
+        import importlib
 
-        v26_names = {m.name for m in pkgutil.iter_modules(v26_svcs.__path__)}
-        if "customer_lifecycle_goal_service" in v26_names or "campaign_lifecycle_goal_service" in v26_names:
-            raise AssertionError("Removed v22-v24 lifecycle goal services still present in v26.")
+        active_svcs = importlib.import_module(
+            f"google.ads.googleads.{ctx.cfg.api_version}.services.services"
+        )
+
+        svc_names = {m.name for m in pkgutil.iter_modules(active_svcs.__path__)}
+        if "customer_lifecycle_goal_service" in svc_names or "campaign_lifecycle_goal_service" in svc_names:
+            raise AssertionError(
+                f"Removed v22-v24 lifecycle goal services still present in {ctx.cfg.api_version}."
+            )
 
         # CSV pre-validation via validate_conversion_upload.py
         csv_path = os.path.join(ctx.sandbox_dir, "valid_clicks.csv")
@@ -3348,7 +3353,10 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
         )
         if not ok_u and _is_auth_or_access_failure(code_u, str(err_u)):
             raise AssertionError(f"ConversionUploadService failed ({code_u}): {err_u}")
-        return "Verified 13 active v26 conversion/goal services, v25+ lifecycle unification, CSV & upload dry-run."
+        return (
+            f"Verified 13 active {ctx.cfg.api_version} conversion/goal services, "
+            "v25+ lifecycle unification, CSV & upload dry-run."
+        )
 
     @register("TC-T2-04", "TC-T2", "Performance Max & AI Steering (WEBPAGE tree & remove verb)")
     def tc_t2_04(ctx: FunctionalTestContext) -> str:
@@ -3481,13 +3489,15 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
             raise AssertionError(f"customer_manager_link GAQL failed ({code_q}): {err_q}")
         return "All 10 account-linking verbs intercepted and manager-link GAQL verified."
 
-    @register("TC-T3-02", "TC-T3", "Administrative & Verification (ATO, start_identity_verification & v26)")
+    @register("TC-T3-02", "TC-T3", "Administrative & Verification (ATO & start_identity_verification)")
     def tc_t3_02(ctx: FunctionalTestContext) -> str:
         _verify_service_descriptors(ctx, TIER_3_CATEGORIES["Administrative & Verification"])
         desc_client = ctx.get_descriptor_client()
         cust_proto = desc_client.get_type("Customer")
         if not hasattr(cust_proto.conversion_tracking_setting, "enablement_setting"):
-            raise AssertionError("v26 Customer.conversion_tracking_setting.enablement_setting missing.")
+            raise AssertionError(
+                f"{ctx.cfg.api_version} Customer.conversion_tracking_setting.enablement_setting missing."
+            )
 
         siv_intercepted = bool(
             config_init.MUTATION_CALL_PATTERN.search("svc.start_identity_verification(request=req)")
@@ -3520,7 +3530,7 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
                 "GAP-01: non-mutate_* verb 'start_identity_verification' is not intercepted "
                 "by MUTATION_CALL_PATTERN / _MUTATION_METHOD_PREFIXES."
             )
-        return "Verified Administrative/Verification services, v26 enablement_setting, and Customer dry-run."
+        return "Verified Administrative/Verification services, enablement_setting, and Customer dry-run."
 
     @register("TC-T3-03", "TC-T3", "Organization & Labeling (7 services & live label dry-run)")
     def tc_t3_03(ctx: FunctionalTestContext) -> str:
@@ -4335,7 +4345,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--api-version",
         default=None,
-        help="Override Google Ads API version (e.g. v26).",
+        help="Override Google Ads API version (format 'v<N>').",
     )
     parser.add_argument(
         "--audit-log",

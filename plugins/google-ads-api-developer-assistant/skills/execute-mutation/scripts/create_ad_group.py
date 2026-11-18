@@ -73,11 +73,43 @@ _SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
 )
 
 
-def _normalize_api_version(api_version: str) -> str:
+def _resolve_default_api_version() -> str:
+    """Resolves the active Google Ads API version dynamically."""
+    env_ver = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip().lower()
+    if env_ver:
+        return f"v{env_ver}" if env_ver.isdigit() else env_ver
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    try:
+        if plugin_root not in sys.path and os.path.isdir(plugin_root):
+            sys.path.insert(0, plugin_root)
+        cfg_mod = importlib.import_module("config.config_init")
+        detected = cfg_mod.get_configured_api_version() or (
+            cfg_mod.detect_latest_api_version()
+        )
+        if detected:
+            return str(detected)
+    except (AttributeError, ImportError, OSError, ValueError):
+        pass
+    spec = importlib.util.find_spec("google.ads.googleads")
+    for loc in (spec.submodule_search_locations or ()) if spec else ():
+        if os.path.isdir(loc):
+            v_dirs = sorted(
+                (d for d in os.listdir(loc) if re.fullmatch(r"v\d+", d)),
+                key=lambda d: int(d[1:]),
+            )
+            if v_dirs:
+                return v_dirs[-1]
+    raise ValueError(
+        "Google Ads API version could not be automatically determined."
+    )
+
+
+def _normalize_api_version(api_version: Optional[str] = None) -> str:
     """Normalizes an API version string to lowercase 'v<N>' format."""
     clean = str(api_version or "").strip().lower()
     if not clean:
-        return "v26"
+        clean = _resolve_default_api_version()
     if not clean.startswith("v") and clean.isdigit():
         return f"v{clean}"
     return clean
@@ -159,7 +191,7 @@ def create_ad_group(
     customer_id: str,
     campaign_id: Optional[str] = None,
     campaign_resource_name: Optional[str] = None,
-    api_version: str = "v26",
+    api_version: Optional[str] = None,
     ad_group_name: Optional[str] = None,
     cpc_bid_micros: Optional[int] = None,
     status: str = "ENABLED",
@@ -175,7 +207,7 @@ def create_ad_group(
         campaign_id: Campaign ID (or resource name) to attach the ad group to.
         campaign_resource_name: Full campaign resource name (e.g.,
           'customers/123/campaigns/456').
-        api_version: Google Ads API version (e.g., 'v26').
+        api_version: Google Ads API version (defaults to active version).
         ad_group_name: Name for the new ad group.
         cpc_bid_micros: Optional default CPC bid in micros (e.g., 10_000_000 =
           $10.00).
@@ -406,8 +438,8 @@ def main() -> None:
         "--api-version",
         "--api_version",
         dest="api_version",
-        default="v26",
-        help="Google Ads API version (default: v26).",
+        default=None,
+        help="Google Ads API version (defaults to active configured version).",
     )
     parser.add_argument(
         "--ad-group-name",

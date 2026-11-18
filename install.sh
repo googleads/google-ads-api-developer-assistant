@@ -562,11 +562,14 @@ detect_and_seed_api_version() {
   if [[ -d "${search_dir}" ]]; then
     latest_v=$(find "${search_dir}" -mindepth 1 -maxdepth 1 -type d -name 'v*' 2>/dev/null | sed 's/.*\/v//' | grep -E '^[0-9]+$' | sort -n | tail -n 1 || true)
   fi
+  if [[ -z "${latest_v}" ]] && command -v python3 >/dev/null 2>&1; then
+    latest_v=$(python3 -c 'import importlib.util, os, re; s = importlib.util.find_spec("google.ads.googleads"); locs = list(s.submodule_search_locations or ()) if s else []; vs = sorted([int(d[1:]) for p in locs if os.path.isdir(p) for d in os.listdir(p) if re.fullmatch(r"v\d+", d)]); print(vs[-1] if vs else "")' 2>/dev/null || true)
+  fi
 
   if [[ -n "${latest_v}" || -n "${CUSTOMER_ID}" ]]; then
     mkdir -p "${target_config_dir}"
     local cfg_file="${target_config_dir}/assistant_config"
-    local api_ver="v26"
+    local api_ver=""
     if [[ -n "${latest_v}" ]]; then
       api_ver="v${latest_v}"
     fi

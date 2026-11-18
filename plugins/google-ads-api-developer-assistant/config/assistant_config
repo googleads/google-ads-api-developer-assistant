@@ -1,4 +1,4 @@
-api_version = "v26"
+api_version = ""
 customer_id = "12345678"
 execute_mutates = false
 enabled = true

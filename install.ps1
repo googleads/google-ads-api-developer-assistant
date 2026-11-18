@@ -313,12 +313,21 @@ function Set-LatestApiVersion {
             $Latest = $VersionDirs[-1].Name
         }
     }
+    if (-not $Latest) {
+        $PyCmd = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } elseif (Get-Command python -ErrorAction SilentlyContinue) { "python" } else { $null }
+        if ($PyCmd) {
+            $DetectedPy = & $PyCmd -c 'import importlib.util, os, re; s = importlib.util.find_spec("google.ads.googleads"); locs = list(s.submodule_search_locations or ()) if s else []; vs = sorted([d for p in locs if os.path.isdir(p) for d in os.listdir(p) if re.fullmatch(r"v\d+", d)], key=lambda d: int(d[1:])); print(vs[-1] if vs else "")' 2>$null
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($DetectedPy)) {
+                $Latest = $DetectedPy.Trim()
+            }
+        }
+    }
     if ($Latest -or $CustomerId) {
         if (-not (Test-Path -LiteralPath $TargetConfigDir)) {
             New-Item -ItemType Directory -Force -Path $TargetConfigDir | Out-Null
         }
         $CfgFile = Join-Path $TargetConfigDir "assistant_config"
-        $ApiVer = if ($Latest) { $Latest } else { "v26" }
+        $ApiVer = if ($Latest) { $Latest } else { "" }
         $Cid = "12345678"
         $ExecMutates = "false"
         $PluginEnabled = "true"

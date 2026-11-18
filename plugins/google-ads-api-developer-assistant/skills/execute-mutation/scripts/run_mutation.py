@@ -301,7 +301,6 @@ _SENSITIVE_KEYS = frozenset({
     "oauth2_client_secret",
     "refresh_token",
     "access_token",
-    "developer_token",
     "private_key",
     "json_key",
 })

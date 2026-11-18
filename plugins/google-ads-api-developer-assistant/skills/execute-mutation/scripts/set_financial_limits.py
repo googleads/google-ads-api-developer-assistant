@@ -376,7 +376,7 @@ FIELD_UNIT_META: Dict[str, Tuple[str, str, str, Union[int, float]]] = {
     ),
 }
 
-# Service-by-service mapping of mutable financial fields in Google Ads API v26:
+# Service-by-service mapping of mutable financial fields in Google Ads API:
 # (service_name, rpc_methods_str, ((field_name, protobuf_context_note), ...))
 _SERVICE_FIELD_DEFINITIONS: Tuple[
     Tuple[str, str, Tuple[Tuple[str, str], ...]], ...

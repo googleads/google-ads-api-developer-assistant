@@ -76,7 +76,6 @@ _SENSITIVE_KEY_NAMES = frozenset({
     "oauth2_client_secret",
     "refresh_token",
     "access_token",
-    "developer_token",
     "private_key",
     "json_key",
     "authorization",
@@ -172,6 +171,31 @@ def resolve_credentials_yaml_path(configured_path: str) -> str:
     return os.path.abspath(clean)
 
 
+def _detect_default_api_version() -> str:
+    """Resolves the active Google Ads API version dynamically from SDK or config."""
+    import importlib.util
+
+    plugin_root = os.path.join(
+        REPO_ROOT, "plugins", "google-ads-api-developer-assistant"
+    )
+    sdk_sub = os.path.join("client_libs", "google-ads-python", "google", "ads", "googleads")
+    search_dirs = [os.path.join(plugin_root, sdk_sub)]
+    spec = importlib.util.find_spec("google.ads.googleads")
+    if spec and spec.submodule_search_locations:
+        search_dirs.extend(list(spec.submodule_search_locations))
+    found = [
+        d
+        for p in search_dirs
+        if os.path.isdir(p)
+        for d in os.listdir(p)
+        if re.fullmatch(r"v\d+", d)
+    ]
+    if found:
+        found.sort(key=lambda d: int(d[1:]))
+        return found[-1]
+    return ""
+
+
 @dataclass
 class TestAccountConfig:
     """Validated runtime configuration for functional tests against a Google Ads Test Account."""
@@ -180,7 +204,7 @@ class TestAccountConfig:
     test_customer_id: str
     login_customer_id: str = ""
     credentials_yaml_path: str = "config/google-ads.yaml"
-    api_version: str = "v26"
+    api_version: str = field(default_factory=_detect_default_api_version)
     allow_live_execute: bool = True
     auto_provision_fixtures: bool = True
     require_test_account: bool = True
@@ -256,10 +280,12 @@ def load_test_account_config(
         or "config/google-ads.yaml"
     )
     api_version = str(
-        api_version_override or acct_sec.get("api_version") or "v26"
+        api_version_override
+        or acct_sec.get("api_version")
+        or _detect_default_api_version()
     ).strip()
     if not re.fullmatch(r"v\d+", api_version):
-        raise ValueError(f"Invalid api_version '{api_version}' (expected format 'v26').")
+        raise ValueError(f"Invalid api_version '{api_version}' (expected format 'v<N>').")
 
     allow_live = (
         bool(allow_live_execute_override)
@@ -336,7 +362,7 @@ class FunctionalAuditLogger:
         filename_prefix: str = "hitl_policy_functional_audit",
         target_customer_id: str = "",
         login_customer_id: str = "",
-        api_version: str = "v26",
+        api_version: str = "",
     ) -> None:
         self.run_id = str(uuid.uuid4())
         try:
@@ -345,7 +371,7 @@ class FunctionalAuditLogger:
             self.operator = "unknown"
         self.target_customer_id = target_customer_id
         self.login_customer_id = login_customer_id
-        self.api_version = api_version
+        self.api_version = api_version or _detect_default_api_version()
         self._seen_record_ids: set[str] = set()
         self._request_record_ids: set[str] = set()
         self.error_count = 0

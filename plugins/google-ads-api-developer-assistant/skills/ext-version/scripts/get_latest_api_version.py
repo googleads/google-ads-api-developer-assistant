@@ -122,7 +122,7 @@ def update_assistant_config_api_version(
     Preserves existing customer_id, execute_mutates, and enabled settings.
 
     Args:
-        latest_version: Detected API version string (e.g., 'v26').
+        latest_version: Detected API version string (format 'v<N>').
         config_dir: Optional explicit config directory path.
 
     Returns:
@@ -267,7 +267,7 @@ def detect_latest_api_version(
           assistant_config.
 
     Returns:
-        The highest detected API version string (e.g., 'v26').
+        The highest detected API version string (format 'v<N>').
 
     Raises:
         RuntimeError: If no Google Ads API version can be detected from local

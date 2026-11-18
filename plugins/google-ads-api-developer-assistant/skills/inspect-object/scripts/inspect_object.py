@@ -21,6 +21,7 @@ import difflib
 import glob
 import importlib
 import importlib.metadata
+import importlib.util
 import json
 import os
 import re
@@ -101,27 +102,33 @@ _PROTO_FIELD_TYPES: dict[int, str] = {
 }
 
 
-def _normalize_api_version(api_version: str) -> str:
+def _normalize_api_version(api_version: Optional[str] = None) -> str:
     """Sanitizes an API version string into 'v<N>' format."""
     clean = str(api_version or "").strip().lower()
     if clean and not clean.startswith("v") and clean.isdigit():
         clean = f"v{clean}"
     clean = re.sub(r"[^a-zA-Z0-9_.-]", "", clean).lstrip(".")
-    return clean or "v26"
+    if clean:
+        return clean
+    resolved = _get_default_api_version()
+    if resolved:
+        return resolved
+    raise ValueError(
+        "Google Ads API version could not be automatically determined."
+    )
 
 
 def _get_default_api_version() -> str:
-    """Resolves default API version from environment or assistant_config."""
-    env_ver = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip()
+    """Resolves default API version from env, assistant_config, or SDK."""
+    env_ver = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip().lower()
     if env_ver:
-        return _normalize_api_version(env_ver)
+        return f"v{env_ver}" if env_ver.isdigit() else env_ver
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
     candidates = (
         os.path.abspath("config/assistant_config"),
-        os.path.abspath(
-            os.path.join(script_dir, "../../../config/assistant_config")
-        ),
+        os.path.join(plugin_root, "config", "assistant_config"),
         os.path.expanduser(
             "~/.gemini/config/plugins/"
             "google-ads-api-developer-assistant/config/assistant_config"
@@ -136,14 +143,33 @@ def _get_default_api_version() -> str:
             try:
                 with open(cfg, "r", encoding="utf-8") as f:
                     m = re.search(
-                        r'(?m)^\s*api_version\s*=\s*["\']?([^"\'\s#]+)["\']?',
+                        r'(?m)^\s*api_version\s*=\s*["\']?(v?\d+)["\']?',
                         f.read(),
                     )
                 if m and m.group(1).strip():
-                    return _normalize_api_version(m.group(1).strip())
+                    val = m.group(1).strip().lower()
+                    return f"v{val}" if val.isdigit() else val
             except OSError:
                 continue
-    return "v26"
+
+    sdk_sub = "client_libs/google-ads-python/google/ads/googleads"
+    search_dirs: list[str] = [
+        os.path.abspath(sdk_sub),
+        os.path.join(plugin_root, sdk_sub),
+    ]
+    spec = importlib.util.find_spec("google.ads.googleads")
+    if spec and spec.submodule_search_locations:
+        search_dirs.extend(list(spec.submodule_search_locations))
+    found: list[str] = []
+    for sdir in search_dirs:
+        if os.path.isdir(sdir):
+            found.extend(
+                d for d in os.listdir(sdir) if re.fullmatch(r"v\d+", d)
+            )
+    if found:
+        found.sort(key=lambda d: int(d[1:]))
+        return found[-1]
+    return ""
 
 
 def _get_config_path() -> str:
@@ -884,10 +910,8 @@ def main() -> None:
         "--api_version",
         "-v",
         required=False,
-        default=_get_default_api_version(),
-        help=(
-            "API version (e.g. v26). Defaults to configured api_version or v26."
-        ),
+        default=None,
+        help="API version (defaults to configured or installed version).",
     )
     args = parser.parse_args()
 

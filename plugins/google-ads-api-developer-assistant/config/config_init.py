@@ -475,8 +475,6 @@ def _format_versioned_content(
 ) -> str:
     """Formats config text with the extension version marker for `lang`."""
     if lang == "YAML":
-        # Strip legacy sunset developer_token lines so sunset tokens are not propagated
-        content = re.sub(r"(?m)^[ \t]*developer_token\s*:.*\r?\n?", "", content)
         pattern = r"(?m)^ads_assistant\s*:.*$"
         line = f"ads_assistant: {version}"
         if re.search(pattern, content):
@@ -541,7 +539,6 @@ def _format_versioned_content(
         separator = "" if content.endswith("\n") else "\n"
         return f"{content}{separator}ads_assistant: {version}\n"
 
-    content = re.sub(r"(?m)^[ \t]*developer_token\s*:.*\r?\n?", "", content)
     separator = "" if (not content or content.endswith("\n")) else "\n"
     return f"{content}{separator}ads_assistant: {version}\n"
 
@@ -640,10 +637,12 @@ def sync_and_set_config_kv(
     using copy_and_append_version. Falls back to PHP, Ruby, Java, or .NET configuration
     files if source_yaml is not found.
     """
+    explicit_config_dir = bool(config_dir)
     if not config_dir:
         env_cfg_dir = os.environ.get("GOOGLE_ADS_ASSISTANT_CONFIG_DIR", "").strip()
         if env_cfg_dir:
             config_dir = os.path.abspath(env_cfg_dir)
+            explicit_config_dir = True
         else:
             for cand_plugin_cfg in (
                 os.path.expanduser(
@@ -784,21 +783,34 @@ def sync_and_set_config_kv(
 
     # 3b. Ensure config/assistant_config exists in TOML format (defaulting execute_mutates = false)
     target_assistant_cfg = os.path.join(config_dir, ASSISTANT_CONFIG_FILENAME)
+    protect_repo_cfg = (
+        not explicit_config_dir
+        and _is_repo_source_plugin_dir(os.path.dirname(os.path.abspath(config_dir)))
+    )
     if key == "execute_mutates" and value is not None:
         parsed_bool = parse_execute_mutates_value(str(value))
-        set_execute_mutates(bool(parsed_bool), config_dir=config_dir)
+        set_execute_mutates(
+            bool(parsed_bool),
+            config_dir=config_dir if explicit_config_dir else None,
+        )
     elif key in ("enabled", "plugin_enabled") and value is not None:
         parsed_en = parse_plugin_enabled_value(str(value))
         set_plugin_enabled(
             bool(parsed_en) if parsed_en is not None else True,
-            config_dir=config_dir,
+            config_dir=config_dir if explicit_config_dir else None,
         )
     elif key == "api_version":
         api_ver_val = str(value).strip() if value is not None else detect_latest_api_version()
-        write_assistant_config({"api_version": api_ver_val}, config_dir=config_dir)
+        write_assistant_config(
+            {"api_version": api_ver_val},
+            config_dir=config_dir if explicit_config_dir else None,
+        )
     elif key == "customer_id" and value is not None:
-        write_assistant_config({"customer_id": str(value).strip()}, config_dir=config_dir)
-    elif not os.path.isfile(target_assistant_cfg):
+        write_assistant_config(
+            {"customer_id": str(value).strip()},
+            config_dir=config_dir if explicit_config_dir else None,
+        )
+    elif not protect_repo_cfg and not os.path.isfile(target_assistant_cfg):
         seeded = False
         for candidate_cfg in get_assistant_config_paths():
             if (
@@ -818,14 +830,17 @@ def sync_and_set_config_kv(
             )
 
     # Automatically advance api_version in assistant_config when a newer API version is detected
-    if key != "api_version":
+    if key != "api_version" and not protect_repo_cfg:
         latest_ver = detect_latest_api_version()
         current_cfg = read_assistant_config(config_dir=config_dir)
         current_ver = str(current_cfg.get("api_version", "")).strip()
-        if not current_ver or (
-            re.match(r"^v\d+$", current_ver)
-            and re.match(r"^v\d+$", latest_ver)
-            and int(latest_ver[1:]) > int(current_ver[1:])
+        if latest_ver and (
+            not current_ver
+            or (
+                re.match(r"^v\d+$", current_ver)
+                and re.match(r"^v\d+$", latest_ver)
+                and int(latest_ver[1:]) > int(current_ver[1:])
+            )
         ):
             write_assistant_config({"api_version": latest_ver}, config_dir=config_dir)
 
@@ -911,7 +926,6 @@ def get_config_file_path(config_dir: Optional[str] = None) -> str:
 
 ASSISTANT_CONFIG_FILENAME = "assistant_config"
 EXECUTE_MUTATES_FILENAME = ASSISTANT_CONFIG_FILENAME
-DEFAULT_API_VERSION = "v26"
 DEFAULT_CUSTOMER_ID = "12345678"
 DEFAULT_EXECUTE_MUTATES = False
 DEFAULT_PLUGIN_ENABLED = True
@@ -1009,7 +1023,11 @@ def detect_latest_api_version() -> str:
         discovered_versions.sort(key=lambda x: int(x[1:]))
         return discovered_versions[-1]
 
-    return DEFAULT_API_VERSION
+    env_ver = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip().lower()
+    if env_ver:
+        return f"v{env_ver}" if env_ver.isdigit() else env_ver
+
+    return ""
 
 
 def _parse_semver_tuple(ver_str: Optional[str]) -> Tuple[int, ...]:
@@ -1229,7 +1247,7 @@ def determine_api_version(
             m = re.match(r"^[vV](\d+)$", str(candidate_ver).strip())
             if m:
                 return f"v{m.group(1)}"
-    return detected_ver or DEFAULT_API_VERSION
+    return detected_ver
 
 
 def format_parity_table_markdown(
@@ -1671,7 +1689,7 @@ def _escape_toml_basic_string(val: str) -> str:
 def format_assistant_config(data: Dict[str, Any]) -> str:
     """Formats assistant configuration dictionary as a canonical TOML string."""
     api_ver = str(
-        data.get("api_version") or detect_latest_api_version() or DEFAULT_API_VERSION
+        data.get("api_version") or detect_latest_api_version() or ""
     ).strip().strip("'\"")
     if api_ver and not api_ver.startswith("v") and ver_str_is_digit(api_ver):
         api_ver = f"v{api_ver}"
@@ -2458,7 +2476,7 @@ def get_plugin_status(config_dir: Optional[str] = None) -> Dict[str, Any]:
         "env_override": env_override,
         "active_config_path": active_cfg_path,
         "config_enabled": active_cfg_enabled if active_cfg_enabled is not None else DEFAULT_PLUGIN_ENABLED,
-        "api_version": get_configured_api_version(config_dir=config_dir) or DEFAULT_API_VERSION,
+        "api_version": get_configured_api_version(config_dir=config_dir) or detect_latest_api_version(),
         "execute_mutates": is_execute_mutates_enabled(config_dir=config_dir),
         "installations": {
             "agy": _inspect_dir(agy_plugin_dir),

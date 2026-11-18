@@ -23,7 +23,7 @@ Use this skill to retrieve the version of the Google Ads API Developer Assistant
 
 2. **Output Handling:**
     * `get_extension_version.py` prints the assistant plugin version string (e.g., `4.1.0`) to `stdout` (or exits with code `1` on `stderr` if `plugin.json` is missing or invalid).
-    * `get_latest_api_version.py --no-update` prints the resolved active Google Ads API version (e.g., `v26`) without modifying `config/assistant_config`.
+    * `get_latest_api_version.py --no-update` prints the resolved active Google Ads API version (`v<N>`) without modifying `config/assistant_config`.
 
 ## When to Use
 
