@@ -15,29 +15,65 @@
 """Mandatory diagnostic collector for conversion troubleshooting."""
 
 import argparse
+import datetime
 import glob
+import importlib
 import json
 import os
 import re
 import sys
 import time
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
+
+
+class _FallbackGoogleAdsError(Exception):
+    """Fallback exception when the google-ads package is not installed."""
+
 
 try:
-    from google.ads.googleads.client import GoogleAdsClient
-    from google.ads.googleads.errors import GoogleAdsException
+    GoogleAdsClient: Any = importlib.import_module(
+        "google.ads.googleads.client"
+    ).GoogleAdsClient
+    GoogleAdsException: Any = importlib.import_module(
+        "google.ads.googleads.errors"
+    ).GoogleAdsException
 except ImportError:
-    GoogleAdsClient = None  # type: ignore
-
-    class GoogleAdsException(Exception):  # type: ignore[no-redef]
-        pass
+    GoogleAdsClient = None  # pylint: disable=invalid-name
+    GoogleAdsException = _FallbackGoogleAdsError
 
 
-_ACTIVE_QUERY_ERRORS: Optional[List[str]] = None
+def _load_extra_sdk_exceptions() -> tuple[type[Exception], ...]:
+    """Loads optional transport/config exception types when installed."""
+    extra: list[type[Exception]] = []
+    for mod_name, attr in (
+        ("yaml", "YAMLError"),
+        ("grpc", "RpcError"),
+        ("google.auth.exceptions", "GoogleAuthError"),
+    ):
+        try:
+            cls = getattr(importlib.import_module(mod_name), attr, None)
+            if isinstance(cls, type) and issubclass(cls, Exception):
+                extra.append(cls)
+        except ImportError:
+            pass
+    return tuple(extra)
+
+
+_SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    RuntimeError,
+    *_load_extra_sdk_exceptions(),
+)
+
+_ACTIVE_QUERY_ERRORS: Optional[list[str]] = None
 
 
 def _normalize_api_version(api_version: str) -> str:
+    """Normalizes an API version string to lowercase 'v<N>' format."""
     clean = str(api_version or "").strip().lower()
     if clean and not clean.startswith("v") and clean.isdigit():
         clean = f"v{clean}"
@@ -45,6 +81,7 @@ def _normalize_api_version(api_version: str) -> str:
 
 
 def _get_config_path() -> str:
+    """Resolves the active assistant google-ads.yaml configuration path."""
     config_path = os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH")
     if config_path:
         expanded_env = os.path.abspath(os.path.expanduser(config_path))
@@ -54,17 +91,21 @@ def _get_config_path() -> str:
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
-    candidates = [
+    candidates = (
         os.path.abspath("config/google-ads.yaml"),
         os.path.join(plugin_root, "config", "google-ads.yaml"),
         os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.gemini/config/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
-        os.path.abspath(os.path.join(script_dir, "../../../../config/google-ads.yaml")),
-    ]
+        os.path.abspath(
+            os.path.join(script_dir, "../../../../config/google-ads.yaml")
+        ),
+    )
     for c in candidates:
         if os.path.isfile(c):
             return c
@@ -72,16 +113,18 @@ def _get_config_path() -> str:
     try:
         if plugin_root not in sys.path and os.path.isdir(plugin_root):
             sys.path.insert(0, plugin_root)
-        from config.config_init import sync_and_set_config_kv
-
-        return sync_and_set_config_kv()
-    except Exception:
+        config_init = importlib.import_module("config.config_init")
+        return config_init.sync_and_set_config_kv()
+    except (AttributeError, ImportError, OSError, RuntimeError, ValueError):
         pass
 
     return os.path.abspath("config/google-ads.yaml")
 
 
-def _record_query_error(msg: str, errors_out: Optional[List[str]] = None) -> None:
+def _record_query_error(
+    msg: str, errors_out: Optional[list[str]] = None
+) -> None:
+    """Appends a query error message to errors_out and active error tracking."""
     if errors_out is not None and msg not in errors_out:
         errors_out.append(msg)
     if _ACTIVE_QUERY_ERRORS is not None and msg not in _ACTIVE_QUERY_ERRORS:
@@ -92,18 +135,21 @@ def run_query(
     client: Any,
     customer_id: str,
     query: str,
-    errors_out: Optional[List[str]] = None,
-) -> List[Any]:
+    errors_out: Optional[list[str]] = None,
+) -> list[Any]:
     """Runs a GAQL query with standardized error logging."""
     clean_cid = re.sub(r"\D", "", str(customer_id or "")) or str(customer_id)
     ga_service = client.get_service("GoogleAdsService")
     try:
         response = ga_service.search_stream(customer_id=clean_cid, query=query)
-        return [row for batch in response for row in batch.results]
+        rows: list[Any] = []
+        for batch in response:
+            rows.extend(batch.results)
+        return rows
     except GoogleAdsException as ex:
         req_id = getattr(ex, "request_id", None) or "N/A"
         print(f"ERROR: Query failed (Request ID: {req_id})", file=sys.stderr)
-        err_messages: List[str] = []
+        err_messages: list[str] = []
         failure = getattr(ex, "failure", None)
         if failure is not None and hasattr(failure, "errors"):
             for error in failure.errors:
@@ -115,7 +161,7 @@ def run_query(
             f"API Query Error (Request ID: {req_id}): {detail}", errors_out
         )
         return []
-    except Exception as ex:
+    except _SDK_EXCEPTIONS as ex:
         print(f"ERROR: Query execution failed: {ex}", file=sys.stderr)
         _record_query_error(f"API Query Error: {ex}", errors_out)
         return []
@@ -125,18 +171,18 @@ def merge_previous_findings(
     output_dir: str,
     customer_id: Optional[str] = None,
     exclude_path: Optional[str] = None,
-) -> List[str]:
-    """Reads findings from existing support packages for the same customer to maintain context."""
-    findings: List[str] = []
-    clean_target_cid = (
-        re.sub(r"\D", "", str(customer_id)) if customer_id is not None else None
-    )
+) -> list[str]:
+    """Reads findings from existing reports for the same customer."""
+    findings: list[str] = []
+    clean_target_cid: Optional[str] = None
+    if customer_id is not None:
+        clean_target_cid = re.sub(r"\D", "", str(customer_id))
     abs_exclude = os.path.abspath(exclude_path) if exclude_path else None
 
-    prev_files = sorted(
-        glob.glob(os.path.join(output_dir, "conversion_troubleshooting_report_*.txt")),
-        reverse=True,
+    report_glob = os.path.join(
+        output_dir, "conversion_troubleshooting_report_*.txt"
     )
+    prev_files = sorted(glob.glob(report_glob), reverse=True)
     for pf in prev_files:
         if len(findings) >= 2:
             break
@@ -148,23 +194,33 @@ def merge_previous_findings(
                 content = f.read(65536)
             if clean_target_cid:
                 m_cid = re.search(r"Customer ID:\s*([0-9-]+)", content)
-                if m_cid and re.sub(r"\D", "", m_cid.group(1)) != clean_target_cid:
+                if (
+                    m_cid
+                    and re.sub(r"\D", "", m_cid.group(1)) != clean_target_cid
+                ):
                     continue
             if "1. Introductory Analysis" in content:
-                summary_part = content.split("2. Primary Errors & Critical Issues")[0]
-                # Strip nested historical context to prevent exponential growth across runs
+                summary_part = content.split(
+                    "2. Primary Errors & Critical Issues"
+                )[0]
+                # Strip nested historical context to prevent exponential growth
                 if "=== HISTORICAL CONTEXT ===" in summary_part:
-                    summary_part = summary_part.split("=== HISTORICAL CONTEXT ===")[0]
+                    summary_part = summary_part.split(
+                        "=== HISTORICAL CONTEXT ==="
+                    )[0]
                 findings.append(
-                    f"Historical Finding (from {os.path.basename(pf)}):\n{summary_part.strip()}"
+                    f"Historical Finding (from {os.path.basename(pf)}):\n"
+                    f"{summary_part.strip()}"
                 )
-        except Exception:
+        except (OSError, UnicodeDecodeError, ValueError):
             pass
     return findings
 
 
-def _extract_enum_label(parent_obj: Any, field_name: str, default: str = "UNKNOWN") -> str:
-    """Safely extracts enum name across proto-plus, raw protobuf (use_proto_plus=False), and mocks."""
+def _extract_enum_label(
+    parent_obj: Any, field_name: str, default: str = "UNKNOWN"
+) -> str:
+    """Extracts enum name across proto-plus, raw protobuf, and mocks."""
     raw_val = getattr(parent_obj, field_name, default)
     name_attr = getattr(raw_val, "name", None)
     if isinstance(name_attr, str) and name_attr:
@@ -181,7 +237,7 @@ def _extract_enum_label(parent_obj: Any, field_name: str, default: str = "UNKNOW
 
 
 def _extract_alert_error_name(alert: Any) -> str:
-    """Extracts error code name from OfflineConversionAlert across proto-plus, raw protobuf, and mocks."""
+    """Extracts error code name from OfflineConversionAlert."""
     err = getattr(alert, "error", None)
     if err is None:
         return "UNKNOWN"
@@ -200,7 +256,7 @@ def _extract_alert_error_name(alert: Any) -> str:
                 if isinstance(val_name, str) and val_name:
                     return val_name
                 return str(error_val)
-        except Exception:
+        except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
             pass
 
     # 2. Try raw protobuf WhichOneof("error_code") (use_proto_plus=False)
@@ -210,7 +266,7 @@ def _extract_alert_error_name(alert: Any) -> str:
             oneof_field = which_fn("error_code")
             if isinstance(oneof_field, str) and oneof_field:
                 return _extract_enum_label(err, oneof_field, default="UNKNOWN")
-        except Exception:
+        except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
             pass
 
     name_attr = getattr(err, "name", None)
@@ -220,14 +276,16 @@ def _extract_alert_error_name(alert: Any) -> str:
 
 
 def _safe_nonneg_int(val: Any) -> int:
+    """Converts a numeric value to a non-negative integer, defaulting to 0."""
     if isinstance(val, (int, float)) and not isinstance(val, bool):
         return max(0, int(val))
     return 0
 
 
 def _append_error(
-    msg: str, errors: List[str], structured_data: Dict[str, Any]
+    msg: str, errors: list[str], structured_data: dict[str, Any]
 ) -> None:
+    """Records a unique error message in both errors and structured_data."""
     if msg not in errors:
         errors.append(msg)
     if msg not in structured_data["primary_errors"]:
@@ -239,7 +297,7 @@ def troubleshoot_conversions(
     customer_id: str,
     json_output: bool = False,
     output_dir: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Collects and reports conversion upload diagnostics."""
     global _ACTIVE_QUERY_ERRORS
     clean_cid = re.sub(r"\D", "", str(customer_id or ""))
@@ -250,23 +308,24 @@ def troubleshoot_conversions(
     epoch = int(time.time())
     if not output_dir:
         output_dir = os.environ.get(
-            "CONVERSION_OUTPUT_DIR", os.path.abspath(os.path.join("saved", "data"))
+            "CONVERSION_OUTPUT_DIR",
+            os.path.abspath(os.path.join("saved", "data")),
         )
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(
         output_dir, f"conversion_troubleshooting_report_{epoch}.txt"
     )
 
-    summary: List[str] = []
-    errors: List[str] = []
-    details: List[str] = [
+    summary: list[str] = []
+    errors: list[str] = []
+    details: list[str] = [
         "\n[1] Customer Account Information",
         f"Diagnostic Report for Customer ID: {clean_cid}",
         f"Timestamp: {time.ctime()} (Epoch: {epoch})",
         "-" * 40,
     ]
 
-    structured_data: Dict[str, Any] = {
+    structured_data: dict[str, Any] = {
         "customer_id": clean_cid,
         "timestamp": time.ctime(),
         "epoch": epoch,
@@ -278,22 +337,25 @@ def troubleshoot_conversions(
         "report_path": output_path,
     }
 
-    query_errors: List[str] = []
+    query_errors: list[str] = []
     prev_active_errors = _ACTIVE_QUERY_ERRORS
     _ACTIVE_QUERY_ERRORS = query_errors
     try:
-        customer_query = """
-        SELECT
-          customer.descriptive_name,
-          customer.conversion_tracking_setting.accepted_customer_data_terms,
-          customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled
-        FROM customer
-        """
+        customer_query = (
+            "SELECT customer.descriptive_name, "
+            "customer.conversion_tracking_setting"
+            ".accepted_customer_data_terms, "
+            "customer.conversion_tracking_setting"
+            ".enhanced_conversions_for_leads_enabled "
+            "FROM customer"
+        )
         results = run_query(client, clean_cid, customer_query)
         for row in results:
             cts = row.customer.conversion_tracking_setting
             cust_name = getattr(row.customer, "descriptive_name", "N/A")
-            terms_accepted = bool(getattr(cts, "accepted_customer_data_terms", False))
+            terms_accepted = bool(
+                getattr(cts, "accepted_customer_data_terms", False)
+            )
             enhanced_leads = bool(
                 getattr(cts, "enhanced_conversions_for_leads_enabled", False)
             )
@@ -316,65 +378,87 @@ def troubleshoot_conversions(
                 )
 
         details.append("\n[2] Client Summary (Overall Health)")
-        client_query = """
-        SELECT
-          offline_conversion_upload_client_summary.client,
-          offline_conversion_upload_client_summary.status,
-          offline_conversion_upload_client_summary.successful_event_count,
-          offline_conversion_upload_client_summary.pending_event_count,
-          offline_conversion_upload_client_summary.total_event_count,
-          offline_conversion_upload_client_summary.daily_summaries,
-          offline_conversion_upload_client_summary.alerts
-        FROM offline_conversion_upload_client_summary
-        """
+        client_query = (
+            "SELECT offline_conversion_upload_client_summary.client, "
+            "offline_conversion_upload_client_summary.status, "
+            "offline_conversion_upload_client_summary.successful_event_count, "
+            "offline_conversion_upload_client_summary.pending_event_count, "
+            "offline_conversion_upload_client_summary.total_event_count, "
+            "offline_conversion_upload_client_summary.daily_summaries, "
+            "offline_conversion_upload_client_summary.alerts "
+            "FROM offline_conversion_upload_client_summary"
+        )
         results = run_query(client, clean_cid, client_query)
         if not json_output:
             print("Created by the Google Ads API Developer Assistant")
-            print(f"\n=== Conversion Diagnostic Summary for Customer {clean_cid} ===")
+            print(
+                "\n=== Conversion Diagnostic Summary for Customer "
+                f"{clean_cid} ==="
+            )
             print("1. Client Summary (Overall Health):")
 
         if not results:
-            details.append("Reason: No standard offline imports detected in last 90 days")
+            details.append(
+                "Reason: No standard offline imports detected in last 90 days"
+            )
             if not json_output:
                 print("  No standard offline imports detected in last 90 days.")
             summary.append(
-                f"For Customer ID: {clean_cid}, no standard offline imports were detected in the last 90 days."
+                f"For Customer ID: {clean_cid}, no standard offline imports "
+                "were detected in the last 90 days."
             )
         else:
             intro_lines = [
-                f"For Customer ID: {clean_cid}, the overall conversion upload health summary across clients:"
+                f"For Customer ID: {clean_cid}, the overall conversion upload "
+                "health summary across clients:"
             ]
             for row in results:
                 csum = row.offline_conversion_upload_client_summary
                 total_count = int(getattr(csum, "total_event_count", 0) or 0)
-                success_count = int(getattr(csum, "successful_event_count", 0) or 0)
+                success_count = int(
+                    getattr(csum, "successful_event_count", 0) or 0
+                )
                 pending_count = _safe_nonneg_int(
                     getattr(csum, "pending_event_count", 0)
                 )
-                failed_count = max(0, total_count - success_count - pending_count)
-                fail_rate = (failed_count / total_count) if total_count > 0 else 0.0
+                failed_count = max(
+                    0, total_count - success_count - pending_count
+                )
+                fail_rate = (
+                    (failed_count / total_count) if total_count > 0 else 0.0
+                )
 
-                client_name = _extract_enum_label(csum, "client", default="UNKNOWN")
+                client_name = _extract_enum_label(
+                    csum, "client", default="UNKNOWN"
+                )
                 if "/" in client_name:
                     client_name = client_name.split("/")[-1]
 
-                status_name = _extract_enum_label(csum, "status", default="UNKNOWN")
+                status_name = _extract_enum_label(
+                    csum, "status", default="UNKNOWN"
+                )
 
                 intro_lines.append(
-                    f"  - {client_name}: {status_name} ({success_count}/{total_count} successful, {fail_rate:.2%} failure rate)"
+                    f"  - {client_name}: {status_name} "
+                    f"({success_count}/{total_count} successful, "
+                    f"{fail_rate:.2%} failure rate)"
                 )
                 details.append(
-                    f"Client Status: {status_name} (Total Success: {success_count}/{total_count}, Pending: {pending_count})"
+                    f"Client Status: {status_name} "
+                    f"(Total Success: {success_count}/{total_count}, "
+                    f"Pending: {pending_count})"
                 )
 
                 if fail_rate > 0.10:
                     _append_error(
-                        f"WARNING: High failure rate for client {client_name}: {fail_rate:.2%} ({failed_count}/{total_count} failed).",
+                        "WARNING: High failure rate for client "
+                        f"{client_name}: {fail_rate:.2%} "
+                        f"({failed_count}/{total_count} failed).",
                         errors,
                         structured_data,
                     )
 
-                client_dict: Dict[str, Any] = {
+                client_dict: dict[str, Any] = {
                     "client": client_name,
                     "status": status_name,
                     "total_event_count": total_count,
@@ -387,7 +471,10 @@ def troubleshoot_conversions(
 
                 if not json_output:
                     print(f"  Client: {client_name}, Status: {status_name}")
-                    print(f"  Total Events: {total_count}, Successful: {success_count}")
+                    print(
+                        f"  Total Events: {total_count}, "
+                        f"Successful: {success_count}"
+                    )
 
                 for ds in getattr(csum, "daily_summaries", []):
                     s_cnt = int(getattr(ds, "successful_count", 0) or 0)
@@ -396,89 +483,108 @@ def troubleshoot_conversions(
                     total = s_cnt + f_cnt + p_cnt
                     u_date = str(getattr(ds, "upload_date", ""))
                     details.append(
-                        f"  - {u_date}: Success={s_cnt}/{total}, Fail={f_cnt}, Pending={p_cnt}"
+                        f"  - {u_date}: Success={s_cnt}/{total}, "
+                        f"Fail={f_cnt}, Pending={p_cnt}"
                     )
                     if not json_output:
                         print(f"    {u_date}: {s_cnt}/{total} successful")
-                    client_dict["daily_summaries"].append(
-                        {
-                            "upload_date": u_date,
-                            "successful_count": s_cnt,
-                            "failed_count": f_cnt,
-                            "pending_count": p_cnt,
-                            "total": total,
-                        }
-                    )
+                    client_dict["daily_summaries"].append({
+                        "upload_date": u_date,
+                        "successful_count": s_cnt,
+                        "failed_count": f_cnt,
+                        "pending_count": p_cnt,
+                        "total": total,
+                    })
 
                 for alert in getattr(csum, "alerts", []):
                     alert_error = _extract_alert_error_name(alert)
-                    err_pct = float(getattr(alert, "error_percentage", 0.0) or 0.0)
+                    err_pct = float(
+                        getattr(alert, "error_percentage", 0.0) or 0.0
+                    )
                     details.append(
-                        f"  - Alert ({client_name}): {alert_error} ({err_pct:.2%})"
+                        f"  - Alert ({client_name}): "
+                        f"{alert_error} ({err_pct:.2%})"
                     )
                     _append_error(
-                        f"Client Alert ({client_name}): {alert_error} ({err_pct:.2%})",
+                        f"Client Alert ({client_name}): "
+                        f"{alert_error} ({err_pct:.2%})",
                         errors,
                         structured_data,
                     )
                     if not json_output:
                         print(f"    Alert: {alert_error} ({err_pct:.2%})")
-                    client_dict["alerts"].append(
-                        {
-                            "error": alert_error,
-                            "error_percentage": err_pct,
-                        }
-                    )
+                    client_dict["alerts"].append({
+                        "error": alert_error,
+                        "error_percentage": err_pct,
+                    })
 
                 structured_data["client_summaries"].append(client_dict)
 
             summary.append("\n".join(intro_lines))
 
         details.append("\n[3] Conversion Action Summaries (Last 90 Days)")
-        summary_query = """
-        SELECT
-          offline_conversion_upload_conversion_action_summary.conversion_action_name,
-          offline_conversion_upload_conversion_action_summary.successful_event_count,
-          offline_conversion_upload_conversion_action_summary.pending_event_count,
-          offline_conversion_upload_conversion_action_summary.total_event_count,
-          offline_conversion_upload_conversion_action_summary.daily_summaries,
-          offline_conversion_upload_conversion_action_summary.alerts
-        FROM offline_conversion_upload_conversion_action_summary
-        """
+        summary_query = (
+            "SELECT offline_conversion_upload_conversion_action_summary"
+            ".conversion_action_name, "
+            "offline_conversion_upload_conversion_action_summary"
+            ".successful_event_count, "
+            "offline_conversion_upload_conversion_action_summary"
+            ".pending_event_count, "
+            "offline_conversion_upload_conversion_action_summary"
+            ".total_event_count, "
+            "offline_conversion_upload_conversion_action_summary"
+            ".daily_summaries, "
+            "offline_conversion_upload_conversion_action_summary.alerts "
+            "FROM offline_conversion_upload_conversion_action_summary"
+        )
         results = run_query(client, clean_cid, summary_query)
         if not json_output:
             print("\n2. Conversion Action Summaries:")
 
         if not results:
-            details.append("Reason: No standard offline imports detected in last 90 days")
+            details.append(
+                "Reason: No standard offline imports detected in last 90 days"
+            )
             if not json_output:
                 print("  No standard offline imports detected in last 90 days.")
         else:
             for row in results:
                 asum = row.offline_conversion_upload_conversion_action_summary
-                act_name = str(getattr(asum, "conversion_action_name", "UNKNOWN"))
+                act_name = str(
+                    getattr(asum, "conversion_action_name", "UNKNOWN")
+                )
                 act_total = int(getattr(asum, "total_event_count", 0) or 0)
-                act_success = int(getattr(asum, "successful_event_count", 0) or 0)
+                act_success = int(
+                    getattr(asum, "successful_event_count", 0) or 0
+                )
                 act_pending = _safe_nonneg_int(
                     getattr(asum, "pending_event_count", 0)
                 )
                 act_failed = max(0, act_total - act_success - act_pending)
-                act_fail_rate = (act_failed / act_total) if act_total > 0 else 0.0
+                act_fail_rate = (
+                    (act_failed / act_total) if act_total > 0 else 0.0
+                )
 
                 details.append(
-                    f"Action: {act_name} (Total Success: {act_success}/{act_total})"
+                    f"Action: {act_name} "
+                    f"(Total Success: {act_success}/{act_total})"
                 )
                 if not json_output:
-                    print(f"  Action: {act_name} (Success: {act_success}/{act_total})")
+                    print(
+                        f"  Action: {act_name} "
+                        f"(Success: {act_success}/{act_total})"
+                    )
 
                 if act_fail_rate > 0.10:
                     _append_error(
-                        f"WARNING: High failure rate for conversion action '{act_name}': {act_fail_rate:.2%} ({act_failed}/{act_total} failed).",
+                        "WARNING: High failure rate for conversion action "
+                        f"'{act_name}': {act_fail_rate:.2%} "
+                        f"({act_failed}/{act_total} failed).",
                         errors,
                         structured_data,
                     )
 
-                action_dict: Dict[str, Any] = {
+                action_dict: dict[str, Any] = {
                     "conversion_action_name": act_name,
                     "total_event_count": act_total,
                     "successful_event_count": act_success,
@@ -495,52 +601,53 @@ def troubleshoot_conversions(
                     total = s_cnt + f_cnt + p_cnt
                     u_date = str(getattr(ds, "upload_date", ""))
                     details.append(
-                        f"  - {u_date}: Success={s_cnt}/{total}, Fail={f_cnt}, Pending={p_cnt}"
+                        f"  - {u_date}: Success={s_cnt}/{total}, "
+                        f"Fail={f_cnt}, Pending={p_cnt}"
                     )
                     if not json_output:
                         print(f"    {u_date}: {s_cnt}/{total} successful")
-                    action_dict["daily_summaries"].append(
-                        {
-                            "upload_date": u_date,
-                            "successful_count": s_cnt,
-                            "failed_count": f_cnt,
-                            "pending_count": p_cnt,
-                            "total": total,
-                        }
-                    )
+                    action_dict["daily_summaries"].append({
+                        "upload_date": u_date,
+                        "successful_count": s_cnt,
+                        "failed_count": f_cnt,
+                        "pending_count": p_cnt,
+                        "total": total,
+                    })
 
                 for alert in getattr(asum, "alerts", []):
                     alert_error = _extract_alert_error_name(alert)
-                    err_pct = float(getattr(alert, "error_percentage", 0.0) or 0.0)
+                    err_pct = float(
+                        getattr(alert, "error_percentage", 0.0) or 0.0
+                    )
                     details.append(f"  - Alert: {alert_error} ({err_pct:.2%})")
                     _append_error(
-                        f"Action Alert ({act_name}): {alert_error} ({err_pct:.2%})",
+                        f"Action Alert ({act_name}): "
+                        f"{alert_error} ({err_pct:.2%})",
                         errors,
                         structured_data,
                     )
                     if not json_output:
                         print(f"    Alert: {alert_error} ({err_pct:.2%})")
-                    action_dict["alerts"].append(
-                        {
-                            "error": alert_error,
-                            "error_percentage": err_pct,
-                        }
-                    )
+                    action_dict["alerts"].append({
+                        "error": alert_error,
+                        "error_percentage": err_pct,
+                    })
 
-                structured_data["conversion_action_summaries"].append(action_dict)
+                structured_data["conversion_action_summaries"].append(
+                    action_dict
+                )
 
         details.append("\n[4] Recent GCLID Validation (Last 7 Days)")
-        gclids_found: List[Dict[str, Any]] = []
+        gclids_found: list[dict[str, Any]] = []
         for i in range(1, 8):
-            query_date = (datetime.now() - timedelta(i)).strftime("%Y-%m-%d")
-            gclid_query = f"""
-            SELECT
-              click_view.gclid,
-              segments.date
-            FROM click_view
-            WHERE segments.date = '{query_date}'
-            LIMIT 5
-            """
+            query_date = (
+                datetime.datetime.now() - datetime.timedelta(days=i)
+            ).strftime("%Y-%m-%d")
+            gclid_query = (
+                "SELECT click_view.gclid, segments.date "
+                f"FROM click_view WHERE segments.date = '{query_date}' "
+                "LIMIT 5"
+            )
             results = run_query(client, clean_cid, gclid_query)
             if results:
                 for row in results:
@@ -559,37 +666,33 @@ def troubleshoot_conversions(
     structured_data["recent_gclids"] = gclids_found
 
     if not gclids_found:
-        details.append("Reason: No recent GCLIDs found in click_view for the last 7 days")
+        details.append(
+            "Reason: No recent GCLIDs found in click_view for the last 7 days"
+        )
     else:
         for g_entry in gclids_found:
             details.append(
-                f"  - GCLID: {g_entry['gclid']} | Date: {g_entry['date']} | Status: VALID ({g_entry['age_days']} day(s) old)"
+                f"  - GCLID: {g_entry['gclid']} | Date: {g_entry['date']} "
+                f"| Status: VALID ({g_entry['age_days']} day(s) old)"
             )
 
     history = merge_previous_findings(
         output_dir, customer_id=clean_cid, exclude_path=output_path
     )
 
+    intro_body = summary or [f"Diagnostic Report for Customer ID: {clean_cid}"]
+    err_body = errors or ["No blocking errors detected."]
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("Created by the Google Ads API Developer Assistant\n\n")
         f.write("1. Introductory Analysis\n")
-        f.write(
-            "\n".join(
-                summary
-                if summary
-                else [f"Diagnostic Report for Customer ID: {clean_cid}"]
-            )
-            + "\n\n"
-        )
+        f.write("\n".join(intro_body) + "\n\n")
 
         if history:
             f.write("=== HISTORICAL CONTEXT ===\n")
             f.write("\n".join(history) + "\n\n")
 
         f.write("2. Primary Errors & Critical Issues\n")
-        f.write(
-            "\n".join(errors if errors else ["No blocking errors detected."]) + "\n\n"
-        )
+        f.write("\n".join(err_body) + "\n\n")
 
         f.write("3. General Health & Technical Findings\n")
         f.write("\n".join(details) + "\n\n")
@@ -611,7 +714,11 @@ def main() -> None:
         "-c", "--customer_id", required=True, help="The Google Ads customer ID."
     )
     parser.add_argument(
-        "-v", "--api_version", type=str, required=True, help="The Google Ads API version."
+        "-v",
+        "--api_version",
+        type=str,
+        required=True,
+        help="The Google Ads API version.",
     )
     parser.add_argument(
         "--json",
@@ -622,7 +729,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if GoogleAdsClient is None:
-        print("CRITICAL ERROR: google-ads package is not installed.", file=sys.stderr)
+        print(
+            "CRITICAL ERROR: google-ads package is not installed.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     try:
@@ -631,7 +741,7 @@ def main() -> None:
         googleads_client = GoogleAdsClient.load_from_storage(
             path=cfg_path, version=norm_ver
         )
-    except Exception as e:
+    except _SDK_EXCEPTIONS as e:
         print(
             f"CRITICAL ERROR: Failed to load Google Ads configuration: {e}",
             file=sys.stderr,

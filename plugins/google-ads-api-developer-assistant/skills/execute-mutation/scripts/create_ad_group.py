@@ -20,21 +20,57 @@ live execution (--execute) under the 4-Step HITL Mutation Protocol.
 """
 
 import argparse
-from importlib.util import module_from_spec, spec_from_file_location
+import importlib
+import importlib.util
 import json
 import os
 import re
 import sys
 from typing import Any, Optional
 
-try:
-    from google.ads.googleads.client import GoogleAdsClient
-    from google.ads.googleads.errors import GoogleAdsException
-except ImportError:
-    GoogleAdsClient = None  # type: ignore
 
-    class GoogleAdsException(Exception):  # type: ignore[no-redef]
-        pass
+class _FallbackGoogleAdsError(Exception):
+    """Fallback exception when the google-ads package is not installed."""
+
+
+try:
+    GoogleAdsClient: Any = importlib.import_module(
+        "google.ads.googleads.client"
+    ).GoogleAdsClient
+    GoogleAdsException: Any = importlib.import_module(
+        "google.ads.googleads.errors"
+    ).GoogleAdsException
+except ImportError:
+    GoogleAdsClient = None  # pylint: disable=invalid-name
+    GoogleAdsException = _FallbackGoogleAdsError
+
+
+def _load_extra_sdk_exceptions() -> tuple[type[Exception], ...]:
+    """Loads optional transport/config exception types when installed."""
+    extra: list[type[Exception]] = []
+    for mod_name, attr in (
+        ("yaml", "YAMLError"),
+        ("grpc", "RpcError"),
+        ("google.auth.exceptions", "GoogleAuthError"),
+    ):
+        try:
+            cls = getattr(importlib.import_module(mod_name), attr, None)
+            if isinstance(cls, type) and issubclass(cls, Exception):
+                extra.append(cls)
+        except ImportError:
+            pass
+    return tuple(extra)
+
+
+_SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    RuntimeError,
+    *_load_extra_sdk_exceptions(),
+)
 
 
 def _get_config_path() -> str:
@@ -43,20 +79,23 @@ def _get_config_path() -> str:
     if config_path and os.path.isfile(config_path):
         return config_path
 
-    plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-    candidates = [
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    candidates = (
         os.path.abspath("config/google-ads.yaml"),
         os.path.join(plugin_root, "config", "google-ads.yaml"),
         os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.gemini/config/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../../../../config/google-ads.yaml")
+            os.path.join(script_dir, "../../../../config/google-ads.yaml")
         ),
-    ]
+    )
     for candidate in candidates:
         if os.path.isfile(candidate):
             return candidate
@@ -64,10 +103,9 @@ def _get_config_path() -> str:
     try:
         if plugin_root not in sys.path:
             sys.path.insert(0, plugin_root)
-        from config.config_init import sync_and_set_config_kv
-
-        return sync_and_set_config_kv()
-    except Exception:
+        config_init = importlib.import_module("config.config_init")
+        return config_init.sync_and_set_config_kv()
+    except (AttributeError, ImportError, OSError, RuntimeError, ValueError):
         pass
 
     return os.path.abspath("config/google-ads.yaml")
@@ -78,15 +116,17 @@ def _load_run_mutation_module() -> Any:
     runner_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "run_mutation.py"
     )
-    spec = spec_from_file_location("_run_mutation_adgroup_check", runner_path)
+    spec = importlib.util.spec_from_file_location(
+        "_run_mutation_adgroup_check", runner_path
+    )
     if spec and spec.loader:
-        mod = module_from_spec(spec)
+        mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod
     raise RuntimeError(f"Unable to load run_mutation module at {runner_path}")
 
 
-def handle_googleads_exception(exception: GoogleAdsException) -> None:
+def handle_googleads_exception(exception: Exception) -> None:
     """Prints clean, actionable details of a GoogleAdsException."""
     req_id = getattr(exception, "request_id", "N/A")
     print(
@@ -97,7 +137,8 @@ def handle_googleads_exception(exception: GoogleAdsException) -> None:
     for error in getattr(failure, "errors", []) or []:
         print(f"  - {error.message}", file=sys.stderr)
         if getattr(error, "location", None):
-            for element in getattr(error.location, "field_path_elements", []) or []:
+            elems = getattr(error.location, "field_path_elements", []) or []
+            for element in elems:
                 print(f"    On field: {element.field_name}", file=sys.stderr)
 
 
@@ -119,13 +160,15 @@ def create_ad_group(
     Args:
         customer_id: The Google Ads Customer ID.
         campaign_id: Campaign ID (or resource name) to attach the ad group to.
-        campaign_resource_name: Full campaign resource name (e.g., 'customers/123/campaigns/456').
+        campaign_resource_name: Full campaign resource name (e.g.,
+          'customers/123/campaigns/456').
         api_version: Google Ads API version (e.g., 'v26').
         ad_group_name: Name for the new ad group.
-        cpc_bid_micros: Optional default CPC bid in micros (e.g., 10_000_000 = $10.00).
+        cpc_bid_micros: Optional default CPC bid in micros (e.g., 10_000_000 =
+          $10.00).
         status: AdGroupStatusEnum name (default: 'ENABLED').
         ad_group_type: AdGroupTypeEnum name (default: 'SEARCH_STANDARD').
-        validate_only: If True, validates the request without creating the ad group.
+        validate_only: If True, validates without creating the ad group.
         client: Optional pre-initialized GoogleAdsClient instance.
         json_output: If True, emits structured JSON to stdout.
 
@@ -142,8 +185,8 @@ def create_ad_group(
     if not resolved_campaign_rn and raw_campaign_id.startswith("customers/"):
         resolved_campaign_rn = raw_campaign_id
 
-    if resolved_campaign_rn and not re.match(
-        r"^customers/\d+/campaigns/-?\d+$", resolved_campaign_rn
+    if resolved_campaign_rn and not re.fullmatch(
+        r"customers/\d+/campaigns/-?\d+", resolved_campaign_rn
     ):
         print(
             f"Error: Invalid campaign resource name '{resolved_campaign_rn}'.",
@@ -152,7 +195,9 @@ def create_ad_group(
         sys.exit(1)
 
     clean_campaign_id = (
-        "" if resolved_campaign_rn else "".join(re.findall(r"\d+", raw_campaign_id))
+        ""
+        if resolved_campaign_rn
+        else "".join(re.findall(r"\d+", raw_campaign_id))
     )
     if not resolved_campaign_rn and not clean_campaign_id:
         print(
@@ -171,13 +216,15 @@ def create_ad_group(
     status_upper = str(status or "ENABLED").strip().upper()
     if status_upper == "REMOVED":
         print(
-            "Error: BLOCKED BY DELETION PROHIBITION: Setting ad group status to 'REMOVED' is prohibited. Use 'PAUSED' instead.",
+            "Error: BLOCKED BY DELETION PROHIBITION: Setting ad group status "
+            "to 'REMOVED' is prohibited. Use 'PAUSED' instead.",
             file=sys.stderr,
         )
         sys.exit(1)
     if status_upper in ("UNSPECIFIED", "UNKNOWN"):
         print(
-            f"Error: Invalid ad group status '{status}'. Must be 'ENABLED' or 'PAUSED'.",
+            f"Error: Invalid ad group status '{status}'. Must be 'ENABLED' "
+            "or 'PAUSED'.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -192,10 +239,10 @@ def create_ad_group(
 
     if not validate_only and cpc_bid_micros is not None:
         run_mod = _load_run_mutation_module()
-        within_limits, limit_err, _ = run_mod.check_financial_transaction_limits(
-            operation_summary="AdGroupService.mutate_ad_groups",
-            rpc_calls=[
-                {
+        within_limits, limit_err, _ = (
+            run_mod.check_financial_transaction_limits(
+                operation_summary="AdGroupService.mutate_ad_groups",
+                rpc_calls=[{
                     "service": "AdGroupService",
                     "method": "mutate_ad_groups",
                     "request_payload": {
@@ -204,8 +251,8 @@ def create_ad_group(
                             {"create": {"cpc_bid_micros": int(cpc_bid_micros)}}
                         ],
                     },
-                }
-            ],
+                }],
+            )
         )
         if not within_limits:
             sys.stderr.write(f"{limit_err}\n")
@@ -220,9 +267,10 @@ def create_ad_group(
             client = GoogleAdsClient.load_from_storage(
                 path=cfg_path, version=api_version
             )
-        except Exception as exc:
+        except _SDK_EXCEPTIONS as exc:
             print(
-                f"CRITICAL ERROR: Failed to load Google Ads configuration: {exc}",
+                "CRITICAL ERROR: Failed to load Google Ads configuration: "
+                f"{exc}",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -233,7 +281,9 @@ def create_ad_group(
             clean_customer_id, clean_campaign_id
         )
 
-    resolved_ad_group_name = (ad_group_name or "").strip() or "Standard Ad Group"
+    resolved_ad_group_name = (
+        ad_group_name or ""
+    ).strip() or "Standard Ad Group"
 
     status_enum = getattr(client.enums.AdGroupStatusEnum, status_upper, None)
     if status_enum is None:
@@ -260,8 +310,10 @@ def create_ad_group(
         ad_group.campaign = resolved_campaign_rn
         ad_group.type_ = type_enum
 
+        resolved_cpc_micros: Optional[int] = None
         if cpc_bid_micros is not None:
-            ad_group.cpc_bid_micros = int(cpc_bid_micros)
+            resolved_cpc_micros = int(cpc_bid_micros)
+            ad_group.cpc_bid_micros = resolved_cpc_micros
 
         request = client.get_type("MutateAdGroupsRequest")
         request.customer_id = clean_customer_id
@@ -281,9 +333,7 @@ def create_ad_group(
             "ad_group_name": resolved_ad_group_name,
             "ad_group_status": status_upper,
             "ad_group_type": type_upper,
-            "cpc_bid_micros": int(cpc_bid_micros)
-            if cpc_bid_micros is not None
-            else None,
+            "cpc_bid_micros": resolved_cpc_micros,
             "ad_group_resource_name": ad_group_rn,
         }
 
@@ -291,8 +341,9 @@ def create_ad_group(
             print(json.dumps(result_payload, indent=2))
         elif validate_only:
             print(
-                f"SUCCESS (validate_only=True): Verified creation of ad group "
-                f"'{resolved_ad_group_name}' ({type_upper}, {status_upper}) under {resolved_campaign_rn}."
+                "SUCCESS (validate_only=True): Verified creation of ad group "
+                f"'{resolved_ad_group_name}' ({type_upper}, {status_upper}) "
+                f"under {resolved_campaign_rn}."
             )
         else:
             print(f"SUCCESS: Created ad group {ad_group_rn}.")
@@ -300,7 +351,7 @@ def create_ad_group(
     except GoogleAdsException as ex:
         handle_googleads_exception(ex)
         sys.exit(1)
-    except Exception as exc:
+    except _SDK_EXCEPTIONS as exc:
         print(f"CRITICAL ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -308,7 +359,9 @@ def create_ad_group(
 def main() -> None:
     """CLI entrypoint for creating a Google Ads ad group."""
     parser = argparse.ArgumentParser(
-        description="Creates a Google Ads ad group under a campaign via AdGroupService."
+        description=(
+            "Creates a Google Ads ad group under a campaign via AdGroupService."
+        )
     )
     parser.add_argument(
         "-c",
@@ -330,7 +383,9 @@ def main() -> None:
         "--campaign_resource_name",
         dest="campaign_resource_name",
         default=None,
-        help="Full campaign resource name (e.g., 'customers/123/campaigns/456').",
+        help=(
+            "Full campaign resource name (e.g., 'customers/123/campaigns/456')."
+        ),
     )
     parser.add_argument(
         "-v",

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Executes Google Ads API mutations with a 2-phase Dry-Run Receipt, Consequence Gate & Audit Log."""
+"""Executes Google Ads mutations with Dry-Run Receipt, HITL Gate & Audit Log."""
 
 import argparse
-from datetime import datetime, timezone
+import datetime
 import enum
 import functools
 import getpass
 import hashlib
+import importlib
+import importlib.util
 import json
 import math
 import os
@@ -18,8 +20,16 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from typing import Any, Dict, List, Optional, Tuple, Union
 import uuid
+
+try:
+    _MESSAGE_TO_DICT: Any = importlib.import_module(
+        "google.protobuf.json_format"
+    ).MessageToDict
+except ImportError:
+    _MESSAGE_TO_DICT = None
 
 
 RECEIPT_FILENAME = "last_dry_run.json"
@@ -69,9 +79,10 @@ _MUTATION_METHOD_PREFIXES = (
     "end_experiment",
 )
 
-# Google Ads API write RPCs whose request messages have NO `validate_only` field.
-# These methods execute live changes immediately if invoked and must never be sent
-# during `--dry-run` or allowed to bypass HITL checks via `validate_only=True`.
+# Google Ads API write RPCs whose request messages have NO `validate_only`
+# field. These methods execute live changes immediately if invoked and must
+# never be sent during `--dry-run` or allowed to bypass HITL checks via
+# `validate_only=True`.
 _NON_VALIDATE_ONLY_MUTATION_METHODS = frozenset({
     "mutate_billing_setup",
     "book_campaigns",
@@ -211,7 +222,8 @@ _FINANCIAL_SUMMARY_RE = re.compile(
     r"billing[_\s]*setup|payments[_\s]*account|account[_\s]*budget|"
     r"campaign[_\s]*budget|\bbudget(?:s|ing)?\b|"
     r"bidding[_\s]*(?:strategy|strategies|seasonality|data[_\s]*exclusion)|"
-    r"bid[_\s]*modifier|\b(?:cpc|cpm|cpv|cpa)[_\s]*bid|target[_\s]*(?:cpa|roas|cpm|spend)|"
+    r"bid[_\s]*modifier|\b(?:cpc|cpm|cpv|cpa)[_\s]*bid|"
+    r"target[_\s]*(?:cpa|roas|cpm|spend)|"
     r"maximize[_\s]*conversion[_\s]*value|"
     r"book[_\s]*campaigns|\breservation(?:s|service)?\b|"
     r"apply[_\s]*incentive|\bincentive(?:s|service)?\b|"
@@ -219,7 +231,8 @@ _FINANCIAL_SUMMARY_RE = re.compile(
     r"conversion[_\s]*value[_\s]*rule|upload[_\s]*conversion[_\s]*adjustments|"
     r"restatement[_\s]*value|adjusted[_\s]*value|"
     r"create[_\s]*customer[_\s]*client|"
-    r"(?:graduate|promote|schedule)[_\s]*experiment|promote[_\s]*campaign[_\s]*draft|"
+    r"(?:graduate|promote|schedule)[_\s]*experiment|"
+    r"promote[_\s]*campaign[_\s]*draft|"
     r"(?:amount|bid|cpa|cpm|cpv|spend|spending_limit)[_\s]*micros|\bmicros\b|"
     r"[$€£¥₹]\s*\d|\b(?:USD|EUR|GBP|JPY|CAD|AUD|CHF|INR|BRL|MXN)\s*\d"
     r")"
@@ -231,10 +244,10 @@ _FINANCIAL_CONSEQUENCE_RE = re.compile(
     r"\b\d+(?:[.,]\d+)?\s*(?:%|percent|micros|/(?:day|mo|month|wk|week|yr|year))\b|"
     r"\b(?:USD|EUR|GBP|JPY|CAD|AUD|CHF|INR|BRL|MXN)\b|"
     r"\b(?:spend|spending|budget|budgets|billing|billable|billed|payment|payments|"
-    r"invoice|invoices|charge|charges|charged|cost|costs|monetary|financial|currency|"
-    r"price|pricing|fee|fees|credit|credits|credited|refund|incentive|coupon|voucher|"
-    r"promotional|booking|booked|guaranteed|reservation|commitment|"
-    r"bid|bids|bidding|cpc|cpm|cpv|cpa|roas|modifier|"
+    r"invoice|invoices|charge|charges|charged|cost|costs|monetary|financial|"
+    r"currency|price|pricing|fee|fees|credit|credits|credited|refund|incentive|"
+    r"coupon|voucher|promotional|booking|booked|guaranteed|reservation|"
+    r"commitment|bid|bids|bidding|cpc|cpm|cpv|cpa|roas|modifier|"
     r"conversion\s+value|restatement|retraction|revenue)\b"
     r")"
 )
@@ -250,20 +263,25 @@ _SENSITIVE_KEYS = frozenset({
 })
 
 
-def _payload_contains_financial_fields(obj: Any, _depth: int = 0) -> bool:
-    """Recursively checks whether a serialized RPC payload contains financial fields."""
-    if _depth > 12:
+def _payload_contains_financial_fields(obj: Any, depth: int = 0) -> bool:
+    """Recursively checks whether an RPC payload contains financial fields."""
+    if depth > 12:
         return False
     if isinstance(obj, dict):
         for k, v in obj.items():
             key_lower = str(k).strip().lower()
-            if key_lower in _FINANCIAL_PAYLOAD_KEYS and v not in (None, "", [], {}):
+            if key_lower in _FINANCIAL_PAYLOAD_KEYS and v not in (
+                None,
+                "",
+                [],
+                {},
+            ):
                 return True
-            if _payload_contains_financial_fields(v, _depth + 1):
+            if _payload_contains_financial_fields(v, depth + 1):
                 return True
     elif isinstance(obj, list):
         for item in obj:
-            if _payload_contains_financial_fields(item, _depth + 1):
+            if _payload_contains_financial_fields(item, depth + 1):
                 return True
     return False
 
@@ -274,10 +292,19 @@ def is_financial_mutation(
     after_state: str = "",
     rpc_calls: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
-    """Determines whether a Google Ads API mutation involves a financial transaction.
+    """Determines whether a Google Ads mutation involves a financial change.
 
-    Checks intercepted RPC services, methods, and request payload fields as well as
-    the operation summary and before/after state descriptions.
+    Checks intercepted RPC services, methods, and request payload fields as well
+    as the operation summary and before/after state descriptions.
+
+    Args:
+        operation_summary: Concise description of the mutation operation.
+        before_state: Description of resource state before the mutation.
+        after_state: Description of target resource state after the mutation.
+        rpc_calls: Optional list of intercepted RPC call dictionaries.
+
+    Returns:
+        True if the mutation touches financial services, methods, or fields.
     """
     for call in rpc_calls or []:
         if not isinstance(call, dict):
@@ -300,7 +327,7 @@ def is_financial_mutation(
 
 
 def has_financial_consequence_disclosure(consequences: List[str]) -> bool:
-    """Returns True if at least one consequence explicitly discloses financial/monetary impact."""
+    """Returns True if consequences explicitly disclose monetary impact."""
     for item in consequences or []:
         text = str(item).strip()
         if text and _FINANCIAL_CONSEQUENCE_RE.search(text):
@@ -318,7 +345,7 @@ def compute_file_sha256(file_path: str) -> str:
 
 
 def _normalize_request_for_hash(obj: Any) -> Any:
-    """Normalizes a serialized RPC request payload by recursively stripping validate_only and response_content_type."""
+    """Strips validate_only and response_content_type from RPC payloads."""
     if isinstance(obj, dict):
         return {
             str(k): _normalize_request_for_hash(v)
@@ -335,11 +362,20 @@ def compute_mutate_request_sha256(
     method_name: str,
     req_payload: Any,
 ) -> str:
-    """Computes a canonical SHA-256 hex digest of a Google Ads mutate request payload.
+    """Computes a canonical SHA-256 hex digest of a mutate request payload.
 
-    Normalizes out `validate_only` so that the `validate_only=True` dry-run request
-    and the `validate_only=False` live request produce the exact same SHA-256 digest
-    if and only if the target service, method, customer_id, and operations are identical.
+    Normalizes out `validate_only` so that the `validate_only=True` dry-run
+    request and the `validate_only=False` live request produce the exact same
+    SHA-256 digest if and only if the target service, method, customer_id, and
+    operations are identical.
+
+    Args:
+        service_name: Target Google Ads service name.
+        method_name: Target RPC method name.
+        req_payload: Request protobuf, proto-plus message, or dictionary.
+
+    Returns:
+        Hex-encoded SHA-256 digest string.
     """
     serialized = _serialize_rpc_object(req_payload)
     normalized = _normalize_request_for_hash(serialized)
@@ -361,7 +397,7 @@ def compute_aggregate_request_sha256(
     request_hashes: List[str],
     fallback_payload: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Computes an aggregate SHA-256 digest across one or more mutate requests."""
+    """Computes an aggregate SHA-256 digest across mutate requests."""
     clean_hashes = [str(h).strip() for h in request_hashes if str(h).strip()]
     if len(clean_hashes) == 1:
         return clean_hashes[0]
@@ -383,10 +419,12 @@ def get_receipt_paths() -> List[str]:
         os.path.abspath(os.path.join("saved", "data", RECEIPT_FILENAME)),
         os.path.join(plugin_root, "saved", "data", RECEIPT_FILENAME),
         os.path.expanduser(
-            f"~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/data/{RECEIPT_FILENAME}"
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/"
+            f"saved/data/{RECEIPT_FILENAME}"
         ),
         os.path.expanduser(
-            f"~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/saved/data/{RECEIPT_FILENAME}"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            f"google-ads-api-developer-assistant/saved/data/{RECEIPT_FILENAME}"
         ),
     ]
     deduped: List[str] = []
@@ -398,7 +436,7 @@ def get_receipt_paths() -> List[str]:
 
 
 def get_audit_log_paths() -> List[str]:
-    """Returns candidate paths for appending to the mutation audit trail (mutation_audit.jsonl)."""
+    """Returns candidate paths for appending to mutation_audit.jsonl."""
     env_override = os.environ.get("GOOGLE_ADS_MUTATION_AUDIT_LOG", "").strip()
     if env_override:
         return [os.path.abspath(env_override)]
@@ -409,10 +447,12 @@ def get_audit_log_paths() -> List[str]:
         os.path.abspath(os.path.join("saved", "logs", AUDIT_LOG_FILENAME)),
         os.path.join(plugin_root, "saved", "logs", AUDIT_LOG_FILENAME),
         os.path.expanduser(
-            f"~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/logs/{AUDIT_LOG_FILENAME}"
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/"
+            f"saved/logs/{AUDIT_LOG_FILENAME}"
         ),
         os.path.expanduser(
-            f"~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/saved/logs/{AUDIT_LOG_FILENAME}"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            f"google-ads-api-developer-assistant/saved/logs/{AUDIT_LOG_FILENAME}"
         ),
     ]
     deduped: List[str] = []
@@ -424,26 +464,27 @@ def get_audit_log_paths() -> List[str]:
 
 
 def parse_execute_mutates_value(raw_text: str) -> Optional[bool]:
-    """Parses 'execute_mutates = <true, false>' from TOML or key=value text and returns a boolean."""
+    """Parses 'execute_mutates = <true, false>' from TOML or key=value text."""
     try:
-        import tomllib  # type: ignore
-
         parsed_toml = tomllib.loads(raw_text)
         if isinstance(parsed_toml, dict) and "execute_mutates" in parsed_toml:
             em_val = parsed_toml["execute_mutates"]
             if isinstance(em_val, bool):
                 return em_val
-            if isinstance(em_val, str) and em_val.strip().lower() in ("true", "false"):
+            if isinstance(em_val, str) and em_val.strip().lower() in (
+                "true",
+                "false",
+            ):
                 return em_val.strip().lower() == "true"
-    except Exception:
+    except (tomllib.TOMLDecodeError, TypeError, ValueError):
         pass
 
     for raw_line in raw_text.splitlines():
         line = raw_line.split("#", 1)[0].strip()
         if not line:
             continue
-        match = re.match(
-            r"^execute_mutates\s*[=:]\s*['\"]?(true|false)['\"]?\s*$",
+        match = re.fullmatch(
+            r"execute_mutates\s*[=:]\s*['\"]?(true|false)['\"]?\s*",
             line,
             re.IGNORECASE,
         )
@@ -456,7 +497,7 @@ def parse_execute_mutates_value(raw_text: str) -> Optional[bool]:
 
 
 def get_execute_mutates_paths() -> List[str]:
-    """Returns candidate paths for reading the execute_mutates setting in config/assistant_config."""
+    """Returns candidate paths for reading execute_mutates in config."""
     this_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
     repo_root = os.path.abspath(os.path.join(plugin_root, "../.."))
@@ -464,17 +505,21 @@ def get_execute_mutates_paths() -> List[str]:
     env_cfg_dir = os.environ.get("GOOGLE_ADS_ASSISTANT_CONFIG_DIR", "").strip()
     if env_cfg_dir:
         paths.append(
-            os.path.join(os.path.abspath(env_cfg_dir), ASSISTANT_CONFIG_FILENAME)
+            os.path.join(
+                os.path.abspath(env_cfg_dir), ASSISTANT_CONFIG_FILENAME
+            )
         )
     paths.extend([
         os.path.abspath(os.path.join("config", ASSISTANT_CONFIG_FILENAME)),
         os.path.join(plugin_root, "config", ASSISTANT_CONFIG_FILENAME),
         os.path.join(repo_root, "config", ASSISTANT_CONFIG_FILENAME),
         os.path.expanduser(
-            f"~/.gemini/config/plugins/google-ads-api-developer-assistant/config/{ASSISTANT_CONFIG_FILENAME}"
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/"
+            f"config/{ASSISTANT_CONFIG_FILENAME}"
         ),
         os.path.expanduser(
-            f"~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/{ASSISTANT_CONFIG_FILENAME}"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            f"google-ads-api-developer-assistant/config/{ASSISTANT_CONFIG_FILENAME}"
         ),
     ])
     deduped: List[str] = []
@@ -486,7 +531,7 @@ def get_execute_mutates_paths() -> List[str]:
 
 
 def is_execute_mutates_enabled() -> bool:
-    """Returns whether the plugin is configured to support mutations (defaults to False)."""
+    """Returns whether the plugin is configured to support mutations."""
     env_override = os.environ.get("GOOGLE_ADS_EXECUTE_MUTATES", "").strip()
     if env_override:
         parsed_env = parse_execute_mutates_value(env_override)
@@ -508,21 +553,24 @@ def is_execute_mutates_enabled() -> bool:
     return False
 
 
-def _load_set_financial_limits_module():
-    from importlib.util import module_from_spec, spec_from_file_location
-
+def _load_set_financial_limits_module() -> Any:
+    """Loads the colocated set_financial_limits module."""
     this_dir = os.path.dirname(os.path.abspath(__file__))
     sfl_path = os.path.join(this_dir, "set_financial_limits.py")
-    spec = spec_from_file_location("_set_financial_limits_mod", sfl_path)
+    spec = importlib.util.spec_from_file_location(
+        "_set_financial_limits_mod", sfl_path
+    )
     if spec and spec.loader:
-        mod = module_from_spec(spec)
+        mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod
     raise RuntimeError(f"Unable to load {sfl_path}")
 
 
 _SFL_MOD = _load_set_financial_limits_module()
-FINANCIAL_LIMIT_SPECS: Dict[str, Dict[str, Any]] = _SFL_MOD.FINANCIAL_LIMIT_SPECS
+FINANCIAL_LIMIT_SPECS: Dict[str, Dict[str, Any]] = (
+    _SFL_MOD.FINANCIAL_LIMIT_SPECS
+)
 LIMIT_KEY_ALIASES: Dict[str, str] = _SFL_MOD.LIMIT_KEY_ALIASES
 resolve_limit_key = _SFL_MOD.resolve_limit_key
 resolve_limit_keys = _SFL_MOD.resolve_limit_keys
@@ -533,9 +581,7 @@ _FINANCIAL_LIMIT_META: Dict[str, Tuple[str, str]] = {
     for k, spec in FINANCIAL_LIMIT_SPECS.items()
 }
 
-_API_FIELD_TO_LIMIT_KEY: Dict[str, str] = dict(LIMIT_KEY_ALIASES)
-
-# Map lowercase service names and RPC method names to canonical PascalCase Service names
+# Map lowercase service names and RPC method names to PascalCase Service names
 _SERVICE_NAME_LOOKUP: Dict[str, str] = {}
 _METHOD_TO_SERVICE_LOOKUP: Dict[str, str] = {
     "mutate_ad_group_bid_modifiers": "AdGroupBidModifierService",
@@ -543,7 +589,9 @@ _METHOD_TO_SERVICE_LOOKUP: Dict[str, str] = {
     "mutate_ad_groups": "AdGroupService",
     "mutate_assets": "AssetService",
     "add_batch_job_operations": "BatchJobService",
-    "mutate_bidding_seasonality_adjustments": "BiddingSeasonalityAdjustmentService",
+    "mutate_bidding_seasonality_adjustments": (
+        "BiddingSeasonalityAdjustmentService"
+    ),
     "mutate_bidding_strategies": "BiddingStrategyService",
     "mutate_campaign_bid_modifiers": "CampaignBidModifierService",
     "mutate_campaign_budgets": "CampaignBudgetService",
@@ -570,7 +618,7 @@ for _spec_key, _spec_val in FINANCIAL_LIMIT_SPECS.items():
     if _svc and _svc != "ALL":
         _SERVICE_NAME_LOOKUP[_svc.lower()] = _svc
 
-# Map nested operation/wrapper keys inside GoogleAdsService.mutate / BatchJobService
+# Map nested operation/wrapper keys inside GoogleAdsService.mutate / BatchJob
 _PARENT_KEY_TO_SERVICE: Dict[str, str] = {
     "ad_group_bid_modifier_operation": "AdGroupBidModifierService",
     "ad_group_bid_modifier": "AdGroupBidModifierService",
@@ -585,7 +633,9 @@ _PARENT_KEY_TO_SERVICE: Dict[str, str] = {
     "money_amount_off": "AssetService",
     "orders_over_amount": "AssetService",
     "price": "AssetService",
-    "bidding_seasonality_adjustment_operation": "BiddingSeasonalityAdjustmentService",
+    "bidding_seasonality_adjustment_operation": (
+        "BiddingSeasonalityAdjustmentService"
+    ),
     "bidding_seasonality_adjustment": "BiddingSeasonalityAdjustmentService",
     "bidding_strategy_operation": "BiddingStrategyService",
     "bidding_strategy": "BiddingStrategyService",
@@ -607,18 +657,23 @@ _PARENT_KEY_TO_SERVICE: Dict[str, str] = {
     "conversion_value_rule": "ConversionValueRuleService",
     "goal_operation": "GoalService",
     "goal": "GoalService",
-    "keyword_plan_ad_group_keyword_operation": "KeywordPlanAdGroupKeywordService",
+    "keyword_plan_ad_group_keyword_operation": (
+        "KeywordPlanAdGroupKeywordService"
+    ),
     "keyword_plan_ad_group_operation": "KeywordPlanAdGroupService",
     "keyword_plan_campaign_operation": "KeywordPlanCampaignService",
 }
 
-_ALL_TRACKED_FIELD_NAMES = set(_SFL_MOD._FIELD_UNIT_META.keys()) | set(
-    LIMIT_KEY_ALIASES.keys()
+_ALL_TRACKED_FIELD_NAMES = frozenset(_SFL_MOD.FIELD_UNIT_META) | frozenset(
+    LIMIT_KEY_ALIASES
 )
 
 _CODE_FINANCIAL_ASSIGN_RE = re.compile(
     r"\b("
-    + "|".join(re.escape(k) for k in sorted(_ALL_TRACKED_FIELD_NAMES, key=len, reverse=True))
+    + "|".join(
+        re.escape(k)
+        for k in sorted(_ALL_TRACKED_FIELD_NAMES, key=len, reverse=True)
+    )
     + r"|action\.value)\s*(?:=|:)\s*(?:float\(\s*['\"]([+-]?(?:nan|inf|infinity))['\"]\s*\)|['\"]?([+-]?(?:[0-9]+(?:_[0-9]+)*(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|[+-]?(?:nan|inf|infinity))['\"]?)",
     re.IGNORECASE,
 )
@@ -634,17 +689,19 @@ def get_financial_limits_paths() -> List[str]:
 
 
 def parse_financial_limits(raw_text: str) -> Dict[str, Union[int, float]]:
-    """Parses TOML (`Service.field = value` or `[Service]`) or key=value text from config/financial_limits."""
+    """Parses TOML or key=value text from config/financial_limits."""
     return _SFL_MOD.parse_financial_limits(raw_text)
 
 
-def read_financial_limits() -> Tuple[Dict[str, Union[int, float]], Optional[str]]:
-    """Reads the highest-precedence config/financial_limits file and returns (limits, path)."""
+def read_financial_limits() -> (
+    Tuple[Dict[str, Union[int, float]], Optional[str]]
+):
+    """Reads highest-precedence config/financial_limits and returns (limits, path)."""
     return _SFL_MOD.read_financial_limits()
 
 
 def _coerce_numeric(val: Any) -> Optional[float]:
-    """Converts an int, float, or numeric string (including negative, scientific, nan, inf) to float, or returns None."""
+    """Converts an int, float, or numeric string to float, or returns None."""
     if isinstance(val, bool) or val is None:
         return None
     if isinstance(val, (int, float)):
@@ -665,8 +722,8 @@ def _coerce_numeric(val: Any) -> Optional[float]:
             "-infinity",
         ):
             return float(s)
-        if re.match(
-            r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", s
+        if re.fullmatch(
+            r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", s
         ):
             try:
                 return float(s)
@@ -680,7 +737,7 @@ def _resolve_canonical_service(
     method_name: str = "",
     context_text: str = "",
 ) -> str:
-    """Resolves a service name, method name, or context text to a canonical Google Ads Service name."""
+    """Resolves service, method, or context text to a canonical Service name."""
     svc_clean = service_name.strip().lower()
     if svc_clean in _SERVICE_NAME_LOOKUP:
         return _SERVICE_NAME_LOOKUP[svc_clean]
@@ -707,7 +764,7 @@ def _resolve_candidate_limit_keys(
     context_text: str = "",
     limits: Optional[Dict[str, Union[int, float]]] = None,
 ) -> List[str]:
-    """Returns ordered candidate `Service.field` limit keys for an observed field."""
+    """Returns ordered candidate `Service.field` limit keys for a field."""
     f_lower = field_name.strip().lower()
     if f_lower == "action.value":
         f_lower = "value"
@@ -715,7 +772,9 @@ def _resolve_candidate_limit_keys(
         f_lower = "conversion_value"
 
     candidates: List[str] = []
-    canon_svc = _resolve_canonical_service(service_name, method_name, context_text)
+    canon_svc = _resolve_canonical_service(
+        service_name, method_name, context_text
+    )
 
     # Check ancestor payload keys for inner resource service disambiguation
     inferred_inner_svc = ""
@@ -724,7 +783,10 @@ def _resolve_candidate_limit_keys(
             inferred_inner_svc = _PARENT_KEY_TO_SERVICE[anc]
             break
 
-    if canon_svc in ("GoogleAdsService", "BatchJobService") and inferred_inner_svc:
+    if (
+        canon_svc in ("GoogleAdsService", "BatchJobService")
+        and inferred_inner_svc
+    ):
         inner_key = f"{inferred_inner_svc}.{f_lower}"
         outer_key = f"{canon_svc}.{f_lower}"
         valid_pair = [
@@ -768,13 +830,13 @@ def _extract_payload_financial_amounts(
     parent_key: str = "",
     out: Optional[List[Tuple[str, str, float]]] = None,
     limits: Optional[Dict[str, Union[int, float]]] = None,
-    _depth: int = 0,
-    _ancestors: Tuple[str, ...] = (),
+    depth: int = 0,
+    ancestors: Tuple[str, ...] = (),
 ) -> List[Tuple[str, str, float]]:
-    """Recursively extracts (limit_key, field_name, numeric_value) tuples from an RPC payload."""
+    """Extracts (limit_key, field_name, numeric_value) tuples from payload."""
     if out is None:
         out = []
-    if _depth > 12:
+    if depth > 12:
         return out
 
     svc_lower = service_name.strip().lower()
@@ -786,8 +848,7 @@ def _extract_payload_financial_amounts(
             num_val = _coerce_numeric(v)
             if num_val is not None:
                 if k_lower == "value" and not (
-                    parent_key
-                    in (
+                    parent_key in (
                         "action",
                         "conversion_value_rule",
                         "conversion_value_rule_operation",
@@ -802,7 +863,8 @@ def _extract_payload_financial_amounts(
                         k_lower,
                         service_name=service_name,
                         method_name=method_name,
-                        ancestor_keys=_ancestors + ((parent_key,) if parent_key else ()),
+                        ancestor_keys=ancestors
+                        + ((parent_key,) if parent_key else ()),
                         limits=limits,
                     )
                     display_field = (
@@ -820,8 +882,8 @@ def _extract_payload_financial_amounts(
                     parent_key=k_lower,
                     out=out,
                     limits=limits,
-                    _depth=_depth + 1,
-                    _ancestors=_ancestors + ((k_lower,) if k_lower else ()),
+                    depth=depth + 1,
+                    ancestors=ancestors + ((k_lower,) if k_lower else ()),
                 )
     elif isinstance(obj, list):
         for item in obj:
@@ -832,14 +894,14 @@ def _extract_payload_financial_amounts(
                 parent_key=parent_key,
                 out=out,
                 limits=limits,
-                _depth=_depth + 1,
-                _ancestors=_ancestors,
+                depth=depth + 1,
+                ancestors=ancestors,
             )
     return out
 
 
 def _infer_limit_key_from_context(context_text: str) -> str:
-    """Infers the primary Service.field micros limit key from an operation summary or service name."""
+    """Infers the primary Service.field micros limit key from context text."""
     lower = context_text.lower()
     if "total_amount_micros" in lower:
         return "CampaignBudgetService.total_amount_micros"
@@ -891,10 +953,21 @@ def _evaluate_observed_amount(
 ) -> Optional[Dict[str, Any]]:
     """Checks an observed amount against its Service.field limit.
 
-    - If the configured limit is 0 / 0.0 (and no positive global fallback applies),
-      the field is NOT modifiable by default (blocked for any value, including 0).
+    - If the configured limit is 0 / 0.0 (and no positive global fallback
+      applies), the field is NOT modifiable by default (blocked for any value,
+      including 0).
     - If the user supplies a value > 0, the field is modifiable and the supplied
       value is enforced as the upper limit.
+
+    Args:
+        limit_key: Canonical `Service.field` limit key.
+        field_name: Observed API field name.
+        observed_val: Observed numeric value from payload, script, or summary.
+        limits: Mapping of canonical `Service.field` keys to upper limits.
+        config_path: Path to the active `financial_limits` file, if any.
+
+    Returns:
+        Violation dictionary if the amount is disallowed, or None if allowed.
     """
     fmt, unit = _FINANCIAL_LIMIT_META.get(limit_key, ("int64", "micros"))
     effective_key = limit_key
@@ -912,7 +985,9 @@ def _evaluate_observed_amount(
         except (TypeError, ValueError):
             fb_micros = 0.0
         try:
-            fb_curr = float(limits.get("all_currency_unit_transactions", 0.0) or 0.0)
+            fb_curr = float(
+                limits.get("all_currency_unit_transactions", 0.0) or 0.0
+            )
         except (TypeError, ValueError):
             fb_curr = 0.0
         if (
@@ -949,10 +1024,11 @@ def _evaluate_observed_amount(
             obs_out = float(observed_val)
             obs_str = str(obs_out)
         msg = (
-            f"BLOCKED BY FINANCIAL UPPER LIMIT (HITL GUARD): Invalid financial value on "
-            f"'{effective_key}' (API field '{field_name}' = {obs_str} {unit}). "
-            f"NaN, Infinity, and negative financial values are prohibited "
-            f"[API format: {fmt}, monetary unit: {unit}] in {cfg_display}. Refusing to execute command."
+            "BLOCKED BY FINANCIAL UPPER LIMIT (HITL GUARD): Invalid financial "
+            f"value on '{effective_key}' (API field '{field_name}' = {obs_str} "
+            f"{unit}). NaN, Infinity, and negative financial values are "
+            f"prohibited [API format: {fmt}, monetary unit: {unit}] in "
+            f"{cfg_display}. Refusing to execute command."
         )
         return {
             "limit_key": effective_key,
@@ -972,16 +1048,21 @@ def _evaluate_observed_amount(
 
     if limit_val <= 0:
         msg = (
-            f"BLOCKED BY FINANCIAL UPPER LIMIT (HITL GUARD): Financial field "
-            f"'{effective_key}' (API field '{field_name}' = {obs_str} {unit}) is not modifiable "
-            f"by default because its value in {cfg_display} is {lim_str}. Supply a value > 0 "
-            f"for '{effective_key}' in {cfg_display} to make this field modifiable up to that "
-            f"upper limit [API format: {fmt}, monetary unit: {unit}]. Refusing to execute command."
+            "BLOCKED BY FINANCIAL UPPER LIMIT (HITL GUARD): Financial field "
+            f"'{effective_key}' (API field '{field_name}' = {obs_str} {unit}) "
+            f"is not modifiable by default because its value in {cfg_display} "
+            f"is {lim_str}. Supply a value > 0 for '{effective_key}' in "
+            f"{cfg_display} to make this field modifiable up to that upper "
+            f"limit [API format: {fmt}, monetary unit: {unit}]. Refusing to "
+            "execute command."
+        )
+        obs_formatted: Union[int, float] = (
+            int(round(observed_val)) if fmt == "int64" else float(observed_val)
         )
         return {
             "limit_key": effective_key,
             "field_name": field_name,
-            "observed_value": int(round(observed_val)) if fmt == "int64" else float(observed_val),
+            "observed_value": obs_formatted,
             "upper_limit": lim_out,
             "monetary_unit": unit,
             "api_format": fmt,
@@ -991,15 +1072,19 @@ def _evaluate_observed_amount(
 
     if observed_val > limit_val:
         msg = (
-            f"BLOCKED BY FINANCIAL UPPER LIMIT (HITL GUARD): Financial transaction on "
-            f"'{effective_key}' (API field '{field_name}' = {obs_str} {unit}) exceeds the "
-            f"configured upper limit of {lim_str} {unit} [API format: {fmt}, monetary unit: {unit}] "
+            "BLOCKED BY FINANCIAL UPPER LIMIT (HITL GUARD): Financial "
+            f"transaction on '{effective_key}' (API field '{field_name}' = "
+            f"{obs_str} {unit}) exceeds the configured upper limit of "
+            f"{lim_str} {unit} [API format: {fmt}, monetary unit: {unit}] "
             f"in {cfg_display}. Refusing to execute command."
+        )
+        obs_formatted = (
+            int(round(observed_val)) if fmt == "int64" else float(observed_val)
         )
         return {
             "limit_key": effective_key,
             "field_name": field_name,
-            "observed_value": int(round(observed_val)) if fmt == "int64" else float(observed_val),
+            "observed_value": obs_formatted,
             "upper_limit": lim_out,
             "monetary_unit": unit,
             "api_format": fmt,
@@ -1019,18 +1104,29 @@ def check_financial_transaction_limits(
     config_path: Optional[str] = None,
     receipt: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, Optional[str], List[Dict[str, Any]]]:
-    """Checks all financial amounts in RPC payloads, scripts, and state against config/financial_limits.
+    """Checks financial amounts in RPCs, scripts, and state against limits.
+
+    Args:
+        operation_summary: Summary description of the mutation operation.
+        after_state: Summary of target resource state after mutation.
+        rpc_calls: Optional list of intercepted RPC call dictionaries.
+        script_path: Optional path to the Python mutation script.
+        code_text: Optional inline Python or command text to inspect.
+        limits: Optional preloaded financial limits mapping.
+        config_path: Optional path to the active `financial_limits` file.
+        receipt: Optional dry-run receipt dictionary for fallback metadata.
 
     Returns:
-        Tuple[bool, Optional[str], List[Dict[str, Any]]]:
-            (within_limits, error_message_if_exceeded, list_of_violations)
+        Tuple of `(within_limits, error_message_if_exceeded, violations)`.
     """
     if isinstance(receipt, dict):
         if not operation_summary:
             operation_summary = str(receipt.get("operation_summary", ""))
         if not after_state:
             after_state = str(receipt.get("after_state", ""))
-        if rpc_calls is None and isinstance(receipt.get("dry_run_rpc_calls"), list):
+        if rpc_calls is None and isinstance(
+            receipt.get("dry_run_rpc_calls"), list
+        ):
             rpc_calls = receipt.get("dry_run_rpc_calls")
         if not script_path and receipt.get("script_path"):
             script_path = str(receipt.get("script_path"))
@@ -1096,7 +1192,8 @@ def check_financial_transaction_limits(
             for lk in cand_keys:
                 observations.append((lk, fld, num_val))
 
-    # 3. Inspect operation_summary and after_state text if no structured RPC/script observations were found
+    # 3. Inspect operation_summary and after_state text if no structured
+    # RPC/script observations were found.
     summary_text = f"{operation_summary}\n{after_state}"
     if summary_text.strip() and not observations:
         for match in _CODE_FINANCIAL_ASSIGN_RE.finditer(summary_text):
@@ -1163,7 +1260,8 @@ _CODE_PROHIBITED_DELETION_RE = re.compile(
     r"|\bsetattr\s*\([^,]+,\s*['\"]remove(?:_all)?['\"]"
     r"|\bstatus\s*=\s*(?:['\"]REMOVED['\"]|[A-Za-z0-9_.]*\.REMOVED\b)"
     r"|['\"]status['\"]\s*:\s*['\"]REMOVED['\"]"
-    r"|\b(?:proposal_type|proposed_proposal_type)\s*=\s*(?:['\"]REMOVE['\"]|[A-Za-z0-9_.]*\.REMOVE\b)"
+    r"|\b(?:proposal_type|proposed_proposal_type)\s*=\s*"
+    r"(?:['\"]REMOVE['\"]|[A-Za-z0-9_.]*\.REMOVE\b)"
     r"|['\"](?:proposal_type|proposed_proposal_type)['\"]\s*:\s*['\"]REMOVE['\"]"
     r")"
 )
@@ -1173,9 +1271,10 @@ _SUMMARY_PROHIBITED_DELETION_RE = re.compile(
     r"|\b(?:remove|delete)_[a-z0-9_]+\b"
     r"|\.(?:remove|remove_all|delete)\b"
     r"|\b(?:operation|op)\s*[:=]\s*['\"]?(?:remove|delete)\b"
-    r"|\b(?:remove|delete)\s+(?:campaign|ad[_\s]*group|ad|asset|criterion|criteria|keyword|"
-    r"budget|label|feed|conversion|bidding|customer|account|link|video|experiment|draft|"
-    r"user[_\s]*list|audience|extension|rule|set|target|modifier|item|resource|entity|goal)s?\b"
+    r"|\b(?:remove|delete)\s+(?:campaign|ad[_\s]*group|ad|asset|criterion|"
+    r"criteria|keyword|budget|label|feed|conversion|bidding|customer|account|"
+    r"link|video|experiment|draft|user[_\s]*list|audience|extension|rule|set|"
+    r"target|modifier|item|resource|entity|goal)s?\b"
     r")"
 )
 _AFTER_STATE_PROHIBITED_DELETION_RE = re.compile(
@@ -1193,26 +1292,32 @@ def _extract_payload_deletion_violations(
     service_name: str = "",
     method_name: str = "",
     out: Optional[List[Dict[str, Any]]] = None,
-    _depth: int = 0,
+    depth: int = 0,
 ) -> List[Dict[str, Any]]:
-    """Recursively inspects an RPC call method and payload for prohibited deletion/remove operations."""
+    """Inspects an RPC call method and payload for prohibited deletions."""
     if out is None:
         out = []
-    if _depth > 12:
+    if depth > 12:
         return out
 
     svc_prefix = f"{service_name.strip()}." if service_name.strip() else ""
     m_clean = method_name.strip()
     m_lower = m_clean.lower()
 
-    if _depth == 0 and m_lower and (
-        m_lower.startswith(_PROHIBITED_DELETION_RPC_PREFIXES)
-        or m_lower in _PROHIBITED_DELETION_RPC_METHODS
+    if (
+        depth == 0
+        and m_lower
+        and (
+            m_lower.startswith(_PROHIBITED_DELETION_RPC_PREFIXES)
+            or m_lower in _PROHIBITED_DELETION_RPC_METHODS
+        )
     ):
         msg = (
-            f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
-            f"only 'create' and 'update' operations are allowed (attempted RPC method "
-            f"'{svc_prefix}{m_clean}'). To stop delivery without deleting a resource, update its status to PAUSED."
+            "BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove "
+            "mutations are prohibited; only 'create' and 'update' operations "
+            f"are allowed (attempted RPC method '{svc_prefix}{m_clean}'). To "
+            "stop delivery without deleting a resource, update its status to "
+            "PAUSED."
         )
         out.append({
             "reason_type": "rpc_method",
@@ -1224,12 +1329,20 @@ def _extract_payload_deletion_violations(
     if isinstance(obj, dict):
         for k, v in obj.items():
             k_lower = str(k).strip().lower()
-            if k_lower in ("remove", "remove_all") and v not in (None, "", False, [], {}):
+            if k_lower in ("remove", "remove_all") and v not in (
+                None,
+                "",
+                False,
+                [],
+                {},
+            ):
                 msg = (
-                    f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
-                    f"only 'create' and 'update' operations are allowed (observed '{k_lower}' operation on "
-                    f"{v!r} in {svc_prefix}{m_clean or 'mutate'}). To stop delivery without deleting a resource, "
-                    f"update its status to PAUSED."
+                    "BLOCKED BY DELETION PROHIBITION (HITL GUARD): "
+                    "Deletion/remove mutations are prohibited; only 'create' "
+                    "and 'update' operations are allowed (observed "
+                    f"'{k_lower}' operation on {v!r} in "
+                    f"{svc_prefix}{m_clean or 'mutate'}). To stop delivery "
+                    "without deleting a resource, update its status to PAUSED."
                 )
                 out.append({
                     "reason_type": "payload_remove_operation",
@@ -1243,10 +1356,12 @@ def _extract_payload_deletion_violations(
                 and v.strip().upper() in ("REMOVED", "REMOVE")
             ):
                 msg = (
-                    f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
-                    f"only 'create' and 'update' operations are allowed (observed '{k_lower}={v.strip()}' in "
-                    f"{svc_prefix}{m_clean or 'mutate'}). To stop delivery without deleting a resource, "
-                    f"update its status to PAUSED."
+                    "BLOCKED BY DELETION PROHIBITION (HITL GUARD): "
+                    "Deletion/remove mutations are prohibited; only 'create' "
+                    "and 'update' operations are allowed (observed "
+                    f"'{k_lower}={v.strip()}' in "
+                    f"{svc_prefix}{m_clean or 'mutate'}). To stop delivery "
+                    "without deleting a resource, update its status to PAUSED."
                 )
                 out.append({
                     "reason_type": "payload_removed_status",
@@ -1260,7 +1375,7 @@ def _extract_payload_deletion_violations(
                     service_name=service_name,
                     method_name=method_name,
                     out=out,
-                    _depth=_depth + 1,
+                    depth=depth + 1,
                 )
     elif isinstance(obj, list):
         for item in obj:
@@ -1269,7 +1384,7 @@ def _extract_payload_deletion_violations(
                 service_name=service_name,
                 method_name=method_name,
                 out=out,
-                _depth=_depth + 1,
+                depth=depth + 1,
             )
     return out
 
@@ -1282,20 +1397,30 @@ def check_prohibited_deletion_mutation(
     code_text: Optional[str] = "",
     receipt: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, Optional[str], List[Dict[str, Any]]]:
-    """Checks RPC payloads, Python scripts, and operation metadata for prohibited deletion/remove operations.
+    """Checks RPC payloads, scripts, and metadata for prohibited deletions.
 
-    Only `create` and `update` mutations are allowed; deletion (`remove`) operations are strictly prohibited.
+    Only `create` and `update` mutations are allowed; deletion (`remove`)
+    operations are strictly prohibited.
+
+    Args:
+        operation_summary: Summary description of the mutation operation.
+        after_state: Summary of target resource state after mutation.
+        rpc_calls: Optional list of intercepted RPC call dictionaries.
+        script_path: Optional path to the Python mutation script.
+        code_text: Optional inline Python or command text to inspect.
+        receipt: Optional dry-run receipt dictionary for fallback metadata.
 
     Returns:
-        Tuple[bool, Optional[str], List[Dict[str, Any]]]:
-            (is_allowed, error_message_if_prohibited, list_of_violations)
+        Tuple of `(is_allowed, error_message_if_prohibited, violations)`.
     """
     if isinstance(receipt, dict):
         if not operation_summary:
             operation_summary = str(receipt.get("operation_summary", ""))
         if not after_state:
             after_state = str(receipt.get("after_state", ""))
-        if rpc_calls is None and isinstance(receipt.get("dry_run_rpc_calls"), list):
+        if rpc_calls is None and isinstance(
+            receipt.get("dry_run_rpc_calls"), list
+        ):
             rpc_calls = receipt.get("dry_run_rpc_calls")
         if not script_path and receipt.get("script_path"):
             script_path = str(receipt.get("script_path"))
@@ -1331,9 +1456,12 @@ def check_prohibited_deletion_mutation(
         for match in _CODE_PROHIBITED_DELETION_RE.finditer(uncommented):
             snippet = match.group(0).strip()
             msg = (
-                f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
-                f"only 'create' and 'update' operations are allowed (detected prohibited deletion syntax "
-                f"'{snippet}' in mutation code). To stop delivery without deleting a resource, update its status to PAUSED."
+                "BLOCKED BY DELETION PROHIBITION (HITL GUARD): "
+                "Deletion/remove mutations are prohibited; only 'create' and "
+                "'update' operations are allowed (detected prohibited "
+                f"deletion syntax '{snippet}' in mutation code). To stop "
+                "delivery without deleting a resource, update its status to "
+                "PAUSED."
             )
             violations.append({
                 "reason_type": "code_deletion_syntax",
@@ -1346,9 +1474,10 @@ def check_prohibited_deletion_mutation(
     op_clean = operation_summary.strip()
     if op_clean and _SUMMARY_PROHIBITED_DELETION_RE.search(op_clean):
         msg = (
-            f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
-            f"only 'create' and 'update' operations are allowed (operation_summary='{op_clean}'). "
-            f"To stop delivery without deleting a resource, update its status to PAUSED."
+            "BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove "
+            "mutations are prohibited; only 'create' and 'update' operations "
+            f"are allowed (operation_summary='{op_clean}'). To stop delivery "
+            "without deleting a resource, update its status to PAUSED."
         )
         violations.append({
             "reason_type": "operation_summary_deletion",
@@ -1364,9 +1493,10 @@ def check_prohibited_deletion_mutation(
         and _AFTER_STATE_PROHIBITED_DELETION_RE.search(after_clean)
     ):
         msg = (
-            f"BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove mutations are prohibited; "
-            f"only 'create' and 'update' operations are allowed (after_state='{after_clean}'). "
-            f"To stop delivery without deleting a resource, update its status to PAUSED."
+            "BLOCKED BY DELETION PROHIBITION (HITL GUARD): Deletion/remove "
+            "mutations are prohibited; only 'create' and 'update' operations "
+            f"are allowed (after_state='{after_clean}'). To stop delivery "
+            "without deleting a resource, update its status to PAUSED."
         )
         violations.append({
             "reason_type": "after_state_deletion",
@@ -1394,10 +1524,12 @@ def _find_google_ads_yaml() -> Optional[str]:
         os.path.abspath(os.path.join("config", "google-ads.yaml")),
         os.path.join(plugin_root, "config", "google-ads.yaml"),
         os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.gemini/config/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
     ]
     for path in candidates:
@@ -1410,19 +1542,17 @@ def resolve_actor_metadata(
     customer_id: str,
     receipt: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Collects non-secret actor and session identity metadata for the audit log."""
+    """Collects non-secret actor and session metadata for the audit log."""
     try:
         os_user = getpass.getuser()
-    except Exception:
+    except (KeyError, OSError, ImportError):
         os_user = (
-            os.environ.get("USER")
-            or os.environ.get("USERNAME")
-            or "unknown"
+            os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
         )
 
     try:
         hostname = socket.gethostname()
-    except Exception:
+    except OSError:
         hostname = "unknown"
 
     login_cid: Optional[str] = None
@@ -1448,7 +1578,11 @@ def resolve_actor_metadata(
                         impersonated_email = val
                     elif key == "json_key_file_path" and val:
                         auth_type = "service_account"
-                    elif key == "client_id" and val and not val.startswith("INSERT_"):
+                    elif (
+                        key == "client_id"
+                        and val
+                        and not val.startswith("INSERT_")
+                    ):
                         if auth_type == "unknown":
                             auth_type = "oauth2"
                         client_id_masked = (
@@ -1476,7 +1610,9 @@ def resolve_actor_metadata(
         "os_user": os_user,
         "hostname": hostname,
         "login_customer_id": login_cid,
-        "target_customer_id": str(customer_id or receipt_data.get("customer_id", "")).strip(),
+        "target_customer_id": (
+            str(customer_id or receipt_data.get("customer_id", "")).strip()
+        ),
         "auth_type": auth_type,
         "impersonated_email": impersonated_email,
         "client_id_masked": client_id_masked,
@@ -1487,9 +1623,9 @@ def resolve_actor_metadata(
     }
 
 
-def _serialize_rpc_object(obj: Any, _depth: int = 0) -> Any:
-    """Safely converts Protobuf messages, proto-plus objects, or Python objects into JSON-safe types."""
-    if _depth > 8:
+def _serialize_rpc_object(obj: Any, depth: int = 0) -> Any:
+    """Safely converts Protobuf, proto-plus, or Python objects to JSON types."""
+    if depth > 8:
         return str(obj)
     if isinstance(obj, enum.Enum):
         return obj.name
@@ -1502,12 +1638,12 @@ def _serialize_rpc_object(obj: Any, _depth: int = 0) -> Any:
             str(k): (
                 "[REDACTED]"
                 if str(k).lower() in _SENSITIVE_KEYS
-                else _serialize_rpc_object(v, _depth + 1)
+                else _serialize_rpc_object(v, depth + 1)
             )
             for k, v in obj.items()
         }
     if isinstance(obj, (list, tuple, set)):
-        return [_serialize_rpc_object(item, _depth + 1) for item in obj]
+        return [_serialize_rpc_object(item, depth + 1) for item in obj]
 
     # 1. proto-plus Message (type(obj).to_dict(obj))
     obj_type = type(obj)
@@ -1519,22 +1655,20 @@ def _serialize_rpc_object(obj: Any, _depth: int = 0) -> Any:
             except TypeError:
                 raw_dict = to_dict_fn(obj)
             if isinstance(raw_dict, dict):
-                return _serialize_rpc_object(raw_dict, _depth + 1)
-        except Exception:
+                return _serialize_rpc_object(raw_dict, depth + 1)
+        except (AttributeError, KeyError, TypeError, ValueError, RuntimeError):
             pass
 
     # 2. Standard google.protobuf.message.Message or wrapped _pb
     pb_candidate = getattr(obj, "_pb", obj)
-    if hasattr(pb_candidate, "DESCRIPTOR"):
+    if _MESSAGE_TO_DICT is not None and hasattr(pb_candidate, "DESCRIPTOR"):
         try:
-            from google.protobuf.json_format import MessageToDict
-
-            pb_dict = MessageToDict(
+            pb_dict = _MESSAGE_TO_DICT(
                 pb_candidate, preserving_proto_field_name=True
             )
             if isinstance(pb_dict, dict):
-                return _serialize_rpc_object(pb_dict, _depth + 1)
-        except Exception:
+                return _serialize_rpc_object(pb_dict, depth + 1)
+        except (AttributeError, KeyError, TypeError, ValueError, RuntimeError):
             pass
 
     # 3. Fallback: inspect known Google Ads request/response/error attributes
@@ -1575,14 +1709,20 @@ def _serialize_rpc_object(obj: Any, _depth: int = 0) -> Any:
                 if k.lower() in _SENSITIVE_KEYS:
                     extracted[k] = "[REDACTED]"
                 else:
-                    extracted[k] = _serialize_rpc_object(v, _depth + 1)
+                    extracted[k] = _serialize_rpc_object(v, depth + 1)
     for attr in known_attrs:
         if attr not in extracted and hasattr(obj, attr):
             try:
                 val = getattr(obj, attr)
                 if not callable(val):
-                    extracted[attr] = _serialize_rpc_object(val, _depth + 1)
-            except Exception:
+                    extracted[attr] = _serialize_rpc_object(val, depth + 1)
+            except (
+                AttributeError,
+                KeyError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+            ):
                 continue
     if extracted:
         return extracted
@@ -1598,9 +1738,13 @@ def _wrap_service_for_audit(
     enforce_request_hash: bool = False,
     dry_run_mode: bool = False,
 ) -> Any:
-    """Wraps mutation methods on a GoogleAdsClient service instance to verify SHA-256 and record payloads."""
-    should_enforce = enforce_request_hash or (expected_request_hashes is not None)
-    expected_list = list(expected_request_hashes) if expected_request_hashes else []
+    """Wraps service mutation methods to verify SHA-256 and record payloads."""
+    should_enforce = enforce_request_hash or (
+        expected_request_hashes is not None
+    )
+    expected_list = (
+        list(expected_request_hashes) if expected_request_hashes else []
+    )
 
     for attr_name in dir(service):
         if attr_name.startswith("_"):
@@ -1609,15 +1753,19 @@ def _wrap_service_for_audit(
             continue
         try:
             orig_method = getattr(service, attr_name)
-        except Exception:
+        except (AttributeError, TypeError):
             continue
-        if not callable(orig_method) or getattr(orig_method, "_is_audit_wrapped", False):
+        if not callable(orig_method) or getattr(
+            orig_method, "_is_audit_wrapped", False
+        ):
             continue
 
         def _make_wrapper(method_fn: Any, svc_name: str, m_name: str) -> Any:
             @functools.wraps(method_fn)
             def _wrapped(*args: Any, **kwargs: Any) -> Any:
-                sent_at_iso = datetime.now(timezone.utc).isoformat()
+                sent_at_iso = datetime.datetime.now(
+                    datetime.timezone.utc
+                ).isoformat()
                 t0 = time.perf_counter()
 
                 if "request" in kwargs:
@@ -1650,20 +1798,30 @@ def _wrap_service_for_audit(
                     if isinstance(req_payload, dict)
                     else None
                 )
+                kw_vo = kwargs.get("validate_only")
                 is_validate_only_true = supports_validate_only and (
-                    payload_vo is True
-                    or (payload_vo is None and kwargs.get("validate_only") is True)
+                    (isinstance(payload_vo, bool) and payload_vo)
+                    or (
+                        payload_vo is None and isinstance(kw_vo, bool) and kw_vo
+                    )
                 )
 
-                # Pre-RPC Deletion Prohibition Guard: block any deletion/remove mutation before calling the API.
+                # Pre-RPC Deletion Prohibition Guard: block any deletion/remove
+                # mutation before calling the API.
                 allowed_non_delete, delete_err, delete_violations = (
                     check_prohibited_deletion_mutation(rpc_calls=[call_record])
                 )
                 if not allowed_non_delete and delete_err:
                     err_msg = f"BLOCKED BEFORE RPC: {delete_err}"
                     call_record.update({
-                        "received_at_iso": datetime.now(timezone.utc).isoformat(),
-                        "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                        "received_at_iso": (
+                            datetime.datetime.now(
+                                datetime.timezone.utc
+                            ).isoformat()
+                        ),
+                        "duration_ms": round(
+                            (time.perf_counter() - t0) * 1000.0, 3
+                        ),
                         "status": "BLOCKED_PROHIBITED_DELETION",
                         "expected_request_sha256": None,
                         "request_sha256_verified": False,
@@ -1678,27 +1836,35 @@ def _wrap_service_for_audit(
                     captured_calls.append(call_record)
                     raise PermissionError(err_msg)
 
-                # Pre-RPC Dry-Run Guard: block any mutation call during --dry-run that lacks
-                # an explicit validate_only=True (including omitted validate_only or
-                # non-validate_only RPCs such as mutate_billing_setup, book_campaigns, apply_incentive).
+                # Pre-RPC Dry-Run Guard: block any mutation call during
+                # --dry-run that lacks an explicit validate_only=True.
                 if dry_run_mode and not is_validate_only_true:
                     if not supports_validate_only:
                         err_msg = (
-                            f"BLOCKED BEFORE RPC: {svc_name}.{m_name} does not support "
-                            f"validate_only=True dry-run requests and would execute a live "
-                            f"mutation immediately. Guard live calls behind '--execute' and "
-                            f"perform read-only preflight queries during '--dry-run'."
+                            f"BLOCKED BEFORE RPC: {svc_name}.{m_name} does not "
+                            "support validate_only=True dry-run requests and "
+                            "would execute a live mutation immediately. Guard "
+                            "live calls behind '--execute' and perform "
+                            "read-only preflight queries during '--dry-run'."
                         )
                     else:
                         err_msg = (
-                            f"BLOCKED BEFORE RPC: Dry-run intercepted mutation call to "
-                            f"{svc_name}.{m_name} without validate_only=True "
-                            f"(observed validate_only={payload_vo!r}). All mutation RPCs executed "
-                            f"during '--dry-run' MUST explicitly set validate_only=True."
+                            "BLOCKED BEFORE RPC: Dry-run intercepted mutation "
+                            f"call to {svc_name}.{m_name} without "
+                            "validate_only=True (observed "
+                            f"validate_only={payload_vo!r}). All mutation RPCs "
+                            "executed during '--dry-run' MUST explicitly set "
+                            "validate_only=True."
                         )
                     call_record.update({
-                        "received_at_iso": datetime.now(timezone.utc).isoformat(),
-                        "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                        "received_at_iso": (
+                            datetime.datetime.now(
+                                datetime.timezone.utc
+                            ).isoformat()
+                        ),
+                        "duration_ms": round(
+                            (time.perf_counter() - t0) * 1000.0, 3
+                        ),
                         "status": "BLOCKED_MISSING_VALIDATE_ONLY",
                         "expected_request_sha256": None,
                         "request_sha256_verified": False,
@@ -1712,15 +1878,22 @@ def _wrap_service_for_audit(
                     captured_calls.append(call_record)
                     raise PermissionError(err_msg)
 
-                # Pre-RPC Financial Upper Limit Guard: block any financial transaction exceeding
-                # a configured upper limit (> 0) in config/financial_limits before calling the API.
+                # Pre-RPC Financial Upper Limit Guard: block any financial
+                # transaction exceeding a configured upper limit (> 0) in
+                # config/financial_limits before calling the API.
                 within_fin_limits, fin_limit_err, fin_violations = (
                     check_financial_transaction_limits(rpc_calls=[call_record])
                 )
                 if not within_fin_limits and fin_limit_err:
                     call_record.update({
-                        "received_at_iso": datetime.now(timezone.utc).isoformat(),
-                        "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                        "received_at_iso": (
+                            datetime.datetime.now(
+                                datetime.timezone.utc
+                            ).isoformat()
+                        ),
+                        "duration_ms": round(
+                            (time.perf_counter() - t0) * 1000.0, 3
+                        ),
                         "status": "BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
                         "expected_request_sha256": None,
                         "request_sha256_verified": False,
@@ -1735,18 +1908,25 @@ def _wrap_service_for_audit(
                     captured_calls.append(call_record)
                     raise PermissionError(fin_limit_err)
 
-                # Pre-RPC Mutates Config check: block live mutations (including omitted validate_only
-                # or non-validate_only RPCs) if execute_mutates = false.
+                # Pre-RPC Mutates Config check: block live mutations if
+                # execute_mutates = false.
                 is_live_rpc = (not is_validate_only_true) or should_enforce
                 if is_live_rpc and not is_execute_mutates_enabled():
                     err_msg = (
-                        f"BLOCKED BEFORE RPC: Mutate support is disabled by configuration "
-                        f"(execute_mutates = false in config/assistant_config). Cannot execute live "
+                        "BLOCKED BEFORE RPC: Mutate support is disabled by "
+                        "configuration (execute_mutates = false in "
+                        "config/assistant_config). Cannot execute live "
                         f"mutation call to {svc_name}.{m_name}."
                     )
                     call_record.update({
-                        "received_at_iso": datetime.now(timezone.utc).isoformat(),
-                        "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                        "received_at_iso": (
+                            datetime.datetime.now(
+                                datetime.timezone.utc
+                            ).isoformat()
+                        ),
+                        "duration_ms": round(
+                            (time.perf_counter() - t0) * 1000.0, 3
+                        ),
                         "status": "BLOCKED_MUTATES_DISABLED",
                         "expected_request_sha256": None,
                         "request_sha256_verified": False,
@@ -1760,17 +1940,26 @@ def _wrap_service_for_audit(
                     captured_calls.append(call_record)
                     raise PermissionError(err_msg)
 
-                # Pre-RPC SHA-256 verification: ensure live request matches dry-run BEFORE sending
+                # Pre-RPC SHA-256 verification: ensure live request matches
+                # dry-run BEFORE sending.
                 if should_enforce:
                     if call_index >= len(expected_list):
                         err_msg = (
-                            f"BLOCKED BEFORE RPC: Unapproved mutation call #{call_index + 1} to "
-                            f"{svc_name}.{m_name} (request_sha256={req_sha256}) was not present in "
-                            f"the validate_only=True dry-run receipt (expected {len(expected_list)} call(s))."
+                            "BLOCKED BEFORE RPC: Unapproved mutation call "
+                            f"#{call_index + 1} to {svc_name}.{m_name} "
+                            f"(request_sha256={req_sha256}) was not present "
+                            "in the validate_only=True dry-run receipt "
+                            f"(expected {len(expected_list)} call(s))."
                         )
                         call_record.update({
-                            "received_at_iso": datetime.now(timezone.utc).isoformat(),
-                            "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                            "received_at_iso": (
+                                datetime.datetime.now(
+                                    datetime.timezone.utc
+                                ).isoformat()
+                            ),
+                            "duration_ms": round(
+                                (time.perf_counter() - t0) * 1000.0, 3
+                            ),
                             "status": "BLOCKED_SHA256_MISMATCH",
                             "expected_request_sha256": None,
                             "request_sha256_verified": False,
@@ -1787,13 +1976,22 @@ def _wrap_service_for_audit(
                     expected_sha = expected_list[call_index]
                     if req_sha256 != expected_sha:
                         err_msg = (
-                            f"BLOCKED BEFORE RPC: Mutate request SHA-256 mismatch on call #{call_index + 1} "
-                            f"to {svc_name}.{m_name} (expected {expected_sha} from validate_only=True dry-run, "
-                            f"got {req_sha256}). The live mutate request payload was altered after dry-run."
+                            "BLOCKED BEFORE RPC: Mutate request SHA-256 "
+                            f"mismatch on call #{call_index + 1} to "
+                            f"{svc_name}.{m_name} (expected {expected_sha} "
+                            "from validate_only=True dry-run, got "
+                            f"{req_sha256}). The live mutate request payload "
+                            "was altered after dry-run."
                         )
                         call_record.update({
-                            "received_at_iso": datetime.now(timezone.utc).isoformat(),
-                            "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                            "received_at_iso": (
+                                datetime.datetime.now(
+                                    datetime.timezone.utc
+                                ).isoformat()
+                            ),
+                            "duration_ms": round(
+                                (time.perf_counter() - t0) * 1000.0, 3
+                            ),
                             "status": "BLOCKED_SHA256_MISMATCH",
                             "expected_request_sha256": expected_sha,
                             "request_sha256_verified": False,
@@ -1815,7 +2013,9 @@ def _wrap_service_for_audit(
 
                 try:
                     response = method_fn(*args, **kwargs)
-                    received_at_iso = datetime.now(timezone.utc).isoformat()
+                    received_at_iso = datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat()
                     duration_ms = round((time.perf_counter() - t0) * 1000.0, 3)
                     resp_payload = _serialize_rpc_object(response)
                     req_id = getattr(response, "request_id", None)
@@ -1831,16 +2031,20 @@ def _wrap_service_for_audit(
                     })
                     captured_calls.append(call_record)
                     return response
-                except Exception as ex:
-                    received_at_iso = datetime.now(timezone.utc).isoformat()
+                except Exception as ex:  # pylint: disable=broad-exception-caught
+                    received_at_iso = datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat()
                     duration_ms = round((time.perf_counter() - t0) * 1000.0, 3)
                     req_id = getattr(ex, "request_id", None)
                     failure_obj = getattr(ex, "failure", None)
-                    err_payload = (
-                        _serialize_rpc_object(failure_obj)
-                        if failure_obj is not None
-                        else {"exception_type": type(ex).__name__, "message": str(ex)}
-                    )
+                    if failure_obj is not None:
+                        err_payload = _serialize_rpc_object(failure_obj)
+                    else:
+                        err_payload = {
+                            "exception_type": type(ex).__name__,
+                            "message": str(ex),
+                        }
                     call_record.update({
                         "received_at_iso": received_at_iso,
                         "duration_ms": duration_ms,
@@ -1861,7 +2065,7 @@ def _wrap_service_for_audit(
                 attr_name,
                 _make_wrapper(orig_method, service_name, attr_name),
             )
-        except Exception:
+        except (AttributeError, TypeError):
             continue
 
     return service
@@ -1872,7 +2076,7 @@ def _run_target_script_with_interception(
     script_args: List[str],
     trace_file: str,
 ) -> None:
-    """Executes the target mutation script while intercepting GoogleAdsClient service calls."""
+    """Executes target mutation script while intercepting service calls."""
     captured_calls: List[Dict[str, Any]] = []
     enforce_hash = os.environ.get(_ENFORCE_HASH_ENV_VAR, "") == "1"
     dry_run_mode = os.environ.get(_DRY_RUN_MODE_ENV_VAR, "") == "1"
@@ -1883,7 +2087,7 @@ def _run_target_script_with_interception(
             parsed = json.loads(raw_expected)
             if isinstance(parsed, list):
                 expected_hashes = [str(item) for item in parsed]
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             expected_hashes = []
 
     script_dir = os.path.dirname(os.path.abspath(script_path))
@@ -1894,18 +2098,21 @@ def _run_target_script_with_interception(
         if p and os.path.isdir(os.path.join(p, "google")):
             current_paths = getattr(sys.modules.get("google"), "__path__", [])
             if p not in current_paths:
-                for m in list(sys.modules.keys()):
+                for m in list(sys.modules):
                     if m == "google" or m.startswith("google."):
                         sys.modules.pop(m, None)
             break
 
     try:
-        from google.ads.googleads.client import GoogleAdsClient
-
-        orig_get_service = GoogleAdsClient.get_service
+        gads_client_cls: Any = importlib.import_module(
+            "google.ads.googleads.client"
+        ).GoogleAdsClient
+        orig_get_service = gads_client_cls.get_service
 
         @functools.wraps(orig_get_service)
-        def _hooked_get_service(self: Any, name: str, *args: Any, **kwargs: Any) -> Any:
+        def _hooked_get_service(
+            self: Any, name: str, *args: Any, **kwargs: Any
+        ) -> Any:
             svc = orig_get_service(self, name, *args, **kwargs)
             return _wrap_service_for_audit(
                 svc,
@@ -1916,8 +2123,8 @@ def _run_target_script_with_interception(
                 dry_run_mode=dry_run_mode,
             )
 
-        GoogleAdsClient.get_service = _hooked_get_service  # type: ignore[method-assign]
-    except Exception:
+        setattr(gads_client_cls, "get_service", _hooked_get_service)
+    except (ImportError, AttributeError, TypeError):
         pass
 
     sys.argv = [script_path, *script_args]
@@ -1938,9 +2145,13 @@ def _execute_script_subprocess(
     expected_request_hashes: Optional[List[str]] = None,
     enforce_request_hash: bool = False,
     dry_run_mode: bool = False,
-) -> Tuple[subprocess.CompletedProcess[str], str, str, float, List[Dict[str, Any]]]:
-    """Runs the mutation script in a subprocess with RPC audit interception and pre-RPC SHA-256 verification."""
-    fd, trace_path = tempfile.mkstemp(prefix="ads_mutation_trace_", suffix=".json")
+) -> Tuple[
+    subprocess.CompletedProcess[str], str, str, float, List[Dict[str, Any]]
+]:
+    """Runs mutation script in a subprocess with RPC audit interception."""
+    fd, trace_path = tempfile.mkstemp(
+        prefix="ads_mutation_trace_", suffix=".json"
+    )
     os.close(fd)
 
     env = os.environ.copy()
@@ -1949,7 +2160,9 @@ def _execute_script_subprocess(
     plugin_config_dir = os.path.join(plugin_root, "config")
     if os.path.isdir(plugin_config_dir):
         existing_pp = env.get("PYTHONPATH", "").strip()
-        pp_parts = [os.path.normpath(p) for p in existing_pp.split(os.pathsep) if p]
+        pp_parts = [
+            os.path.normpath(p) for p in existing_pp.split(os.pathsep) if p
+        ]
         if os.path.normpath(plugin_config_dir) not in pp_parts:
             env["PYTHONPATH"] = (
                 f"{existing_pp}{os.pathsep}{plugin_config_dir}"
@@ -1969,7 +2182,9 @@ def _execute_script_subprocess(
         env.pop(_DRY_RUN_MODE_ENV_VAR, None)
     if enforce_request_hash or expected_request_hashes is not None:
         env[_ENFORCE_HASH_ENV_VAR] = "1"
-        env[_EXPECTED_HASHES_ENV_VAR] = json.dumps(expected_request_hashes or [])
+        env[_EXPECTED_HASHES_ENV_VAR] = json.dumps(
+            expected_request_hashes or []
+        )
     else:
         env.pop(_ENFORCE_HASH_ENV_VAR, None)
         env.pop(_EXPECTED_HASHES_ENV_VAR, None)
@@ -1981,11 +2196,13 @@ def _execute_script_subprocess(
         script_path,
         *script_args,
     ]
-    sent_at_iso = datetime.now(timezone.utc).isoformat()
+    sent_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     t0 = time.perf_counter()
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=False, env=env
+    )
     duration_ms = round((time.perf_counter() - t0) * 1000.0, 3)
-    received_at_iso = datetime.now(timezone.utc).isoformat()
+    received_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     captured_calls: List[Dict[str, Any]] = []
     if os.path.isfile(trace_path):
@@ -1996,7 +2213,13 @@ def _execute_script_subprocess(
                     data = json.loads(raw)
                     if isinstance(data, list):
                         captured_calls = data
-        except Exception:
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ):
             pass
         finally:
             try:
@@ -2044,16 +2267,15 @@ def append_mutation_audit_log(
             )
         calls.append(c_copy)
 
-    effective_sent_at = (
-        str(calls[0].get("sent_at_iso"))
-        if calls and calls[0].get("sent_at_iso")
-        else request_sent_at_iso
-    )
-    effective_received_at = (
-        str(calls[-1].get("received_at_iso"))
-        if calls and calls[-1].get("received_at_iso")
-        else response_received_at_iso
-    )
+    if calls and calls[0].get("sent_at_iso"):
+        effective_sent_at = str(calls[0].get("sent_at_iso"))
+    else:
+        effective_sent_at = request_sent_at_iso
+
+    if calls and calls[-1].get("received_at_iso"):
+        effective_received_at = str(calls[-1].get("received_at_iso"))
+    else:
+        effective_received_at = response_received_at_iso
 
     fallback_request_payload = {
         "customer_id": str(customer_id).strip(),
@@ -2066,16 +2288,12 @@ def append_mutation_audit_log(
     }
 
     if calls:
-        request_payload: Any = (
-            calls[0].get("request_payload")
-            if len(calls) == 1
-            else [c.get("request_payload") for c in calls]
-        )
-        response_payload: Any = (
-            calls[0].get("response_payload")
-            if len(calls) == 1
-            else [c.get("response_payload") for c in calls]
-        )
+        if len(calls) == 1:
+            request_payload: Any = calls[0].get("request_payload")
+            response_payload: Any = calls[0].get("response_payload")
+        else:
+            request_payload = [c.get("request_payload") for c in calls]
+            response_payload = [c.get("response_payload") for c in calls]
     else:
         request_payload = fallback_request_payload
         response_payload = {
@@ -2112,7 +2330,9 @@ def append_mutation_audit_log(
             or aggregate_request_sha256 == expected_receipt_sha256
         )
 
-    is_financial = bool(receipt_data.get("is_financial_transaction")) or is_financial_mutation(
+    is_financial = bool(
+        receipt_data.get("is_financial_transaction")
+    ) or is_financial_mutation(
         operation_summary=operation_summary,
         before_state=before_state,
         after_state=after_state,
@@ -2136,18 +2356,23 @@ def append_mutation_audit_log(
         "BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
         "BLOCKED_PROHIBITED_DELETION",
     ):
-        error_summary = (
-            "; ".join(rpc_errors)
-            if rpc_errors
-            else (stderr.strip() or stdout.strip() or f"Process exited with code {exit_code}")
-        )
+        if rpc_errors:
+            error_summary = "; ".join(rpc_errors)
+        else:
+            error_summary = (
+                stderr.strip()
+                or stdout.strip()
+                or f"Process exited with code {exit_code}"
+            )
 
     audit_record: Dict[str, Any] = {
         "audit_id": str(uuid.uuid4()),
         "receipt_id": str(receipt_data.get("receipt_id") or uuid.uuid4()),
         "phase": phase,
         "status": status,
-        "actor": resolve_actor_metadata(customer_id=customer_id, receipt=receipt_data),
+        "actor": resolve_actor_metadata(
+            customer_id=customer_id, receipt=receipt_data
+        ),
         "request": {
             "sent_at_iso": effective_sent_at,
             "customer_id": str(customer_id).strip(),
@@ -2232,7 +2457,7 @@ def append_mutation_audit_log(
 
 
 def _remove_stale_receipts() -> None:
-    """Removes any existing dry-run receipt files when a dry-run or limit check fails."""
+    """Removes existing dry-run receipt files when a check fails."""
     for target_path in get_receipt_paths():
         if os.path.isfile(target_path):
             try:
@@ -2258,19 +2483,21 @@ def write_dry_run_receipt(
 ) -> Dict[str, Any]:
     """Writes a signed dry-run receipt to saved/data/last_dry_run.json."""
     resolved_script = os.path.abspath(script_path) if script_path else ""
-    script_hash = (
-        compute_file_sha256(resolved_script)
-        if resolved_script and os.path.isfile(resolved_script)
-        else ""
-    )
+    if resolved_script and os.path.isfile(resolved_script):
+        script_hash = compute_file_sha256(resolved_script)
+    else:
+        script_hash = ""
 
     now_ts = time.time()
-    now_iso = datetime.fromtimestamp(now_ts, tz=timezone.utc).isoformat()
+    now_iso = datetime.datetime.fromtimestamp(
+        now_ts, tz=datetime.timezone.utc
+    ).isoformat()
 
     clean_consequences = [c.strip() for c in consequences if c.strip()]
     if not clean_consequences:
         raise ValueError(
-            "At least one explicit consequence must be provided in --consequences."
+            "At least one explicit consequence must be provided in "
+            "--consequences."
         )
 
     normalized_calls: List[Dict[str, Any]] = []
@@ -2288,7 +2515,8 @@ def write_dry_run_receipt(
         request_sha256_list.append(c_sha)
         normalized_calls.append(c_copy)
 
-    # Enforce prohibition of deletion/remove mutations (only create and update are allowed)
+    # Enforce prohibition of deletion/remove mutations (only create and update
+    # are allowed).
     allowed_non_delete, delete_err, _ = check_prohibited_deletion_mutation(
         operation_summary=operation_summary,
         after_state=after_state,
@@ -2316,11 +2544,13 @@ def write_dry_run_receipt(
         after_state=after_state,
         rpc_calls=normalized_calls,
     )
-    if is_financial and not has_financial_consequence_disclosure(clean_consequences):
+    if is_financial and not has_financial_consequence_disclosure(
+        clean_consequences
+    ):
         raise ValueError(
-            "Financial mutation requires explicit monetary, currency, spend, budget, "
-            "billing, credit, or bidding impact disclosure in --consequences "
-            f"(operation: '{operation_summary.strip()}')."
+            "Financial mutation requires explicit monetary, currency, spend, "
+            "budget, billing, credit, or bidding impact disclosure in "
+            f"--consequences (operation: '{operation_summary.strip()}')."
         )
 
     fallback_req_meta = {
@@ -2351,7 +2581,7 @@ def write_dry_run_receipt(
         "reversibility": reversibility.strip().upper(),
         "script_path": resolved_script,
         "script_sha256": script_hash,
-        "script_args": [str(a) for a in (script_args or [])],
+        "script_args": [str(a) for a in script_args or []],
         "record_only": bool(record_only),
         "request_sha256": request_sha256,
         "request_sha256_list": request_sha256_list,
@@ -2382,8 +2612,11 @@ def mark_receipt_executed(
     response_received_at_iso: Optional[str] = None,
     audit_id: Optional[str] = None,
 ) -> None:
-    """Marks existing dry-run receipts as EXECUTED to prevent replay without re-verification."""
-    executed_iso = response_received_at_iso or datetime.now(timezone.utc).isoformat()
+    """Marks existing dry-run receipts as EXECUTED to prevent replay."""
+    executed_iso = (
+        response_received_at_iso
+        or datetime.datetime.now(datetime.timezone.utc).isoformat()
+    )
     for target_path in get_receipt_paths():
         if os.path.isfile(target_path):
             try:
@@ -2396,12 +2629,20 @@ def mark_receipt_executed(
                 if request_sent_at_iso:
                     data["live_request_sent_at_iso"] = request_sent_at_iso
                 if response_received_at_iso:
-                    data["live_response_received_at_iso"] = response_received_at_iso
+                    data["live_response_received_at_iso"] = (
+                        response_received_at_iso
+                    )
                 if audit_id:
                     data["audit_id"] = audit_id
                 with open(target_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
-            except Exception:
+            except (
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ):
                 continue
 
 
@@ -2409,7 +2650,7 @@ def load_and_verify_receipt(
     script_path: Optional[str] = None,
     max_age_seconds: int = DEFAULT_MAX_RECEIPT_AGE_SECONDS,
 ) -> Tuple[bool, str, Dict[str, Any]]:
-    """Verifies that a valid, un-expired validate_only=True dry-run receipt exists."""
+    """Verifies that a valid, un-expired dry-run receipt exists."""
     loaded_candidates: List[Dict[str, Any]] = []
     for candidate in get_receipt_paths():
         if os.path.isfile(candidate):
@@ -2418,7 +2659,13 @@ def load_and_verify_receipt(
                     data = json.load(f)
                 if isinstance(data, dict) and data:
                     loaded_candidates.append(data)
-            except Exception:
+            except (
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ):
                 continue
 
     receipt: Optional[Dict[str, Any]] = None
@@ -2432,8 +2679,11 @@ def load_and_verify_receipt(
     if not receipt:
         return (
             False,
-            "No validate_only=True dry-run receipt found at saved/data/last_dry_run.json. "
-            "Run with --dry-run first, disclose consequences to the user, and wait for confirmation.",
+            (
+                "No validate_only=True dry-run receipt found at"
+                " saved/data/last_dry_run.json. Run with --dry-run first,"
+                " disclose consequences to the user, and wait for confirmation."
+            ),
             {},
         )
 
@@ -2441,8 +2691,11 @@ def load_and_verify_receipt(
     if status != "DRY_RUN_PASSED":
         return (
             False,
-            f"Dry-run receipt status is '{status}' (expected 'DRY_RUN_PASSED'). "
-            "A fresh validate_only=True dry-run is required before live execution.",
+            (
+                f"Dry-run receipt status is '{status}' (expected "
+                "'DRY_RUN_PASSED'). A fresh validate_only=True dry-run is "
+                "required before live execution."
+            ),
             receipt,
         )
 
@@ -2454,15 +2707,19 @@ def load_and_verify_receipt(
     except (TypeError, ValueError):
         return (
             False,
-            "Dry-run receipt timestamp is missing or malformed. "
-            "Re-run validate_only=True dry-run and re-confirm with the user.",
+            (
+                "Dry-run receipt timestamp is missing or malformed. Re-run"
+                " validate_only=True dry-run and re-confirm with the user."
+            ),
             receipt,
         )
     if math.isnan(ts) or math.isinf(ts):
         return (
             False,
-            "Dry-run receipt timestamp is invalid (NaN/Infinity). "
-            "Re-run validate_only=True dry-run and re-confirm with the user.",
+            (
+                "Dry-run receipt timestamp is invalid (NaN/Infinity). Re-run"
+                " validate_only=True dry-run and re-confirm with the user."
+            ),
             receipt,
         )
 
@@ -2470,15 +2727,21 @@ def load_and_verify_receipt(
     if age < -5:
         return (
             False,
-            f"Dry-run receipt has an invalid future timestamp ({int(-age)}s in the future). "
-            "Re-run validate_only=True dry-run and re-confirm with the user.",
+            (
+                f"Dry-run receipt has an invalid future timestamp ({int(-age)}s"
+                " in the future). Re-run validate_only=True dry-run and"
+                " re-confirm with the user."
+            ),
             receipt,
         )
     if age > max_age_seconds:
         return (
             False,
-            f"Dry-run receipt expired ({int(age)}s old > {max_age_seconds}s limit). "
-            "Re-run validate_only=True dry-run and re-confirm with the user.",
+            (
+                f"Dry-run receipt expired ({int(age)}s old > {max_age_seconds}s"
+                " limit). Re-run validate_only=True dry-run and re-confirm"
+                " with the user."
+            ),
             receipt,
         )
 
@@ -2492,12 +2755,14 @@ def load_and_verify_receipt(
 
     dry_run_calls = receipt.get("dry_run_rpc_calls")
     effective_script = script_path or str(receipt.get("script_path", ""))
+    rpc_list = dry_run_calls if isinstance(dry_run_calls, list) else None
 
-    # Enforce prohibition of deletion/remove mutations (only create and update are allowed)
+    # Enforce prohibition of deletion/remove mutations (only create and update
+    # are allowed).
     allowed_non_delete, delete_err, _ = check_prohibited_deletion_mutation(
         operation_summary=str(receipt.get("operation_summary", "")),
         after_state=str(receipt.get("after_state", "")),
-        rpc_calls=dry_run_calls if isinstance(dry_run_calls, list) else None,
+        rpc_calls=rpc_list,
         script_path=effective_script if effective_script else None,
         receipt=receipt,
     )
@@ -2508,27 +2773,32 @@ def load_and_verify_receipt(
             receipt,
         )
 
-    is_financial = bool(receipt.get("is_financial_transaction")) or is_financial_mutation(
+    is_financial = bool(
+        receipt.get("is_financial_transaction")
+    ) or is_financial_mutation(
         operation_summary=str(receipt.get("operation_summary", "")),
         before_state=str(receipt.get("before_state", "")),
         after_state=str(receipt.get("after_state", "")),
-        rpc_calls=dry_run_calls if isinstance(dry_run_calls, list) else None,
+        rpc_calls=rpc_list,
     )
     if is_financial and not has_financial_consequence_disclosure(
         [str(c) for c in consequences]
     ):
         return (
             False,
-            "Dry-run receipt for financial mutation is missing explicit monetary, currency, "
-            "spend, budget, billing, credit, or bidding impact disclosure in consequences.",
+            (
+                "Dry-run receipt for financial mutation is missing explicit"
+                " monetary, currency, spend, budget, billing, credit, or"
+                " bidding impact disclosure in consequences."
+            ),
             receipt,
         )
 
-    # Verify financial transaction upper limits against current config/financial_limits
+    # Verify financial transaction upper limits against config/financial_limits
     within_fin_limits, fin_limit_err, _ = check_financial_transaction_limits(
         operation_summary=str(receipt.get("operation_summary", "")),
         after_state=str(receipt.get("after_state", "")),
-        rpc_calls=dry_run_calls if isinstance(dry_run_calls, list) else None,
+        rpc_calls=rpc_list,
         script_path=effective_script if effective_script else None,
     )
     if not within_fin_limits and fin_limit_err:
@@ -2546,8 +2816,11 @@ def load_and_verify_receipt(
             if actual_hash != expected_hash:
                 return (
                     False,
-                    f"Script '{script_path}' was modified after the validate_only=True dry-run "
-                    "(SHA-256 mismatch). Re-run --dry-run before executing.",
+                    (
+                        f"Script '{script_path}' was modified after the "
+                        "validate_only=True dry-run (SHA-256 mismatch). Re-run "
+                        "--dry-run before executing."
+                    ),
                     receipt,
                 )
 
@@ -2560,7 +2833,10 @@ def load_and_verify_receipt(
             if not isinstance(call, dict):
                 return (
                     False,
-                    f"Dry-run receipt RPC call #{idx + 1} is malformed. Re-run --dry-run before executing.",
+                    (
+                        f"Dry-run receipt RPC call #{idx + 1} is malformed. "
+                        "Re-run --dry-run before executing."
+                    ),
                     receipt,
                 )
             recomputed_sha = compute_mutate_request_sha256(
@@ -2572,42 +2848,59 @@ def load_and_verify_receipt(
             if call_sha and call_sha != recomputed_sha:
                 return (
                     False,
-                    f"Dry-run receipt mutate request SHA-256 mismatch on RPC call #{idx + 1} "
-                    "(dry-run request payload was tampered with). Re-run --dry-run before executing.",
+                    (
+                        "Dry-run receipt mutate request SHA-256 mismatch on"
+                        f" RPC call #{idx + 1} (dry-run request payload was"
+                        " tampered with). Re-run --dry-run before executing."
+                    ),
                     receipt,
                 )
             recomputed_list.append(recomputed_sha)
 
-        if isinstance(recorded_sha_list, list) and recorded_sha_list != recomputed_list:
+        if (
+            isinstance(recorded_sha_list, list)
+            and recorded_sha_list != recomputed_list
+        ):
             return (
                 False,
-                "Dry-run receipt request_sha256_list mismatch (SHA-256 mismatch). "
-                "Re-run --dry-run before executing.",
+                (
+                    "Dry-run receipt request_sha256_list mismatch "
+                    "(SHA-256 mismatch). Re-run --dry-run before executing."
+                ),
                 receipt,
             )
         recomputed_agg = compute_aggregate_request_sha256(recomputed_list)
         if recorded_req_sha and recorded_req_sha != recomputed_agg:
             return (
                 False,
-                "Dry-run receipt aggregate request_sha256 mismatch (SHA-256 mismatch). "
-                "Re-run --dry-run before executing.",
+                (
+                    "Dry-run receipt aggregate request_sha256 mismatch "
+                    "(SHA-256 mismatch). Re-run --dry-run before executing."
+                ),
                 receipt,
             )
     elif recorded_req_sha:
         fallback_meta = {
             "customer_id": str(receipt.get("customer_id", "")).strip(),
-            "operation_summary": str(receipt.get("operation_summary", "")).strip(),
+            "operation_summary": (
+                str(receipt.get("operation_summary", "")).strip()
+            ),
             "before_state": str(receipt.get("before_state", "")).strip(),
             "after_state": str(receipt.get("after_state", "")).strip(),
             "script_path": str(receipt.get("script_path", "")),
             "script_sha256": str(receipt.get("script_sha256", "")),
         }
-        recomputed_fallback_sha = compute_aggregate_request_sha256([], fallback_meta)
+        recomputed_fallback_sha = compute_aggregate_request_sha256(
+            [], fallback_meta
+        )
         if recorded_req_sha != recomputed_fallback_sha:
             return (
                 False,
-                "Dry-run receipt request_sha256 mismatch (receipt parameters were modified after dry-run). "
-                "Re-run --dry-run before executing.",
+                (
+                    "Dry-run receipt request_sha256 mismatch (receipt"
+                    " parameters were modified after dry-run). Re-run --dry-run"
+                    " before executing."
+                ),
                 receipt,
             )
 
@@ -2620,48 +2913,55 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
         f"  - {c}" for c in receipt.get("consequences", [])
     )
     reversibility = receipt.get("reversibility", "UNKNOWN")
-    rev_badge = (
-        "IRREVERSIBLE (PERMANENT)"
-        if "IRREVERSIBLE" in reversibility
-        else "REVERSIBLE"
-    )
-    mutates_enabled = is_execute_mutates_enabled()
-    mutates_cfg_line = (
-        "ENABLED (execute_mutates = true)"
-        if mutates_enabled
-        else "DISABLED (execute_mutates = false — set execute_mutates = true in config/assistant_config before --execute)"
-    )
+    if "IRREVERSIBLE" in reversibility:
+        rev_badge = "IRREVERSIBLE (PERMANENT)"
+    else:
+        rev_badge = "REVERSIBLE"
+
+    if is_execute_mutates_enabled():
+        mutates_cfg_line = "ENABLED (execute_mutates = true)"
+    else:
+        mutates_cfg_line = (
+            "DISABLED (execute_mutates = false — set execute_mutates = true "
+            "in config/assistant_config before --execute)"
+        )
+
     financial_line = ""
     if receipt.get("is_financial_transaction"):
         fin_limits, _ = read_financial_limits()
         has_active_cap = any(float(v or 0) > 0 for v in fin_limits.values())
-        cap_note = (
-            "; within configured upper limits in config/financial_limits"
-            if has_active_cap
-            else ""
-        )
+        if has_active_cap:
+            cap_note = (
+                "; within configured upper limits in config/financial_limits"
+            )
+        else:
+            cap_note = ""
         financial_line = (
-            f"Financial Txn : YES (explicit monetary/spend/billing impact disclosure verified{cap_note})\n"
+            "Financial Txn : YES (explicit monetary/spend/billing impact "
+            f"disclosure verified{cap_note})\n"
         )
+    ts_iso = receipt.get("timestamp_iso", "")
+    sep = "=" * 70
     return (
-        "======================================================================\n"
+        f"{sep}\n"
         "GOOGLE ADS API MUTATION & CONSEQUENCE VERIFICATION CARD\n"
-        "======================================================================\n"
+        f"{sep}\n"
         f"Customer ID   : {receipt.get('customer_id', 'Unknown')}\n"
         f"Operation     : {receipt.get('operation_summary', 'Unknown')}\n"
         f"{financial_line}"
         f"Mutates Config: {mutates_cfg_line}\n"
-        f"Dry-Run Status: PASSED (validate_only=True verified at {receipt.get('timestamp_iso', '')})\n"
+        f"Dry-Run Status: PASSED (validate_only=True verified at {ts_iso})\n"
         f"Request SHA256: {receipt.get('request_sha256', 'N/A')}\n"
         f"Before State  : {receipt.get('before_state', 'N/A')}\n"
         f"After State   : {receipt.get('after_state', 'N/A')}\n"
         f"Reversibility : {rev_badge}\n"
         "Consequences  :\n"
         f"{consequences_lines}\n"
-        "======================================================================\n"
-        "NEXT STEP: Present this card to the user and obtain explicit confirmation\n"
+        f"{sep}\n"
+        "NEXT STEP: Present this card to the user and obtain explicit "
+        "confirmation\n"
         "before running with --execute.\n"
-        "======================================================================"
+        f"{sep}"
     )
 
 
@@ -2671,11 +2971,16 @@ def main() -> None:
         target_script = sys.argv[2]
         target_args = sys.argv[3:]
         trace_file = os.environ.get(_TRACE_ENV_VAR, "")
-        _run_target_script_with_interception(target_script, target_args, trace_file)
+        _run_target_script_with_interception(
+            target_script, target_args, trace_file
+        )
         return
 
     parser = argparse.ArgumentParser(
-        description="Run Google Ads API mutations with mandatory validate_only=True dry-run, HITL consequence verification, and audit logging."
+        description=(
+            "Run Google Ads API mutations with mandatory validate_only=True "
+            "dry-run, HITL consequence verification, and audit logging."
+        )
     )
     parser.add_argument(
         "--script",
@@ -2686,12 +2991,18 @@ def main() -> None:
     mode_group.add_argument(
         "--dry-run",
         action="store_true",
-        help="Phase 1: Execute script with validate_only=True and write signed receipt.",
+        help=(
+            "Phase 1: Execute script with validate_only=True and write signed "
+            "receipt."
+        ),
     )
     mode_group.add_argument(
         "--execute",
         action="store_true",
-        help="Phase 2: Verify signed dry-run receipt and execute live mutation (validate_only=False).",
+        help=(
+            "Phase 2: Verify signed dry-run receipt and execute live mutation "
+            "(validate_only=False)."
+        ),
     )
     parser.add_argument(
         "--customer-id",
@@ -2701,7 +3012,10 @@ def main() -> None:
     parser.add_argument(
         "--operation",
         default="",
-        help="Concise summary of the service/resource operation (required for --dry-run).",
+        help=(
+            "Concise summary of the service/resource operation "
+            "(required for --dry-run)."
+        ),
     )
     parser.add_argument(
         "--before",
@@ -2716,13 +3030,19 @@ def main() -> None:
     parser.add_argument(
         "--consequences",
         default="",
-        help="Semicolon-separated list of financial, ad-serving, and structural consequences.",
+        help=(
+            "Semicolon-separated list of financial, ad-serving, and "
+            "structural consequences."
+        ),
     )
     parser.add_argument(
         "--reversibility",
         default="REVERSIBLE",
         choices=["REVERSIBLE", "IRREVERSIBLE"],
-        help="Whether the mutation can be undone (REVERSIBLE) or is permanent (IRREVERSIBLE).",
+        help=(
+            "Whether the mutation can be undone (REVERSIBLE) or is permanent "
+            "(IRREVERSIBLE)."
+        ),
     )
     parser.add_argument(
         "--script-args",
@@ -2732,26 +3052,36 @@ def main() -> None:
     parser.add_argument(
         "--record-only",
         action="store_true",
-        help="Record the dry-run receipt without invoking the subprocess (for unit tests or inline dry-runs).",
+        help=(
+            "Record the dry-run receipt without invoking the subprocess "
+            "(for unit tests or inline dry-runs)."
+        ),
     )
 
     args, unknown_args = parser.parse_known_args()
     script_path = os.path.abspath(args.script)
 
     if not os.path.isfile(script_path):
-        print(f"Error: Mutation script not found at '{script_path}'", file=sys.stderr)
+        print(
+            f"Error: Mutation script not found at '{script_path}'",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     script_sha256 = compute_file_sha256(script_path)
-    explicit_script_args_passed = (args.script_args is not None) or bool(unknown_args)
-    extra_args = (
+    explicit_script_args_passed = (args.script_args is not None) or bool(
+        unknown_args
+    )
+    parsed_script_args = (
         shlex.split(args.script_args) if args.script_args else []
-    ) + unknown_args
+    )
+    extra_args = parsed_script_args + unknown_args
 
     if args.dry_run:
         if not args.customer_id or not args.operation or not args.consequences:
             print(
-                "Error: --dry-run requires --customer-id, --operation, and --consequences.",
+                "Error: --dry-run requires --customer-id, --operation, and "
+                "--consequences.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -2767,7 +3097,7 @@ def main() -> None:
         script_args.extend(extra_args)
 
         dry_run_output = "Dry-run validated."
-        sent_at_iso = datetime.now(timezone.utc).isoformat()
+        sent_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         received_at_iso = sent_at_iso
         duration_ms = 0.0
         captured_calls: List[Dict[str, Any]] = []
@@ -2805,12 +3135,16 @@ def main() -> None:
             sys.exit(2)
 
         if not args.record_only:
-            result, sent_at_iso, received_at_iso, duration_ms, captured_calls = (
-                _execute_script_subprocess(
-                    script_path,
-                    script_args,
-                    dry_run_mode=True,
-                )
+            (
+                result,
+                sent_at_iso,
+                received_at_iso,
+                duration_ms,
+                captured_calls,
+            ) = _execute_script_subprocess(
+                script_path,
+                script_args,
+                dry_run_mode=True,
             )
             if result.returncode != 0:
                 if any(
@@ -2832,12 +3166,15 @@ def main() -> None:
                     dry_fail_status = "BLOCKED_MISSING_VALIDATE_ONLY"
                 else:
                     dry_fail_status = "DRY_RUN_FAILED"
-                effective_dry_exit = (
-                    2
-                    if dry_fail_status
-                    in ("BLOCKED_FINANCIAL_LIMIT_EXCEEDED", "BLOCKED_PROHIBITED_DELETION")
-                    else result.returncode
-                )
+
+                if dry_fail_status in (
+                    "BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
+                    "BLOCKED_PROHIBITED_DELETION",
+                ):
+                    effective_dry_exit = 2
+                else:
+                    effective_dry_exit = result.returncode
+
                 append_mutation_audit_log(
                     phase="DRY_RUN",
                     status=dry_fail_status,
@@ -2860,7 +3197,8 @@ def main() -> None:
                     rpc_calls=captured_calls,
                 )
                 print(
-                    f"validate_only=True Dry-Run FAILED (exit code {effective_dry_exit}):\n"
+                    "validate_only=True Dry-Run FAILED "
+                    f"(exit code {effective_dry_exit}):\n"
                     f"{result.stdout}\n{result.stderr}",
                     file=sys.stderr,
                 )
@@ -2873,15 +3211,16 @@ def main() -> None:
                         src_no_comments = re.sub(r"(?m)^\s*#.*$", "", sf.read())
                 except OSError:
                     src_no_comments = ""
-                called_methods = set(re.findall(r"\.([a-z_][a-z0-9_]*)\s*\(", src_no_comments))
+                called_methods = set(
+                    re.findall(r"\.([a-z_][a-z0-9_]*)\s*\(", src_no_comments)
+                )
                 vo_capable_calls = {
                     m
                     for m in called_methods
                     if (
                         m == "mutate"
                         or m.startswith("mutate_")
-                        or m
-                        in (
+                        or m in (
                             "create_customer_client",
                             "upload_click_conversions",
                             "upload_call_conversions",
@@ -2896,9 +3235,10 @@ def main() -> None:
                 )
                 if vo_capable_calls and not has_non_vo_preflight_method:
                     no_rpc_err = (
-                        "BLOCKED: Dry-run exited cleanly without executing any validate_only=True "
-                        "Google Ads API mutation RPC. Ensure the script executes its Google Ads "
-                        "mutate request with validate_only=True during --dry-run."
+                        "BLOCKED: Dry-run exited cleanly without executing any "
+                        "validate_only=True Google Ads API mutation RPC. "
+                        "Ensure the script executes its Google Ads mutate "
+                        "request with validate_only=True during --dry-run."
                     )
                     _remove_stale_receipts()
                     append_mutation_audit_log(
@@ -2942,14 +3282,14 @@ def main() -> None:
                 record_only=bool(args.record_only),
             )
         except ValueError as exc:
-            err_msg = (
-                str(exc)
-                if str(exc).startswith("BLOCKED")
-                else f"BLOCKED: {exc}"
-            )
-            if "BLOCKED BY DELETION PROHIBITION" in str(exc):
+            exc_text = str(exc)
+            if exc_text.startswith("BLOCKED"):
+                err_msg = exc_text
+            else:
+                err_msg = f"BLOCKED: {exc_text}"
+            if "BLOCKED BY DELETION PROHIBITION" in exc_text:
                 audit_status = "BLOCKED_PROHIBITED_DELETION"
-            elif "BLOCKED BY FINANCIAL UPPER LIMIT" in str(exc):
+            elif "BLOCKED BY FINANCIAL UPPER LIMIT" in exc_text:
                 audit_status = "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
             else:
                 audit_status = "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING"
@@ -3004,20 +3344,33 @@ def main() -> None:
 
     # Phase 2: --execute
     if not is_execute_mutates_enabled():
-        blocked_iso = datetime.now(timezone.utc).isoformat()
+        blocked_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         err_msg = (
             "BLOCKED: Mutate support is disabled by configuration "
-            "(execute_mutates = false in config/assistant_config). "
-            "Set 'execute_mutates = true' in config/assistant_config to enable live mutations."
+            "(execute_mutates = false in config/assistant_config). Set "
+            "'execute_mutates = true' in config/assistant_config to enable "
+            "live mutations."
         )
-        _, _, existing_receipt = load_and_verify_receipt(script_path=script_path)
-        cid_blocked = args.customer_id or str(existing_receipt.get("customer_id", ""))
-        op_blocked = str(args.operation or existing_receipt.get("operation_summary", ""))
+        _, _, existing_receipt = load_and_verify_receipt(
+            script_path=script_path
+        )
+        cid_blocked = args.customer_id or str(
+            existing_receipt.get("customer_id", "")
+        )
+        op_blocked = str(
+            args.operation or existing_receipt.get("operation_summary", "")
+        )
         before_blocked = str(existing_receipt.get("before_state", args.before))
-        after_blocked = str(existing_receipt.get("after_state", args.after or op_blocked))
-        rev_blocked = str(existing_receipt.get("reversibility", args.reversibility))
+        after_blocked = str(
+            existing_receipt.get("after_state", args.after or op_blocked)
+        )
+        rev_blocked = str(
+            existing_receipt.get("reversibility", args.reversibility)
+        )
         conseq_blocked = [
-            str(c) for c in existing_receipt.get("consequences", []) if str(c).strip()
+            str(c)
+            for c in existing_receipt.get("consequences", [])
+            if str(c).strip()
         ]
         append_mutation_audit_log(
             phase="EXECUTE",
@@ -3046,29 +3399,40 @@ def main() -> None:
 
     ok, message, receipt = load_and_verify_receipt(script_path=script_path)
     if not ok:
-        err_out = (
-            message
-            if message.startswith("BLOCKED")
-            else f"BLOCKED: {message}"
-        )
+        if message.startswith("BLOCKED"):
+            err_out = message
+        else:
+            err_out = f"BLOCKED: {message}"
         if (
             "BLOCKED BY DELETION PROHIBITION" in message
             or "BLOCKED BY FINANCIAL UPPER LIMIT" in message
         ):
-            blocked_iso = datetime.now(timezone.utc).isoformat()
-            cid_blocked = args.customer_id or str(receipt.get("customer_id", ""))
-            op_blocked = str(args.operation or receipt.get("operation_summary", ""))
+            blocked_iso = datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat()
+            cid_blocked = args.customer_id or str(
+                receipt.get("customer_id", "")
+            )
+            op_blocked = str(
+                args.operation or receipt.get("operation_summary", "")
+            )
             before_blocked = str(receipt.get("before_state", args.before))
-            after_blocked = str(receipt.get("after_state", args.after or op_blocked))
+            after_blocked = str(
+                receipt.get("after_state", args.after or op_blocked)
+            )
             rev_blocked = str(receipt.get("reversibility", args.reversibility))
             conseq_blocked = [
-                str(c) for c in receipt.get("consequences", []) if str(c).strip()
+                str(c)
+                for c in receipt.get("consequences", [])
+                if str(c).strip()
             ]
-            audit_block_status = (
-                "BLOCKED_PROHIBITED_DELETION"
-                if "BLOCKED BY DELETION PROHIBITION" in message
-                else "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
-            )
+            if "BLOCKED BY DELETION PROHIBITION" in message:
+                audit_block_status = "BLOCKED_PROHIBITED_DELETION"
+            else:
+                audit_block_status = "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+            dry_rpc_calls = receipt.get("dry_run_rpc_calls")
+            if not isinstance(dry_rpc_calls, list):
+                dry_rpc_calls = []
             append_mutation_audit_log(
                 phase="EXECUTE",
                 status=audit_block_status,
@@ -3088,20 +3452,17 @@ def main() -> None:
                 stdout="",
                 stderr=err_out,
                 command=[sys.executable, script_path, "--execute", *extra_args],
-                rpc_calls=receipt.get("dry_run_rpc_calls")
-                if isinstance(receipt.get("dry_run_rpc_calls"), list)
-                else [],
+                rpc_calls=dry_rpc_calls,
                 receipt=receipt if receipt else None,
             )
         print(err_out, file=sys.stderr)
         sys.exit(2)
 
     recorded_script_args = receipt.get("script_args")
-    receipt_extra_args = (
-        [str(a) for a in recorded_script_args]
-        if isinstance(recorded_script_args, list)
-        else []
-    )
+    if isinstance(recorded_script_args, list):
+        receipt_extra_args = [str(a) for a in recorded_script_args]
+    else:
+        receipt_extra_args = []
     if not explicit_script_args_passed and receipt_extra_args:
         extra_args = list(receipt_extra_args)
     elif (
@@ -3109,18 +3470,20 @@ def main() -> None:
         and receipt_extra_args
         and extra_args != receipt_extra_args
     ):
-        blocked_iso = datetime.now(timezone.utc).isoformat()
+        blocked_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         cid_blocked = args.customer_id or str(receipt.get("customer_id", ""))
         op_blocked = str(args.operation or receipt.get("operation_summary", ""))
         before_blocked = str(receipt.get("before_state", args.before))
-        after_blocked = str(receipt.get("after_state", args.after or op_blocked))
+        after_blocked = str(
+            receipt.get("after_state", args.after or op_blocked)
+        )
         rev_blocked = str(receipt.get("reversibility", args.reversibility))
         conseq_blocked = [
             str(c) for c in receipt.get("consequences", []) if str(c).strip()
         ]
         args_err = (
-            f"BLOCKED: --script-args on --execute ({extra_args!r}) differs from "
-            f"verified dry-run script_args ({receipt_extra_args!r}). "
+            f"BLOCKED: --script-args on --execute ({extra_args!r}) differs "
+            f"from verified dry-run script_args ({receipt_extra_args!r}). "
             "Re-run --dry-run with the updated arguments first."
         )
         append_mutation_audit_log(
@@ -3148,8 +3511,10 @@ def main() -> None:
         print(args_err, file=sys.stderr)
         sys.exit(2)
 
-    # Record exact timestamp when the user approved the mutation and execution commenced
-    user_approved_at_iso = datetime.now(timezone.utc).isoformat()
+    # Record exact timestamp when the user approved the mutation
+    user_approved_at_iso = datetime.datetime.now(
+        datetime.timezone.utc
+    ).isoformat()
 
     cid = args.customer_id or str(receipt.get("customer_id", ""))
     script_args = ["--execute"]
@@ -3162,7 +3527,8 @@ def main() -> None:
         for h in receipt.get("request_sha256_list", [])
         if str(h).strip()
     ]
-    is_record_only_receipt = receipt.get("record_only") is True
+    rec_only_val = receipt.get("record_only")
+    is_record_only_receipt = isinstance(rec_only_val, bool) and rec_only_val
     uses_non_vo_method = False
     if not expected_rpc_hashes and os.path.isfile(script_path):
         try:
@@ -3182,12 +3548,13 @@ def main() -> None:
     enforce_live_hash = bool(expected_rpc_hashes) or (
         not is_record_only_receipt and not uses_non_vo_method
     )
+    expected_hashes_arg = expected_rpc_hashes if enforce_live_hash else None
 
     result, sent_at_iso, received_at_iso, duration_ms, captured_calls = (
         _execute_script_subprocess(
             script_path,
             script_args,
-            expected_request_hashes=expected_rpc_hashes if enforce_live_hash else None,
+            expected_request_hashes=expected_hashes_arg,
             enforce_request_hash=enforce_live_hash,
         )
     )
@@ -3195,16 +3562,21 @@ def main() -> None:
     consequences_from_receipt = [
         str(c) for c in receipt.get("consequences", []) if str(c).strip()
     ]
-    operation_summary = str(args.operation or receipt.get("operation_summary", ""))
+    operation_summary = str(
+        args.operation or receipt.get("operation_summary", "")
+    )
     before_state = str(receipt.get("before_state", args.before))
-    after_state = str(receipt.get("after_state", args.after or operation_summary))
+    after_state = str(
+        receipt.get("after_state", args.after or operation_summary)
+    )
     reversibility = str(receipt.get("reversibility", args.reversibility))
 
     blocked_by_deletion = any(
         c.get("status") == "BLOCKED_PROHIBITED_DELETION" for c in captured_calls
     )
     blocked_by_fin_limit = any(
-        c.get("status") == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED" for c in captured_calls
+        c.get("status") == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+        for c in captured_calls
     )
     blocked_by_sha_mismatch = any(
         c.get("status") == "BLOCKED_SHA256_MISMATCH" for c in captured_calls
@@ -3235,16 +3607,22 @@ def main() -> None:
             failure_status = "BLOCKED_SHA256_MISMATCH"
         else:
             failure_status = "FAILED"
-        effective_exit_code = (
-            2
-            if (blocked_by_deletion or blocked_by_fin_limit)
-            else (result.returncode if result.returncode != 0 else 2)
-        )
+
+        if (
+            blocked_by_deletion
+            or blocked_by_fin_limit
+            or result.returncode == 0
+        ):
+            effective_exit_code = 2
+        else:
+            effective_exit_code = result.returncode
+
         stderr_out = result.stderr
         if missing_expected_calls and not stderr_out:
             stderr_out = (
-                f"BLOCKED: Expected {len(expected_rpc_hashes)} verified mutate RPC call(s) "
-                f"matching dry-run SHA-256 {expected_rpc_hashes}, but observed {actual_rpc_hashes}."
+                f"BLOCKED: Expected {len(expected_rpc_hashes)} verified "
+                "mutate RPC call(s) matching dry-run SHA-256 "
+                f"{expected_rpc_hashes}, but observed {actual_rpc_hashes}."
             )
         append_mutation_audit_log(
             phase="EXECUTE",
@@ -3270,7 +3648,8 @@ def main() -> None:
             user_approved_at_iso=user_approved_at_iso,
         )
         print(
-            f"Live mutation {failure_status} (exit code {effective_exit_code}):\n"
+            f"Live mutation {failure_status} "
+            f"(exit code {effective_exit_code}):\n"
             f"{result.stdout}\n{stderr_out}",
             file=sys.stderr,
         )

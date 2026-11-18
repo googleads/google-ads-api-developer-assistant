@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Helper utility to view, configure, and reset Google Ads API financial transaction upper limits by Service.field."""
+"""Helper utility to view, configure, and reset financial transaction limits."""
 
 import argparse
 import hashlib
@@ -7,126 +7,184 @@ import json
 import math
 import os
 import sys
+import tomllib
 from typing import Any, Dict, List, Optional, Tuple, Union
-
 
 FINANCIAL_LIMITS_FILENAME = "financial_limits"
 MAX_INT64 = (1 << 63) - 1  # 9223372036854775807
 
-# Field-level metadata: (api_format, monetary_unit, unit_description, default_value)
-_FIELD_UNIT_META: Dict[str, Tuple[str, str, str, Union[int, float]]] = {
+# Field-level metadata:
+# (api_format, monetary_unit, unit_description, default_value)
+FIELD_UNIT_META: Dict[str, Tuple[str, str, str, Union[int, float]]] = {
     "amount_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 100000000 = 100.00"
+        ),
         0,
     ),
     "total_amount_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 1000000000 = 1,000.00 lifetime total",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 1000000000 = 1,000.00 lifetime total"
+        ),
         0,
     ),
     "new_budget_amount_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00/day",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 100000000 = 100.00/day"
+        ),
         0,
     ),
     "new_campaign_budget_amount_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00/day",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 100000000 = 100.00/day"
+        ),
         0,
     ),
     "budget_micros_to_move": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 budget transfer",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 50000000 = 50.00 budget transfer"
+        ),
         0,
     ),
     "campaign_budget_amount_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00/day",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 100000000 = 100.00/day"
+        ),
         0,
     ),
     "cpc_bid_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 max CPC",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 10000000 = 10.00 max CPC"
+        ),
         0,
     ),
     "target_cpc_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 10000000 = 10.00 target CPC",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 10000000 = 10.00 target CPC"
+        ),
         0,
     ),
     "cpm_bid_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 CPM",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency per 1,000"
+            " impressions; e.g., 20000000 = 20.00 CPM"
+        ),
         0,
     ),
     "target_cpm_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 target CPM",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency per 1,000"
+            " impressions; e.g., 20000000 = 20.00 target CPM"
+        ),
         0,
     ),
     "fixed_cpm_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency per 1,000 impressions; e.g., 20000000 = 20.00 fixed CPM",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency per 1,000"
+            " impressions; e.g., 20000000 = 20.00 fixed CPM"
+        ),
         0,
     ),
     "cpv_bid_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 2000000 = 2.00 CPV",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 2000000 = 2.00 CPV"
+        ),
         0,
     ),
     "target_cpv_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 2000000 = 2.00 target CPV",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 2000000 = 2.00 target CPV"
+        ),
         0,
     ),
     "target_cpa_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 50000000 = 50.00 Target CPA"
+        ),
         0,
     ),
     "manual_cpa_bid_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 manual CPA",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 50000000 = 50.00 manual CPA"
+        ),
         0,
     ),
     "target_cpa_bid_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 50000000 = 50.00 Target CPA bid",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 50000000 = 50.00 Target CPA bid"
+        ),
         0,
     ),
     "cpc_bid_ceiling_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 15000000 = 15.00 CPC bid ceiling",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 15000000 = 15.00 CPC bid ceiling"
+        ),
         0,
     ),
     "cpc_bid_floor_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 15000000 = 15.00 CPC bid floor",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 15000000 = 15.00 CPC bid floor"
+        ),
         0,
     ),
     "target_spend_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of account currency; e.g., 100000000 = 100.00 target spend",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of account currency; e.g.,"
+            " 100000000 = 100.00 target spend"
+        ),
         0,
     ),
     "percent_cpc_bid_micros": (
@@ -150,73 +208,109 @@ _FIELD_UNIT_META: Dict[str, Tuple[str, str, str, Union[int, float]]] = {
     "conversion_value": (
         "double",
         "currency_units",
-        "double/float, standard currency units, NOT micros; e.g., 500.0 = 500.00 currency units",
+        (
+            "double/float, standard currency units, NOT micros; e.g., 500.0 ="
+            " 500.00 currency units"
+        ),
         0.0,
     ),
     "unit_price": (
         "double",
         "currency_units",
-        "double/float, standard currency units, NOT micros; e.g., 100.0 = 100.00 item unit price",
+        (
+            "double/float, standard currency units, NOT micros; e.g., 100.0 ="
+            " 100.00 item unit price"
+        ),
         0.0,
     ),
     "local_transaction_cost": (
         "double",
         "currency_units",
-        "double/float, standard currency units, NOT micros; e.g., 50.0 = 50.00 local transaction cost",
+        (
+            "double/float, standard currency units, NOT micros; e.g., 50.0 ="
+            " 50.00 local transaction cost"
+        ),
         0.0,
     ),
     "adjusted_value": (
         "double",
         "currency_units",
-        "double/float, standard currency units, NOT micros; e.g., 500.0 = 500.00 restated value",
+        (
+            "double/float, standard currency units, NOT micros; e.g., 500.0 ="
+            " 500.00 restated value"
+        ),
         0.0,
     ),
     "default_value": (
         "double",
         "currency_units",
-        "double/float, standard currency units, NOT micros; e.g., 100.0 = 100.00 default conversion value",
+        (
+            "double/float, standard currency units, NOT micros; e.g., 100.0 ="
+            " 100.00 default conversion value"
+        ),
         0.0,
     ),
     "value": (
         "double",
         "currency_units",
-        "for ADD/SET operations (or decimal_ratio for MULTIPLY operation) (double/float, NOT micros; e.g., 100.0)",
+        (
+            "for ADD/SET operations (or decimal_ratio for MULTIPLY operation)"
+            " (double/float, NOT micros; e.g., 100.0)"
+        ),
         0.0,
     ),
     "additional_value": (
         "double",
         "currency_units",
-        "double/float, standard currency units, NOT micros; e.g., 50.0 = 50.00 additional new-customer value",
+        (
+            "double/float, standard currency units, NOT micros; e.g., 50.0 ="
+            " 50.00 additional new-customer value"
+        ),
         0.0,
     ),
     "additional_high_lifetime_value": (
         "double",
         "currency_units",
-        "double/float, standard currency units, NOT micros; e.g., 100.0 = 100.00 additional high-LTV value",
+        (
+            "double/float, standard currency units, NOT micros; e.g., 100.0 ="
+            " 100.00 additional high-LTV value"
+        ),
         0.0,
     ),
     "transaction_amount_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of currency; e.g., 500000000 = 500.00 transaction amount",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of currency; e.g., 500000000 ="
+            " 500.00 transaction amount"
+        ),
         0,
     ),
     "lifetime_value_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of currency; e.g., 500000000 = 500.00 user lifetime value",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of currency; e.g., 500000000 ="
+            " 500.00 user lifetime value"
+        ),
         0,
     ),
     "average_purchase_value_micros": (
         "int64",
         "micros",
-        "int64, 1,000,000 micros = 1.00 unit of currency; e.g., 250000000 = 250.00 average purchase value",
+        (
+            "int64, 1,000,000 micros = 1.00 unit of currency; e.g., 250000000 ="
+            " 250.00 average purchase value"
+        ),
         0,
     ),
     "target_roas": (
         "double",
         "decimal_ratio",
-        "double/float, conversion value per 1.00 currency unit spent; e.g., 5.0 = 500% ROAS",
+        (
+            "double/float, conversion value per 1.00 currency unit spent; e.g.,"
+            " 5.0 = 500% ROAS"
+        ),
         0.0,
     ),
     "bid_modifier": (
@@ -228,66 +322,87 @@ _FIELD_UNIT_META: Dict[str, Tuple[str, str, str, Union[int, float]]] = {
     "conversion_rate_modifier": (
         "double",
         "decimal_ratio",
-        "double/float, conversion rate multiplier; e.g., 1.5 = +50% seasonality adjustment",
+        (
+            "double/float, conversion rate multiplier; e.g., 1.5 = +50%"
+            " seasonality adjustment"
+        ),
         0.0,
     ),
     "target_cpa_multiplier": (
         "double",
         "decimal_ratio",
-        "double/float, recommendation Target CPA multiplier; e.g., 1.2 = 120% of current Target CPA",
+        (
+            "double/float, recommendation Target CPA multiplier; e.g., 1.2 ="
+            " 120% of current Target CPA"
+        ),
         0.0,
     ),
     "target_roas_multiplier": (
         "double",
         "decimal_ratio",
-        "double/float, recommendation Target ROAS multiplier; e.g., 0.9 = 90% of current Target ROAS",
+        (
+            "double/float, recommendation Target ROAS multiplier; e.g., 0.9 ="
+            " 90% of current Target ROAS"
+        ),
         0.0,
     ),
     "target_multiplier": (
         "double",
         "decimal_ratio",
-        "double/float, recommendation target multiplier; e.g., 1.2 = 120% of current target",
+        (
+            "double/float, recommendation target multiplier; e.g., 1.2 = 120%"
+            " of current target"
+        ),
         0.0,
     ),
     "value_multiplier": (
         "double",
         "decimal_ratio",
-        "double/float, customer lifecycle value multiplier; e.g., 1.5 = 150% conversion value multiplier",
+        (
+            "double/float, customer lifecycle value multiplier; e.g., 1.5 ="
+            " 150% conversion value multiplier"
+        ),
         0.0,
     ),
     "high_lifetime_value_multiplier": (
         "double",
         "decimal_ratio",
-        "double/float, high-LTV customer lifecycle value multiplier; e.g., 2.0 = 200% conversion value multiplier",
+        (
+            "double/float, high-LTV customer lifecycle value multiplier; e.g.,"
+            " 2.0 = 200% conversion value multiplier"
+        ),
         0.0,
     ),
 }
 
 # Service-by-service mapping of mutable financial fields in Google Ads API v26:
-# (service_name, rpc_methods_str, [(field_name, protobuf_context_note), ...])
-_SERVICE_FIELD_DEFINITIONS: List[Tuple[str, str, List[Tuple[str, str]]]] = [
+# (service_name, rpc_methods_str, ((field_name, protobuf_context_note), ...))
+_SERVICE_FIELD_DEFINITIONS: Tuple[
+    Tuple[str, str, Tuple[Tuple[str, str], ...]], ...
+] = (
     (
         "AdGroupBidModifierService",
         "mutate_ad_group_bid_modifiers",
-        [
-            ("bid_modifier", "AdGroupBidModifier.bid_modifier"),
-        ],
+        (("bid_modifier", "AdGroupBidModifier.bid_modifier"),),
     ),
     (
         "AdGroupCriterionService",
         "mutate_ad_group_criteria",
-        [
+        (
             ("bid_modifier", "AdGroupCriterion.bid_modifier"),
             ("cpc_bid_micros", "AdGroupCriterion.cpc_bid_micros"),
             ("cpm_bid_micros", "AdGroupCriterion.cpm_bid_micros"),
             ("cpv_bid_micros", "AdGroupCriterion.cpv_bid_micros"),
-            ("percent_cpc_bid_micros", "AdGroupCriterion.percent_cpc_bid_micros"),
-        ],
+            (
+                "percent_cpc_bid_micros",
+                "AdGroupCriterion.percent_cpc_bid_micros",
+            ),
+        ),
     ),
     (
         "AdGroupService",
         "mutate_ad_groups",
-        [
+        (
             ("cpc_bid_micros", "AdGroup.cpc_bid_micros"),
             ("cpm_bid_micros", "AdGroup.cpm_bid_micros"),
             ("cpv_bid_micros", "AdGroup.cpv_bid_micros"),
@@ -298,255 +413,554 @@ _SERVICE_FIELD_DEFINITIONS: List[Tuple[str, str, List[Tuple[str, str]]]] = [
             ("target_cpm_micros", "AdGroup.target_cpm_micros"),
             ("target_cpv_micros", "AdGroup.target_cpv_micros"),
             ("target_roas", "AdGroup.target_roas"),
-        ],
+        ),
     ),
     (
         "AssetService",
         "mutate_assets",
-        [
-            ("amount_micros", "PromotionAsset.money_amount_off.amount_micros, PromotionAsset.orders_over_amount.amount_micros, PriceOffering.price.amount_micros"),
-        ],
+        (
+            (
+                "amount_micros",
+                (
+                    "PromotionAsset.money_amount_off.amount_micros, "
+                    "PromotionAsset.orders_over_amount.amount_micros, "
+                    "PriceOffering.price.amount_micros"
+                ),
+            ),
+        ),
     ),
     (
         "BatchJobService",
         "add_batch_job_operations",
-        [
-            ("amount_micros", "CampaignBudget.amount_micros, Money.amount_micros"),
-            ("bid_modifier", "AdGroupBidModifier.bid_modifier, AdGroupCriterion.bid_modifier, CampaignBidModifier.bid_modifier, CampaignCriterion.bid_modifier"),
+        (
+            (
+                "amount_micros",
+                "CampaignBudget.amount_micros, Money.amount_micros",
+            ),
+            (
+                "bid_modifier",
+                (
+                    "AdGroupBidModifier.bid_modifier, "
+                    "AdGroupCriterion.bid_modifier, "
+                    "CampaignBidModifier.bid_modifier, "
+                    "CampaignCriterion.bid_modifier"
+                ),
+            ),
             ("commission_rate_micros", "Commission.commission_rate_micros"),
-            ("conversion_rate_modifier", "BiddingSeasonalityAdjustment.conversion_rate_modifier"),
-            ("cpc_bid_ceiling_micros", "MaximizeConversions.cpc_bid_ceiling_micros, MaximizeConversionValue.cpc_bid_ceiling_micros, TargetCpa.cpc_bid_ceiling_micros, TargetRoas.cpc_bid_ceiling_micros, TargetSpend.cpc_bid_ceiling_micros, TargetImpressionShare.cpc_bid_ceiling_micros, PercentCpc.cpc_bid_ceiling_micros"),
-            ("cpc_bid_floor_micros", "MaximizeConversions.cpc_bid_floor_micros, MaximizeConversionValue.cpc_bid_floor_micros, TargetCpa.cpc_bid_floor_micros, TargetRoas.cpc_bid_floor_micros"),
-            ("cpc_bid_micros", "AdGroup.cpc_bid_micros, AdGroupCriterion.cpc_bid_micros, KeywordPlanCampaign.cpc_bid_micros, KeywordPlanAdGroup.cpc_bid_micros, KeywordPlanAdGroupKeyword.cpc_bid_micros"),
-            ("cpm_bid_micros", "AdGroup.cpm_bid_micros, AdGroupCriterion.cpm_bid_micros"),
-            ("cpv_bid_micros", "AdGroup.cpv_bid_micros, AdGroupCriterion.cpv_bid_micros"),
+            (
+                "conversion_rate_modifier",
+                "BiddingSeasonalityAdjustment.conversion_rate_modifier",
+            ),
+            (
+                "cpc_bid_ceiling_micros",
+                (
+                    "MaximizeConversions.cpc_bid_ceiling_micros, "
+                    "MaximizeConversionValue.cpc_bid_ceiling_micros, "
+                    "TargetCpa.cpc_bid_ceiling_micros, "
+                    "TargetRoas.cpc_bid_ceiling_micros, "
+                    "TargetSpend.cpc_bid_ceiling_micros, "
+                    "TargetImpressionShare.cpc_bid_ceiling_micros, "
+                    "PercentCpc.cpc_bid_ceiling_micros"
+                ),
+            ),
+            (
+                "cpc_bid_floor_micros",
+                (
+                    "MaximizeConversions.cpc_bid_floor_micros, "
+                    "MaximizeConversionValue.cpc_bid_floor_micros, "
+                    "TargetCpa.cpc_bid_floor_micros, "
+                    "TargetRoas.cpc_bid_floor_micros"
+                ),
+            ),
+            (
+                "cpc_bid_micros",
+                (
+                    "AdGroup.cpc_bid_micros, AdGroupCriterion.cpc_bid_micros, "
+                    "KeywordPlanCampaign.cpc_bid_micros, "
+                    "KeywordPlanAdGroup.cpc_bid_micros, "
+                    "KeywordPlanAdGroupKeyword.cpc_bid_micros"
+                ),
+            ),
+            (
+                "cpm_bid_micros",
+                "AdGroup.cpm_bid_micros, AdGroupCriterion.cpm_bid_micros",
+            ),
+            (
+                "cpv_bid_micros",
+                "AdGroup.cpv_bid_micros, AdGroupCriterion.cpv_bid_micros",
+            ),
             ("default_value", "ValueSettings.default_value"),
             ("fixed_cpm_micros", "AdGroup.fixed_cpm_micros"),
-            ("location_fraction_micros", "TargetImpressionShare.location_fraction_micros"),
+            (
+                "location_fraction_micros",
+                "TargetImpressionShare.location_fraction_micros",
+            ),
             ("manual_cpa_bid_micros", "CategoryBid.manual_cpa_bid_micros"),
-            ("percent_cpc_bid_micros", "AdGroup.percent_cpc_bid_micros, AdGroupCriterion.percent_cpc_bid_micros"),
+            (
+                "percent_cpc_bid_micros",
+                (
+                    "AdGroup.percent_cpc_bid_micros, "
+                    "AdGroupCriterion.percent_cpc_bid_micros"
+                ),
+            ),
             ("target_cpa_bid_micros", "CategoryBid.target_cpa_bid_micros"),
-            ("target_cpa_micros", "AdGroup.target_cpa_micros, TargetCpa.target_cpa_micros, MaximizeConversions.target_cpa_micros"),
-            ("target_cpc_micros", "AdGroup.target_cpc_micros, TargetCpc.target_cpc_micros"),
+            (
+                "target_cpa_micros",
+                (
+                    "AdGroup.target_cpa_micros, TargetCpa.target_cpa_micros, "
+                    "MaximizeConversions.target_cpa_micros"
+                ),
+            ),
+            (
+                "target_cpc_micros",
+                "AdGroup.target_cpc_micros, TargetCpc.target_cpc_micros",
+            ),
             ("target_cpm_micros", "AdGroup.target_cpm_micros"),
             ("target_cpv_micros", "AdGroup.target_cpv_micros"),
-            ("target_roas", "AdGroup.target_roas, TargetRoas.target_roas, MaximizeConversionValue.target_roas"),
+            (
+                "target_roas",
+                (
+                    "AdGroup.target_roas, TargetRoas.target_roas, "
+                    "MaximizeConversionValue.target_roas"
+                ),
+            ),
             ("target_spend_micros", "TargetSpend.target_spend_micros"),
             ("total_amount_micros", "CampaignBudget.total_amount_micros"),
             ("value", "ValueRuleAction.value"),
-        ],
+        ),
     ),
     (
         "BiddingSeasonalityAdjustmentService",
         "mutate_bidding_seasonality_adjustments",
-        [
-            ("conversion_rate_modifier", "BiddingSeasonalityAdjustment.conversion_rate_modifier"),
-        ],
+        (
+            (
+                "conversion_rate_modifier",
+                "BiddingSeasonalityAdjustment.conversion_rate_modifier",
+            ),
+        ),
     ),
     (
         "BiddingStrategyService",
         "mutate_bidding_strategies",
-        [
-            ("cpc_bid_ceiling_micros", "MaximizeConversions.cpc_bid_ceiling_micros, MaximizeConversionValue.cpc_bid_ceiling_micros, TargetCpa.cpc_bid_ceiling_micros, TargetRoas.cpc_bid_ceiling_micros, TargetSpend.cpc_bid_ceiling_micros, TargetImpressionShare.cpc_bid_ceiling_micros"),
-            ("cpc_bid_floor_micros", "MaximizeConversions.cpc_bid_floor_micros, MaximizeConversionValue.cpc_bid_floor_micros, TargetCpa.cpc_bid_floor_micros, TargetRoas.cpc_bid_floor_micros"),
-            ("location_fraction_micros", "TargetImpressionShare.location_fraction_micros"),
-            ("target_cpa_micros", "TargetCpa.target_cpa_micros, MaximizeConversions.target_cpa_micros"),
-            ("target_roas", "TargetRoas.target_roas, MaximizeConversionValue.target_roas"),
+        (
+            (
+                "cpc_bid_ceiling_micros",
+                (
+                    "MaximizeConversions.cpc_bid_ceiling_micros, "
+                    "MaximizeConversionValue.cpc_bid_ceiling_micros, "
+                    "TargetCpa.cpc_bid_ceiling_micros, "
+                    "TargetRoas.cpc_bid_ceiling_micros, "
+                    "TargetSpend.cpc_bid_ceiling_micros, "
+                    "TargetImpressionShare.cpc_bid_ceiling_micros"
+                ),
+            ),
+            (
+                "cpc_bid_floor_micros",
+                (
+                    "MaximizeConversions.cpc_bid_floor_micros, "
+                    "MaximizeConversionValue.cpc_bid_floor_micros, "
+                    "TargetCpa.cpc_bid_floor_micros, "
+                    "TargetRoas.cpc_bid_floor_micros"
+                ),
+            ),
+            (
+                "location_fraction_micros",
+                "TargetImpressionShare.location_fraction_micros",
+            ),
+            (
+                "target_cpa_micros",
+                (
+                    "TargetCpa.target_cpa_micros, "
+                    "MaximizeConversions.target_cpa_micros"
+                ),
+            ),
+            (
+                "target_roas",
+                "TargetRoas.target_roas, MaximizeConversionValue.target_roas",
+            ),
             ("target_spend_micros", "TargetSpend.target_spend_micros"),
-        ],
+        ),
     ),
     (
         "CampaignBidModifierService",
         "mutate_campaign_bid_modifiers",
-        [
-            ("bid_modifier", "CampaignBidModifier.bid_modifier"),
-        ],
+        (("bid_modifier", "CampaignBidModifier.bid_modifier"),),
     ),
     (
         "CampaignBudgetService",
         "mutate_campaign_budgets",
-        [
+        (
             ("amount_micros", "CampaignBudget.amount_micros"),
             ("total_amount_micros", "CampaignBudget.total_amount_micros"),
-        ],
+        ),
     ),
     (
         "CampaignCriterionService",
         "mutate_campaign_criteria",
-        [
-            ("bid_modifier", "CampaignCriterion.bid_modifier"),
-        ],
+        (("bid_modifier", "CampaignCriterion.bid_modifier"),),
     ),
     (
         "CampaignGoalConfigService",
         "mutate_campaign_goal_configs",
-        [
-            ("additional_high_lifetime_value", "CustomerLifecycleOptimizationValueSettings.additional_high_lifetime_value"),
-            ("additional_value", "CustomerLifecycleOptimizationValueSettings.additional_value"),
-            ("high_lifetime_value_multiplier", "CustomerLifecycleOptimizationValueSettings.high_lifetime_value_multiplier"),
-            ("value_multiplier", "CustomerLifecycleOptimizationValueSettings.value_multiplier"),
-        ],
+        (
+            (
+                "additional_high_lifetime_value",
+                "CustomerLifecycleOptimizationValueSettings.additional_high_lifetime_value",
+            ),
+            (
+                "additional_value",
+                "CustomerLifecycleOptimizationValueSettings.additional_value",
+            ),
+            (
+                "high_lifetime_value_multiplier",
+                "CustomerLifecycleOptimizationValueSettings.high_lifetime_value_multiplier",
+            ),
+            (
+                "value_multiplier",
+                "CustomerLifecycleOptimizationValueSettings.value_multiplier",
+            ),
+        ),
     ),
     (
         "CampaignService",
         "mutate_campaigns",
-        [
+        (
             ("commission_rate_micros", "Commission.commission_rate_micros"),
-            ("cpc_bid_ceiling_micros", "MaximizeConversions.cpc_bid_ceiling_micros, MaximizeConversionValue.cpc_bid_ceiling_micros, TargetCpa.cpc_bid_ceiling_micros, TargetRoas.cpc_bid_ceiling_micros, TargetSpend.cpc_bid_ceiling_micros, TargetImpressionShare.cpc_bid_ceiling_micros, PercentCpc.cpc_bid_ceiling_micros"),
-            ("cpc_bid_floor_micros", "MaximizeConversions.cpc_bid_floor_micros, MaximizeConversionValue.cpc_bid_floor_micros, TargetCpa.cpc_bid_floor_micros, TargetRoas.cpc_bid_floor_micros"),
-            ("location_fraction_micros", "TargetImpressionShare.location_fraction_micros"),
+            (
+                "cpc_bid_ceiling_micros",
+                (
+                    "MaximizeConversions.cpc_bid_ceiling_micros, "
+                    "MaximizeConversionValue.cpc_bid_ceiling_micros, "
+                    "TargetCpa.cpc_bid_ceiling_micros, "
+                    "TargetRoas.cpc_bid_ceiling_micros, "
+                    "TargetSpend.cpc_bid_ceiling_micros, "
+                    "TargetImpressionShare.cpc_bid_ceiling_micros, "
+                    "PercentCpc.cpc_bid_ceiling_micros"
+                ),
+            ),
+            (
+                "cpc_bid_floor_micros",
+                (
+                    "MaximizeConversions.cpc_bid_floor_micros, "
+                    "MaximizeConversionValue.cpc_bid_floor_micros, "
+                    "TargetCpa.cpc_bid_floor_micros, "
+                    "TargetRoas.cpc_bid_floor_micros"
+                ),
+            ),
+            (
+                "location_fraction_micros",
+                "TargetImpressionShare.location_fraction_micros",
+            ),
             ("manual_cpa_bid_micros", "CategoryBid.manual_cpa_bid_micros"),
             ("target_cpa_bid_micros", "CategoryBid.target_cpa_bid_micros"),
-            ("target_cpa_micros", "TargetCpa.target_cpa_micros, MaximizeConversions.target_cpa_micros"),
+            (
+                "target_cpa_micros",
+                (
+                    "TargetCpa.target_cpa_micros, "
+                    "MaximizeConversions.target_cpa_micros"
+                ),
+            ),
             ("target_cpc_micros", "TargetCpc.target_cpc_micros"),
-            ("target_roas", "TargetRoas.target_roas, MaximizeConversionValue.target_roas"),
+            (
+                "target_roas",
+                "TargetRoas.target_roas, MaximizeConversionValue.target_roas",
+            ),
             ("target_spend_micros", "TargetSpend.target_spend_micros"),
-        ],
+        ),
     ),
     (
         "ConversionActionService",
         "mutate_conversion_actions",
-        [
-            ("default_value", "ValueSettings.default_value"),
-        ],
+        (("default_value", "ValueSettings.default_value"),),
     ),
     (
         "ConversionAdjustmentUploadService",
         "upload_conversion_adjustments",
-        [
-            ("adjusted_value", "RestatementValue.adjusted_value"),
-        ],
+        (("adjusted_value", "RestatementValue.adjusted_value"),),
     ),
     (
         "ConversionUploadService",
         "upload_click_conversions, upload_call_conversions",
-        [
-            ("conversion_value", "ClickConversion.conversion_value, CallConversion.conversion_value"),
+        (
+            (
+                "conversion_value",
+                (
+                    "ClickConversion.conversion_value, "
+                    "CallConversion.conversion_value"
+                ),
+            ),
             ("local_transaction_cost", "CartData.local_transaction_cost"),
             ("unit_price", "CartData.Item.unit_price"),
-        ],
+        ),
     ),
     (
         "ConversionValueRuleService",
         "mutate_conversion_value_rules",
-        [
-            ("value", "ValueRuleAction.value"),
-        ],
+        (("value", "ValueRuleAction.value"),),
     ),
     (
         "GoalService",
         "mutate_goals",
-        [
-            ("additional_high_lifetime_value", "CustomerLifecycleOptimizationValueSettings.additional_high_lifetime_value"),
-            ("additional_value", "CustomerLifecycleOptimizationValueSettings.additional_value"),
-            ("high_lifetime_value_multiplier", "CustomerLifecycleOptimizationValueSettings.high_lifetime_value_multiplier"),
-            ("value_multiplier", "CustomerLifecycleOptimizationValueSettings.value_multiplier"),
-        ],
+        (
+            (
+                "additional_high_lifetime_value",
+                "CustomerLifecycleOptimizationValueSettings.additional_high_lifetime_value",
+            ),
+            (
+                "additional_value",
+                "CustomerLifecycleOptimizationValueSettings.additional_value",
+            ),
+            (
+                "high_lifetime_value_multiplier",
+                "CustomerLifecycleOptimizationValueSettings.high_lifetime_value_multiplier",
+            ),
+            (
+                "value_multiplier",
+                "CustomerLifecycleOptimizationValueSettings.value_multiplier",
+            ),
+        ),
     ),
     (
         "GoogleAdsService",
         "mutate",
-        [
-            ("amount_micros", "CampaignBudget.amount_micros, Money.amount_micros"),
-            ("bid_modifier", "AdGroupBidModifier.bid_modifier, AdGroupCriterion.bid_modifier, CampaignBidModifier.bid_modifier, CampaignCriterion.bid_modifier"),
+        (
+            (
+                "amount_micros",
+                "CampaignBudget.amount_micros, Money.amount_micros",
+            ),
+            (
+                "bid_modifier",
+                (
+                    "AdGroupBidModifier.bid_modifier, "
+                    "AdGroupCriterion.bid_modifier, "
+                    "CampaignBidModifier.bid_modifier, "
+                    "CampaignCriterion.bid_modifier"
+                ),
+            ),
             ("commission_rate_micros", "Commission.commission_rate_micros"),
-            ("conversion_rate_modifier", "BiddingSeasonalityAdjustment.conversion_rate_modifier"),
-            ("cpc_bid_ceiling_micros", "MaximizeConversions.cpc_bid_ceiling_micros, MaximizeConversionValue.cpc_bid_ceiling_micros, TargetCpa.cpc_bid_ceiling_micros, TargetRoas.cpc_bid_ceiling_micros, TargetSpend.cpc_bid_ceiling_micros, TargetImpressionShare.cpc_bid_ceiling_micros, PercentCpc.cpc_bid_ceiling_micros"),
-            ("cpc_bid_floor_micros", "MaximizeConversions.cpc_bid_floor_micros, MaximizeConversionValue.cpc_bid_floor_micros, TargetCpa.cpc_bid_floor_micros, TargetRoas.cpc_bid_floor_micros"),
-            ("cpc_bid_micros", "AdGroup.cpc_bid_micros, AdGroupCriterion.cpc_bid_micros, KeywordPlanCampaign.cpc_bid_micros, KeywordPlanAdGroup.cpc_bid_micros, KeywordPlanAdGroupKeyword.cpc_bid_micros"),
-            ("cpm_bid_micros", "AdGroup.cpm_bid_micros, AdGroupCriterion.cpm_bid_micros"),
-            ("cpv_bid_micros", "AdGroup.cpv_bid_micros, AdGroupCriterion.cpv_bid_micros"),
+            (
+                "conversion_rate_modifier",
+                "BiddingSeasonalityAdjustment.conversion_rate_modifier",
+            ),
+            (
+                "cpc_bid_ceiling_micros",
+                (
+                    "MaximizeConversions.cpc_bid_ceiling_micros, "
+                    "MaximizeConversionValue.cpc_bid_ceiling_micros, "
+                    "TargetCpa.cpc_bid_ceiling_micros, "
+                    "TargetRoas.cpc_bid_ceiling_micros, "
+                    "TargetSpend.cpc_bid_ceiling_micros, "
+                    "TargetImpressionShare.cpc_bid_ceiling_micros, "
+                    "PercentCpc.cpc_bid_ceiling_micros"
+                ),
+            ),
+            (
+                "cpc_bid_floor_micros",
+                (
+                    "MaximizeConversions.cpc_bid_floor_micros, "
+                    "MaximizeConversionValue.cpc_bid_floor_micros, "
+                    "TargetCpa.cpc_bid_floor_micros, "
+                    "TargetRoas.cpc_bid_floor_micros"
+                ),
+            ),
+            (
+                "cpc_bid_micros",
+                (
+                    "AdGroup.cpc_bid_micros, AdGroupCriterion.cpc_bid_micros, "
+                    "KeywordPlanCampaign.cpc_bid_micros, "
+                    "KeywordPlanAdGroup.cpc_bid_micros, "
+                    "KeywordPlanAdGroupKeyword.cpc_bid_micros"
+                ),
+            ),
+            (
+                "cpm_bid_micros",
+                "AdGroup.cpm_bid_micros, AdGroupCriterion.cpm_bid_micros",
+            ),
+            (
+                "cpv_bid_micros",
+                "AdGroup.cpv_bid_micros, AdGroupCriterion.cpv_bid_micros",
+            ),
             ("default_value", "ValueSettings.default_value"),
             ("fixed_cpm_micros", "AdGroup.fixed_cpm_micros"),
-            ("location_fraction_micros", "TargetImpressionShare.location_fraction_micros"),
+            (
+                "location_fraction_micros",
+                "TargetImpressionShare.location_fraction_micros",
+            ),
             ("manual_cpa_bid_micros", "CategoryBid.manual_cpa_bid_micros"),
-            ("percent_cpc_bid_micros", "AdGroup.percent_cpc_bid_micros, AdGroupCriterion.percent_cpc_bid_micros"),
+            (
+                "percent_cpc_bid_micros",
+                (
+                    "AdGroup.percent_cpc_bid_micros, "
+                    "AdGroupCriterion.percent_cpc_bid_micros"
+                ),
+            ),
             ("target_cpa_bid_micros", "CategoryBid.target_cpa_bid_micros"),
-            ("target_cpa_micros", "AdGroup.target_cpa_micros, TargetCpa.target_cpa_micros, MaximizeConversions.target_cpa_micros"),
-            ("target_cpc_micros", "AdGroup.target_cpc_micros, TargetCpc.target_cpc_micros"),
+            (
+                "target_cpa_micros",
+                (
+                    "AdGroup.target_cpa_micros, TargetCpa.target_cpa_micros, "
+                    "MaximizeConversions.target_cpa_micros"
+                ),
+            ),
+            (
+                "target_cpc_micros",
+                "AdGroup.target_cpc_micros, TargetCpc.target_cpc_micros",
+            ),
             ("target_cpm_micros", "AdGroup.target_cpm_micros"),
             ("target_cpv_micros", "AdGroup.target_cpv_micros"),
-            ("target_roas", "AdGroup.target_roas, TargetRoas.target_roas, MaximizeConversionValue.target_roas"),
+            (
+                "target_roas",
+                (
+                    "AdGroup.target_roas, TargetRoas.target_roas, "
+                    "MaximizeConversionValue.target_roas"
+                ),
+            ),
             ("target_spend_micros", "TargetSpend.target_spend_micros"),
             ("total_amount_micros", "CampaignBudget.total_amount_micros"),
             ("value", "ValueRuleAction.value"),
-        ],
+        ),
     ),
     (
         "KeywordPlanAdGroupKeywordService",
         "mutate_keyword_plan_ad_group_keywords",
-        [
-            ("cpc_bid_micros", "KeywordPlanAdGroupKeyword.cpc_bid_micros"),
-        ],
+        (("cpc_bid_micros", "KeywordPlanAdGroupKeyword.cpc_bid_micros"),),
     ),
     (
         "KeywordPlanAdGroupService",
         "mutate_keyword_plan_ad_groups",
-        [
-            ("cpc_bid_micros", "KeywordPlanAdGroup.cpc_bid_micros"),
-        ],
+        (("cpc_bid_micros", "KeywordPlanAdGroup.cpc_bid_micros"),),
     ),
     (
         "KeywordPlanCampaignService",
         "mutate_keyword_plan_campaigns",
-        [
-            ("cpc_bid_micros", "KeywordPlanCampaign.cpc_bid_micros"),
-        ],
+        (("cpc_bid_micros", "KeywordPlanCampaign.cpc_bid_micros"),),
     ),
     (
         "OfflineUserDataJobService",
         "add_offline_user_data_job_operations",
-        [
-            ("average_purchase_value_micros", "UserAttribute.average_purchase_value_micros"),
+        (
+            (
+                "average_purchase_value_micros",
+                "UserAttribute.average_purchase_value_micros",
+            ),
             ("lifetime_value_micros", "UserAttribute.lifetime_value_micros"),
-            ("transaction_amount_micros", "TransactionAttribute.transaction_amount_micros"),
-        ],
+            (
+                "transaction_amount_micros",
+                "TransactionAttribute.transaction_amount_micros",
+            ),
+        ),
     ),
     (
         "RecommendationService",
         "apply_recommendation",
-        [
-            ("amount_micros", "PromotionAsset.money_amount_off.amount_micros, PromotionAsset.orders_over_amount.amount_micros"),
-            ("budget_micros_to_move", "MoveUnusedBudgetParameters.budget_micros_to_move"),
-            ("campaign_budget_amount_micros", "ForecastingSetTargetCpaParameters.campaign_budget_amount_micros, ForecastingSetTargetRoasParameters.campaign_budget_amount_micros"),
+        (
+            (
+                "amount_micros",
+                (
+                    "PromotionAsset.money_amount_off.amount_micros, "
+                    "PromotionAsset.orders_over_amount.amount_micros"
+                ),
+            ),
+            (
+                "budget_micros_to_move",
+                "MoveUnusedBudgetParameters.budget_micros_to_move",
+            ),
+            (
+                "campaign_budget_amount_micros",
+                (
+                    "ForecastingSetTargetCpaParameters.campaign_budget_amount_micros, "
+                    "ForecastingSetTargetRoasParameters.campaign_budget_amount_micros"
+                ),
+            ),
             ("cpc_bid_micros", "KeywordParameters.cpc_bid_micros"),
-            ("new_budget_amount_micros", "CampaignBudgetParameters.new_budget_amount_micros, RaiseBudgetPerformanceTooLowParameters.new_budget_amount_micros, UseBroadMatchKeywordParameters.new_budget_amount_micros"),
-            ("new_campaign_budget_amount_micros", "TargetCpaOptInParameters.new_campaign_budget_amount_micros, TargetRoasOptInParameters.new_campaign_budget_amount_micros"),
-            ("target_cpa_micros", "TargetCpaOptInParameters.target_cpa_micros, ForecastingSetTargetCpaParameters.target_cpa_micros"),
-            ("target_cpa_multiplier", "RaiseTargetCpaParameters.target_cpa_multiplier, RaiseTargetCpaPerformanceBidTooLowParameters.target_cpa_multiplier"),
-            ("target_multiplier", "RaiseTargetCpaBidTooLowParameters.target_multiplier"),
-            ("target_roas", "TargetRoasOptInParameters.target_roas, ForecastingSetTargetRoasParameters.target_roas"),
-            ("target_roas_multiplier", "LowerTargetRoasParameters.target_roas_multiplier, LowerTargetRoasPerformanceBidTooLowParameters.target_roas_multiplier"),
-        ],
+            (
+                "new_budget_amount_micros",
+                (
+                    "CampaignBudgetParameters.new_budget_amount_micros,"
+                    " RaiseBudgetPerformanceTooLowParameters.new_budget_amount_micros,"
+                    " UseBroadMatchKeywordParameters.new_budget_amount_micros"
+                ),
+            ),
+            (
+                "new_campaign_budget_amount_micros",
+                (
+                    "TargetCpaOptInParameters.new_campaign_budget_amount_micros, "
+                    "TargetRoasOptInParameters.new_campaign_budget_amount_micros"
+                ),
+            ),
+            (
+                "target_cpa_micros",
+                (
+                    "TargetCpaOptInParameters.target_cpa_micros, "
+                    "ForecastingSetTargetCpaParameters.target_cpa_micros"
+                ),
+            ),
+            (
+                "target_cpa_multiplier",
+                (
+                    "RaiseTargetCpaParameters.target_cpa_multiplier, "
+                    "RaiseTargetCpaPerformanceBidTooLowParameters.target_cpa_multiplier"
+                ),
+            ),
+            (
+                "target_multiplier",
+                "RaiseTargetCpaBidTooLowParameters.target_multiplier",
+            ),
+            (
+                "target_roas",
+                (
+                    "TargetRoasOptInParameters.target_roas, "
+                    "ForecastingSetTargetRoasParameters.target_roas"
+                ),
+            ),
+            (
+                "target_roas_multiplier",
+                (
+                    "LowerTargetRoasParameters.target_roas_multiplier, "
+                    "LowerTargetRoasPerformanceBidTooLowParameters.target_roas_multiplier"
+                ),
+            ),
+        ),
     ),
     (
         "UserDataService",
         "upload_user_data",
-        [
-            ("average_purchase_value_micros", "UserAttribute.average_purchase_value_micros"),
+        (
+            (
+                "average_purchase_value_micros",
+                "UserAttribute.average_purchase_value_micros",
+            ),
             ("lifetime_value_micros", "UserAttribute.lifetime_value_micros"),
-            ("transaction_amount_micros", "TransactionAttribute.transaction_amount_micros"),
-        ],
+            (
+                "transaction_amount_micros",
+                "TransactionAttribute.transaction_amount_micros",
+            ),
+        ),
     ),
-]
+)
 
 
 def _build_financial_limit_specs() -> Dict[str, Dict[str, Any]]:
+    """Builds canonical Service.field financial limit specifications."""
     specs: Dict[str, Dict[str, Any]] = {
         "all_micros_transactions": {
             "category": "Global Fallback Upper Limits (Optional)",
             "service": "ALL",
             "field": "all_micros_transactions",
             "services": [
-                "All Google Ads API services using micros-denominated monetary fields"
+                "All Google Ads API services using micros-denominated monetary"
+                " fields"
             ],
             "api_fields": [
-                "Any *_micros monetary field when its Service.field limit below is set to 0"
+                "Any *_micros monetary field when its Service.field limit below"
+                " is set to 0"
             ],
             "protobuf_paths": ["*.*_micros"],
             "api_format": "int64",
             "monetary_unit": "micros",
-            "unit_description": "int64, 1,000,000 micros = 1.00 unit of account currency",
+            "unit_description": (
+                "int64, 1,000,000 micros = 1.00 unit of account currency"
+            ),
             "default": 0,
         },
         "all_currency_unit_transactions": {
@@ -554,15 +968,19 @@ def _build_financial_limit_specs() -> Dict[str, Dict[str, Any]]:
             "service": "ALL",
             "field": "all_currency_unit_transactions",
             "services": [
-                "All Google Ads API services using standard currency unit fields"
+                "All Google Ads API services using standard currency unit"
+                " fields"
             ],
             "api_fields": [
-                "Any standard currency unit field when its Service.field limit below is set to 0.0"
+                "Any standard currency unit field when its Service.field limit"
+                " below is set to 0.0"
             ],
             "protobuf_paths": ["*.*"],
             "api_format": "double",
             "monetary_unit": "currency_units",
-            "unit_description": "double/float, 1.0 = 1.00 unit of account currency, NOT micros",
+            "unit_description": (
+                "double/float, 1.0 = 1.00 unit of account currency, NOT micros"
+            ),
             "default": 0.0,
         },
     }
@@ -571,7 +989,7 @@ def _build_financial_limit_specs() -> Dict[str, Dict[str, Any]]:
         category = f"{svc_name} ({rpc_methods})"
         svc_label = f"{svc_name} ({rpc_methods})"
         for field_name, proto_note in fields:
-            fmt, unit, desc, default_val = _FIELD_UNIT_META[field_name]
+            fmt, unit, desc, default_val = FIELD_UNIT_META[field_name]
             key = f"{svc_name}.{field_name}"
             specs[key] = {
                 "category": category,
@@ -588,9 +1006,13 @@ def _build_financial_limit_specs() -> Dict[str, Dict[str, Any]]:
     return specs
 
 
-# Canonical specification of all mutable financial transaction limits keyed by `Service.field`
-# (plus the 2 global fallbacks `all_micros_transactions` and `all_currency_unit_transactions`).
-FINANCIAL_LIMIT_SPECS: Dict[str, Dict[str, Any]] = _build_financial_limit_specs()
+# Canonical specification of all mutable financial transaction limits keyed by
+# `Service.field`
+# (plus the 2 global fallbacks `all_micros_transactions` and
+# `all_currency_unit_transactions`).
+FINANCIAL_LIMIT_SPECS: Dict[str, Dict[str, Any]] = (
+    _build_financial_limit_specs()
+)
 
 # Case-insensitive lookup map for canonical `Service.field` keys
 _LOWER_TO_CANONICAL_KEY: Dict[str, str] = {}
@@ -600,15 +1022,22 @@ for _k in FINANCIAL_LIMIT_SPECS:
 
 # Primary `Service.field` key for bare field names or legacy category aliases
 LIMIT_KEY_ALIASES: Dict[str, str] = {
-    # Legacy category keys & bare field names -> primary mutable Service.field key
+    # Legacy category keys & bare field names -> primary mutable Service.field
+    # key
     "campaign_budget_amount_micros": "CampaignBudgetService.amount_micros",
     "amount_micros": "CampaignBudgetService.amount_micros",
-    "new_budget_amount_micros": "RecommendationService.new_budget_amount_micros",
-    "new_campaign_budget_amount_micros": "RecommendationService.new_campaign_budget_amount_micros",
+    "new_budget_amount_micros": (
+        "RecommendationService.new_budget_amount_micros"
+    ),
+    "new_campaign_budget_amount_micros": (
+        "RecommendationService.new_campaign_budget_amount_micros"
+    ),
     "budget_micros_to_move": "RecommendationService.budget_micros_to_move",
     "campaign_budget": "CampaignBudgetService.amount_micros",
     "campaignbudgetservice": "CampaignBudgetService.amount_micros",
-    "campaign_budget_total_amount_micros": "CampaignBudgetService.total_amount_micros",
+    "campaign_budget_total_amount_micros": (
+        "CampaignBudgetService.total_amount_micros"
+    ),
     "total_amount_micros": "CampaignBudgetService.total_amount_micros",
     "asset_price_and_promotion_amount_micros": "AssetService.amount_micros",
     "money_amount_off": "AssetService.amount_micros",
@@ -631,7 +1060,9 @@ LIMIT_KEY_ALIASES: Dict[str, str] = {
     "cpc_bid_floor_micros": "BiddingStrategyService.cpc_bid_floor_micros",
     "target_spend_micros": "BiddingStrategyService.target_spend_micros",
     "percent_cpc_bid_micros": "AdGroupService.percent_cpc_bid_micros",
-    "location_fraction_micros": "BiddingStrategyService.location_fraction_micros",
+    "location_fraction_micros": (
+        "BiddingStrategyService.location_fraction_micros"
+    ),
     "commission_rate_micros": "CampaignService.commission_rate_micros",
     "commission": "CampaignService.commission_rate_micros",
     "conversion_upload_value": "ConversionUploadService.conversion_value",
@@ -641,10 +1072,14 @@ LIMIT_KEY_ALIASES: Dict[str, str] = {
     "unit_price": "ConversionUploadService.unit_price",
     "local_transaction_cost": "ConversionUploadService.local_transaction_cost",
     "conversionuploadservice": "ConversionUploadService.conversion_value",
-    "conversion_adjustment_restatement_value": "ConversionAdjustmentUploadService.adjusted_value",
+    "conversion_adjustment_restatement_value": (
+        "ConversionAdjustmentUploadService.adjusted_value"
+    ),
     "adjusted_value": "ConversionAdjustmentUploadService.adjusted_value",
     "restatement_value": "ConversionAdjustmentUploadService.adjusted_value",
-    "conversionadjustmentuploadservice": "ConversionAdjustmentUploadService.adjusted_value",
+    "conversionadjustmentuploadservice": (
+        "ConversionAdjustmentUploadService.adjusted_value"
+    ),
     "conversion_action_default_value": "ConversionActionService.default_value",
     "default_value": "ConversionActionService.default_value",
     "conversionactionservice": "ConversionActionService.default_value",
@@ -655,31 +1090,53 @@ LIMIT_KEY_ALIASES: Dict[str, str] = {
     "conversionvalueruleservice": "ConversionValueRuleService.value",
     "lifecycle_goal_additional_value": "GoalService.additional_value",
     "additional_value": "GoalService.additional_value",
-    "additional_high_lifetime_value": "GoalService.additional_high_lifetime_value",
+    "additional_high_lifetime_value": (
+        "GoalService.additional_high_lifetime_value"
+    ),
     "goalservice": "GoalService.additional_value",
     "campaigngoalconfigservice": "CampaignGoalConfigService.additional_value",
-    "user_data_transaction_amount_micros": "UserDataService.transaction_amount_micros",
+    "user_data_transaction_amount_micros": (
+        "UserDataService.transaction_amount_micros"
+    ),
     "transaction_amount_micros": "UserDataService.transaction_amount_micros",
     "lifetime_value_micros": "UserDataService.lifetime_value_micros",
-    "average_purchase_value_micros": "UserDataService.average_purchase_value_micros",
+    "average_purchase_value_micros": (
+        "UserDataService.average_purchase_value_micros"
+    ),
     "userdataservice": "UserDataService.transaction_amount_micros",
-    "offlineuserdatajobservice": "OfflineUserDataJobService.transaction_amount_micros",
+    "offlineuserdatajobservice": (
+        "OfflineUserDataJobService.transaction_amount_micros"
+    ),
     "target_roas": "BiddingStrategyService.target_roas",
     "bid_modifier": "CampaignBidModifierService.bid_modifier",
-    "seasonality_conversion_rate_modifier": "BiddingSeasonalityAdjustmentService.conversion_rate_modifier",
-    "conversion_rate_modifier": "BiddingSeasonalityAdjustmentService.conversion_rate_modifier",
-    "biddingseasonalityadjustmentservice": "BiddingSeasonalityAdjustmentService.conversion_rate_modifier",
-    "recommendation_target_multiplier": "RecommendationService.target_cpa_multiplier",
+    "seasonality_conversion_rate_modifier": (
+        "BiddingSeasonalityAdjustmentService.conversion_rate_modifier"
+    ),
+    "conversion_rate_modifier": (
+        "BiddingSeasonalityAdjustmentService.conversion_rate_modifier"
+    ),
+    "biddingseasonalityadjustmentservice": (
+        "BiddingSeasonalityAdjustmentService.conversion_rate_modifier"
+    ),
+    "recommendation_target_multiplier": (
+        "RecommendationService.target_cpa_multiplier"
+    ),
     "target_cpa_multiplier": "RecommendationService.target_cpa_multiplier",
     "target_roas_multiplier": "RecommendationService.target_roas_multiplier",
     "target_multiplier": "RecommendationService.target_multiplier",
-    "lifecycle_goal_value_multiplier": "CampaignGoalConfigService.high_lifetime_value_multiplier",
+    "lifecycle_goal_value_multiplier": (
+        "CampaignGoalConfigService.high_lifetime_value_multiplier"
+    ),
     "value_multiplier": "CampaignGoalConfigService.value_multiplier",
-    "high_lifetime_value_multiplier": "CampaignGoalConfigService.high_lifetime_value_multiplier",
+    "high_lifetime_value_multiplier": (
+        "CampaignGoalConfigService.high_lifetime_value_multiplier"
+    ),
 }
 
-# Group expansion for legacy category aliases or bare field names so setting a group
-# alias (or `*.field`) applies across all corresponding mutable `Service.field` entries.
+# Group expansion for legacy category aliases or bare field names so setting a
+# group
+# alias (or `*.field`) applies across all corresponding mutable `Service.field`
+# entries.
 _GROUP_ALIAS_FIELDS: Dict[str, List[str]] = {
     "campaign_budget_amount_micros": [
         "CampaignBudgetService.amount_micros",
@@ -759,7 +1216,7 @@ _GROUP_ALIAS_FIELDS: Dict[str, List[str]] = {
 
 
 def resolve_limit_key(raw_key: str) -> str:
-    """Resolves a `Service.field` key, CLI flag name, or alias to its canonical key."""
+    """Resolves a Service.field key, CLI flag, or alias to its canonical key."""
     cleaned = raw_key.strip()
     if cleaned in FINANCIAL_LIMIT_SPECS:
         return cleaned
@@ -784,8 +1241,9 @@ def resolve_limit_key(raw_key: str) -> str:
 
     raise ValueError(
         f"Unknown financial transaction limit key '{raw_key}'. "
-        f"Expected 'Service.field' (e.g., CampaignBudgetService.amount_micros, AdGroupService.cpc_bid_micros) "
-        f"or global fallback ('all_micros_transactions', 'all_currency_unit_transactions')."
+        "Expected 'Service.field' (e.g., CampaignBudgetService.amount_micros, "
+        "AdGroupService.cpc_bid_micros) or global fallback "
+        "('all_micros_transactions', 'all_currency_unit_transactions')."
     )
 
 
@@ -794,8 +1252,15 @@ def resolve_limit_keys(raw_key: str) -> List[str]:
 
     - Exact `Service.field` resolves to `[Service.field]`.
     - Wildcard `*.field` resolves to all `Service.field` entries for that field.
-    - Group/field alias (e.g., `campaign_budget_amount_micros` or `cpc_bid_micros`)
-      resolves to all `Service.field` entries in that group or with that field name.
+    - Group/field alias (e.g., `campaign_budget_amount_micros` or
+      `cpc_bid_micros`) resolves to all `Service.field` entries in that group
+      or with that field name.
+
+    Args:
+        raw_key: A `Service.field` key, wildcard `*.field`, or alias string.
+
+    Returns:
+        List of matching canonical `Service.field` keys.
     """
     cleaned = raw_key.strip()
     if cleaned in FINANCIAL_LIMIT_SPECS:
@@ -806,11 +1271,12 @@ def resolve_limit_keys(raw_key: str) -> List[str]:
         return [_LOWER_TO_CANONICAL_KEY[lower]]
 
     norm = lower.replace("-", "_")
-    # Check if norm matches a specific `service_field` key (and is not a bare field or group alias)
+    # Check if norm matches a specific `service_field` key (and is not a bare
+    # field or group alias).
     if (
         norm in _LOWER_TO_CANONICAL_KEY
         and norm not in _GROUP_ALIAS_FIELDS
-        and norm not in _FIELD_UNIT_META
+        and norm not in FIELD_UNIT_META
         and norm not in LIMIT_KEY_ALIASES
     ):
         return [_LOWER_TO_CANONICAL_KEY[norm]]
@@ -828,7 +1294,7 @@ def resolve_limit_keys(raw_key: str) -> List[str]:
     if norm in _GROUP_ALIAS_FIELDS:
         return list(_GROUP_ALIAS_FIELDS[norm])
 
-    if norm in _FIELD_UNIT_META:
+    if norm in FIELD_UNIT_META:
         matched = [
             k
             for k, spec in FINANCIAL_LIMIT_SPECS.items()
@@ -842,7 +1308,7 @@ def resolve_limit_keys(raw_key: str) -> List[str]:
 
 
 def flatten_toml_limits(parsed_toml: Dict[str, Any]) -> Dict[str, Any]:
-    """Flattens nested TOML table dicts (`{Service: {field: val}}`) into `{'Service.field': val}`."""
+    """Flattens nested TOML table dicts into `'Service.field'` keys."""
     flat: Dict[str, Any] = {}
     for k, v in parsed_toml.items():
         if isinstance(v, dict):
@@ -857,7 +1323,7 @@ def flatten_toml_limits(parsed_toml: Dict[str, Any]) -> Dict[str, Any]:
 def parse_and_validate_limit_amount(
     key: str, raw_value: Union[str, int, float]
 ) -> Union[int, float]:
-    """Validates and converts a limit amount into the exact numeric format required by the API."""
+    """Validates and converts a limit amount into the required API format."""
     canonical_key = resolve_limit_key(key)
     spec = FINANCIAL_LIMIT_SPECS[canonical_key]
     api_format = spec["api_format"]
@@ -866,29 +1332,36 @@ def parse_and_validate_limit_amount(
 
     if isinstance(raw_value, bool):
         raise ValueError(
-            f"Invalid value '{raw_value}' for '{canonical_key}'. Expected {api_format} ({monetary_unit})."
+            f"Invalid value '{raw_value}' for '{canonical_key}'. "
+            f"Expected {api_format} ({monetary_unit})."
         )
 
-    if isinstance(raw_value, float) and (math.isnan(raw_value) or math.isinf(raw_value)):
+    if isinstance(raw_value, float) and (
+        math.isnan(raw_value) or math.isinf(raw_value)
+    ):
         raise ValueError(
-            f"Invalid amount '{raw_value}' for '{canonical_key}': NaN and Infinity are not allowed."
+            f"Invalid amount '{raw_value}' for '{canonical_key}': "
+            "NaN and Infinity are not allowed."
         )
 
     raw_str = str(raw_value).strip().replace(",", "").replace("_", "")
     if not raw_str:
         raise ValueError(
-            f"Empty value provided for '{canonical_key}'. Expected {api_format} ({monetary_unit})."
+            f"Empty value provided for '{canonical_key}'. "
+            f"Expected {api_format} ({monetary_unit})."
         )
 
     if api_format == "int64":
         # Reject non-integer decimal numbers for micros fields so users do not
-        # accidentally enter standard currency decimals where the API requires int64 micros.
+        # accidentally enter standard currency decimals where the API requires
+        # int64 micros.
         if isinstance(raw_value, float):
             if not raw_value.is_integer():
                 raise ValueError(
-                    f"Invalid amount '{raw_value}' for '{canonical_key}': "
-                    f"Google Ads API requires an int64 integer in '{monetary_unit}' "
-                    f"({unit_desc}). Do not pass decimal fractions for micros fields."
+                    f"Invalid amount '{raw_value}' for '{canonical_key}':"
+                    " Google Ads API requires an int64 integer in"
+                    f" '{monetary_unit}' ({unit_desc}). Do not pass decimal"
+                    " fractions for micros fields."
                 )
             val_int = int(raw_value)
         elif isinstance(raw_value, int):
@@ -896,26 +1369,29 @@ def parse_and_validate_limit_amount(
         else:
             if "." in raw_str:
                 raise ValueError(
-                    f"Invalid amount '{raw_value}' for '{canonical_key}': "
-                    f"Google Ads API requires an int64 integer in '{monetary_unit}' "
-                    f"({unit_desc}). Example: 50000000 for 50.00 currency units."
+                    f"Invalid amount '{raw_value}' for '{canonical_key}':"
+                    " Google Ads API requires an int64 integer in"
+                    f" '{monetary_unit}' ({unit_desc}). Example: 50000000 for"
+                    " 50.00 currency units."
                 )
             try:
                 val_int = int(raw_str)
             except ValueError as exc:
                 raise ValueError(
-                    f"Invalid amount '{raw_value}' for '{canonical_key}': "
-                    f"must be an int64 integer in '{monetary_unit}' ({unit_desc})."
+                    f"Invalid amount '{raw_value}' for '{canonical_key}': must"
+                    f" be an int64 integer in '{monetary_unit}' ({unit_desc})."
                 ) from exc
 
         if val_int < 0:
             raise ValueError(
-                f"Invalid amount '{val_int}' for '{canonical_key}': value must be >= 0 "
-                f"(0 = not modifiable; > 0 = modifiable up to that upper limit)."
+                f"Invalid amount '{val_int}' for '{canonical_key}': value must"
+                " be >= 0 (0 = not modifiable; > 0 = modifiable up to that"
+                " upper limit)."
             )
         if val_int > MAX_INT64:
             raise ValueError(
-                f"Invalid amount '{val_int}' for '{canonical_key}': value exceeds int64 max ({MAX_INT64})."
+                f"Invalid amount '{val_int}' for '{canonical_key}': "
+                f"value exceeds int64 max ({MAX_INT64})."
             )
         return val_int
 
@@ -924,19 +1400,21 @@ def parse_and_validate_limit_amount(
         val_float = float(raw_str)
     except ValueError as exc:
         raise ValueError(
-            f"Invalid amount '{raw_value}' for '{canonical_key}': "
-            f"must be a numeric value (double/float) in '{monetary_unit}' ({unit_desc})."
+            f"Invalid amount '{raw_value}' for '{canonical_key}': must be a"
+            f" numeric value (double/float) in '{monetary_unit}' ({unit_desc})."
         ) from exc
 
     if math.isnan(val_float) or math.isinf(val_float):
         raise ValueError(
-            f"Invalid amount '{raw_value}' for '{canonical_key}': NaN and Infinity are not allowed."
+            f"Invalid amount '{raw_value}' for '{canonical_key}': "
+            "NaN and Infinity are not allowed."
         )
 
     if val_float < 0.0:
         raise ValueError(
-            f"Invalid amount '{val_float}' for '{canonical_key}': value must be >= 0.0 "
-            f"(0.0 = not modifiable; > 0.0 = modifiable up to that upper limit)."
+            f"Invalid amount '{val_float}' for '{canonical_key}': value must be"
+            " >= 0.0 (0.0 = not modifiable; > 0.0 = modifiable up to that"
+            " upper limit)."
         )
     return val_float
 
@@ -954,14 +1432,17 @@ def get_financial_limits_paths(
         return [os.path.abspath(env_file)]
 
     if config_dir:
-        return [os.path.join(os.path.abspath(config_dir), FINANCIAL_LIMITS_FILENAME)]
+        return [
+            os.path.join(os.path.abspath(config_dir), FINANCIAL_LIMITS_FILENAME)
+        ]
 
     this_dir = os.path.dirname(os.path.abspath(__file__))
     candidates: List[str] = [
         os.path.abspath(os.path.join("config", FINANCIAL_LIMITS_FILENAME)),
     ]
 
-    # Resolve relative to either skills/execute-mutation/scripts/, config/, or repo root
+    # Resolve relative to skills/execute-mutation/scripts/, config/, or repo
+    # root
     if os.path.basename(this_dir) == "scripts":
         plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
         candidates.append(
@@ -982,10 +1463,12 @@ def get_financial_limits_paths(
 
     candidates.extend([
         os.path.expanduser(
-            f"~/.gemini/config/plugins/google-ads-api-developer-assistant/config/{FINANCIAL_LIMITS_FILENAME}"
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/"
+            f"config/{FINANCIAL_LIMITS_FILENAME}"
         ),
         os.path.expanduser(
-            f"~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/{FINANCIAL_LIMITS_FILENAME}"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            f"google-ads-api-developer-assistant/config/{FINANCIAL_LIMITS_FILENAME}"
         ),
     ])
 
@@ -1006,7 +1489,7 @@ _PARSED_LIMITS_CACHE: Dict[str, Dict[str, Union[int, float]]] = {}
 def _coerce_parsed_limit_value(
     raw_v: Any, api_format: str
 ) -> Optional[Union[int, float]]:
-    """Safely parses a raw financial_limits value, rejecting NaN, Inf, negatives, and int64 overflow."""
+    """Parses a raw limit value, rejecting NaN, Inf, negatives, and overflow."""
     if isinstance(raw_v, bool) or raw_v is None:
         return None
     if isinstance(raw_v, int):
@@ -1056,7 +1539,7 @@ def _coerce_parsed_limit_value(
 
 
 def parse_financial_limits(raw_text: str) -> Dict[str, Union[int, float]]:
-    """Parses TOML (`Service.field = value` or `[Service]`) or key=value text from config/financial_limits."""
+    """Parses TOML or key=value text from config/financial_limits."""
     if not raw_text or not raw_text.strip():
         return dict(_DEFAULT_LIMITS_TEMPLATE)
 
@@ -1069,12 +1552,10 @@ def parse_financial_limits(raw_text: str) -> Dict[str, Union[int, float]]:
 
     parsed_dict: Dict[str, Any] = {}
     try:
-        import tomllib  # type: ignore
-
         loaded = tomllib.loads(raw_text)
         if isinstance(loaded, dict):
             parsed_dict = flatten_toml_limits(loaded)
-    except Exception:
+    except (tomllib.TOMLDecodeError, TypeError, ValueError):
         pass
 
     if not parsed_dict:
@@ -1100,17 +1581,22 @@ def parse_financial_limits(raw_text: str) -> Dict[str, Union[int, float]]:
     exact_entries: List[Tuple[str, Any]] = []
     for raw_k, raw_v in parsed_dict.items():
         k_str = str(raw_k).strip()
-        if k_str in FINANCIAL_LIMIT_SPECS or k_str.lower() in _LOWER_TO_CANONICAL_KEY:
+        if (
+            k_str in FINANCIAL_LIMIT_SPECS
+            or k_str.lower() in _LOWER_TO_CANONICAL_KEY
+        ):
             exact_entries.append((k_str, raw_v))
             continue
         try:
             target_keys = resolve_limit_keys(k_str)
             for canonical_k in target_keys:
                 spec = FINANCIAL_LIMIT_SPECS[canonical_k]
-                parsed_val = _coerce_parsed_limit_value(raw_v, spec["api_format"])
+                parsed_val = _coerce_parsed_limit_value(
+                    raw_v, spec["api_format"]
+                )
                 if parsed_val is not None:
                     limits[canonical_k] = parsed_val
-        except Exception:
+        except (KeyError, OverflowError, TypeError, ValueError):
             continue
 
     for k_str, raw_v in exact_entries:
@@ -1120,7 +1606,7 @@ def parse_financial_limits(raw_text: str) -> Dict[str, Union[int, float]]:
             parsed_val = _coerce_parsed_limit_value(raw_v, spec["api_format"])
             if parsed_val is not None:
                 limits[canonical_k] = parsed_val
-        except Exception:
+        except (KeyError, OverflowError, TypeError, ValueError):
             continue
 
     if len(_PARSED_LIMITS_CACHE) >= 256:
@@ -1133,7 +1619,7 @@ def read_financial_limits(
     config_dir: Optional[str] = None,
     config_file: Optional[str] = None,
 ) -> Tuple[Dict[str, Union[int, float]], Optional[str]]:
-    """Reads the active financial_limits configuration file and returns (limits, active_path)."""
+    """Reads active financial_limits file and returns (limits, active_path)."""
     for candidate in get_financial_limits_paths(
         config_dir=config_dir, config_file=config_file
     ):
@@ -1149,33 +1635,81 @@ def read_financial_limits(
 def format_financial_limits_config(limits: Dict[str, Union[int, float]]) -> str:
     """Formats the complete config/financial_limits file keyed by Service.field."""
     lines = [
-        "# ==============================================================================",
-        "# Google Ads API Financial Transaction Upper Limits Configuration (Service.field)",
-        "# ==============================================================================",
-        "# Specify upper limits for financial transactions using `<Service>.<field>` keys.",
-        "# All values MUST be in the exact numeric format required by the Google Ads API",
-        "# call for that service and field (see the monetary unit noted for each entry).",
+        (
+            "# =============================================================================="
+        ),
+        (
+            "# Google Ads API Financial Transaction Upper Limits Configuration"
+            " (Service.field)"
+        ),
+        (
+            "# =============================================================================="
+        ),
+        (
+            "# Specify upper limits for financial transactions using"
+            " `<Service>.<field>` keys."
+        ),
+        (
+            "# All values MUST be in the exact numeric format required by the"
+            " Google Ads API"
+        ),
+        (
+            "# call for that service and field (see the monetary unit noted for"
+            " each entry)."
+        ),
         "#",
-        "# Each value is set to 0 (for int64 fields) or 0.0 (for double/float fields) so",
-        "# that financial fields are NOT modifiable by default. The user must supply a",
-        "# value greater than zero (> 0) to make a Service.field modifiable. The supplied",
+        (
+            "# Each value is set to 0 (for int64 fields) or 0.0 (for"
+            " double/float fields) so"
+        ),
+        (
+            "# that financial fields are NOT modifiable by default. The user"
+            " must supply a"
+        ),
+        (
+            "# value greater than zero (> 0) to make a Service.field"
+            " modifiable. The supplied"
+        ),
         "# value is the upper limit.",
         "#",
-        "# If any mutation attempts to modify a Service.field whose value is 0 / 0.0, or",
-        "# attempts a financial transaction exceeding the supplied upper limit (> 0), the",
-        "# mutate functions and HITL guard will return an error, inform the user at the",
+        (
+            "# If any mutation attempts to modify a Service.field whose value"
+            " is 0 / 0.0, or"
+        ),
+        (
+            "# attempts a financial transaction exceeding the supplied upper"
+            " limit (> 0), the"
+        ),
+        (
+            "# mutate functions and HITL guard will return an error, inform the"
+            " user at the"
+        ),
         "# HITL step, and refuse to execute the command.",
         "#",
         "# MONETARY & NUMERIC UNITS USED BY GOOGLE ADS API SERVICES:",
         "# 1. micros (int64):",
-        "#    1 unit of account currency = 1,000,000 micros (e.g., 50000000 = 50.00 currency units).",
+        (
+            "#    1 unit of account currency = 1,000,000 micros "
+            "(e.g., 50000000 = 50.00 currency units)."
+        ),
         "# 2. currency_units (double / float):",
-        "#    Standard account/conversion currency units (NOT micros; e.g., 100.50 = 100.50 currency units).",
+        (
+            "#    Standard account/conversion currency units "
+            "(NOT micros; e.g., 100.50 = 100.50 currency units)."
+        ),
         "# 3. decimal_ratio (double / float):",
-        "#    Decimal ratio or multiplier (e.g., 2.5 = 250% Target ROAS; 1.5 = +50% bid modifier).",
+        (
+            "#    Decimal ratio or multiplier "
+            "(e.g., 2.5 = 250% Target ROAS; 1.5 = +50% bid modifier)."
+        ),
         "# 4. micros_proportion (int64):",
-        "#    Proportion in micros where 1,000,000 = 100% (e.g., 200000 = 20% Percent CPC or commission).",
-        "# ==============================================================================",
+        (
+            "#    Proportion in micros where 1,000,000 = 100% "
+            "(e.g., 200000 = 20% Percent CPC or commission)."
+        ),
+        (
+            "# =============================================================================="
+        ),
         "",
     ]
 
@@ -1226,7 +1760,7 @@ def write_financial_limits(
     config_file: Optional[str] = None,
     sync_global: bool = True,
 ) -> str:
-    """Writes updated financial limits to config/financial_limits and returns the primary path."""
+    """Writes updated financial limits and returns the primary file path."""
     validated_updates: Dict[str, Union[int, float]] = {}
     for raw_k, raw_v in updates.items():
         for canonical_k in resolve_limit_keys(raw_k):
@@ -1246,19 +1780,25 @@ def write_financial_limits(
             os.path.join(os.path.abspath(config_dir), FINANCIAL_LIMITS_FILENAME)
         )
     else:
-        env_file = os.environ.get("GOOGLE_ADS_FINANCIAL_LIMITS_FILE", "").strip()
+        env_file = os.environ.get(
+            "GOOGLE_ADS_FINANCIAL_LIMITS_FILE", ""
+        ).strip()
         if env_file:
             target_paths.append(os.path.abspath(env_file))
         else:
             this_dir = os.path.dirname(os.path.abspath(__file__))
             if os.path.basename(this_dir) == "scripts":
-                plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
+                plugin_root = os.path.abspath(
+                    os.path.join(this_dir, "../../..")
+                )
                 repo_cfg_path = os.path.join(
                     plugin_root, "config", FINANCIAL_LIMITS_FILENAME
                 )
             elif os.path.basename(this_dir) == "config":
                 plugin_root = os.path.dirname(this_dir)
-                repo_cfg_path = os.path.join(this_dir, FINANCIAL_LIMITS_FILENAME)
+                repo_cfg_path = os.path.join(
+                    this_dir, FINANCIAL_LIMITS_FILENAME
+                )
             else:
                 plugin_root = os.path.join(
                     this_dir,
@@ -1273,10 +1813,12 @@ def write_financial_limits(
             global_paths: List[str] = []
             for global_dir in (
                 os.path.expanduser(
-                    "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
+                    "~/.gemini/config/plugins/"
+                    "google-ads-api-developer-assistant/config"
                 ),
                 os.path.expanduser(
-                    "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
+                    "~/.claude/plugins/google-ads-assistant-local/plugins/"
+                    "google-ads-api-developer-assistant/config"
                 ),
             ):
                 if os.path.isdir(global_dir) or os.path.isdir(
@@ -1287,23 +1829,27 @@ def write_financial_limits(
                     )
 
             if is_repo_source and global_paths:
-                # Redirect writes to global installed plugin config dirs so git-tracked
-                # plugins/.../config/financial_limits is not dirtied.
-                if active_path and os.path.normpath(active_path) != os.path.normpath(
-                    repo_cfg_path
-                ):
+                # Redirect writes to global installed plugin config dirs so
+                # git-tracked plugins/.../config/financial_limits is not
+                # dirtied.
+                if active_path and os.path.normpath(
+                    active_path
+                ) != os.path.normpath(repo_cfg_path):
                     target_paths.append(active_path)
                 for g_path in global_paths:
                     if os.path.normpath(g_path) not in [
                         os.path.normpath(p) for p in target_paths
                     ]:
                         target_paths.append(g_path)
-                # Seed current_limits from the first existing target_path so existing global limits are preserved
+                # Seed current_limits from the first existing target_path so
+                # existing global limits are preserved.
                 for tp in target_paths:
                     if os.path.isfile(tp):
                         try:
                             with open(tp, "r", encoding="utf-8") as f:
-                                current_limits = parse_financial_limits(f.read())
+                                current_limits = parse_financial_limits(
+                                    f.read()
+                                )
                             break
                         except OSError:
                             continue
@@ -1370,12 +1916,16 @@ def format_limit_display_value(key: str, val: Union[int, float]) -> str:
 def format_limits_table(
     limits: Dict[str, Union[int, float]], active_path: Optional[str]
 ) -> str:
-    """Formats all Service.field financial transaction limits as a readable report."""
+    """Formats Service.field financial transaction limits as a readable report."""
+    sep = "=" * 90
     lines = [
-        "==========================================================================================",
+        sep,
         "GOOGLE ADS API FINANCIAL TRANSACTION UPPER LIMITS (Service.field)",
-        f"Configuration File: {active_path or 'config/financial_limits (defaults)'}",
-        "==========================================================================================",
+        (
+            "Configuration File:"
+            f" {active_path or 'config/financial_limits (defaults)'}"
+        ),
+        sep,
     ]
     current_cat = ""
     for key, spec in FINANCIAL_LIMIT_SPECS.items():
@@ -1386,14 +1936,12 @@ def format_limits_table(
         display_val = format_limit_display_value(key, val)
         lines.append(f"  • {key} = {display_val}")
         lines.append(
-            f"      Monetary Unit : {spec['monetary_unit']} ({spec['api_format']}) — {spec['unit_description']}"
+            f"      Monetary Unit : {spec['monetary_unit']} "
+            f"({spec['api_format']}) — {spec['unit_description']}"
         )
-        lines.append(
-            f"      Protobuf Path : {', '.join(spec.get('protobuf_paths', spec['api_fields']))}"
-        )
-    lines.append(
-        "\n=========================================================================================="
-    )
+        proto_paths = ", ".join(spec.get("protobuf_paths", spec["api_fields"]))
+        lines.append(f"      Protobuf Path : {proto_paths}")
+    lines.append(f"\n{sep}")
     return "\n".join(lines)
 
 
@@ -1401,23 +1949,28 @@ def run_interactive_prompt(
     config_dir: Optional[str] = None,
     config_file: Optional[str] = None,
 ) -> str:
-    """Interactively prompts the user to set upper limits for Service.field transaction types."""
+    """Interactively prompts the user to set Service.field upper limits."""
     current_limits, active_path = read_financial_limits(
         config_dir=config_dir, config_file=config_file
     )
     print(
-        "Configure Google Ads API Financial Transaction Upper Limits (Service.field)\n"
-        "Press Enter to keep the current value, enter > 0 to make modifiable up to that upper limit, or 0 to make non-modifiable.\n"
-        "All values must be entered in the exact API format noted for each Service.field.\n"
+        "Configure Google Ads API Financial Transaction Upper Limits "
+        "(Service.field)\n"
+        "Press Enter to keep the current value, enter > 0 to make modifiable "
+        "up to that upper limit, or 0 to make non-modifiable.\n"
+        "All values must be entered in the exact API format noted for each "
+        "Service.field.\n"
     )
     updates: Dict[str, Union[int, float]] = {}
     for key, spec in FINANCIAL_LIMIT_SPECS.items():
         cur_val = current_limits.get(key, spec["default"])
+        proto_paths = ", ".join(spec.get("protobuf_paths", spec["api_fields"]))
         prompt = (
             f"{key}\n"
             f"  Service      : {', '.join(spec['services'])}\n"
-            f"  API Field    : {', '.join(spec.get('protobuf_paths', spec['api_fields']))}\n"
-            f"  Monetary Unit: {spec['monetary_unit']} ({spec['api_format']}) — {spec['unit_description']}\n"
+            f"  API Field    : {proto_paths}\n"
+            f"  Monetary Unit: {spec['monetary_unit']} ({spec['api_format']}) "
+            f"— {spec['unit_description']}\n"
             f"  Current Limit: {format_limit_display_value(key, cur_val)}\n"
             f"  New value [{cur_val}]: "
         )
@@ -1444,9 +1997,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     """Builds the CLI argument parser for set_financial_limits.py."""
     parser = argparse.ArgumentParser(
         description=(
-            "Configure upper limits for Google Ads API financial transactions by Service.field in config/financial_limits. "
-            "All values must be specified in the exact numeric format required by the Google Ads API call "
-            "for each service and field (int64 micros, double currency_units, double decimal_ratio, or int64 micros_proportion)."
+            "Configure upper limits for Google Ads API financial transactions "
+            "by Service.field in config/financial_limits. All values must be "
+            "specified in the exact numeric format required by the Google Ads "
+            "API call for each service and field (int64 micros, double "
+            "currency_units, double decimal_ratio, or int64 micros_proportion)."
         )
     )
     parser.add_argument(
@@ -1454,7 +2009,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--show",
         dest="show",
         action="store_true",
-        help="List all Service.field financial transaction limits, their monetary units, and current upper limits.",
+        help=(
+            "List all Service.field financial transaction limits, their "
+            "monetary units, and current upper limits."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -1468,22 +2026,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="SERVICE.FIELD=AMOUNT",
         help=(
-            "Set an upper limit (> 0) for a Service.field (or *.field / group alias) in API format "
-            "(e.g., --set CampaignBudgetService.amount_micros=100000000 --set ConversionUploadService.conversion_value=500.0). "
-            "May be specified multiple times."
+            "Set an upper limit (> 0) for a Service.field (or *.field / group "
+            "alias) in API format (e.g., --set "
+            "CampaignBudgetService.amount_micros=100000000 --set "
+            "ConversionUploadService.conversion_value=500.0). May be specified "
+            "multiple times."
         ),
     )
     parser.add_argument(
         "--type",
         dest="txn_type",
         default=None,
-        help="Service.field key (or *.field / alias) to configure with --amount.",
+        help=(
+            "Service.field key (or *.field / alias) to configure with --amount."
+        ),
     )
     parser.add_argument(
         "--amount",
         dest="amount",
         default=None,
-        help="Upper limit amount (> 0 to make modifiable) in the exact format required by the API call (used with --type).",
+        help=(
+            "Upper limit amount (> 0 to make modifiable) in the exact format "
+            "required by the API call (used with --type)."
+        ),
     )
     parser.add_argument(
         "--reset",
@@ -1491,17 +2056,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="SERVICE.FIELD",
-        help="Reset the specified Service.field (or alias) to 0 / 0.0 (not modifiable).",
+        help=(
+            "Reset the specified Service.field (or alias) to 0 / 0.0 "
+            "(not modifiable)."
+        ),
     )
     parser.add_argument(
         "--reset-all",
         action="store_true",
-        help="Reset all Service.field financial transaction limits to 0 / 0.0 (not modifiable by default).",
+        help=(
+            "Reset all Service.field financial transaction limits to 0 / 0.0 "
+            "(not modifiable by default)."
+        ),
     )
     parser.add_argument(
         "--interactive",
         action="store_true",
-        help="Interactively prompt for each Service.field financial transaction limit.",
+        help=(
+            "Interactively prompt for each Service.field financial "
+            "transaction limit."
+        ),
     )
     parser.add_argument(
         "--config-dir",
@@ -1516,7 +2090,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # Dedicated per-Service.field and shorthand CLI flags
     type_group = parser.add_argument_group(
-        "Service.field & Shorthand Flags (values in exact Google Ads API format)"
+        "Service.field & Shorthand Flags (values in exact Google Ads API"
+        " format)"
     )
     for key, spec in FINANCIAL_LIMIT_SPECS.items():
         flag_dot = "--" + key
@@ -1526,16 +2101,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
             *flags,
             dest=f"limit__{key}",
             default=None,
-            metavar=f"{spec['api_format'].upper()}_{spec['monetary_unit'].upper()}",
+            metavar=(
+                f"{spec['api_format'].upper()}_{spec['monetary_unit'].upper()}"
+            ),
             help=(
-                f"Upper limit for {key} [{spec['monetary_unit']} ({spec['api_format']}): "
-                f"{spec['unit_description']}]"
+                f"Upper limit for {key} [{spec['monetary_unit']} "
+                f"({spec['api_format']}): {spec['unit_description']}]"
             ),
         )
 
-    # Also support shorthand group flags (e.g., --campaign-budget-amount-micros, --target-cpa-micros)
+    # Also support shorthand group flags (e.g., --campaign-budget-amount-micros,
+    # --target-cpa-micros).
     added_alias_flags = set()
-    for alias_key in list(_GROUP_ALIAS_FIELDS.keys()) + list(_FIELD_UNIT_META.keys()):
+    for alias_key in (*_GROUP_ALIAS_FIELDS, *FIELD_UNIT_META):
         flag_name = "--" + alias_key.replace("_", "-")
         if flag_name in added_alias_flags or alias_key in FINANCIAL_LIMIT_SPECS:
             continue
@@ -1551,7 +2129,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI entrypoint for viewing and setting financial transaction upper limits."""
+    """CLI entrypoint for viewing and setting financial transaction limits."""
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
@@ -1578,7 +2156,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if (args.txn_type is not None) ^ (args.amount is not None):
             print(
-                "[set_financial_limits] Error: --type and --amount must be provided together.",
+                "[set_financial_limits] Error: --type and --amount must be "
+                "provided together.",
                 file=sys.stderr,
             )
             return 2
@@ -1592,14 +2171,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         for item in args.set_items:
             if "=" not in item:
                 raise ValueError(
-                    f"Invalid --set argument '{item}'. Expected format: SERVICE.FIELD=AMOUNT "
-                    f"(e.g., --set CampaignBudgetService.amount_micros=100000000)."
+                    f"Invalid --set argument '{item}'. Expected format: "
+                    "SERVICE.FIELD=AMOUNT (e.g., --set "
+                    "CampaignBudgetService.amount_micros=100000000)."
                 )
             k_part, v_part = item.split("=", 1)
             for canonical in resolve_limit_keys(k_part):
-                updates[canonical] = parse_and_validate_limit_amount(canonical, v_part)
+                updates[canonical] = parse_and_validate_limit_amount(
+                    canonical, v_part
+                )
 
-        for alias_key in list(_GROUP_ALIAS_FIELDS.keys()) + list(_FIELD_UNIT_META.keys()):
+        for alias_key in (*_GROUP_ALIAS_FIELDS, *FIELD_UNIT_META):
             flag_val = getattr(args, f"alias__{alias_key}", None)
             if flag_val is not None:
                 for canonical in resolve_limit_keys(alias_key):
@@ -1624,8 +2206,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 config_dir=args.config_dir,
                 config_file=args.config_file,
             )
-        except Exception as exc:
-            print(f"[set_financial_limits] Error writing config: {exc}", file=sys.stderr)
+        except (OSError, ValueError) as exc:
+            print(
+                f"[set_financial_limits] Error writing config: {exc}",
+                file=sys.stderr,
+            )
             return 1
 
     limits, active_path = read_financial_limits(
@@ -1648,7 +2233,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "unit_description": spec["unit_description"],
                     "services": spec["services"],
                     "api_fields": spec["api_fields"],
-                    "protobuf_paths": spec.get("protobuf_paths", spec["api_fields"]),
+                    "protobuf_paths": spec.get(
+                        "protobuf_paths", spec["api_fields"]
+                    ),
                 }
                 for k, spec in FINANCIAL_LIMIT_SPECS.items()
             },
@@ -1657,7 +2244,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if updates and not args.show:
-        print(f"Updated financial transaction upper limits in: {effective_path}")
+        print(
+            f"Updated financial transaction upper limits in: {effective_path}"
+        )
         for k, v in updates.items():
             spec = FINANCIAL_LIMIT_SPECS[k]
             print(

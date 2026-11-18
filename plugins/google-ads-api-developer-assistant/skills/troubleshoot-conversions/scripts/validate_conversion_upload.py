@@ -16,20 +16,24 @@
 
 import argparse
 import csv
+import datetime
+import importlib
 import math
 import os
 import re
 import sys
-from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Optional
 
 try:
-    from google.ads.googleads.client import GoogleAdsClient
+    GoogleAdsClient: Any = importlib.import_module(
+        "google.ads.googleads.client"
+    ).GoogleAdsClient
 except ImportError:
-    GoogleAdsClient = None  # type: ignore
+    GoogleAdsClient = None  # pylint: disable=invalid-name
 
 _TIMESTAMP_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})?$"
+    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}"
+    r"(?:\.\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})?$"
 )
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 _SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -49,7 +53,7 @@ _CURRENCY_HEADERS = (
 )
 
 
-def _parse_conversion_timestamp(raw_ts: str) -> datetime:
+def _parse_conversion_timestamp(raw_ts: str) -> datetime.datetime:
     """Strictly validates and parses a conversion timestamp string."""
     clean = raw_ts.strip()
     if not _TIMESTAMP_RE.fullmatch(clean):
@@ -58,20 +62,24 @@ def _parse_conversion_timestamp(raw_ts: str) -> datetime:
     # Normalize +HHMM / -HHMM without colon if provided
     if re.search(r"[+-]\d{4}$", iso_str):
         iso_str = f"{iso_str[:-2]}:{iso_str[-2:]}"
-    return datetime.fromisoformat(iso_str)
+    return datetime.datetime.fromisoformat(iso_str)
 
 
-def _timestamps_ordered(click_dt: datetime, conv_dt: datetime) -> bool:
-    """Returns True if conv_dt > click_dt, safely handling naive vs aware comparisons."""
+def _timestamps_ordered(
+    click_dt: datetime.datetime, conv_dt: datetime.datetime
+) -> bool:
+    """Returns True if conv_dt > click_dt across naive and aware timestamps."""
     if (click_dt.tzinfo is None) == (conv_dt.tzinfo is None):
         return conv_dt > click_dt
     c_aware = (
-        click_dt.replace(tzinfo=timezone.utc)
+        click_dt.replace(tzinfo=datetime.timezone.utc)
         if click_dt.tzinfo is None
         else click_dt
     )
     v_aware = (
-        conv_dt.replace(tzinfo=timezone.utc) if conv_dt.tzinfo is None else conv_dt
+        conv_dt.replace(tzinfo=datetime.timezone.utc)
+        if conv_dt.tzinfo is None
+        else conv_dt
     )
     return v_aware > c_aware
 
@@ -79,9 +87,18 @@ def _timestamps_ordered(click_dt: datetime, conv_dt: datetime) -> bool:
 def validate_conversion_csv(
     csv_path: str,
     api_version: str,
-    client: Optional[GoogleAdsClient] = None,
+    client: Optional[Any] = None,
 ) -> None:
-    """Validates that conversion upload records conform to formatting, PII, and time rules."""
+    """Validates conversion upload CSV rows for formatting, PII, and time rules.
+
+    Args:
+        csv_path: Path to the conversion upload CSV file.
+        api_version: Google Ads API version string (retained for CLI/caller
+          signature compatibility).
+        client: Optional GoogleAdsClient instance (retained for caller signature
+          compatibility).
+    """
+    del api_version, client  # Unused; retained for signature compatibility.
     if not os.path.isfile(csv_path):
         print(f"ERROR: CSV file not found at '{csv_path}'.", file=sys.stderr)
         sys.exit(1)
@@ -92,27 +109,32 @@ def validate_conversion_csv(
     try:
         with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
-            headers = (
-                {h.strip().lower(): h for h in reader.fieldnames if h is not None}
-                if reader.fieldnames
-                else {}
-            )
+            headers: dict[str, str] = {}
+            if reader.fieldnames:
+                headers = {
+                    h.strip().lower(): h
+                    for h in reader.fieldnames
+                    if h is not None
+                }
 
-            missing: List[str] = []
+            missing: list[str] = []
             present_id_cols = [h for h in _IDENTIFIER_HEADERS if h in headers]
             if not present_id_cols:
                 missing.append("gclid")
 
-            time_col_key = next((h for h in _TIME_HEADERS if h in headers), None)
+            time_col_key = next(
+                (h for h in _TIME_HEADERS if h in headers), None
+            )
             if time_col_key is None:
                 missing.append("conversion_time")
 
             if "conversion_value" not in headers:
                 missing.append("conversion_value")
 
-            if missing:
+            if missing or time_col_key is None:
+                missing_str = ", ".join(missing)
                 print(
-                    f"ERROR: Missing required CSV headers: {', '.join(missing)}",
+                    f"ERROR: Missing required CSV headers: {missing_str}",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -125,38 +147,46 @@ def validate_conversion_csv(
             row_idx = 1
             for row in reader:
                 row_idx += 1
-                conv_time_str = (row.get(headers[time_col_key]) or "").strip()  # type: ignore[index]
-                conv_dt: Optional[datetime] = None
+                conv_time_str = (row.get(headers[time_col_key]) or "").strip()
+                conv_dt: Optional[datetime.datetime] = None
                 try:
                     conv_dt = _parse_conversion_timestamp(conv_time_str)
                 except ValueError:
                     print(
-                        f"  [Row {row_idx}] ERROR: Invalid conversion_time format '{conv_time_str}'. "
+                        f"  [Row {row_idx}] ERROR: Invalid conversion_time "
+                        f"format '{conv_time_str}'. "
                         "Use 'YYYY-MM-DD HH:MM:SS-HH:MM'."
                     )
                     errors_found += 1
 
                 if click_col_key is not None:
-                    click_time_str = (row.get(headers[click_col_key]) or "").strip()
+                    click_time_str = (
+                        row.get(headers[click_col_key]) or ""
+                    ).strip()
                     if click_time_str:
                         try:
-                            click_dt = _parse_conversion_timestamp(click_time_str)
+                            click_dt = _parse_conversion_timestamp(
+                                click_time_str
+                            )
                             if conv_dt is not None and not _timestamps_ordered(
                                 click_dt, conv_dt
                             ):
                                 print(
-                                    f"  [Row {row_idx}] ERROR: conversion_time '{conv_time_str}' "
-                                    f"must be strictly after click_time '{click_time_str}'."
+                                    f"  [Row {row_idx}] ERROR: conversion_time "
+                                    f"'{conv_time_str}' must be strictly after "
+                                    f"click_time '{click_time_str}'."
                                 )
                                 errors_found += 1
                         except ValueError:
                             print(
-                                f"  [Row {row_idx}] ERROR: Invalid click_time format '{click_time_str}'. "
+                                f"  [Row {row_idx}] ERROR: Invalid click_time "
+                                f"format '{click_time_str}'. "
                                 "Use 'YYYY-MM-DD HH:MM:SS-HH:MM'."
                             )
                             errors_found += 1
 
-                # Validate conversion identifiers (do not skip even if timestamp had an error)
+                # Validate conversion identifiers (do not skip even if timestamp
+                # had an error).
                 has_any_valid_id = False
                 gclid_val = (
                     (row.get(headers["gclid"]) or "").strip()
@@ -172,7 +202,8 @@ def validate_conversion_csv(
                 if "gclid" in headers and (gclid_val or not other_id_populated):
                     if not gclid_val or len(gclid_val) < 10:
                         print(
-                            f"  [Row {row_idx}] ERROR: GCLID is too short or empty: '{gclid_val}'"
+                            f"  [Row {row_idx}] ERROR: GCLID is too short or "
+                            f"empty: '{gclid_val}'"
                         )
                         errors_found += 1
                     else:
@@ -182,9 +213,12 @@ def validate_conversion_csv(
                     if braid_col in headers:
                         b_val = (row.get(headers[braid_col]) or "").strip()
                         if b_val:
-                            if len(b_val) < 5 or any(ch.isspace() for ch in b_val):
+                            if len(b_val) < 5 or any(
+                                ch.isspace() for ch in b_val
+                            ):
                                 print(
-                                    f"  [Row {row_idx}] ERROR: Invalid {braid_col} value: '{b_val}'"
+                                    f"  [Row {row_idx}] ERROR: Invalid "
+                                    f"{braid_col} value: '{b_val}'"
                                 )
                                 errors_found += 1
                             else:
@@ -196,36 +230,45 @@ def validate_conversion_csv(
                         if p_val:
                             if "@" in p_val or "+" in p_val:
                                 print(
-                                    f"  [Row {row_idx}] ERROR: Unhashed raw PII detected in {pii_col} "
-                                    f"('{p_val}'). Must be SHA-256 hex digest (64 hex chars)."
+                                    f"  [Row {row_idx}] ERROR: Unhashed raw "
+                                    f"PII detected in {pii_col} ('{p_val}'). "
+                                    "Must be SHA-256 hex digest (64 hex chars)."
                                 )
                                 errors_found += 1
                             elif not _SHA256_HEX_RE.fullmatch(p_val):
                                 print(
-                                    f"  [Row {row_idx}] ERROR: Invalid {pii_col} '{p_val}'. "
-                                    "Expected 64-character hexadecimal SHA-256 hash."
+                                    f"  [Row {row_idx}] ERROR: Invalid "
+                                    f"{pii_col} '{p_val}'. Expected "
+                                    "64-character hexadecimal SHA-256 hash."
                                 )
                                 errors_found += 1
                             else:
                                 has_any_valid_id = True
 
-                if "gclid" not in headers and not has_any_valid_id and not other_id_populated:
+                if (
+                    "gclid" not in headers
+                    and not has_any_valid_id
+                    and not other_id_populated
+                ):
                     print(
-                        f"  [Row {row_idx}] ERROR: Row has no conversion identifier "
-                        f"({', '.join(present_id_cols)})."
+                        f"  [Row {row_idx}] ERROR: Row has no conversion "
+                        f"identifier ({', '.join(present_id_cols)})."
                     )
                     errors_found += 1
 
                 # Validate conversion_value when non-empty
-                conv_val_str = (row.get(headers["conversion_value"]) or "").strip()
-                if conv_val_str != "":
+                conv_val_str = (
+                    row.get(headers["conversion_value"]) or ""
+                ).strip()
+                if conv_val_str:
                     try:
                         val_num = float(conv_val_str)
                         if not math.isfinite(val_num) or val_num < 0:
                             raise ValueError("non-finite or negative")
                     except ValueError:
                         print(
-                            f"  [Row {row_idx}] ERROR: Invalid conversion_value '{conv_val_str}'. "
+                            f"  [Row {row_idx}] ERROR: Invalid "
+                            f"conversion_value '{conv_val_str}'. "
                             "Must be a finite number >= 0."
                         )
                         errors_found += 1
@@ -235,27 +278,33 @@ def validate_conversion_csv(
                     curr_val = (row.get(headers[curr_col]) or "").strip()
                     if curr_val and not _CURRENCY_RE.fullmatch(curr_val):
                         print(
-                            f"  [Row {row_idx}] ERROR: Invalid {curr_col} '{curr_val}'. "
-                            "Expected 3-letter uppercase ISO 4217 code (e.g., 'USD')."
+                            f"  [Row {row_idx}] ERROR: Invalid {curr_col} "
+                            f"'{curr_val}'. Expected 3-letter uppercase "
+                            "ISO 4217 code (e.g., 'USD')."
                         )
                         errors_found += 1
 
         if errors_found == 0:
             print(
-                "SUCCESS: Conversion Upload CSV parsed cleanly with valid formatting rules."
+                "SUCCESS: Conversion Upload CSV parsed cleanly with valid "
+                "formatting rules."
             )
         else:
-            print(f"FAILURE: Pre-validation failed with {errors_found} error(s).")
+            print(
+                f"FAILURE: Pre-validation failed with {errors_found} error(s)."
+            )
             sys.exit(1)
 
-    except Exception as e:
+    except (OSError, csv.Error, UnicodeError, ValueError, RuntimeError) as e:
         print(f"CRITICAL ERROR: Failed to parse CSV: {e}", file=sys.stderr)
         sys.exit(1)
 
 
 def main() -> None:
-    """Parses command line arguments."""
-    parser = argparse.ArgumentParser(description="Validates a conversion upload CSV.")
+    """Parses command line arguments and validates the conversion CSV."""
+    parser = argparse.ArgumentParser(
+        description="Validates a conversion upload CSV."
+    )
     parser.add_argument(
         "--csv_path", required=True, help="Path to the conversion CSV file."
     )

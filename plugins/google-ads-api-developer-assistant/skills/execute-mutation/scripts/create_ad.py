@@ -13,27 +13,63 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Creates a Google Ads Responsive Search Ad under an ad group via AdGroupAdService.
+"""Creates a Google Ads Responsive Search Ad via AdGroupAdService.
 
 Supports both validate_only=True dry-run validation (--dry-run, default) and
 live execution (--execute) under the 4-Step HITL Mutation Protocol.
 """
 
 import argparse
+import importlib
 import json
 import os
 import re
 import sys
 from typing import Any, Optional
 
-try:
-    from google.ads.googleads.client import GoogleAdsClient
-    from google.ads.googleads.errors import GoogleAdsException
-except ImportError:
-    GoogleAdsClient = None  # type: ignore
 
-    class GoogleAdsException(Exception):  # type: ignore[no-redef]
-        pass
+class _FallbackGoogleAdsError(Exception):
+    """Fallback exception when the google-ads package is not installed."""
+
+
+try:
+    GoogleAdsClient: Any = importlib.import_module(
+        "google.ads.googleads.client"
+    ).GoogleAdsClient
+    GoogleAdsException: Any = importlib.import_module(
+        "google.ads.googleads.errors"
+    ).GoogleAdsException
+except ImportError:
+    GoogleAdsClient = None  # pylint: disable=invalid-name
+    GoogleAdsException = _FallbackGoogleAdsError
+
+
+def _load_extra_sdk_exceptions() -> tuple[type[Exception], ...]:
+    """Loads optional transport/config exception types when installed."""
+    extra: list[type[Exception]] = []
+    for mod_name, attr in (
+        ("yaml", "YAMLError"),
+        ("grpc", "RpcError"),
+        ("google.auth.exceptions", "GoogleAuthError"),
+    ):
+        try:
+            cls = getattr(importlib.import_module(mod_name), attr, None)
+            if isinstance(cls, type) and issubclass(cls, Exception):
+                extra.append(cls)
+        except ImportError:
+            pass
+    return tuple(extra)
+
+
+_SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    RuntimeError,
+    *_load_extra_sdk_exceptions(),
+)
 
 
 def _get_config_path() -> str:
@@ -42,20 +78,23 @@ def _get_config_path() -> str:
     if config_path and os.path.isfile(config_path):
         return config_path
 
-    plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-    candidates = [
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    candidates = (
         os.path.abspath("config/google-ads.yaml"),
         os.path.join(plugin_root, "config", "google-ads.yaml"),
         os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.gemini/config/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../../../../config/google-ads.yaml")
+            os.path.join(script_dir, "../../../../config/google-ads.yaml")
         ),
-    ]
+    )
     for candidate in candidates:
         if os.path.isfile(candidate):
             return candidate
@@ -63,16 +102,15 @@ def _get_config_path() -> str:
     try:
         if plugin_root not in sys.path:
             sys.path.insert(0, plugin_root)
-        from config.config_init import sync_and_set_config_kv
-
-        return sync_and_set_config_kv()
-    except Exception:
+        config_init = importlib.import_module("config.config_init")
+        return config_init.sync_and_set_config_kv()
+    except (AttributeError, ImportError, OSError, RuntimeError, ValueError):
         pass
 
     return os.path.abspath("config/google-ads.yaml")
 
 
-def handle_googleads_exception(exception: GoogleAdsException) -> None:
+def handle_googleads_exception(exception: Exception) -> None:
     """Prints clean, actionable details of a GoogleAdsException."""
     req_id = getattr(exception, "request_id", "N/A")
     print(
@@ -83,7 +121,8 @@ def handle_googleads_exception(exception: GoogleAdsException) -> None:
     for error in getattr(failure, "errors", []) or []:
         print(f"  - {error.message}", file=sys.stderr)
         if getattr(error, "location", None):
-            for element in getattr(error.location, "field_path_elements", []) or []:
+            elems = getattr(error.location, "field_path_elements", []) or []
+            for element in elems:
                 print(f"    On field: {element.field_name}", file=sys.stderr)
 
 
@@ -114,15 +153,17 @@ def create_responsive_search_ad(
     Args:
         customer_id: The Google Ads Customer ID.
         ad_group_id: Ad Group ID (or resource name) to attach the ad to.
-        ad_group_resource_name: Full ad group resource name (e.g., 'customers/123/adGroups/789').
+        ad_group_resource_name: Full ad group resource name (e.g.,
+          'customers/123/adGroups/789').
         api_version: Google Ads API version (e.g., 'v26').
-        final_urls: List of landing page final URLs (default: ['https://www.example.com']).
+        final_urls: List of landing page final URLs (default:
+          ['https://www.example.com']).
         headlines: List of 3 to 15 headline strings (<=30 chars each).
         descriptions: List of 2 to 4 description strings (<=90 chars each).
         path1: Optional first display URL path segment (<=15 chars).
         path2: Optional second display URL path segment (<=15 chars).
         status: AdGroupAdStatusEnum name (default: 'PAUSED').
-        validate_only: If True, validates the request without creating the ad.
+        validate_only: If True, validates without creating the ad.
         client: Optional pre-initialized GoogleAdsClient instance.
         json_output: If True, emits structured JSON to stdout.
 
@@ -139,8 +180,8 @@ def create_responsive_search_ad(
     if not resolved_ad_group_rn and raw_ad_group_id.startswith("customers/"):
         resolved_ad_group_rn = raw_ad_group_id
 
-    if resolved_ad_group_rn and not re.match(
-        r"^customers/\d+/adGroups/-?\d+$", resolved_ad_group_rn
+    if resolved_ad_group_rn and not re.fullmatch(
+        r"customers/\d+/adGroups/-?\d+", resolved_ad_group_rn
     ):
         print(
             f"Error: Invalid ad group resource name '{resolved_ad_group_rn}'.",
@@ -149,7 +190,9 @@ def create_responsive_search_ad(
         sys.exit(1)
 
     clean_ad_group_id = (
-        "" if resolved_ad_group_rn else "".join(re.findall(r"\d+", raw_ad_group_id))
+        ""
+        if resolved_ad_group_rn
+        else "".join(re.findall(r"\d+", raw_ad_group_id))
     )
     if not resolved_ad_group_rn and not clean_ad_group_id:
         print(
@@ -161,25 +204,29 @@ def create_responsive_search_ad(
     status_upper = str(status or "PAUSED").strip().upper()
     if status_upper == "REMOVED":
         print(
-            "Error: BLOCKED BY DELETION PROHIBITION: Setting ad status to 'REMOVED' is prohibited. Use 'PAUSED' instead.",
+            "Error: BLOCKED BY DELETION PROHIBITION: Setting ad status to "
+            "'REMOVED' is prohibited. Use 'PAUSED' instead.",
             file=sys.stderr,
         )
         sys.exit(1)
     if status_upper in ("UNSPECIFIED", "UNKNOWN"):
         print(
-            f"Error: Invalid ad status '{status}'. Must be 'PAUSED' or 'ENABLED'.",
+            f"Error: Invalid ad status '{status}'. Must be 'PAUSED' or "
+            "'ENABLED'.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     resolved_final_urls = [
-        str(u).strip() for u in (final_urls or []) if str(u).strip()
+        str(u).strip() for u in final_urls or [] if str(u).strip()
     ]
     if not resolved_final_urls:
         resolved_final_urls = ["https://www.example.com"]
 
     if headlines is not None:
-        resolved_headlines = [str(h).strip() for h in headlines if str(h).strip()]
+        resolved_headlines = [
+            str(h).strip() for h in headlines if str(h).strip()
+        ]
     else:
         resolved_headlines = [
             "Explore Official Solutions",
@@ -189,14 +236,16 @@ def create_responsive_search_ad(
 
     if len(resolved_headlines) < 3 or len(resolved_headlines) > 15:
         print(
-            f"Error: Responsive Search Ads require between 3 and 15 headlines (got {len(resolved_headlines)}).",
+            "Error: Responsive Search Ads require between 3 and 15 headlines "
+            f"(got {len(resolved_headlines)}).",
             file=sys.stderr,
         )
         sys.exit(1)
     for idx, hl in enumerate(resolved_headlines, start=1):
         if len(hl) > 30:
             print(
-                f"Error: Headline {idx} exceeds maximum length of 30 characters ({len(hl)} chars): '{hl}'.",
+                f"Error: Headline {idx} exceeds maximum length of 30 "
+                f"characters ({len(hl)} chars): '{hl}'.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -213,14 +262,16 @@ def create_responsive_search_ad(
 
     if len(resolved_descriptions) < 2 or len(resolved_descriptions) > 4:
         print(
-            f"Error: Responsive Search Ads require between 2 and 4 descriptions (got {len(resolved_descriptions)}).",
+            "Error: Responsive Search Ads require between 2 and 4 "
+            f"descriptions (got {len(resolved_descriptions)}).",
             file=sys.stderr,
         )
         sys.exit(1)
     for idx, desc in enumerate(resolved_descriptions, start=1):
         if len(desc) > 90:
             print(
-                f"Error: Description {idx} exceeds maximum length of 90 characters ({len(desc)} chars).",
+                f"Error: Description {idx} exceeds maximum length of 90 "
+                f"characters ({len(desc)} chars).",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -229,13 +280,15 @@ def create_responsive_search_ad(
     clean_path2 = str(path2).strip() if path2 is not None else ""
     if len(clean_path1) > 15:
         print(
-            f"Error: path1 exceeds maximum length of 15 characters ({len(clean_path1)} chars): '{clean_path1}'.",
+            "Error: path1 exceeds maximum length of 15 characters "
+            f"({len(clean_path1)} chars): '{clean_path1}'.",
             file=sys.stderr,
         )
         sys.exit(1)
     if len(clean_path2) > 15:
         print(
-            f"Error: path2 exceeds maximum length of 15 characters ({len(clean_path2)} chars): '{clean_path2}'.",
+            "Error: path2 exceeds maximum length of 15 characters "
+            f"({len(clean_path2)} chars): '{clean_path2}'.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -255,9 +308,10 @@ def create_responsive_search_ad(
             client = GoogleAdsClient.load_from_storage(
                 path=cfg_path, version=api_version
             )
-        except Exception as exc:
+        except _SDK_EXCEPTIONS as exc:
             print(
-                f"CRITICAL ERROR: Failed to load Google Ads configuration: {exc}",
+                "CRITICAL ERROR: Failed to load Google Ads configuration: "
+                f"{exc}",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -329,19 +383,21 @@ def create_responsive_search_ad(
             print(json.dumps(result_payload, indent=2))
         elif validate_only:
             print(
-                f"SUCCESS (validate_only=True): Verified creation of Responsive Search Ad "
-                f"({len(resolved_headlines)} headlines, {len(resolved_descriptions)} descriptions, "
+                "SUCCESS (validate_only=True): Verified creation of Responsive "
+                f"Search Ad ({len(resolved_headlines)} headlines, "
+                f"{len(resolved_descriptions)} descriptions, "
                 f"status={status_upper}) under {resolved_ad_group_rn}."
             )
         else:
             print(
-                f"SUCCESS: Created responsive search ad with resource_name {ad_group_ad_rn}."
+                "SUCCESS: Created responsive search ad with resource_name "
+                f"{ad_group_ad_rn}."
             )
         return result_payload
     except GoogleAdsException as ex:
         handle_googleads_exception(ex)
         sys.exit(1)
-    except Exception as exc:
+    except _SDK_EXCEPTIONS as exc:
         print(f"CRITICAL ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -352,7 +408,10 @@ create_ad = create_responsive_search_ad
 def main() -> None:
     """CLI entrypoint for creating a Google Ads Responsive Search Ad."""
     parser = argparse.ArgumentParser(
-        description="Creates a Google Ads Responsive Search Ad under an ad group via AdGroupAdService."
+        description=(
+            "Creates a Google Ads Responsive Search Ad under an ad group via "
+            "AdGroupAdService."
+        )
     )
     parser.add_argument(
         "-c",
@@ -374,7 +433,9 @@ def main() -> None:
         "--ad_group_resource_name",
         dest="ad_group_resource_name",
         default=None,
-        help="Full ad group resource name (e.g., 'customers/123/adGroups/789').",
+        help=(
+            "Full ad group resource name (e.g., 'customers/123/adGroups/789')."
+        ),
     )
     parser.add_argument(
         "-v",
@@ -390,21 +451,30 @@ def main() -> None:
         dest="final_urls",
         action="append",
         default=None,
-        help="Landing page final URL (can be specified multiple times; default: https://www.example.com).",
+        help=(
+            "Landing page final URL (can be specified multiple times; "
+            "default: https://www.example.com)."
+        ),
     )
     parser.add_argument(
         "--headline",
         dest="headlines",
         action="append",
         default=None,
-        help="Headline text (specify 3 to 15 times when provided, <=30 chars each).",
+        help=(
+            "Headline text (specify 3 to 15 times when provided, "
+            "<=30 chars each)."
+        ),
     )
     parser.add_argument(
         "--description",
         dest="descriptions",
         action="append",
         default=None,
-        help="Description text (specify 2 to 4 times when provided, <=90 chars each).",
+        help=(
+            "Description text (specify 2 to 4 times when provided, "
+            "<=90 chars each)."
+        ),
     )
     parser.add_argument(
         "--path1",

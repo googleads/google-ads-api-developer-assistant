@@ -12,24 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Prints the installed Google Ads API Developer Assistant plugin version."""
+
 import json
 import os
 import sys
 
 
+_JSON_READ_ERRORS = (
+    OSError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    TypeError,
+    ValueError,
+)
+
+
 def get_extension_version() -> bool:
-    """Reads plugin.json or agent.json, prints the version (or 'Unknown'), and returns True if found."""
+    """Reads plugin.json or agent.json, prints the version, and returns status.
+
+    Returns:
+        True if a non-empty version string was found and printed; False
+        otherwise (after printing 'Unknown').
+    """
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        target_files = [
+        plugin_subpath = os.path.join(
+            "plugins", "google-ads-api-developer-assistant"
+        )
+        target_files = (
             "plugin.json",
             "plugin.json.disabled",
             "agent.json",
-            os.path.join("plugins", "google-ads-api-developer-assistant", "plugin.json"),
-            os.path.join(
-                "plugins", "google-ads-api-developer-assistant", "plugin.json.disabled"
-            ),
-        ]
+            os.path.join(plugin_subpath, "plugin.json"),
+            os.path.join(plugin_subpath, "plugin.json.disabled"),
+        )
 
         candidate_roots: list[str] = []
         walk_dir = current_dir
@@ -42,16 +59,15 @@ def get_extension_version() -> bool:
             if env_dir:
                 candidate_roots.append(env_dir)
 
-        candidate_roots.extend(
-            [
-                os.path.expanduser(
-                    "~/.gemini/config/plugins/google-ads-api-developer-assistant"
-                ),
-                os.path.expanduser(
-                    "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"
-                ),
-            ]
-        )
+        candidate_roots.extend([
+            os.path.expanduser(
+                "~/.gemini/config/plugins/google-ads-api-developer-assistant"
+            ),
+            os.path.expanduser(
+                "~/.claude/plugins/google-ads-assistant-local/plugins/"
+                "google-ads-api-developer-assistant"
+            ),
+        ])
 
         for root in candidate_roots:
             for file_name in target_files:
@@ -60,17 +76,19 @@ def get_extension_version() -> bool:
                     try:
                         with open(candidate, "r", encoding="utf-8") as f:
                             data = json.load(f)
+                        if not isinstance(data, dict):
+                            continue
                         ver = str(data.get("version") or "").strip()
                         if ver:
                             print(ver)
                             return True
-                    except Exception:
+                    except _JSON_READ_ERRORS:
                         continue
 
         print("Unknown")
         return False
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         print(f"An unexpected error occurred: {e}", file=sys.stderr)
         sys.exit(1)
 

@@ -18,26 +18,62 @@
 import argparse
 import builtins
 import csv
+import importlib
 import json
 import os
 import re
 import sys
 from typing import Any, Optional
 
-_ORIG_INPUT = builtins.input
+_orig_input = builtins.input
+
+
+class _FallbackGoogleAdsError(Exception):
+    """Fallback exception when the google-ads package is not installed."""
+
 
 try:
-    from google.ads.googleads.client import GoogleAdsClient
-    from google.ads.googleads.errors import GoogleAdsException
+    GoogleAdsClient: Any = importlib.import_module(
+        "google.ads.googleads.client"
+    ).GoogleAdsClient
+    GoogleAdsException: Any = importlib.import_module(
+        "google.ads.googleads.errors"
+    ).GoogleAdsException
 except ImportError:
-    GoogleAdsClient = None  # type: ignore
+    GoogleAdsClient = None  # pylint: disable=invalid-name
+    GoogleAdsException = _FallbackGoogleAdsError
 
-    class GoogleAdsException(Exception):  # type: ignore[no-redef]
-        pass
+
+def _load_extra_sdk_exceptions() -> tuple[type[Exception], ...]:
+    """Loads optional transport/config exception types when installed."""
+    extra: list[type[Exception]] = []
+    for mod_name, attr in (
+        ("yaml", "YAMLError"),
+        ("grpc", "RpcError"),
+        ("google.auth.exceptions", "GoogleAuthError"),
+    ):
+        try:
+            cls = getattr(importlib.import_module(mod_name), attr, None)
+            if isinstance(cls, type) and issubclass(cls, Exception):
+                extra.append(cls)
+        except ImportError:
+            pass
+    return tuple(extra)
+
+
+_SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    RuntimeError,
+    *_load_extra_sdk_exceptions(),
+)
 
 
 class ChildAccountRow(tuple):
-    """3-tuple (customer_id, level, is_mcc) carrying optional descriptive_name and status metadata."""
+    """3-tuple (customer_id, level, is_mcc) with name and status metadata."""
 
     descriptive_name: str
     status: str
@@ -56,7 +92,7 @@ class ChildAccountRow(tuple):
         return obj
 
 
-def handle_googleads_exception(exception: GoogleAdsException) -> None:
+def handle_googleads_exception(exception: Exception) -> None:
     """Prints the details of a GoogleAdsException."""
     req_id = getattr(exception, "request_id", "N/A")
     print(
@@ -67,7 +103,8 @@ def handle_googleads_exception(exception: GoogleAdsException) -> None:
     for error in getattr(failure, "errors", []) or []:
         print(f"  - {error.message}", file=sys.stderr)
         if getattr(error, "location", None):
-            for element in getattr(error.location, "field_path_elements", []) or []:
+            elems = getattr(error.location, "field_path_elements", []) or []
+            for element in elems:
                 print(f"    On field: {element.field_name}", file=sys.stderr)
 
 
@@ -77,20 +114,23 @@ def _get_config_path() -> str:
     if config_path and os.path.isfile(config_path):
         return config_path
 
-    plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-    candidates = [
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    candidates = (
         os.path.abspath("config/google-ads.yaml"),
         os.path.join(plugin_root, "config", "google-ads.yaml"),
         os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.gemini/config/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../../../../config/google-ads.yaml")
+            os.path.join(script_dir, "../../../../config/google-ads.yaml")
         ),
-    ]
+    )
     for candidate in candidates:
         if os.path.isfile(candidate):
             return candidate
@@ -98,10 +138,9 @@ def _get_config_path() -> str:
     try:
         if plugin_root not in sys.path:
             sys.path.insert(0, plugin_root)
-        from config.config_init import sync_and_set_config_kv
-
-        return sync_and_set_config_kv()
-    except Exception:
+        config_init = importlib.import_module("config.config_init")
+        return config_init.sync_and_set_config_kv()
+    except (AttributeError, ImportError, OSError, RuntimeError, ValueError):
         pass
 
     return os.path.abspath("config/google-ads.yaml")
@@ -112,7 +151,16 @@ def get_cids_under_mcc(
     api_version: str = "v26",
     client: Optional[Any] = None,
 ) -> list[tuple[str, int, bool]]:
-    """Retrieves all child customer accounts under an MCC as a list of tuples."""
+    """Retrieves all child customer accounts under an MCC as a list of tuples.
+
+    Args:
+        customer_id: Google Ads MCC Customer ID.
+        api_version: Google Ads API version string (e.g., 'v26').
+        client: Optional pre-initialized GoogleAdsClient instance.
+
+    Returns:
+        A list of ChildAccountRow 3-tuples (customer_id, level, is_mcc).
+    """
     clean_customer_id = "".join(re.findall(r"\d+", str(customer_id or "")))
     if not clean_customer_id:
         print(f"Error: Invalid customer ID '{customer_id}'.", file=sys.stderr)
@@ -127,7 +175,7 @@ def get_cids_under_mcc(
             client = GoogleAdsClient.load_from_storage(
                 path=cfg_path, version=api_version
             )
-        except Exception as e:
+        except _SDK_EXCEPTIONS as e:
             print(
                 f"CRITICAL ERROR: Failed to load Google Ads configuration: {e}",
                 file=sys.stderr,
@@ -150,7 +198,9 @@ def get_cids_under_mcc(
 
     results: list[tuple[str, int, bool]] = []
     try:
-        stream = ga_service.search_stream(customer_id=clean_customer_id, query=query)
+        stream = ga_service.search_stream(
+            customer_id=clean_customer_id, query=query
+        )
         for batch in stream:
             for row in batch.results:
                 cc = row.customer_client
@@ -173,13 +223,13 @@ def get_cids_under_mcc(
     except GoogleAdsException as ex:
         handle_googleads_exception(ex)
         sys.exit(1)
-    except Exception as e:
+    except _SDK_EXCEPTIONS as e:
         print(f"CRITICAL ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
 
 def _extract_row_fields(row: Any) -> tuple[str, int, bool, str, str]:
-    """Extracts (cid, level, is_mcc, descriptive_name, status) from a ChildAccountRow or plain tuple."""
+    """Extracts (cid, level, is_mcc, descriptive_name, status) from a row."""
     cid, level, is_mcc = str(row[0]), int(row[1]), bool(row[2])
     desc_name = getattr(row, "descriptive_name", "")
     if not isinstance(desc_name, str):
@@ -197,7 +247,7 @@ def _extract_row_fields(row: Any) -> tuple[str, int, bool, str, str]:
 
 
 def main() -> None:
-    """Parses command line arguments or prompts user, then calls get_cids_under_mcc."""
+    """Parses CLI arguments or prompts user, then calls get_cids_under_mcc."""
     parser = argparse.ArgumentParser(
         description="Retrieves child customer accounts under an MCC."
     )
@@ -230,7 +280,7 @@ def main() -> None:
         dest="print_cids",
         action="store_true",
         default=False,
-        help="If set, prints the detailed table of child accounts to the console.",
+        help="If set, prints the detailed table of child accounts.",
     )
     parser.add_argument(
         "--json",
@@ -242,9 +292,10 @@ def main() -> None:
 
     customer_id = args.customer_id
     if not customer_id:
-        if not sys.stdin.isatty() and builtins.input is _ORIG_INPUT:
+        if not sys.stdin.isatty() and builtins.input is _orig_input:
             print(
-                "Error: No MCC Customer ID provided (non-interactive stdin). Pass --customer-id.",
+                "Error: No MCC Customer ID provided (non-interactive stdin). "
+                "Pass --customer-id.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -288,7 +339,7 @@ def main() -> None:
                     writer.writerow(row_vals)
             if not args.json:
                 print(f"SUCCESS: Results saved to {csv_path}")
-        except Exception as e:
+        except (OSError, csv.Error, TypeError, ValueError) as e:
             print(f"Error saving CSV file: {e}", file=sys.stderr)
             sys.exit(1)
 
@@ -317,13 +368,18 @@ def main() -> None:
     if args.print_cids:
         print(f"Child accounts under MCC {clean_id}:")
         if has_names:
-            header_fmt = f"{'Customer ID':<15} {'Level':<7} {'Is MCC':<8} {'Descriptive Name'}"
+            header_fmt = (
+                f"{'Customer ID':<15} {'Level':<7} "
+                f"{'Is MCC':<8} {'Descriptive Name'}"
+            )
             print(header_fmt)
             print("-" * 56)
             for cid, level, is_mcc, desc_name, status_str in extracted:
                 is_mcc_str = "Yes" if is_mcc else "No"
                 suffix = f" ({status_str})" if status_str else ""
-                print(f"{cid:<15} {level:<7} {is_mcc_str:<8} {desc_name}{suffix}")
+                print(
+                    f"{cid:<15} {level:<7} {is_mcc_str:<8} {desc_name}{suffix}"
+                )
         else:
             print(f"{'Customer ID':<15} {'Level':<7} {'Is MCC':<8}")
             print("-" * 32)

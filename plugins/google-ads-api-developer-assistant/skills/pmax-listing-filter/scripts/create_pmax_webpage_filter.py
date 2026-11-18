@@ -20,6 +20,7 @@ Performance Max Asset Group to exclude matching URLs from URL expansion.
 """
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -27,14 +28,49 @@ import sys
 from typing import Any, Optional
 import unittest.mock
 
-try:
-    from google.ads.googleads.client import GoogleAdsClient
-    from google.ads.googleads.errors import GoogleAdsException
-except ImportError:
-    GoogleAdsClient = None  # type: ignore
 
-    class GoogleAdsException(Exception):  # type: ignore[no-redef]
-        pass
+class _FallbackGoogleAdsError(Exception):
+    """Fallback exception when the google-ads package is not installed."""
+
+
+try:
+    GoogleAdsClient: Any = importlib.import_module(
+        "google.ads.googleads.client"
+    ).GoogleAdsClient
+    GoogleAdsException: Any = importlib.import_module(
+        "google.ads.googleads.errors"
+    ).GoogleAdsException
+except ImportError:
+    GoogleAdsClient = None  # pylint: disable=invalid-name
+    GoogleAdsException = _FallbackGoogleAdsError
+
+
+def _load_extra_sdk_exceptions() -> tuple[type[Exception], ...]:
+    """Loads optional transport/config exception types when installed."""
+    extra: list[type[Exception]] = []
+    for mod_name, attr in (
+        ("yaml", "YAMLError"),
+        ("grpc", "RpcError"),
+        ("google.auth.exceptions", "GoogleAuthError"),
+    ):
+        try:
+            cls = getattr(importlib.import_module(mod_name), attr, None)
+            if isinstance(cls, type) and issubclass(cls, Exception):
+                extra.append(cls)
+        except ImportError:
+            pass
+    return tuple(extra)
+
+
+_SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    RuntimeError,
+    *_load_extra_sdk_exceptions(),
+)
 
 
 def _get_config_path() -> str:
@@ -43,20 +79,23 @@ def _get_config_path() -> str:
     if config_path and os.path.isfile(config_path):
         return config_path
 
-    plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-    candidates = [
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    candidates = (
         os.path.abspath("config/google-ads.yaml"),
         os.path.join(plugin_root, "config", "google-ads.yaml"),
         os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.gemini/config/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../../../../config/google-ads.yaml")
+            os.path.join(script_dir, "../../../../config/google-ads.yaml")
         ),
-    ]
+    )
     for candidate in candidates:
         if os.path.isfile(candidate):
             return candidate
@@ -64,17 +103,16 @@ def _get_config_path() -> str:
     try:
         if plugin_root not in sys.path:
             sys.path.insert(0, plugin_root)
-        from config.config_init import sync_and_set_config_kv
-
-        return sync_and_set_config_kv()
-    except Exception:
+        config_init = importlib.import_module("config.config_init")
+        return config_init.sync_and_set_config_kv()
+    except (AttributeError, ImportError, OSError, RuntimeError, ValueError):
         pass
 
     return os.path.abspath("config/google-ads.yaml")
 
 
 def _build_webpage_condition(client: Any, clean_url: str) -> Any:
-    """Constructs a WebpageCondition compatible with GoogleAdsClient and unit-test mocks."""
+    """Constructs a WebpageCondition compatible with SDK and unit-test mocks."""
     condition = None
     try:
         dim_obj = client.get_type("ListingGroupFilterDimension")
@@ -89,7 +127,7 @@ def _build_webpage_condition(client: Any, clean_url: str) -> Any:
             or "WebpageCondition" in dim_obj.__dict__
         ):
             condition = dim_obj.WebpageCondition()
-    except Exception:
+    except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
         condition = None
 
     if condition is None:
@@ -97,7 +135,7 @@ def _build_webpage_condition(client: Any, clean_url: str) -> Any:
             condition = client.get_type(
                 "ListingGroupFilterDimension.WebpageCondition"
             )
-        except Exception:
+        except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
             condition = client.get_type(
                 "ListingGroupFilterDimension"
             ).WebpageCondition()
@@ -134,7 +172,20 @@ def create_pmax_webpage_filter(
     client: Optional[Any] = None,
     json_output: bool = False,
 ) -> dict[str, Any]:
-    """Creates or validates a root UNIT_EXCLUDED webpage URL filter on an Asset Group."""
+    """Creates or validates a root UNIT_EXCLUDED webpage filter on Asset Group.
+
+    Args:
+        customer_id: The Google Ads Customer ID.
+        asset_group_id: The Performance Max Asset Group ID.
+        url_exclusion: URL substring to exclude from URL expansion.
+        api_version: Google Ads API version string (e.g., 'v26').
+        validate_only: If True, validates without creating the filter.
+        client: Optional pre-initialized GoogleAdsClient instance.
+        json_output: If True, emits structured JSON to stdout.
+
+    Returns:
+        Dictionary containing validation or creation details.
+    """
     clean_cid = "".join(re.findall(r"\d+", str(customer_id or "")))
     if not clean_cid:
         print(f"Error: Invalid customer ID '{customer_id}'.", file=sys.stderr)
@@ -143,7 +194,8 @@ def create_pmax_webpage_filter(
     clean_agid = "".join(re.findall(r"\d+", str(asset_group_id or "")))
     if not clean_agid:
         print(
-            f"Error: Invalid asset group ID '{asset_group_id}'.", file=sys.stderr
+            f"Error: Invalid asset group ID '{asset_group_id}'.",
+            file=sys.stderr,
         )
         sys.exit(1)
 
@@ -161,21 +213,20 @@ def create_pmax_webpage_filter(
             client = GoogleAdsClient.load_from_storage(
                 path=cfg_path, version=api_version
             )
-        except Exception as e:
+        except _SDK_EXCEPTIONS as e:
             print(
                 f"CRITICAL ERROR: Failed to load Google Ads configuration: {e}",
                 file=sys.stderr,
             )
             sys.exit(1)
 
-    asset_group_listing_filter_service = client.get_service(
-        "AssetGroupListingGroupFilterService"
-    )
+    filter_service = client.get_service("AssetGroupListingGroupFilterService")
     asset_group_service = client.get_service("AssetGroupService")
     asset_group_rn = asset_group_service.asset_group_path(clean_cid, clean_agid)
 
-    # In Google Ads API v23-v26, WEBPAGE listing group filters must be flat root-level
-    # UNIT_EXCLUDED nodes (setting a parent triggers PAGE_FEED_FILTER_HAS_PARENT).
+    # In Google Ads API v23-v26, WEBPAGE listing group filters must be flat
+    # root-level UNIT_EXCLUDED nodes (setting a parent triggers
+    # PAGE_FEED_FILTER_HAS_PARENT).
     filter_op = client.get_type("AssetGroupListingGroupFilterOperation")
     webpage_filter = filter_op.create
     webpage_filter.asset_group = asset_group_rn
@@ -200,14 +251,12 @@ def create_pmax_webpage_filter(
             request.operations.extend(operations)
         request.validate_only = bool(validate_only)
 
-        response = (
-            asset_group_listing_filter_service.mutate_asset_group_listing_group_filters(
-                request=request
-            )
+        response = filter_service.mutate_asset_group_listing_group_filters(
+            request=request
         )
         created_resources = [
             str(r.resource_name)
-            for r in (getattr(response, "results", None) or [])
+            for r in getattr(response, "results", None) or []
             if getattr(r, "resource_name", None)
         ]
         result_payload: dict[str, Any] = {
@@ -226,14 +275,17 @@ def create_pmax_webpage_filter(
             print(json.dumps(result_payload, indent=2))
         else:
             print(
-                "SUCCESS: Webpage exclusion Listing Filter (UNIT_EXCLUDED) validated/created successfully."
+                "SUCCESS: Webpage exclusion Listing Filter (UNIT_EXCLUDED) "
+                "validated/created successfully."
             )
             for rn in created_resources:
                 print(f"  - Created Listing Filter resource: '{rn}'")
         return result_payload
     except GoogleAdsException as ex:
         req_id = getattr(ex, "request_id", "N/A")
-        header = f"FAILURE: Listing Filter creation failed (Request ID: {req_id})"
+        header = (
+            f"FAILURE: Listing Filter creation failed (Request ID: {req_id})"
+        )
         print(header)
         print(header, file=sys.stderr)
         failure = getattr(ex, "failure", None)
@@ -242,7 +294,7 @@ def create_pmax_webpage_filter(
             print(err_line)
             print(err_line, file=sys.stderr)
         sys.exit(1)
-    except Exception as e:
+    except _SDK_EXCEPTIONS as e:
         print(f"CRITICAL ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 

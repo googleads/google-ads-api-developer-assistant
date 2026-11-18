@@ -12,15 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Detects the latest Google Ads API version and updates assistant_config."""
+
 import argparse
+import importlib
 import os
 import re
 import sys
-from typing import List, Optional
+from typing import Optional
 
 
 def _is_git_tracked_plugin_config_dir(cfg_dir: str) -> bool:
-    """Returns True if cfg_dir is <repo>/plugins/google-ads-api-developer-assistant/config inside a git repo."""
+    """Returns True if cfg_dir is the git-tracked plugin config directory."""
     abs_cfg = os.path.abspath(cfg_dir)
     plugin_dir = os.path.dirname(abs_cfg)
     plugins_parent = os.path.dirname(plugin_dir)
@@ -36,21 +39,32 @@ def _is_git_tracked_plugin_config_dir(cfg_dir: str) -> bool:
 def update_assistant_config_api_version(
     latest_version: str,
     config_dir: Optional[str] = None,
-) -> List[str]:
-    """Updates api_version in config/assistant_config (TOML), preserving customer_id and execute_mutates."""
+) -> list[str]:
+    """Updates api_version in config/assistant_config (TOML).
+
+    Preserves existing customer_id, execute_mutates, and enabled settings.
+
+    Args:
+        latest_version: Detected API version string (e.g., 'v26').
+        config_dir: Optional explicit config directory path.
+
+    Returns:
+        List of assistant_config file paths that were updated.
+    """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     ver_clean = latest_version.strip().strip("'\"")
     if ver_clean and not ver_clean.startswith("v") and ver_clean.isdigit():
         ver_clean = f"v{ver_clean}"
 
-    global_cfg_dirs = [
+    global_cfg_dirs = (
         os.path.expanduser(
             "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
         ),
         os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            "google-ads-api-developer-assistant/config"
         ),
-    ]
+    )
     has_global_cfg = any(os.path.isdir(d) for d in global_cfg_dirs)
 
     if config_dir:
@@ -64,17 +78,21 @@ def update_assistant_config_api_version(
                 os.path.join(script_dir, "../../../config/assistant_config")
             ),
             os.path.abspath(
-                os.path.join(script_dir, "../../../../../config/assistant_config")
+                os.path.join(
+                    script_dir, "../../../../../config/assistant_config"
+                )
             ),
             os.path.expanduser(
-                "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/assistant_config"
+                "~/.gemini/config/plugins/"
+                "google-ads-api-developer-assistant/config/assistant_config"
             ),
             os.path.expanduser(
-                "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/assistant_config"
+                "~/.claude/plugins/google-ads-assistant-local/plugins/"
+                "google-ads-api-developer-assistant/config/assistant_config"
             ),
         ]
 
-    updated_paths: List[str] = []
+    updated_paths: list[str] = []
     seen: set[str] = set()
     for cfg_path in candidate_configs:
         norm_path = os.path.normpath(cfg_path)
@@ -153,7 +171,7 @@ def update_assistant_config_api_version(
     return updated_paths
 
 
-def _extract_version_dirs(base_dir: str) -> List[str]:
+def _extract_version_dirs(base_dir: str) -> list[str]:
     """Returns sorted v<N> directory names inside base_dir."""
     if not base_dir or not os.path.isdir(base_dir):
         return []
@@ -162,7 +180,7 @@ def _extract_version_dirs(base_dir: str) -> List[str]:
             d
             for d in os.listdir(base_dir)
             if os.path.isdir(os.path.join(base_dir, d))
-            and re.match(r"^v\d+$", d)
+            and re.fullmatch(r"v\d+", d)
         ]
         v_dirs.sort(key=lambda x: int(x[1:]))
         return v_dirs
@@ -174,44 +192,52 @@ def detect_latest_api_version(
     update_config: bool = False,
     config_dir: Optional[str] = None,
 ) -> str:
-    """Detects the latest Google Ads API version from local sources or package metadata.
+    """Detects the latest Google Ads API version from local or installed files.
 
     If update_config is True or config_dir is provided, automatically writes the
     detected api_version into config/assistant_config.
+
+    Args:
+        update_config: Whether to update config/assistant_config with the
+          detected API version.
+        config_dir: Optional explicit config directory containing
+          assistant_config.
+
+    Returns:
+        The highest detected API version string (e.g., 'v26').
+
+    Raises:
+        RuntimeError: If no Google Ads API version can be detected from local
+            client_libs or the installed google-ads package.
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     detected: Optional[str] = None
-    discovered_versions: List[str] = []
+    discovered_versions: list[str] = []
+    gads_subpath = "client_libs/google-ads-python/google/ads/googleads"
 
-    # 1. Search candidate directories for client_libs/google-ads-python/google/ads/googleads
-    candidate_paths = [
+    # 1. Search candidate directories for local google-ads-python sources.
+    candidate_paths = (
         # Relative to current working directory
-        os.path.abspath("client_libs/google-ads-python/google/ads/googleads"),
+        os.path.abspath(gads_subpath),
         os.path.abspath(
-            "plugins/google-ads-api-developer-assistant/client_libs/google-ads-python/google/ads/googleads"
+            f"plugins/google-ads-api-developer-assistant/{gads_subpath}"
         ),
         # Relative to .agents/skills/ext_version/scripts/
         os.path.abspath(
-            os.path.join(
-                script_dir,
-                "../../../../client_libs/google-ads-python/google/ads/googleads",
-            )
+            os.path.join(script_dir, f"../../../../{gads_subpath}")
         ),
-        # Relative to plugins/google-ads-api-developer-assistant/skills/ext-version/scripts/
-        os.path.abspath(
-            os.path.join(
-                script_dir,
-                "../../../client_libs/google-ads-python/google/ads/googleads",
-            )
-        ),
+        # Relative to plugins/.../skills/ext-version/scripts/
+        os.path.abspath(os.path.join(script_dir, f"../../../{gads_subpath}")),
         # Global plugin installation directories
         os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python/google/ads/googleads"
+            "~/.gemini/config/plugins/"
+            f"google-ads-api-developer-assistant/{gads_subpath}"
         ),
         os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/client_libs/google-ads-python/google/ads/googleads"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            f"google-ads-api-developer-assistant/{gads_subpath}"
         ),
-    ]
+    )
 
     for candidate in candidate_paths:
         version_dirs = _extract_version_dirs(candidate)
@@ -219,18 +245,14 @@ def detect_latest_api_version(
             discovered_versions.append(version_dirs[-1])
             break
 
-    # 2. Inspect installed python package if available (checking both attributes and package __path__)
+    # 2. Inspect installed python package if available (attributes & __path__).
     try:
-        import importlib
-
         gads_mod = importlib.import_module("google.ads.googleads")
 
-        installed_versions: List[str] = [
-            attr
-            for attr in dir(gads_mod)
-            if re.match(r"^v\d+$", attr)
+        installed_versions: list[str] = [
+            attr for attr in dir(gads_mod) if re.fullmatch(r"v\d+", attr)
         ]
-        pkg_paths: List[str] = []
+        pkg_paths: list[str] = []
         raw_path = getattr(gads_mod, "__path__", None)
         if raw_path:
             pkg_paths.extend(list(raw_path))
@@ -242,7 +264,7 @@ def detect_latest_api_version(
         if installed_versions:
             installed_versions.sort(key=lambda x: int(x[1:]))
             discovered_versions.append(installed_versions[-1])
-    except Exception:
+    except (AttributeError, ImportError, OSError, TypeError, ValueError):
         pass
 
     if discovered_versions:
@@ -251,8 +273,8 @@ def detect_latest_api_version(
 
     if not detected:
         raise RuntimeError(
-            "Unable to detect the latest Google Ads API version from local client_libs "
-            "or installed google-ads package."
+            "Unable to detect the latest Google Ads API version from local "
+            "client_libs or installed google-ads package."
         )
 
     if update_config or config_dir is not None:
@@ -262,14 +284,20 @@ def detect_latest_api_version(
 
 
 def main() -> None:
-    """Detects the latest API version, updates config/assistant_config by default, and prints the version."""
+    """Detects the latest API version, updates config, and prints the version."""
     parser = argparse.ArgumentParser(
-        description="Detect the latest Google Ads API version and update config/assistant_config."
+        description=(
+            "Detect the latest Google Ads API version and update "
+            "config/assistant_config."
+        )
     )
     parser.add_argument(
         "--no-update",
         action="store_true",
-        help="Print the detected API version without updating config/assistant_config.",
+        help=(
+            "Print the detected API version without updating "
+            "config/assistant_config."
+        ),
     )
     parser.add_argument(
         "--config-dir",

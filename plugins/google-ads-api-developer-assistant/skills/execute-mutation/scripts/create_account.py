@@ -13,27 +13,63 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Creates a new Google Ads client customer account under a Manager (MCC) account.
+"""Creates a new Google Ads client customer account under an MCC account.
 
 Supports both validate_only=True dry-run validation (--dry-run, default) and
 live execution (--execute) under the 4-Step HITL Mutation Protocol.
 """
 
 import argparse
+import importlib
 import json
 import os
 import re
 import sys
 from typing import Any, Optional
 
-try:
-    from google.ads.googleads.client import GoogleAdsClient
-    from google.ads.googleads.errors import GoogleAdsException
-except ImportError:
-    GoogleAdsClient = None  # type: ignore
 
-    class GoogleAdsException(Exception):  # type: ignore[no-redef]
-        pass
+class _FallbackGoogleAdsError(Exception):
+    """Fallback exception when the google-ads package is not installed."""
+
+
+try:
+    GoogleAdsClient: Any = importlib.import_module(
+        "google.ads.googleads.client"
+    ).GoogleAdsClient
+    GoogleAdsException: Any = importlib.import_module(
+        "google.ads.googleads.errors"
+    ).GoogleAdsException
+except ImportError:
+    GoogleAdsClient = None  # pylint: disable=invalid-name
+    GoogleAdsException = _FallbackGoogleAdsError
+
+
+def _load_extra_sdk_exceptions() -> tuple[type[Exception], ...]:
+    """Loads optional transport/config exception types when installed."""
+    extra: list[type[Exception]] = []
+    for mod_name, attr in (
+        ("yaml", "YAMLError"),
+        ("grpc", "RpcError"),
+        ("google.auth.exceptions", "GoogleAuthError"),
+    ):
+        try:
+            cls = getattr(importlib.import_module(mod_name), attr, None)
+            if isinstance(cls, type) and issubclass(cls, Exception):
+                extra.append(cls)
+        except ImportError:
+            pass
+    return tuple(extra)
+
+
+_SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    RuntimeError,
+    *_load_extra_sdk_exceptions(),
+)
 
 
 def _get_config_path() -> str:
@@ -42,20 +78,23 @@ def _get_config_path() -> str:
     if config_path and os.path.isfile(config_path):
         return config_path
 
-    plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-    candidates = [
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    candidates = (
         os.path.abspath("config/google-ads.yaml"),
         os.path.join(plugin_root, "config", "google-ads.yaml"),
         os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.gemini/config/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../../../../config/google-ads.yaml")
+            os.path.join(script_dir, "../../../../config/google-ads.yaml")
         ),
-    ]
+    )
     for candidate in candidates:
         if os.path.isfile(candidate):
             return candidate
@@ -63,16 +102,15 @@ def _get_config_path() -> str:
     try:
         if plugin_root not in sys.path:
             sys.path.insert(0, plugin_root)
-        from config.config_init import sync_and_set_config_kv
-
-        return sync_and_set_config_kv()
-    except Exception:
+        config_init = importlib.import_module("config.config_init")
+        return config_init.sync_and_set_config_kv()
+    except (AttributeError, ImportError, OSError, RuntimeError, ValueError):
         pass
 
     return os.path.abspath("config/google-ads.yaml")
 
 
-def handle_googleads_exception(exception: GoogleAdsException) -> None:
+def handle_googleads_exception(exception: Exception) -> None:
     """Prints clean, actionable details of a GoogleAdsException."""
     req_id = getattr(exception, "request_id", "N/A")
     print(
@@ -83,7 +121,8 @@ def handle_googleads_exception(exception: GoogleAdsException) -> None:
     for error in getattr(failure, "errors", []) or []:
         print(f"  - {error.message}", file=sys.stderr)
         if getattr(error, "location", None):
-            for element in getattr(error.location, "field_path_elements", []) or []:
+            elems = getattr(error.location, "field_path_elements", []) or []
+            for element in elems:
                 print(f"    On field: {element.field_name}", file=sys.stderr)
 
 
@@ -113,7 +152,7 @@ def create_account_under_mcc(
         final_url_suffix: Optional final URL suffix.
         email_address: Optional email address to invite to the new account.
         access_role: Optional AccessRole enum name (e.g., 'ADMIN', 'STANDARD').
-        validate_only: If True, validates the request without creating the account.
+        validate_only: If True, validates without creating the account.
         client: Optional pre-initialized GoogleAdsClient instance.
         json_output: If True, emits structured JSON to stdout.
 
@@ -129,7 +168,7 @@ def create_account_under_mcc(
         sys.exit(1)
 
     clean_currency = str(currency_code or "").strip().upper()
-    if not re.match(r"^[A-Z]{3}$", clean_currency):
+    if not re.fullmatch(r"[A-Z]{3}", clean_currency):
         print(
             f"Error: Invalid 3-letter ISO currency code '{currency_code}'.",
             file=sys.stderr,
@@ -146,7 +185,8 @@ def create_account_under_mcc(
         role_upper = str(access_role).strip().upper()
         if role_upper in ("UNSPECIFIED", "UNKNOWN"):
             print(
-                f"Error: Invalid access_role '{access_role}'. Must be a concrete role (e.g., ADMIN, STANDARD, READ_ONLY).",
+                f"Error: Invalid access_role '{access_role}'. Must be a "
+                "concrete role (e.g., ADMIN, STANDARD, READ_ONLY).",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -160,9 +200,10 @@ def create_account_under_mcc(
             client = GoogleAdsClient.load_from_storage(
                 path=cfg_path, version=api_version
             )
-        except Exception as exc:
+        except _SDK_EXCEPTIONS as exc:
             print(
-                f"CRITICAL ERROR: Failed to load Google Ads configuration: {exc}",
+                "CRITICAL ERROR: Failed to load Google Ads configuration: "
+                f"{exc}",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -218,19 +259,21 @@ def create_account_under_mcc(
             print(json.dumps(result_payload, indent=2))
         elif validate_only:
             print(
-                f"SUCCESS (validate_only=True): Verified creation of client account "
-                f"'{resolved_name}' ({clean_currency}, {clean_tz}) under MCC {clean_mcc_id}."
+                "SUCCESS (validate_only=True): Verified creation of client "
+                f"account '{resolved_name}' ({clean_currency}, {clean_tz}) "
+                f"under MCC {clean_mcc_id}."
             )
         else:
             print(
-                f'SUCCESS: Customer created with resource name "{resource_name}" '
-                f'under manager account with ID "{clean_mcc_id}".'
+                f"SUCCESS: Customer created with resource name "
+                f'"{resource_name}" under manager account with ID '
+                f'"{clean_mcc_id}".'
             )
         return result_payload
     except GoogleAdsException as ex:
         handle_googleads_exception(ex)
         sys.exit(1)
-    except Exception as exc:
+    except _SDK_EXCEPTIONS as exc:
         print(f"CRITICAL ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -238,7 +281,9 @@ def create_account_under_mcc(
 def main() -> None:
     """CLI entrypoint for creating a client account under an MCC."""
     parser = argparse.ArgumentParser(
-        description="Creates a new Google Ads client customer account under an MCC."
+        description=(
+            "Creates a new Google Ads client customer account under an MCC."
+        )
     )
     parser.add_argument(
         "-m",
@@ -285,7 +330,9 @@ def main() -> None:
         "--tracking_url_template",
         dest="tracking_url_template",
         default=None,
-        help="Optional tracking URL template (e.g., '{lpurl}?device={device}').",
+        help=(
+            "Optional tracking URL template (e.g., '{lpurl}?device={device}')."
+        ),
     )
     parser.add_argument(
         "--final-url-suffix",
@@ -306,7 +353,10 @@ def main() -> None:
         "--access_role",
         dest="access_role",
         default=None,
-        help="Optional access role for invited user (e.g., ADMIN, STANDARD, READ_ONLY).",
+        help=(
+            "Optional access role for invited user "
+            "(e.g., ADMIN, STANDARD, READ_ONLY)."
+        ),
     )
     parser.add_argument(
         "--dry-run",

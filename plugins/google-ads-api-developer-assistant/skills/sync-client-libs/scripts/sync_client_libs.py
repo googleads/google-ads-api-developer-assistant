@@ -15,30 +15,34 @@
 """Automated discovery, version verification, and update tool for client_libs."""
 
 import argparse
+import concurrent.futures
 import glob
+import importlib
+import importlib.metadata
 import json
 import os
 import re
 import shutil
+import site
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
+from typing import Any, Optional
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Optional
 
 
 class VersionFallback:
-    """Lightweight PEP 440 / SemVer comparator with pre-release ordering (e.g. 26.0.0-rc1 < 26.0.0)."""
+    """Lightweight PEP 440 / SemVer comparator with pre-release ordering."""
 
     def __init__(self, v_str: str) -> None:
         self.raw: str = v_str
         clean: str = re.sub(r"^[vV\s]+", "", v_str.strip())
         clean = clean.split("+", 1)[0]
-        m = re.match(r"^(\d+(?:\.\d+)*)(.*)$", clean)
+        m = re.fullmatch(r"(\d+(?:\.\d+)*)(.*)", clean, flags=re.DOTALL)
         if m:
             rel_str, pre_raw = m.group(1), m.group(2).strip(".-_")
             rel_list = [int(p) for p in rel_str.split(".") if p.isdigit()]
@@ -47,7 +51,8 @@ class VersionFallback:
             rel_list = digits if digits else [0]
             pre_raw = ""
 
-        # Trim trailing zeros for canonical equality (e.g. 26.0 == 26.0.0) while keeping >=1 element
+        # Trim trailing zeros for canonical equality (e.g. 26.0 == 26.0.0)
+        # while keeping >= 1 element.
         norm_rel = list(rel_list)
         while len(norm_rel) > 1 and norm_rel[-1] == 0:
             norm_rel.pop()
@@ -61,13 +66,19 @@ class VersionFallback:
                     pre_tokens.append((1, int(tok)))
                 else:
                     low = tok.lower()
-                    alias = {"a": "alpha", "b": "beta", "c": "rc", "pre": "rc"}.get(
-                        low, low
-                    )
+                    alias = {
+                        "a": "alpha",
+                        "b": "beta",
+                        "c": "rc",
+                        "pre": "rc",
+                    }.get(low, low)
                     pre_tokens.append((0, alias))
 
-        # Final release (1) sorts strictly greater than pre-release (0) of the same numeric tuple
-        self._sort_key: tuple[tuple[int, ...], int, tuple[tuple[int, Any], ...]] = (
+        # Final release (1) sorts strictly greater than pre-release (0) of the
+        # same numeric tuple.
+        self._sort_key: tuple[
+            tuple[int, ...], int, tuple[tuple[int, Any], ...]
+        ] = (
             tuple(norm_rel),
             0 if self.is_prerelease else 1,
             tuple(pre_tokens),
@@ -95,13 +106,24 @@ class VersionFallback:
 
 
 try:
-    from packaging.version import Version, parse as parse_version
+    _PACKAGING_VERSION_MOD: Any = importlib.import_module("packaging.version")
+    _PACKAGING_PARSE: Any = _PACKAGING_VERSION_MOD.parse
+    _VERSION_PARSE_ERRORS: tuple[type[Exception], ...] = (
+        AttributeError,
+        TypeError,
+        ValueError,
+        _PACKAGING_VERSION_MOD.InvalidVersion,
+    )
 except ImportError:
+    _PACKAGING_PARSE = None
+    _VERSION_PARSE_ERRORS = (AttributeError, TypeError, ValueError)
 
-    def parse_version(v_str: str) -> Any:
-        return VersionFallback(v_str)
 
-    Version = VersionFallback  # type: ignore[misc,assignment]
+def parse_version(v_str: str) -> Any:
+    """Parses a version string using packaging.version or VersionFallback."""
+    if _PACKAGING_PARSE is not None:
+        return _PACKAGING_PARSE(v_str)
+    return VersionFallback(v_str)
 
 
 KNOWN_REPOS: dict[str, str] = {
@@ -132,10 +154,11 @@ _SAFE_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _PRERELEASE_TAG_RE = re.compile(
     r"(?i)(?:[-_.]?(?:alpha|beta|rc|dev|pre)\d*|-a\d+|-b\d+)$"
 )
-_GITHUB_AUTH_HOSTS = {"api.github.com", "github.com"}
+_GITHUB_AUTH_HOSTS = frozenset({"api.github.com", "github.com"})
 
 
 def _normalize_target_library(target_library: Optional[str]) -> Optional[str]:
+    """Normalizes a library name or shorthand alias."""
     if not target_library:
         return None
     cleaned = target_library.strip()
@@ -148,18 +171,22 @@ def _normalize_target_library(target_library: Optional[str]) -> Optional[str]:
 
 
 def _is_safe_git_tag(tag: str) -> bool:
+    """Returns True if tag is a safe git tag string."""
     return bool(tag and not tag.startswith("-") and _SAFE_TAG_RE.fullmatch(tag))
 
 
 def _git_env() -> dict[str, str]:
+    """Returns environment variables for non-interactive git commands."""
     return {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 
 
 def _pip_env() -> dict[str, str]:
+    """Returns environment variables for non-interactive pip commands."""
     return {**os.environ, "PIP_NO_INPUT": "1"}
 
 
 def _build_github_headers(include_auth: bool = True) -> dict[str, str]:
+    """Builds HTTP request headers for GitHub API calls."""
     headers = {
         "User-Agent": "google-ads-api-developer-assistant",
         "Accept": "application/vnd.github.v3+json",
@@ -191,10 +218,12 @@ def discover_client_libs_dir(explicit_path: Optional[str] = None) -> str:
         os.path.abspath(os.path.join(script_dir, "../../../client_libs")),
         # Global plugin installation directories
         os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/client_libs"
+            "~/.gemini/config/plugins/"
+            "google-ads-api-developer-assistant/client_libs"
         ),
         os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/client_libs"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            "google-ads-api-developer-assistant/client_libs"
         ),
         # Local workspace override
         os.path.abspath("client_libs"),
@@ -211,7 +240,7 @@ def discover_client_libs_dir(explicit_path: Optional[str] = None) -> str:
 
 
 def get_repo_slug(lib_name: str, lib_path: str) -> str:
-    """Determines GitHub repo slug (owner/repo) for a given library directory."""
+    """Determines GitHub repo slug (owner/repo) for a library directory."""
     if lib_name in KNOWN_REPOS:
         return KNOWN_REPOS[lib_name]
 
@@ -232,7 +261,7 @@ def get_repo_slug(lib_name: str, lib_path: str) -> str:
             match = re.search(r"github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?$", url)
             if match:
                 return match.group(1)
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             pass
 
     # Default fallback assumption
@@ -240,7 +269,8 @@ def get_repo_slug(lib_name: str, lib_path: str) -> str:
 
 
 def detect_installed_version(lib_name: str, lib_path: str) -> Optional[str]:
-    """Detects the installed version of a client library from its local files."""
+    """Detects the installed version of a client library from local files."""
+    del lib_name
     # 1. Python library detection (pyproject.toml or ChangeLog)
     pyproject_path = os.path.join(lib_path, "pyproject.toml")
     if os.path.isfile(pyproject_path):
@@ -264,15 +294,25 @@ def detect_installed_version(lib_name: str, lib_path: str) -> Optional[str]:
         except OSError:
             pass
 
-    # 2. PHP library detection (composer.json, ChangeLog.md, GapicClientTrait.php)
+    # 2. PHP library detection (composer.json, ChangeLog.md,
+    #    GapicClientTrait.php)
     composer_path = os.path.join(lib_path, "composer.json")
     if os.path.isfile(composer_path):
         try:
             with open(composer_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if "version" in data and str(data["version"]).strip():
+                if (
+                    isinstance(data, dict)
+                    and str(data.get("version", "")).strip()
+                ):
                     return str(data["version"]).strip().lstrip("v")
-        except Exception:
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ):
             pass
 
     for cl_md_name in ("ChangeLog.md", "CHANGELOG.md"):
@@ -281,8 +321,9 @@ def detect_installed_version(lib_name: str, lib_path: str) -> Optional[str]:
             try:
                 with open(cl_md_path, "r", encoding="utf-8") as f:
                     for line in f:
-                        m = re.match(
-                            r"^(?:##?\s*\[?v?|\*\s*v?)(\d+\.\d+\.\d+(?:[-.][0-9A-Za-z]+)*)",
+                        m = re.search(
+                            r"^(?:##?\s*\[?v?|\*\s*v?)"
+                            r"(\d+\.\d+\.\d+(?:[-.][0-9A-Za-z]+)*)",
                             line.strip(),
                         )
                         if m:
@@ -291,12 +332,14 @@ def detect_installed_version(lib_name: str, lib_path: str) -> Optional[str]:
                 pass
 
     for php_trait in glob.glob(
-        os.path.join(lib_path, "src", "**", "GapicClientTrait.php"), recursive=True
+        os.path.join(lib_path, "src", "**", "GapicClientTrait.php"),
+        recursive=True,
     ):
         try:
             with open(php_trait, "r", encoding="utf-8") as f:
                 m = re.search(
-                    r"(?:LIB_VERSION|VERSION)\s*=\s*['\"]([^'\"]+)['\"]", f.read()
+                    r"(?:LIB_VERSION|VERSION)\s*=\s*['\"]([^'\"]+)['\"]",
+                    f.read(),
                 )
                 if m:
                     return m.group(1).strip().lstrip("v")
@@ -330,20 +373,25 @@ def detect_installed_version(lib_name: str, lib_path: str) -> Optional[str]:
         except OSError:
             pass
 
-    # 4. Java library detection (pom.xml - strip <parent>...</parent> before matching <version>)
+    # 4. Java library detection (pom.xml - strip <parent>...</parent> before
+    # matching <version>).
     pom_path = os.path.join(lib_path, "pom.xml")
     if os.path.isfile(pom_path):
         try:
             with open(pom_path, "r", encoding="utf-8") as f:
                 pom_content = f.read()
-            pom_no_comments = re.sub(r"<!--.*?-->", "", pom_content, flags=re.DOTALL)
+            pom_no_comments = re.sub(
+                r"<!--.*?-->", "", pom_content, flags=re.DOTALL
+            )
             pom_no_parent = re.sub(
                 r"<parent\b[^>]*>.*?</parent>",
                 "",
                 pom_no_comments,
                 flags=re.DOTALL | re.IGNORECASE,
             )
-            match = re.search(r"<version>\s*([^<$\s]+)\s*</version>", pom_no_parent)
+            match = re.search(
+                r"<version>\s*([^<$\s]+)\s*</version>", pom_no_parent
+            )
             if match:
                 return match.group(1).strip()
         except OSError:
@@ -395,13 +443,14 @@ def detect_installed_version(lib_name: str, lib_path: str) -> Optional[str]:
             tag = res.stdout.strip()
             if tag:
                 return tag.lstrip("v")
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             pass
 
     return None
 
 
 def _is_prerelease_tag(tag_name: str) -> bool:
+    """Returns True if tag_name represents a pre-release version."""
     clean = tag_name.strip().lstrip("vV")
     if not clean:
         return True
@@ -411,16 +460,21 @@ def _is_prerelease_tag(tag_name: str) -> bool:
         parsed = parse_version(clean)
         if getattr(parsed, "is_prerelease", False):
             return True
-    except Exception:
+    except _VERSION_PARSE_ERRORS:
         pass
     return False
 
 
-def fetch_github_latest_release(repo_slug: str) -> tuple[Optional[str], Optional[str]]:
+def fetch_github_latest_release(
+    repo_slug: str,
+) -> tuple[Optional[str], Optional[str]]:
     """Fetches the latest release tag name and tarball URL from GitHub API.
 
+    Args:
+        repo_slug: GitHub repository slug in `'owner/repo'` format.
+
     Returns:
-        (latest_version_tag, tarball_url)
+        Tuple of `(latest_version_tag, tarball_url)`.
     """
     if not _SAFE_SLUG_RE.fullmatch(repo_slug):
         print(f"WARN: Invalid repository slug '{repo_slug}'.", file=sys.stderr)
@@ -438,8 +492,9 @@ def fetch_github_latest_release(repo_slug: str) -> tuple[Optional[str], Optional
     except urllib.error.HTTPError as e:
         if e.code in (403, 429):
             print(
-                f"WARN: GitHub API rate limit or forbidden (HTTP {e.code}) for {repo_slug}. "
-                "Set GITHUB_TOKEN or GH_TOKEN to increase rate limits.",
+                f"WARN: GitHub API rate limit or forbidden (HTTP {e.code}) "
+                f"for {repo_slug}. Set GITHUB_TOKEN or GH_TOKEN to increase "
+                "rate limits.",
                 file=sys.stderr,
             )
         elif e.code == 404:
@@ -461,18 +516,36 @@ def fetch_github_latest_release(repo_slug: str) -> tuple[Optional[str], Optional
             except urllib.error.HTTPError as fb_http_err:
                 if fb_http_err.code in (403, 429):
                     print(
-                        f"WARN: GitHub API rate limit or forbidden (HTTP {fb_http_err.code}) for {repo_slug}.",
+                        "WARN: GitHub API rate limit or forbidden "
+                        f"(HTTP {fb_http_err.code}) for {repo_slug}.",
                         file=sys.stderr,
                     )
-            except Exception:
+            except (
+                urllib.error.URLError,
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ):
                 pass
         else:
             print(
                 f"WARN: GitHub API HTTP {e.code} for {repo_slug}: {e}",
                 file=sys.stderr,
             )
-    except Exception as ex:
-        print(f"WARN: Failed to query GitHub API for {repo_slug}: {ex}", file=sys.stderr)
+    except (
+        urllib.error.URLError,
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+    ) as ex:
+        print(
+            f"WARN: Failed to query GitHub API for {repo_slug}: {ex}",
+            file=sys.stderr,
+        )
 
     # Secondary fallback using git ls-remote tags
     try:
@@ -500,19 +573,21 @@ def fetch_github_latest_release(repo_slug: str) -> tuple[Optional[str], Optional
                 def tag_sort_key(t_val: str) -> Any:
                     try:
                         return parse_version(t_val.lstrip("vV"))
-                    except Exception:
+                    except _VERSION_PARSE_ERRORS:
                         return parse_version("0.0.0")
 
                 candidates.sort(key=tag_sort_key)
                 latest_tag = candidates[-1]
                 return latest_tag, None
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError):
         pass
 
     return None, None
 
 
-def is_update_needed(installed_str: Optional[str], github_str: Optional[str]) -> bool:
+def is_update_needed(
+    installed_str: Optional[str], github_str: Optional[str]
+) -> bool:
     """Compares installed version vs GitHub release version."""
     if not github_str:
         return False
@@ -526,13 +601,13 @@ def is_update_needed(installed_str: Optional[str], github_str: Optional[str]) ->
         v_inst = parse_version(clean_installed)
         v_gh = parse_version(clean_github)
         return v_inst < v_gh
-    except Exception:
+    except _VERSION_PARSE_ERRORS:
         # Fallback raw comparison
         return clean_installed != clean_github
 
 
 def _resolve_default_branch(lib_path: str) -> Optional[str]:
-    """Determines the active or default branch (e.g., main/master) for a git repository."""
+    """Determines the active or default branch for a git repository."""
     try:
         head_res = subprocess.run(
             ["git", "symbolic-ref", "-q", "--short", "HEAD"],
@@ -547,7 +622,13 @@ def _resolve_default_branch(lib_path: str) -> Optional[str]:
             return head_res.stdout.strip()
 
         origin_res = subprocess.run(
-            ["git", "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"],
+            [
+                "git",
+                "symbolic-ref",
+                "-q",
+                "--short",
+                "refs/remotes/origin/HEAD",
+            ],
             cwd=lib_path,
             capture_output=True,
             text=True,
@@ -578,13 +659,13 @@ def _resolve_default_branch(lib_path: str) -> Optional[str]:
                 )
                 if ref_res.returncode == 0:
                     return candidate
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pass
     return None
 
 
 def update_codebase_via_git(lib_path: str, tag: str) -> bool:
-    """Updates a git repository in lib_path to the specified tag or latest HEAD."""
+    """Updates a git repository in lib_path to tag or latest HEAD."""
     if tag and not _is_safe_git_tag(tag):
         print(f"Error: Unsafe git tag rejected: {tag!r}", file=sys.stderr)
         return False
@@ -611,7 +692,13 @@ def update_codebase_via_git(lib_path: str, tag: str) -> bool:
                     continue
                 if default_branch:
                     co_branch = subprocess.run(
-                        ["git", "checkout", "-B", default_branch, candidate_tag],
+                        [
+                            "git",
+                            "checkout",
+                            "-B",
+                            default_branch,
+                            candidate_tag,
+                        ],
                         cwd=lib_path,
                         capture_output=True,
                         text=True,
@@ -648,7 +735,7 @@ def update_codebase_via_git(lib_path: str, tag: str) -> bool:
                 if co_res.returncode == 0:
                     return True
 
-        # Fallback to git pull (ensuring HEAD is attached to default_branch first)
+        # Fallback to git pull (ensuring HEAD is attached to default_branch)
         if default_branch:
             subprocess.run(
                 ["git", "checkout", default_branch],
@@ -683,13 +770,16 @@ def update_codebase_via_git(lib_path: str, tag: str) -> bool:
             env=_git_env(),
         )
         return pull_res.returncode == 0
-    except Exception as ex:
-        print(f"Error updating git repository at {lib_path}: {ex}", file=sys.stderr)
+    except (subprocess.SubprocessError, OSError) as ex:
+        print(
+            f"Error updating git repository at {lib_path}: {ex}",
+            file=sys.stderr,
+        )
         return False
 
 
 def _has_project_manifest(directory: str) -> bool:
-    """Checks if an extracted or cloned directory contains a valid library/plugin manifest."""
+    """Checks if directory contains a valid library or plugin manifest."""
     static_files = (
         "pyproject.toml",
         "composer.json",
@@ -703,7 +793,10 @@ def _has_project_manifest(directory: str) -> bool:
             return True
     if os.path.isfile(
         os.path.join(
-            directory, "plugins", "google-ads-api-developer-assistant", "plugin.json"
+            directory,
+            "plugins",
+            "google-ads-api-developer-assistant",
+            "plugin.json",
         )
     ):
         return True
@@ -715,7 +808,7 @@ def _has_project_manifest(directory: str) -> bool:
 
 
 def _resolve_sync_source_dir(extracted_root: str, target_lib_path: str) -> str:
-    """Maps nested plugins/google-ads-api-developer-assistant when syncing into a standalone plugin dir."""
+    """Maps nested plugin dir when syncing into a standalone plugin dir."""
     nested_plugin = os.path.join(
         extracted_root, "plugins", "google-ads-api-developer-assistant"
     )
@@ -723,7 +816,9 @@ def _resolve_sync_source_dir(extracted_root: str, target_lib_path: str) -> str:
         os.path.isfile(os.path.join(target_lib_path, "plugin.json"))
         or os.path.isfile(os.path.join(target_lib_path, "plugin.json.disabled"))
     ) and not os.path.isdir(
-        os.path.join(target_lib_path, "plugins", "google-ads-api-developer-assistant")
+        os.path.join(
+            target_lib_path, "plugins", "google-ads-api-developer-assistant"
+        )
     )
     if is_standalone_plugin_target and os.path.isdir(nested_plugin):
         return nested_plugin
@@ -731,7 +826,7 @@ def _resolve_sync_source_dir(extracted_root: str, target_lib_path: str) -> str:
 
 
 def _safe_extract_tar(tar: tarfile.TarFile, extract_dir: str) -> None:
-    """Validates all tar members against path traversal, link escapes, and device files before extracting."""
+    """Validates tar members against traversal, links, and devices."""
     real_extract = os.path.realpath(extract_dir)
     prefix = real_extract + os.sep
     members = tar.getmembers()
@@ -739,7 +834,8 @@ def _safe_extract_tar(tar: tarfile.TarFile, extract_dir: str) -> None:
         member_dest = os.path.realpath(os.path.join(extract_dir, member.name))
         if member_dest != real_extract and not member_dest.startswith(prefix):
             raise ValueError(
-                f"Unsafe tar member path outside extract directory: {member.name}"
+                "Unsafe tar member path outside extract directory:"
+                f" {member.name}"
             )
         if member.isdev():
             raise ValueError(f"Unsafe device file in archive: {member.name}")
@@ -749,10 +845,15 @@ def _safe_extract_tar(tar: tarfile.TarFile, extract_dir: str) -> None:
                 if member.issym()
                 else extract_dir
             )
-            link_target = os.path.realpath(os.path.join(link_base, member.linkname))
-            if link_target != real_extract and not link_target.startswith(prefix):
+            link_target = os.path.realpath(
+                os.path.join(link_base, member.linkname)
+            )
+            if link_target != real_extract and not link_target.startswith(
+                prefix
+            ):
                 raise ValueError(
-                    f"Unsafe link target in archive: {member.name} -> {member.linkname}"
+                    f"Unsafe link target in archive: {member.name} -> "
+                    f"{member.linkname}"
                 )
     try:
         tar.extractall(extract_dir, members=members, filter="data")
@@ -761,6 +862,7 @@ def _safe_extract_tar(tar: tarfile.TarFile, extract_dir: str) -> None:
 
 
 def _write_sync_version_marker(lib_path: str, tag: str) -> None:
+    """Writes the synced release version marker file."""
     clean_ver = tag.strip().lstrip("vV")
     if clean_ver:
         try:
@@ -775,7 +877,7 @@ def _write_sync_version_marker(lib_path: str, tag: str) -> None:
 def update_codebase_via_archive(
     lib_path: str, repo_slug: str, tag: str, tarball_url: Optional[str]
 ) -> bool:
-    """Downloads release tarball or clones repository to update non-git codebase."""
+    """Downloads release tarball or clones repo to update non-git codebase."""
     if not _SAFE_SLUG_RE.fullmatch(repo_slug):
         print(f"Error: Invalid repository slug '{repo_slug}'.", file=sys.stderr)
         return False
@@ -785,7 +887,7 @@ def update_codebase_via_archive(
 
     temp_dir = tempfile.mkdtemp(prefix="client_lib_update_")
     try:
-        # 1. Try git clone shallow tag first if git is available and tag is provided
+        # 1. Try git clone shallow tag first if git is available and tag given
         if tag:
             clone_dir = os.path.join(temp_dir, "clone")
             clone_tag = tag if tag.startswith("v") else f"v{tag}"
@@ -850,7 +952,9 @@ def update_codebase_via_archive(
         req_headers = {"User-Agent": "google-ads-api-developer-assistant"}
         if parsed_url.netloc.lower() in _GITHUB_AUTH_HOSTS:
             token = (
-                os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
+                os.environ.get("GITHUB_TOKEN")
+                or os.environ.get("GH_TOKEN")
+                or ""
             ).strip()
             if token:
                 req_headers["Authorization"] = f"Bearer {token}"
@@ -881,7 +985,14 @@ def update_codebase_via_archive(
             _write_sync_version_marker(lib_path, tag)
         return ok
 
-    except Exception as ex:
+    except (
+        subprocess.SubprocessError,
+        urllib.error.URLError,
+        tarfile.TarError,
+        shutil.Error,
+        OSError,
+        ValueError,
+    ) as ex:
         print(f"Error updating codebase {repo_slug}: {ex}", file=sys.stderr)
         return False
     finally:
@@ -892,11 +1003,15 @@ def sync_directories(source_dir: str, target_dir: str) -> bool:
     """Cleanly synchronizes content from source_dir into target_dir."""
     try:
         os.makedirs(target_dir, exist_ok=True)
-        # Preserve user config files if syncing an installed standalone plugin directory
+        # Preserve user config files if syncing an installed standalone plugin
         preserved_plugin_configs: dict[str, bytes] = {}
         cfg_subdir = os.path.join(target_dir, "config")
         if os.path.isdir(cfg_subdir):
-            for cfg_fname in ("google-ads.yaml", "assistant_config", "financial_limits"):
+            for cfg_fname in (
+                "google-ads.yaml",
+                "assistant_config",
+                "financial_limits",
+            ):
                 cfg_fpath = os.path.join(cfg_subdir, cfg_fname)
                 if os.path.isfile(cfg_fpath):
                     try:
@@ -905,7 +1020,7 @@ def sync_directories(source_dir: str, target_dir: str) -> bool:
                     except OSError:
                         pass
 
-        # Remove existing contents except .git and user custom yaml/config if any
+        # Remove existing contents except .git and user custom yaml/config
         for item in os.listdir(target_dir):
             if item in [".git", "google-ads.yaml", "config.yaml"]:
                 continue
@@ -934,7 +1049,10 @@ def sync_directories(source_dir: str, target_dir: str) -> bool:
                 try:
                     with open(restored_path, "wb") as rf:
                         rf.write(raw_bytes)
-                    if cfg_fname in ("google-ads.yaml", "financial_limits") and sys.platform != "win32":
+                    if (
+                        cfg_fname in ("google-ads.yaml", "financial_limits")
+                        and sys.platform != "win32"
+                    ):
                         try:
                             os.chmod(restored_path, 0o600)
                         except OSError:
@@ -943,7 +1061,7 @@ def sync_directories(source_dir: str, target_dir: str) -> bool:
                     pass
 
         return True
-    except Exception as ex:
+    except (shutil.Error, OSError, ValueError) as ex:
         print(
             f"Failed to copy files from {source_dir} to {target_dir}: {ex}",
             file=sys.stderr,
@@ -952,7 +1070,7 @@ def sync_directories(source_dir: str, target_dir: str) -> bool:
 
 
 def detect_lib_api_version(lib_path: str) -> Optional[str]:
-    """Detects the highest v<N> API version directory in a google-ads-python codebase."""
+    """Detects highest v<N> API version dir in a google-ads-python codebase."""
     python_root = os.path.join(lib_path, "google/ads/googleads")
     if not os.path.isdir(python_root):
         return None
@@ -960,7 +1078,8 @@ def detect_lib_api_version(lib_path: str) -> Optional[str]:
         v_dirs = [
             d
             for d in os.listdir(python_root)
-            if os.path.isdir(os.path.join(python_root, d)) and re.match(r"^v\d+$", d)
+            if os.path.isdir(os.path.join(python_root, d))
+            and re.fullmatch(r"v\d+", d)
         ]
         if not v_dirs:
             return None
@@ -971,7 +1090,7 @@ def detect_lib_api_version(lib_path: str) -> Optional[str]:
 
 
 def _is_git_tracked_plugin_config_dir(cfg_dir: str) -> bool:
-    """Returns True if cfg_dir is <repo>/plugins/google-ads-api-developer-assistant/config inside a git repo."""
+    """Returns True if cfg_dir is a git-tracked plugin config directory."""
     abs_cfg = os.path.abspath(cfg_dir)
     plugin_dir = os.path.dirname(abs_cfg)
     plugins_parent = os.path.dirname(plugin_dir)
@@ -985,7 +1104,7 @@ def _is_git_tracked_plugin_config_dir(cfg_dir: str) -> bool:
 
 
 def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
-    """Inspects updated google-ads-python library and refreshes api_version in config/assistant_config."""
+    """Refreshes api_version in config/assistant_config from lib_path."""
     latest_v = detect_lib_api_version(lib_path)
     if not latest_v:
         return None
@@ -993,10 +1112,12 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
     try:
         global_cfg_dirs = [
             os.path.expanduser(
-                "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
+                "~/.gemini/config/plugins/"
+                "google-ads-api-developer-assistant/config"
             ),
             os.path.expanduser(
-                "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
+                "~/.claude/plugins/google-ads-assistant-local/plugins/"
+                "google-ads-api-developer-assistant/config"
             ),
         ]
         has_global_cfg = any(os.path.isdir(d) for d in global_cfg_dirs)
@@ -1028,7 +1149,8 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
             cfg_dir = os.path.dirname(cfg_path)
             if not os.path.isdir(cfg_dir):
                 continue
-            # Avoid dirtying git-tracked plugins/.../config/assistant_config when global plugin dirs exist
+            # Avoid dirtying git-tracked plugins/.../config/assistant_config
+            # when global plugin dirs exist.
             if has_global_cfg and _is_git_tracked_plugin_config_dir(cfg_dir):
                 continue
 
@@ -1079,39 +1201,38 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
                     pass
 
         return latest_v
-    except Exception:
+    except (OSError, ValueError):
         return None
 
 
 def detect_system_package_version(
     package_name: str = "google-ads",
 ) -> tuple[Optional[str], list[str]]:
-    """Detects the installed version of a package in the Python system site-packages/environment.
+    """Detects the installed package version in Python site-packages.
+
+    Args:
+        package_name: Distribution package name to inspect.
 
     Returns:
-        (installed_version, site_directories)
+        Tuple of `(installed_version, site_directories)`.
     """
     site_dirs: list[str] = []
     try:
-        import site
-
         if hasattr(site, "getsitepackages"):
             site_dirs.extend(site.getsitepackages())
         if hasattr(site, "getusersitepackages"):
             site_dirs.append(site.getusersitepackages())
-    except Exception:
+    except (OSError, AttributeError, ValueError):
         pass
 
     # Try importlib.metadata
     try:
-        import importlib.metadata
-
         v = importlib.metadata.version(package_name)
         return v.strip(), site_dirs
-    except Exception:
+    except (importlib.metadata.PackageNotFoundError, OSError, ValueError):
         pass
 
-    # Fallback to pip show (parse ALL lines so Location: after Version: is never skipped)
+    # Fallback to pip show (parse ALL lines so Location: after Version: is kept)
     try:
         res = subprocess.run(
             [sys.executable, "-m", "pip", "show", package_name],
@@ -1132,7 +1253,7 @@ def detect_system_package_version(
                         site_dirs.append(loc)
             if detected_ver:
                 return detected_ver, site_dirs
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError):
         pass
 
     return None, site_dirs
@@ -1143,10 +1264,14 @@ def fetch_latest_pypi_python_version(
     ttl_seconds: int = 3600,
     force: bool = False,
 ) -> Optional[str]:
-    """Fetches and caches the latest release version of a package from pypi.org."""
+    """Fetches and caches the latest release version of a package from PyPI."""
     safe_pkg = re.sub(r"[^A-Za-z0-9_.-]", "_", package_name)
     temp_dir = tempfile.gettempdir()
-    is_shared_tmp = os.path.normpath(temp_dir) in ("/tmp", "/var/tmp", "/usr/tmp")
+    is_shared_tmp = os.path.normpath(temp_dir) in (
+        "/tmp",
+        "/var/tmp",
+        "/usr/tmp",
+    )
     if not is_shared_tmp:
         try:
             is_shared_tmp = bool(os.stat(temp_dir).st_mode & 0o1000)
@@ -1160,7 +1285,11 @@ def fetch_latest_pypi_python_version(
         f"gads_assistant_pypi_{safe_pkg.replace('-', '_')}_release{uid_suffix}.json",
     )
     now = time.time()
-    if not force and os.path.isfile(cache_file) and not os.path.islink(cache_file):
+    if (
+        not force
+        and os.path.isfile(cache_file)
+        and not os.path.islink(cache_file)
+    ):
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 cached = json.load(f)
@@ -1168,7 +1297,14 @@ def fetch_latest_pypi_python_version(
             ver = str(cached.get("pypi_version") or "").strip().lstrip("v")
             if ver and 0 <= (now - ts) < ttl_seconds:
                 return ver
-        except Exception:
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            AttributeError,
+            TypeError,
+            ValueError,
+        ):
             pass
 
     url = f"https://pypi.org/pypi/{safe_pkg}/json"
@@ -1185,14 +1321,27 @@ def fetch_latest_pypi_python_version(
         ver = str(data.get("info", {}).get("version") or "").strip().lstrip("v")
         if ver:
             try:
-                flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+                flags = (
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_TRUNC
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
                 fd = os.open(cache_file, flags, 0o600)
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump({"timestamp": now, "pypi_version": ver}, f)
             except OSError:
                 pass
             return ver
-    except Exception:
+    except (
+        urllib.error.URLError,
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        AttributeError,
+        TypeError,
+        ValueError,
+    ):
         pass
     return None
 
@@ -1201,7 +1350,7 @@ def check_system_package_parity(
     package_name: str = "google-ads",
     target_version: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Checks the installed package version in the system site-directory against target/upstream version."""
+    """Checks installed package version in site-packages vs target version."""
     system_version, site_dirs = detect_system_package_version(package_name)
     matches = False
     if system_version and target_version:
@@ -1222,7 +1371,7 @@ def upgrade_system_package(
     target_version: Optional[str] = None,
     lib_path: Optional[str] = None,
 ) -> bool:
-    """Upgrades the package from pypi.org (and optional local client_libs path) into the Python site directory."""
+    """Upgrades package from PyPI (or local lib_path) in site-packages."""
     if target_version and not _is_safe_git_tag(target_version):
         print(
             f"Error: Invalid target package version '{target_version}'.",
@@ -1277,16 +1426,18 @@ def upgrade_system_package(
                 )
         if not ok and last_err:
             print(
-                f"ERROR: pip upgrade failed for {package_name}: {str(last_err).strip()}",
+                f"ERROR: pip upgrade failed for {package_name}: "
+                f"{str(last_err).strip()}",
                 file=sys.stderr,
             )
         return ok
-    except Exception as ex:
+    except (subprocess.SubprocessError, OSError, ValueError) as ex:
         print(f"Error upgrading {package_name}: {ex}", file=sys.stderr)
         return False
 
 
 def _has_assistant_manifest(directory: str) -> bool:
+    """Returns True if directory contains an assistant plugin manifest."""
     for rel in (
         "plugin.json",
         "plugin.json.disabled",
@@ -1302,12 +1453,12 @@ def check_assistant_repo(
     check_only: bool = False,
     force: bool = False,
 ) -> Optional[dict[str, Any]]:
-    """Checks and updates the google-ads-api-developer-assistant repository itself."""
+    """Checks and updates the google-ads-api-developer-assistant repository."""
     script_dir: str = os.path.dirname(os.path.abspath(__file__))
     project_root: Optional[str] = None
     git_toplevel: Optional[str] = None
 
-    # 1. Resolve enclosing git repository root via git rev-parse --show-toplevel first
+    # 1. Resolve enclosing git repository root via git rev-parse first
     try:
         top_res = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -1323,10 +1474,11 @@ def check_assistant_repo(
             if _has_assistant_manifest(cand_top):
                 project_root = cand_top
                 git_toplevel = cand_top
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pass
 
-    # 2. Check git repo root candidates FIRST so <repo>/.git is selected over nested <repo>/plugins/...
+    # 2. Check git repo root candidates FIRST so <repo>/.git is selected over
+    # nested <repo>/plugins/...
     repo_first_candidates = [
         os.path.abspath(os.path.join(script_dir, "../../../../..")),
         os.path.abspath(os.path.join(script_dir, "../../../..")),
@@ -1334,7 +1486,9 @@ def check_assistant_repo(
     ]
     if not project_root:
         for c in repo_first_candidates:
-            if os.path.exists(os.path.join(c, ".git")) and _has_assistant_manifest(c):
+            if os.path.exists(
+                os.path.join(c, ".git")
+            ) and _has_assistant_manifest(c):
                 project_root = c
                 break
 
@@ -1348,7 +1502,9 @@ def check_assistant_repo(
     if not project_root:
         return None
 
-    has_git_repo = bool(git_toplevel) or os.path.exists(os.path.join(project_root, ".git"))
+    has_git_repo = bool(git_toplevel) or os.path.exists(
+        os.path.join(project_root, ".git")
+    )
 
     repo_slug = "googleads/google-ads-api-developer-assistant"
     installed_version = None
@@ -1356,7 +1512,8 @@ def check_assistant_repo(
     # Read version from plugin.json / plugin.json.disabled
     for p_json in [
         os.path.join(
-            project_root, "plugins/google-ads-api-developer-assistant/plugin.json"
+            project_root,
+            "plugins/google-ads-api-developer-assistant/plugin.json",
         ),
         os.path.join(
             project_root,
@@ -1372,7 +1529,14 @@ def check_assistant_repo(
                     installed_version = data.get("version")
                     if installed_version:
                         break
-            except Exception:
+            except (
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                AttributeError,
+                TypeError,
+                ValueError,
+            ):
                 pass
 
     if not installed_version and has_git_repo:
@@ -1389,10 +1553,10 @@ def check_assistant_repo(
             tag = res.stdout.strip()
             if tag:
                 installed_version = tag.lstrip("v")
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             pass
 
-    github_tag, tarball_url = fetch_github_latest_release(repo_slug)
+    github_tag, _ = fetch_github_latest_release(repo_slug)
     github_version = github_tag.lstrip("v") if github_tag else None
 
     local_ahead_of_github = bool(
@@ -1431,15 +1595,15 @@ def process_client_libs(
     include_assistant: bool = True,
     upgrade_system: bool = False,
 ) -> list[dict[str, Any]]:
-    """Discovers, verifies, and updates all codebases in client_libs_dir and the assistant."""
-    import concurrent.futures
-
+    """Discovers, verifies, and updates codebases in client_libs_dir."""
     target_library = _normalize_target_library(target_library)
     results: list[dict[str, Any]] = []
 
-    # 1. Check Assistant repository if enabled and not filtering for a specific client lib
+    # 1. Check Assistant repository if enabled and not filtering for a client
+    #    lib
     if include_assistant and (
-        not target_library or target_library == "google-ads-api-developer-assistant"
+        not target_library
+        or target_library == "google-ads-api-developer-assistant"
     ):
         assistant_res = check_assistant_repo(check_only=check_only, force=force)
         if assistant_res:
@@ -1459,7 +1623,7 @@ def process_client_libs(
         repo_slug = get_repo_slug(entry, lib_path)
         valid_libs.append((entry, lib_path, repo_slug))
 
-    # Prefetch GitHub release metadata concurrently when multiple libraries are checked
+    # Prefetch GitHub release metadata concurrently when checking >1 library
     prefetched_releases: dict[str, tuple[Optional[str], Optional[str]]] = {}
     if len(valid_libs) > 1:
         unique_slugs = list(dict.fromkeys(slug for _, _, slug in valid_libs))
@@ -1474,7 +1638,14 @@ def process_client_libs(
                 slug = future_to_slug[future]
                 try:
                     prefetched_releases[slug] = future.result()
-                except Exception:
+                except (
+                    concurrent.futures.CancelledError,
+                    urllib.error.URLError,
+                    subprocess.SubprocessError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ):
                     prefetched_releases[slug] = (None, None)
 
     for entry, lib_path, repo_slug in valid_libs:
@@ -1485,7 +1656,9 @@ def process_client_libs(
             github_tag, tarball_url = fetch_github_latest_release(repo_slug)
         github_version = github_tag.lstrip("v") if github_tag else None
 
-        needs_update = is_update_needed(installed_version, github_version) or force
+        needs_update = (
+            is_update_needed(installed_version, github_version) or force
+        )
         status = "UP_TO_DATE"
         updated = False
 
@@ -1560,7 +1733,9 @@ def process_client_libs(
                     site_version_less_than_pypi = is_update_needed(
                         sys_v, target_pypi_v
                     )
-                    site_version_less_than_github = is_update_needed(sys_v, ref_v)
+                    site_version_less_than_github = is_update_needed(
+                        sys_v, ref_v
+                    )
                     if target_pypi_v and sys_v:
                         system_version_matches = (
                             not site_version_less_than_pypi
@@ -1575,7 +1750,9 @@ def process_client_libs(
                     )
 
             if not check_only:
-                latest_api_version = update_api_version_cache_if_needed(lib_path)
+                latest_api_version = update_api_version_cache_if_needed(
+                    lib_path
+                )
             else:
                 latest_api_version = detect_lib_api_version(lib_path)
 
@@ -1592,9 +1769,13 @@ def process_client_libs(
             res_item["system_version"] = system_version
             res_item["system_site_dirs"] = system_site_dirs
             res_item["system_version_matches"] = system_version_matches
-            res_item["site_version_less_than_github"] = site_version_less_than_github
+            res_item["site_version_less_than_github"] = (
+                site_version_less_than_github
+            )
             res_item["pypi_version"] = pypi_version
-            res_item["site_version_less_than_pypi"] = site_version_less_than_pypi
+            res_item["site_version_less_than_pypi"] = (
+                site_version_less_than_pypi
+            )
             if system_upgrade_failed:
                 res_item["system_upgrade_failed"] = True
             if latest_api_version:
@@ -1637,12 +1818,12 @@ def print_table(results: list[dict[str, Any]]) -> None:
                 is_outdated = r.get("site_version_less_than_github")
             if r.get("system_upgrade_failed"):
                 sys_st = "UPDATE_FAILED"
+            elif r.get("system_version_matches"):
+                sys_st = "UP_TO_DATE"
+            elif is_outdated:
+                sys_st = "OUTDATED"
             else:
-                sys_st = (
-                    "UP_TO_DATE"
-                    if r.get("system_version_matches")
-                    else ("OUTDATED" if is_outdated else "MISMATCH")
-                )
+                sys_st = "MISMATCH"
             print(
                 fmt.format(
                     "google-ads (site-packages)",
@@ -1676,30 +1857,40 @@ def print_table(results: list[dict[str, Any]]) -> None:
             dirs = r.get("system_site_dirs") or []
             primary_dir = dirs[0] if dirs else "system site-packages"
             api_ver = r.get("api_version")
-            if r.get("system_version_matches") is False:
+            matches_flag = r.get("system_version_matches")
+            if isinstance(matches_flag, bool) and not matches_flag:
                 print("\n" + "!" * 80)
                 print("ALERT: Python system site-directory version mismatch!")
                 print("  Package: google-ads")
-                print(f"  System site-directory version : {sys_v or 'NOT INSTALLED'}")
+                print(
+                    "  System site-directory version :"
+                    f" {sys_v or 'NOT INSTALLED'}"
+                )
                 print(f"  Latest upstream release       : {tgt_v}")
                 print(f"  Site directory path           : {primary_dir}")
                 print(
-                    "  Action: Gemini should alert the user and ask if they would like to upgrade."
+                    "  Action: Gemini should alert the user and ask if they "
+                    "would like to upgrade."
                 )
                 print("!" * 80)
-            elif r.get("system_version_matches") is True:
+            elif isinstance(matches_flag, bool) and matches_flag:
                 api_suffix = (
                     f" (active api_version = {api_ver})" if api_ver else ""
                 )
                 print(
-                    f"\n[OK] System site-directory package 'google-ads' ({sys_v} in {primary_dir}) matches upstream release ({tgt_v}){api_suffix}."
+                    "\n[OK] System site-directory package 'google-ads' "
+                    f"({sys_v} in {primary_dir}) matches upstream release "
+                    f"({tgt_v}){api_suffix}."
                 )
 
 
 def main() -> None:
     """CLI entry point for discovery and updating client_libs."""
     parser = argparse.ArgumentParser(
-        description="Automated discovery and update tool for Google Ads client libraries."
+        description=(
+            "Automated discovery and update tool for Google Ads client "
+            "libraries."
+        )
     )
     parser.add_argument(
         "--client_libs_dir",
@@ -1724,12 +1915,18 @@ def main() -> None:
         "-l",
         type=str,
         default=None,
-        help="Target a specific codebase/library name (e.g. python, php, ruby, java, dotnet, all).",
+        help=(
+            "Target a specific codebase/library name "
+            "(e.g. python, php, ruby, java, dotnet, all)."
+        ),
     )
     parser.add_argument(
         "--upgrade_system",
         action="store_true",
-        help="Upgrade google-ads in the Python system site-packages if mismatched.",
+        help=(
+            "Upgrade google-ads in the Python system site-packages if "
+            "mismatched."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -1752,7 +1949,8 @@ def main() -> None:
         if args.json:
             print(
                 json.dumps(
-                    {"client_libs_dir": target_dir, "results": results}, indent=2
+                    {"client_libs_dir": target_dir, "results": results},
+                    indent=2,
                 )
             )
         else:
@@ -1766,7 +1964,12 @@ def main() -> None:
         if has_failures:
             sys.exit(1)
 
-    except Exception as e:
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 

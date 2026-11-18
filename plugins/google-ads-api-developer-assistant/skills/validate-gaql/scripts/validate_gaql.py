@@ -29,13 +29,75 @@ import re
 import sys
 import tempfile
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Optional
+
+
+class _FallbackGoogleAdsError(Exception):
+    """Fallback exception when the google-ads package is not installed."""
+
+
+try:
+    GoogleAdsClient: Any = importlib.import_module(
+        "google.ads.googleads.client"
+    ).GoogleAdsClient
+    GoogleAdsException: Any = importlib.import_module(
+        "google.ads.googleads.errors"
+    ).GoogleAdsException
+except ImportError:
+    GoogleAdsClient = None  # pylint: disable=invalid-name
+    GoogleAdsException = _FallbackGoogleAdsError
+
+
+def _load_extra_sdk_exceptions() -> tuple[type[Exception], ...]:
+    """Loads optional transport/config exception types when installed."""
+    extra: list[type[Exception]] = []
+    for mod_name, attr in (
+        ("yaml", "YAMLError"),
+        ("grpc", "RpcError"),
+        ("google.auth.exceptions", "GoogleAuthError"),
+    ):
+        try:
+            cls = getattr(importlib.import_module(mod_name), attr, None)
+            if isinstance(cls, type) and issubclass(cls, Exception):
+                extra.append(cls)
+        except ImportError:
+            pass
+    return tuple(extra)
+
+
+_SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    RuntimeError,
+    *_load_extra_sdk_exceptions(),
+)
+
+_JSON_CACHE_ERRORS = (
+    OSError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    TypeError,
+    ValueError,
+)
+
+_TYPE_LOOKUP_ERRORS = (
+    AttributeError,
+    KeyError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 DEFAULT_CACHE_TTL_SECONDS: float = 86400.0
-_GAQL_MEMORY_CACHE: Dict[str, Dict[str, Any]] = {}
+_GAQL_MEMORY_CACHE: dict[str, dict[str, Any]] = {}
 _LAST_PYTEST_TEST: Optional[str] = None
-_STRING_LITERAL_RE = re.compile(r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"", re.DOTALL)
-_METADATA_FIELDS = {
+_STRING_LITERAL_RE = re.compile(
+    r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"", re.DOTALL
+)
+_METADATA_FIELDS = frozenset({
     "NAME",
     "RESOURCE_NAME",
     "CATEGORY",
@@ -50,18 +112,23 @@ _METADATA_FIELDS = {
     "ENUM_VALUES",
     "TYPE_URL",
     "IS_REPEATED",
-}
+})
 
 
 def _normalize_api_version(api_version: str) -> str:
+    """Normalizes an API version string to lowercase 'v<N>' format."""
     clean_version = str(api_version or "").strip().lower()
-    if clean_version and not clean_version.startswith("v") and clean_version.isdigit():
+    if (
+        clean_version
+        and not clean_version.startswith("v")
+        and clean_version.isdigit()
+    ):
         clean_version = f"v{clean_version}"
     return clean_version
 
 
 def _mask_string_literals(query: str) -> str:
-    """Replaces contents of quoted GAQL string literals with spaces while preserving offsets."""
+    """Replaces quoted GAQL string literal contents with spaces."""
     return _STRING_LITERAL_RE.sub(
         lambda m: "'" + (" " * max(0, len(m.group(0)) - 2)) + "'",
         query,
@@ -71,7 +138,7 @@ def _mask_string_literals(query: str) -> str:
 def compute_gaql_cache_key(
     query: str, api_version: str, customer_id: Optional[str] = None
 ) -> str:
-    """Computes the SHA-256 cache key for a (query + api_version [+ optional customer_id]) tuple."""
+    """Computes the SHA-256 cache key for query, version, and customer_id."""
     clean_query = query.strip()
     clean_version = _normalize_api_version(api_version)
     if customer_id is not None:
@@ -110,7 +177,8 @@ def _get_cache_file_path(cache_path: Optional[str] = None) -> str:
     )
 
 
-def _load_disk_cache(file_path: str) -> Dict[str, Dict[str, Any]]:
+def _load_disk_cache(file_path: str) -> dict[str, dict[str, Any]]:
+    """Loads the JSON validation cache from disk, returning {} on error."""
     if not os.path.isfile(file_path):
         return {}
     try:
@@ -122,12 +190,13 @@ def _load_disk_cache(file_path: str) -> Dict[str, Dict[str, Any]]:
                 for k, v in data.items()
                 if isinstance(k, str) and isinstance(v, dict)
             }
-    except Exception:
+    except _JSON_CACHE_ERRORS:
         pass
     return {}
 
 
-def _save_disk_cache(file_path: str, data: Dict[str, Dict[str, Any]]) -> None:
+def _save_disk_cache(file_path: str, data: dict[str, dict[str, Any]]) -> None:
+    """Atomically writes the validation cache dictionary to disk."""
     tmp_path: Optional[str] = None
     try:
         abs_file = os.path.abspath(file_path)
@@ -141,7 +210,7 @@ def _save_disk_cache(file_path: str, data: Dict[str, Dict[str, Any]]) -> None:
             json.dump(data, f, indent=2)
         os.replace(tmp_path, abs_file)
         tmp_path = None
-    except Exception:
+    except (OSError, TypeError, ValueError):
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
@@ -155,14 +224,14 @@ def get_cached_validation(
     cache_path: Optional[str] = None,
     ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS,
     customer_id: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    """Retrieves a cached validation result for (query, api_version) if present and not expired."""
+) -> Optional[dict[str, Any]]:
+    """Retrieves a cached validation result if present and not expired."""
     resolved_path = _get_cache_file_path(cache_path)
     key = compute_gaql_cache_key(query, api_version, customer_id=customer_id)
     mem_key = f"{resolved_path}:{key}"
 
     entry = _GAQL_MEMORY_CACHE.get(mem_key)
-    disk_data: Optional[Dict[str, Dict[str, Any]]] = None
+    disk_data: Optional[dict[str, dict[str, Any]]] = None
     if entry is None:
         disk_data = _load_disk_cache(resolved_path)
         entry = disk_data.get(key)
@@ -202,19 +271,20 @@ def set_cached_validation(
     cache_path: Optional[str] = None,
     timestamp: Optional[float] = None,
     customer_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Stores a validation result in both memory and on-disk cache keyed by SHA-256."""
+) -> dict[str, Any]:
+    """Stores a validation result in both memory and on-disk cache."""
     resolved_path = _get_cache_file_path(cache_path)
     key = compute_gaql_cache_key(query, api_version, customer_id=customer_id)
     mem_key = f"{resolved_path}:{key}"
 
-    entry: Dict[str, Any] = {
+    resolved_ts = float(timestamp if timestamp is not None else time.time())
+    entry: dict[str, Any] = {
         "key": key,
         "query": query.strip(),
         "api_version": _normalize_api_version(api_version),
         "valid": bool(valid),
         "message": message,
-        "timestamp": float(timestamp if timestamp is not None else time.time()),
+        "timestamp": resolved_ts,
     }
     if customer_id is not None:
         clean_cid = "".join(re.findall(r"\d+", str(customer_id)))
@@ -236,18 +306,28 @@ def invalidate_gaql_cache(
 ) -> int:
     """Invalidates cached GAQL validation results.
 
-    - If both `query` and `api_version` are provided, invalidates that specific entry.
-    - If only `query` is provided, invalidates all entries matching that query across versions.
-    - If only `api_version` is provided, invalidates all entries for that API version.
+    - If both `query` and `api_version` are provided, invalidates that entry.
+    - If only `query` is provided, invalidates entries matching that query.
+    - If only `api_version` is provided, invalidates entries for that version.
     - If neither is provided, clears the entire cache.
-    Returns the number of invalidated cache entries.
+
+    Args:
+        query: Optional GAQL query string to invalidate.
+        api_version: Optional API version string to invalidate.
+        cache_path: Optional explicit cache file path.
+        customer_id: Optional customer ID scoping the cache key.
+
+    Returns:
+        The number of invalidated cache entries.
     """
     resolved_path = _get_cache_file_path(cache_path)
     disk_data = _load_disk_cache(resolved_path)
     removed = 0
 
     if query is not None and api_version is not None:
-        key = compute_gaql_cache_key(query, api_version, customer_id=customer_id)
+        key = compute_gaql_cache_key(
+            query, api_version, customer_id=customer_id
+        )
         mem_key = f"{resolved_path}:{key}"
         in_mem = _GAQL_MEMORY_CACHE.pop(mem_key, None) is not None
         in_disk = disk_data.pop(key, None) is not None
@@ -267,7 +347,7 @@ def invalidate_gaql_cache(
             del disk_data[k]
             _GAQL_MEMORY_CACHE.pop(f"{prefix}{k}", None)
             removed += 1
-        for mk in list(_GAQL_MEMORY_CACHE.keys()):
+        for mk in list(_GAQL_MEMORY_CACHE):
             val = _GAQL_MEMORY_CACHE.get(mk)
             if (
                 mk.startswith(prefix)
@@ -292,7 +372,7 @@ def invalidate_gaql_cache(
             del disk_data[k]
             _GAQL_MEMORY_CACHE.pop(f"{prefix}{k}", None)
             removed += 1
-        for mk in list(_GAQL_MEMORY_CACHE.keys()):
+        for mk in list(_GAQL_MEMORY_CACHE):
             val = _GAQL_MEMORY_CACHE.get(mk)
             if (
                 mk.startswith(prefix)
@@ -307,8 +387,8 @@ def invalidate_gaql_cache(
         return removed
 
     # Clear all entries for resolved_path
-    removed_keys = set(disk_data.keys())
-    for mk in list(_GAQL_MEMORY_CACHE.keys()):
+    removed_keys = set(disk_data)
+    for mk in list(_GAQL_MEMORY_CACHE):
         if mk.startswith(prefix):
             removed_keys.add(mk[len(prefix) :])
             del _GAQL_MEMORY_CACHE[mk]
@@ -318,6 +398,7 @@ def invalidate_gaql_cache(
 
 
 def _get_config_path() -> str:
+    """Resolves the active assistant google-ads.yaml configuration path."""
     config_path = os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH")
     if config_path:
         expanded_env = os.path.abspath(os.path.expanduser(config_path))
@@ -327,17 +408,21 @@ def _get_config_path() -> str:
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
-    candidates = [
+    candidates = (
         os.path.abspath("config/google-ads.yaml"),
         os.path.join(plugin_root, "config", "google-ads.yaml"),
         os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.gemini/config/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
         os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            "~/.claude/plugins/google-ads-assistant-local/plugins/"
+            "google-ads-api-developer-assistant/config/google-ads.yaml"
         ),
-        os.path.abspath(os.path.join(script_dir, "../../../../config/google-ads.yaml")),
-    ]
+        os.path.abspath(
+            os.path.join(script_dir, "../../../../config/google-ads.yaml")
+        ),
+    )
     for c in candidates:
         if os.path.isfile(c):
             return c
@@ -345,26 +430,15 @@ def _get_config_path() -> str:
     try:
         if plugin_root not in sys.path and os.path.isdir(plugin_root):
             sys.path.insert(0, plugin_root)
-        from config.config_init import sync_and_set_config_kv
-
-        return sync_and_set_config_kv()
-    except Exception:
+        config_init = importlib.import_module("config.config_init")
+        return config_init.sync_and_set_config_kv()
+    except (AttributeError, ImportError, OSError, RuntimeError, ValueError):
         pass
 
     return os.path.abspath("config/google-ads.yaml")
 
 
-try:
-    from google.ads.googleads.client import GoogleAdsClient
-    from google.ads.googleads.errors import GoogleAdsException
-except ImportError:
-    GoogleAdsClient = None  # type: ignore
-
-    class GoogleAdsException(Exception):  # type: ignore[no-redef]
-        pass
-
-
-def handle_googleads_exception(exception: GoogleAdsException) -> None:
+def handle_googleads_exception(exception: Exception) -> None:
     """Prints the details of a GoogleAdsException."""
     req_id = getattr(exception, "request_id", None) or "N/A"
     print(f"FAILURE: Query validation failed with Request ID {req_id}")
@@ -375,7 +449,8 @@ def handle_googleads_exception(exception: GoogleAdsException) -> None:
             print(f"  - {getattr(error, 'message', str(error))}")
             location = getattr(error, "location", None)
             if location:
-                for element in getattr(location, "field_path_elements", []) or []:
+                elems = getattr(location, "field_path_elements", []) or []
+                for element in elems:
                     print(f"    On field: {element.field_name}")
     elif str(exception):
         print(f"  - {exception}")
@@ -385,12 +460,12 @@ def validate_gaql(
     customer_id: str,
     api_version: str,
     query: str,
-    client: Optional[GoogleAdsClient] = None,
+    client: Optional[Any] = None,
     use_cache: bool = True,
     cache_path: Optional[str] = None,
     cache_ttl: float = DEFAULT_CACHE_TTL_SECONDS,
 ) -> None:
-    """Validates a GAQL query by performing static analysis and a dry run against the API."""
+    """Validates a GAQL query via static checks and an API validate_only run."""
     if not query or not query.strip():
         print("Error: No query provided.")
         sys.exit(1)
@@ -419,7 +494,7 @@ def validate_gaql(
             )
             sys.exit(1)
 
-    # Static Analysis (mask quoted string literals first to eliminate false positives)
+    # Static Analysis (mask quoted string literals first to avoid false hits).
     query_upper = query.upper()
     masked_upper = _mask_string_literals(query).upper()
     has_from = bool(re.search(r"\bFROM\b", masked_upper))
@@ -433,24 +508,29 @@ def validate_gaql(
     if where_match:
         where_clause = where_match.group(1)
         if re.search(r"\bOR\b", where_clause):
-            print("FAILURE: GAQL query contains forbidden OR operator in WHERE clause.")
             print(
-                "  - GAQL does not support the OR operator. Use IN or execute separate queries instead."
+                "FAILURE: GAQL query contains forbidden OR operator in WHERE "
+                "clause."
+            )
+            print(
+                "  - GAQL does not support the OR operator. Use IN or execute "
+                "separate queries instead."
             )
             sys.exit(1)
 
     # Check for forbidden aggregate functions
-    agg_funcs = ["COUNT", "SUM", "AVG", "MIN", "MAX"]
+    agg_funcs = ("COUNT", "SUM", "AVG", "MIN", "MAX")
     for func in agg_funcs:
         if re.search(r"\b" + func + r"\b\s*\(", masked_upper):
             print(
-                f"FAILURE: GAQL query contains forbidden aggregate function '{func}'."
+                "FAILURE: GAQL query contains forbidden aggregate function "
+                f"'{func}'."
             )
             print("  - GAQL does not support standard SQL aggregate functions.")
             sys.exit(1)
 
-    # Check for forbidden SQL date/time functions (avoiding GAQL valid 'DURING TODAY')
-    sql_call_date_funcs = [
+    # Check for forbidden SQL date/time functions (avoiding 'DURING TODAY')
+    sql_call_date_funcs = (
         "NOW",
         "TODAY",
         "GETDATE",
@@ -459,43 +539,59 @@ def validate_gaql(
         "DATEDIFF",
         "DATE_ADD",
         "DATE_SUB",
-    ]
+    )
     for func in sql_call_date_funcs:
         if re.search(r"\b" + func + r"\s*\(", masked_upper):
             print(
-                f"FAILURE: GAQL query contains forbidden date/time function '{func}'."
+                "FAILURE: GAQL query contains forbidden date/time function "
+                f"'{func}'."
             )
             print(
-                "  - GAQL does not support SQL date/time functions like NOW() or CURRENT_DATE()."
+                "  - GAQL does not support SQL date/time functions like NOW() "
+                "or CURRENT_DATE()."
             )
             sys.exit(1)
 
-    sql_bare_date_funcs = ["CURRENT_DATE", "CURRENT_TIMESTAMP", "SYSDATE"]
+    sql_bare_date_funcs = ("CURRENT_DATE", "CURRENT_TIMESTAMP", "SYSDATE")
     for func in sql_bare_date_funcs:
         if re.search(r"\b" + func + r"\b", masked_upper):
             print(
-                f"FAILURE: GAQL query contains forbidden date/time function '{func}'."
+                "FAILURE: GAQL query contains forbidden date/time function "
+                f"'{func}'."
             )
             print(
-                "  - GAQL does not support SQL date/time functions like NOW() or CURRENT_DATE()."
+                "  - GAQL does not support SQL date/time functions like NOW() "
+                "or CURRENT_DATE()."
             )
             sys.exit(1)
 
-    # Core date segment check (DAY_OF_WEEK does NOT require a finite date range in GAQL)
-    select_match = re.search(r"\bSELECT\b(.*?)\bFROM\b", masked_upper, re.DOTALL)
+    # Core date segment check (DAY_OF_WEEK does NOT require a finite date range)
+    select_match = re.search(
+        r"\bSELECT\b(.*?)\bFROM\b", masked_upper, re.DOTALL
+    )
     if select_match:
         select_clause = select_match.group(1)
         has_date_segment = bool(
-            re.search(r"\bSEGMENTS\.(?:DATE|WEEK|MONTH|QUARTER|YEAR)\b", select_clause)
+            re.search(
+                r"\bSEGMENTS\.(?:DATE|WEEK|MONTH|QUARTER|YEAR)\b",
+                select_clause,
+            )
         )
         if has_date_segment:
+            date_filter_re = (
+                r"\b(?:SEGMENTS\.(?:DATE|WEEK|MONTH|QUARTER|YEAR)"
+                r"|[A-Z0-9_.]*DATE(?:_TIME)?)"
+                r"\s*(?:=|>=|<=|>|<|\bBETWEEN\b|\bDURING\b|\bIN\b)"
+            )
             date_filter_match = where_match and re.search(
-                r"\b(?:SEGMENTS\.(?:DATE|WEEK|MONTH|QUARTER|YEAR)|[A-Z0-9_.]*DATE(?:_TIME)?)\s*(?:=|>=|<=|>|<|\bBETWEEN\b|\bDURING\b|\bIN\b)",
+                date_filter_re,
                 where_match.group(1),
             )
             if not date_filter_match:
                 print(
-                    "FAILURE: GAQL query selects a date segment but does not specify a finite date filter (DURING or BETWEEN) in the WHERE clause."
+                    "FAILURE: GAQL query selects a date segment but does not "
+                    "specify a finite date filter (DURING or BETWEEN) in the "
+                    "WHERE clause."
                 )
                 sys.exit(1)
 
@@ -503,7 +599,8 @@ def validate_gaql(
     if re.search(r"\bFROM\s+CLICK_VIEW\b", masked_upper):
         if not where_match:
             print(
-                "FAILURE: Queries against 'click_view' require a single-day filter on segments.date."
+                "FAILURE: Queries against 'click_view' require a single-day "
+                "filter on segments.date."
             )
             sys.exit(1)
         masked_where = where_match.group(1)
@@ -516,18 +613,21 @@ def validate_gaql(
         )
         has_single_during = bool(
             re.search(
-                r"\bSEGMENTS\.DATE\s+DURING\s+(?:TODAY|YESTERDAY)\b", masked_where
-            )
-        )
-        has_multi_day = bool(
-            re.search(
-                r"\bSEGMENTS\.DATE\s+(?:BETWEEN\b|IN\b|DURING\s+(?!(?:TODAY|YESTERDAY)\b))|\bSEGMENTS\.DATE\s*(?:>=|<=|>|<|!=)",
+                r"\bSEGMENTS\.DATE\s+DURING\s+(?:TODAY|YESTERDAY)\b",
                 masked_where,
             )
         )
+        multi_day_re = (
+            r"\bSEGMENTS\.DATE\s+(?:BETWEEN\b|IN\b"
+            r"|DURING\s+(?!(?:TODAY|YESTERDAY)\b))"
+            r"|\bSEGMENTS\.DATE\s*(?:>=|<=|>|<|!=)"
+        )
+        has_multi_day = bool(re.search(multi_day_re, masked_where))
         if has_multi_day or not (has_eq_date or has_single_during):
             print(
-                "FAILURE: Queries against 'click_view' require a single-day filter on segments.date (e.g., WHERE segments.date = 'YYYY-MM-DD' or segments.date DURING TODAY)."
+                "FAILURE: Queries against 'click_view' require a single-day "
+                "filter on segments.date (e.g., WHERE segments.date = "
+                "'YYYY-MM-DD' or segments.date DURING TODAY)."
             )
             sys.exit(1)
 
@@ -535,7 +635,9 @@ def validate_gaql(
     if re.search(r"\bFROM\s+CHANGE_STATUS\b", masked_upper):
         if not where_match:
             print(
-                "FAILURE: Queries against 'change_status' require a finite date filter (such as a BETWEEN filter on last_change_date_time)."
+                "FAILURE: Queries against 'change_status' require a finite "
+                "date filter (such as a BETWEEN filter on "
+                "last_change_date_time)."
             )
             sys.exit(1)
         masked_where = where_match.group(1)
@@ -554,17 +656,23 @@ def validate_gaql(
         )
         if not (has_between or has_during or has_bounds or has_exact):
             print(
-                "FAILURE: Queries against 'change_status' require a finite date filter (such as a BETWEEN filter on last_change_date_time)."
+                "FAILURE: Queries against 'change_status' require a finite "
+                "date filter (such as a BETWEEN filter on "
+                "last_change_date_time)."
             )
             sys.exit(1)
         limit_match = re.search(r"\bLIMIT\s+(\d+)\b", masked_upper)
         if not limit_match:
-            print("FAILURE: Queries against 'change_status' require a LIMIT clause.")
+            print(
+                "FAILURE: Queries against 'change_status' require a LIMIT "
+                "clause."
+            )
             sys.exit(1)
         limit_val = int(limit_match.group(1))
         if limit_val < 1 or limit_val > 10000:
             print(
-                "FAILURE: Queries against 'change_status' require a LIMIT between 1 and 10,000."
+                "FAILURE: Queries against 'change_status' require a LIMIT "
+                "between 1 and 10,000."
             )
             sys.exit(1)
 
@@ -572,30 +680,34 @@ def validate_gaql(
     if "GOOGLE_ADS_FIELD" in masked_upper:
         if has_from:
             print(
-                "FAILURE: Metadata queries (google_ads_field) MUST NOT contain a FROM clause."
+                "FAILURE: Metadata queries (google_ads_field) MUST NOT "
+                "contain a FROM clause."
             )
             print("  - Incorrect: SELECT name FROM google_ads_field")
             print("  - Correct: SELECT name")
             sys.exit(1)
         if any(
             prefix in masked_upper
-            for prefix in ["GOOGLE_ADS_FIELD.", "METRICS.", "SEGMENTS."]
+            for prefix in ("GOOGLE_ADS_FIELD.", "METRICS.", "SEGMENTS.")
         ):
             print(
-                "FAILURE: Metadata queries MUST NOT use resource/segment prefixes (e.g., use 'name', not 'google_ads_field.name')."
+                "FAILURE: Metadata queries MUST NOT use resource/segment "
+                "prefixes (e.g., use 'name', not 'google_ads_field.name')."
             )
             sys.exit(1)
 
     # Detect GoogleAdsFieldService metadata query (SELECT without FROM)
     is_metadata_query = False
     if not has_from and "GOOGLE_ADS_FIELD" not in masked_upper:
-        if any(prefix in masked_upper for prefix in ["METRICS.", "SEGMENTS."]):
+        if any(prefix in masked_upper for prefix in ("METRICS.", "SEGMENTS.")):
             print(
-                "FAILURE: Metadata queries MUST NOT use resource/segment prefixes (e.g., use 'name', not 'google_ads_field.name')."
+                "FAILURE: Metadata queries MUST NOT use resource/segment "
+                "prefixes (e.g., use 'name', not 'google_ads_field.name')."
             )
             sys.exit(1)
         meta_sel = re.search(
-            r"\bSELECT\b(.*?)(?:\bWHERE\b|\bORDER\s+BY\b|\bLIMIT\b|\bPARAMETERS\b|$)",
+            r"\bSELECT\b(.*?)"
+            r"(?:\bWHERE\b|\bORDER\s+BY\b|\bLIMIT\b|\bPARAMETERS\b|$)",
             masked_upper,
             re.DOTALL,
         )
@@ -613,9 +725,13 @@ def validate_gaql(
     ver_num = int(ver_match.group(1)) if ver_match else None
     if ver_num is None or ver_num >= 23:
         if re.search(r"\bSEGMENTS\.HOUR\b", masked_upper):
-            print("FAILURE: GAQL query references deprecated segment 'segments.hour'.")
             print(
-                "  - In Google Ads API v23+, 'segments.hour' was renamed to 'segments.hour_of_day'."
+                "FAILURE: GAQL query references deprecated segment "
+                "'segments.hour'."
+            )
+            print(
+                "  - In Google Ads API v23+, 'segments.hour' was renamed to "
+                "'segments.hour_of_day'."
             )
             print("  - Please update your query to use 'segments.hour_of_day'.")
             sys.exit(1)
@@ -629,15 +745,20 @@ def validate_gaql(
             client = GoogleAdsClient.load_from_storage(
                 path=cfg_path, version=api_version
             )
-        except Exception as e:
-            print(f"CRITICAL ERROR: Failed to load Google Ads configuration: {e}")
+        except _SDK_EXCEPTIONS as e:
+            print(
+                f"CRITICAL ERROR: Failed to load Google Ads configuration: {e}"
+            )
             sys.exit(1)
 
     try:
         print(f"--- [DRY RUN] Validating Query for {clean_customer_id} ---")
         if is_metadata_query:
             field_request_type = None
-            field_mod_path = f"google.ads.googleads.{api_version}.services.types.google_ads_field_service"
+            field_mod_path = (
+                f"google.ads.googleads.{api_version}.services.types"
+                ".google_ads_field_service"
+            )
             try:
                 f_mod = importlib.import_module(field_mod_path)
                 field_request_type = getattr(
@@ -647,8 +768,10 @@ def validate_gaql(
                 pass
             if field_request_type is None and client is not None:
                 try:
-                    field_request_type = client.get_type("SearchGoogleAdsFieldsRequest")
-                except Exception:
+                    field_request_type = client.get_type(
+                        "SearchGoogleAdsFieldsRequest"
+                    )
+                except _TYPE_LOOKUP_ERRORS:
                     pass
 
             field_service = client.get_service("GoogleAdsFieldService")
@@ -665,7 +788,10 @@ def validate_gaql(
             field_service.search_google_ads_fields(request=request)
         else:
             search_request_type = None
-            module_path = f"google.ads.googleads.{api_version}.services.types.google_ads_service"
+            module_path = (
+                f"google.ads.googleads.{api_version}.services.types"
+                ".google_ads_service"
+            )
             try:
                 module = importlib.import_module(module_path)
                 search_request_type = getattr(
@@ -675,8 +801,10 @@ def validate_gaql(
                 pass
             if search_request_type is None and client is not None:
                 try:
-                    search_request_type = client.get_type("SearchGoogleAdsRequest")
-                except Exception:
+                    search_request_type = client.get_type(
+                        "SearchGoogleAdsRequest"
+                    )
+                except _TYPE_LOOKUP_ERRORS:
                     pass
 
             ga_service = client.get_service("GoogleAdsService")
@@ -712,7 +840,7 @@ def validate_gaql(
     except GoogleAdsException as ex:
         handle_googleads_exception(ex)
         sys.exit(1)
-    except Exception as e:
+    except _SDK_EXCEPTIONS as e:
         print(f"CRITICAL ERROR: {e}")
         sys.exit(1)
 
@@ -720,7 +848,9 @@ def validate_gaql(
 def main() -> None:
     """Parses command line arguments and calls validate_gaql."""
     parser = argparse.ArgumentParser(description="Validates a GAQL query.")
-    parser.add_argument("--customer_id", required=True, help="Google Ads Customer ID.")
+    parser.add_argument(
+        "--customer_id", required=True, help="Google Ads Customer ID."
+    )
     parser.add_argument(
         "--api_version",
         required=True,
@@ -773,7 +903,8 @@ def main() -> None:
             query = sys.stdin.read().strip()
         else:
             print(
-                "Error: No GAQL query provided. Pass via --query / -q or pipe via stdin.",
+                "Error: No GAQL query provided. Pass via --query / -q or "
+                "pipe via stdin.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -792,4 +923,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
