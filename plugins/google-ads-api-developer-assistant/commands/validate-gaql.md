@@ -21,7 +21,7 @@ Validates Google Ads Query Language (GAQL) queries against Google Ads API schema
      - Ensure **NO `OR` operator** is used (GAQL only supports `AND`; suggest `IN` or separate queries).
      - Ensure **NO `FROM` clause** is used for `GoogleAdsFieldService` metadata queries.
      - Ensure no SQL aggregation functions (`SUM()`, `COUNT()`) are used.
-     - Ensure **segment renames** are respected (in v23+, `segments.hour` was renamed to `segments.hour_of_day`).
+     - Ensure valid **hourly segmentation** (`segments.hour` is the valid GAQL field; `segments.hour_of_day` is invalid).
    - **Step 4: Dry-Run Execution** (if credentials and customer ID are available):
      Run `skills/validate-gaql/scripts/validate_gaql.py` (validation results are cached locally keyed by `SHA-256(query + api_version)` in `saved/data/gaql_validation_cache.json`; pass `--no-cache` to bypass or `--clear-cache` to invalidate):
      ```bash

@@ -543,7 +543,7 @@ def _bench_gaql_static_analysis() -> Optional[Dict[str, Any]]:
     )
     invalid_agg_q = "SELECT COUNT(campaign.id) FROM campaign"
     invalid_hour_date_q = (
-        "SELECT campaign.id, segments.hour FROM campaign "
+        "SELECT campaign.id, segments.hour_of_day FROM campaign "
         "WHERE segments.date DURING LAST_7_DAYS"
     )
 

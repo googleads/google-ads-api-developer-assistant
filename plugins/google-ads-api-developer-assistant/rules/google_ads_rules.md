@@ -79,7 +79,7 @@ Before presenting or executing ANY GAQL query, pass this sequence:
    - All fields in `SELECT`, `WHERE`, and `ORDER BY` must exist on and be compatible (`selectable_with`) with the `FROM` resource (`WHERE` fields do not need to appear in `SELECT`, while core date segments in `SELECT` such as `segments.date` require a finite date filter in `WHERE`).
    - `OR` operator is forbidden.
    - Metadata queries MUST NOT contain `FROM`.
-   - In v23+, `segments.hour` was renamed to `segments.hour_of_day`.
+   - Use `segments.hour` for hourly segmentation (`segments.hour_of_day` is not a valid GAQL field).
 4. **Runtime Dry Run:** Execute `python3 skills/validate-gaql/scripts/validate_gaql.py --customer_id <customer_id> --api_version <api_version>`.
 
 #### 3.2. Code Generation Protocol (Python)

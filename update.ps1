@@ -684,7 +684,7 @@ try {
                 $ManifestPath = Join-Path $TargetPluginDir $RelJson
                 if (Test-Path -LiteralPath $ManifestPath) {
                     $RawJson = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8
-                    $UpdatedJson = $RawJson -replace '"command"\s*:\s*"python3"', '"command": "python"'
+                    $UpdatedJson = $RawJson -replace '"command"\s*:\s*"python3(?=\s|")', '"command": "python'
                     if ($UpdatedJson -ne $RawJson) {
                         Set-Content -LiteralPath $ManifestPath -Value $UpdatedJson -Encoding UTF8 -NoNewline
                     }

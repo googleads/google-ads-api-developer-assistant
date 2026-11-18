@@ -425,7 +425,7 @@ update_git_repo() {
         git branch --set-upstream-to="origin/${default_branch}" "${default_branch}" >/dev/null 2>&1 || true
       fi
     fi
-    git -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull
+    git -c core.longpaths=true -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull
   )
 }
 

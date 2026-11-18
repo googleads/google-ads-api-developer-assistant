@@ -27,6 +27,7 @@ import contextlib
 from datetime import datetime, timezone
 import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import importlib.util
 from importlib.util import module_from_spec, spec_from_file_location
 import io
 import json
@@ -75,6 +76,36 @@ _ALLOWED_ORIGIN_RE = re.compile(
     r"^http://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$",
     re.IGNORECASE,
 )
+_ORIG_SPEC_FROM_FILE_LOCATION = spec_from_file_location
+_ORIG_MODULE_FROM_SPEC = module_from_spec
+_SKILL_MODULE_CACHE: dict[str, tuple[int, Any]] = {}
+
+
+def _load_skill_module_cached(mod_name: str, script_path: str) -> Optional[Any]:
+    """Loads a skill module with (path, mtime_ns) caching when stdlib loaders are unpatched."""
+    abs_path = os.path.abspath(script_path)
+    can_cache = (
+        spec_from_file_location is _ORIG_SPEC_FROM_FILE_LOCATION
+        and module_from_spec is _ORIG_MODULE_FROM_SPEC
+    )
+    mtime_ns = -1
+    if can_cache:
+        try:
+            mtime_ns = os.stat(abs_path).st_mtime_ns
+            cached = _SKILL_MODULE_CACHE.get(abs_path)
+            if cached is not None and cached[0] == mtime_ns:
+                return cached[1]
+        except OSError:
+            can_cache = False
+
+    spec = spec_from_file_location(mod_name, abs_path)
+    if not spec or not spec.loader:
+        return None
+    mod = module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    if can_cache and mtime_ns >= 0:
+        _SKILL_MODULE_CACHE[abs_path] = (mtime_ns, mod)
+    return mod
 
 
 def _strict_bool(val: Any) -> bool:
@@ -244,11 +275,35 @@ def get_effective_api_version(
                 continue
 
     try:
-        import google.ads.googleads  # type: ignore
-
-        installed_versions = [
-            attr for attr in dir(google.ads.googleads) if re.match(r"^v\d+$", attr)
-        ]
+        installed_versions: list[str] = []
+        pkg_paths: list[str] = []
+        if "google.ads.googleads" in sys.modules:
+            gads_mod = sys.modules["google.ads.googleads"]
+            if gads_mod is not None:
+                installed_versions.extend(
+                    attr for attr in dir(gads_mod) if re.match(r"^v\d+$", attr)
+                )
+                raw_path = getattr(gads_mod, "__path__", None)
+                if raw_path:
+                    pkg_paths.extend(list(raw_path))
+                pkg_file = getattr(gads_mod, "__file__", None)
+                if pkg_file:
+                    pkg_paths.append(os.path.dirname(pkg_file))
+        else:
+            spec = importlib.util.find_spec("google.ads.googleads")
+            if spec is not None:
+                if spec.submodule_search_locations:
+                    pkg_paths.extend(list(spec.submodule_search_locations))
+                elif spec.origin:
+                    pkg_paths.append(os.path.dirname(spec.origin))
+        for pkg_dir in pkg_paths:
+            if pkg_dir and os.path.isdir(pkg_dir):
+                installed_versions.extend(
+                    d
+                    for d in os.listdir(pkg_dir)
+                    if os.path.isdir(os.path.join(pkg_dir, d))
+                    and re.match(r"^v\d+$", d)
+                )
         if installed_versions:
             installed_versions.sort(key=lambda x: int(x[1:]))
             return installed_versions[-1]
@@ -376,9 +431,76 @@ def _parse_source_fields_and_enums(
 
     try:
         with open(py_file, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+            source_text = f.read()
     except OSError:
         return fields, enum_values
+
+    try:
+        tree = ast.parse(source_text)
+        target_cls: Optional[ast.ClassDef] = None
+        parts = [p for p in class_name.split(".") if p]
+        scope: list[ast.stmt] = list(tree.body)
+        for part in parts:
+            matched: Optional[ast.ClassDef] = None
+            for node in scope:
+                if isinstance(node, ast.ClassDef) and node.name == part:
+                    matched = node
+                    break
+            if matched is None:
+                target_cls = None
+                break
+            target_cls = matched
+            scope = list(matched.body)
+
+        if target_cls is not None:
+            inspect_nodes: list[ast.stmt] = list(target_cls.body)
+            nested_classes = [
+                n for n in target_cls.body if isinstance(n, ast.ClassDef)
+            ]
+            has_top_fields = any(
+                isinstance(n, (ast.AnnAssign, ast.Assign))
+                for n in target_cls.body
+            )
+            if not has_top_fields and len(nested_classes) == 1:
+                inspect_nodes = list(nested_classes[0].body)
+
+            for stmt in inspect_nodes:
+                if isinstance(stmt, ast.AnnAssign) and isinstance(
+                    stmt.target, ast.Name
+                ):
+                    f_name = stmt.target.id
+                    f_type = ast.unparse(stmt.annotation).strip("\"'")
+                    label = "OPTIONAL"
+                    if isinstance(stmt.value, ast.Call) and isinstance(
+                        stmt.value.func, ast.Attribute
+                    ):
+                        call_attr = stmt.value.func.attr
+                        if call_attr == "RepeatedField":
+                            label = "REPEATED"
+                        elif call_attr == "MapField":
+                            label = "MAP"
+                    fields.append(
+                        {"name": f_name, "label": label, "type": f_type}
+                    )
+                elif (
+                    isinstance(stmt, ast.Assign)
+                    and len(stmt.targets) == 1
+                    and isinstance(stmt.targets[0], ast.Name)
+                    and isinstance(stmt.value, ast.Constant)
+                    and isinstance(stmt.value.value, int)
+                    and not isinstance(stmt.value.value, bool)
+                ):
+                    name_tok = stmt.targets[0].id
+                    if name_tok.isupper() or "_" in name_tok:
+                        enum_values.append(
+                            {"name": name_tok, "number": int(stmt.value.value)}
+                        )
+            if fields or enum_values:
+                return fields, enum_values
+    except SyntaxError:
+        pass
+
+    lines = source_text.splitlines(keepends=True)
 
     in_target_class = False
     class_indent = -1
@@ -403,7 +525,12 @@ def _parse_source_fields_and_enums(
             if m:
                 f_name = m.group(1)
                 f_type = m.group(2).strip().strip("\"'")
-                label = "REPEATED" if m.group(3) == "RepeatedField" else "OPTIONAL"
+                if m.group(3) == "RepeatedField":
+                    label = "REPEATED"
+                elif m.group(3) == "MapField":
+                    label = "MAP"
+                else:
+                    label = "OPTIONAL"
                 fields.append({"name": f_name, "label": label, "type": f_type})
             elif (
                 "=" in stripped
@@ -442,20 +569,23 @@ class A2AHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, status_code: int, data: dict[str, Any]) -> None:
         response_bytes = json.dumps(data, indent=2).encode("utf-8")
-        self.send_response(status_code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(response_bytes)))
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
-        self.send_header(
-            "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"
-        )
-        self.send_header("Cache-Control", "no-store")
-        self.send_header(
-            "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
-        )
-        self.end_headers()
-        self.wfile.write(response_bytes)
+        try:
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(response_bytes)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header(
+                "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"
+            )
+            self.send_header("Cache-Control", "no-store")
+            self.send_header(
+                "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+            )
+            self.end_headers()
+            self.wfile.write(response_bytes)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            return
 
     def _reject_disallowed_method(self) -> None:
         self._send_json(405, {"error": "Method Not Allowed"})
@@ -584,7 +714,10 @@ class A2AHandler(BaseHTTPRequestHandler):
             self._send_json(413, {"error": "Payload Too Large (max 1 MiB)"})
             return
 
-        body_bytes = self.rfile.read(content_length) if content_length > 0 else b""
+        try:
+            body_bytes = self.rfile.read(content_length) if content_length > 0 else b""
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+            return
         try:
             request_data = json.loads(body_bytes.decode("utf-8"))
         except Exception as e:
@@ -729,23 +862,38 @@ class A2AHandler(BaseHTTPRequestHandler):
                 query,
                 re.IGNORECASE | re.DOTALL,
             )
-            if not raw_where_match or not re.search(
-                r"segments\.date\s*=\s*['\"][0-9]{4}-[0-9]{2}-[0-9]{2}['\"]",
-                raw_where_match.group(1),
-                re.IGNORECASE,
-            ):
+            has_single_day = bool(
+                raw_where_match
+                and (
+                    re.search(
+                        r"segments\.date\s*=\s*['\"][0-9]{4}-[0-9]{2}-[0-9]{2}['\"]",
+                        raw_where_match.group(1),
+                        re.IGNORECASE,
+                    )
+                    or re.search(
+                        r"\bsegments\.date\s+DURING\s+(?:TODAY|YESTERDAY)\b",
+                        raw_where_match.group(1),
+                        re.IGNORECASE,
+                    )
+                )
+            )
+            if not has_single_day:
                 static_errors.append(
-                    "Queries against 'click_view' require a single-day filter (WHERE segments.date = 'YYYY-MM-DD')."
+                    "Queries against 'click_view' require a single-day filter (WHERE segments.date = 'YYYY-MM-DD' or DURING TODAY/YESTERDAY)."
                 )
 
         if re.search(r"\bFROM\s+CHANGE_STATUS\b", stripped_upper):
-            if (
-                not where_match
-                or "LAST_CHANGE_DATE_TIME" not in where_match.group(1)
-                or not re.search(r"\b(?:BETWEEN|DURING)\b", where_match.group(1))
-            ):
+            where_body = where_match.group(1) if where_match else ""
+            has_cs_bounds = "LAST_CHANGE_DATE_TIME" in where_body and (
+                bool(re.search(r"\b(?:BETWEEN|DURING)\b", where_body))
+                or (
+                    bool(re.search(r"LAST_CHANGE_DATE_TIME\s*>=?", where_body))
+                    and bool(re.search(r"LAST_CHANGE_DATE_TIME\s*<=?", where_body))
+                )
+            )
+            if not has_cs_bounds:
                 static_errors.append(
-                    "Queries against 'change_status' require a finite BETWEEN or DURING filter on last_change_date_time."
+                    "Queries against 'change_status' require a finite BETWEEN, DURING, or >=/<= filter on last_change_date_time."
                 )
             limit_match = re.search(r"\bLIMIT\s+(\d+)\b", stripped_upper)
             if not limit_match:
@@ -757,13 +905,10 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "Queries against 'change_status' require a positive LIMIT up to 10,000."
                 )
 
-        ver_match = re.search(r"v(\d+)", api_version.lower())
-        ver_num = int(ver_match.group(1)) if ver_match else None
-        if ver_num is None or ver_num >= 23:
-            if re.search(r"\bsegments\.hour\b", stripped, re.IGNORECASE):
-                static_errors.append(
-                    "In Google Ads API v23+, 'segments.hour' was renamed to 'segments.hour_of_day'. Update your query to use 'segments.hour_of_day'."
-                )
+        if re.search(r"\bsegments\.hour_of_day\b", stripped, re.IGNORECASE):
+            static_errors.append(
+                "'segments.hour_of_day' is not a valid GAQL field (QueryError.UNRECOGNIZED_FIELD). Update your query to use 'segments.hour'."
+            )
 
         if static_errors:
             return {
@@ -809,10 +954,10 @@ class A2AHandler(BaseHTTPRequestHandler):
         )
         if os.path.isfile(inspect_script_path):
             try:
-                spec = spec_from_file_location("_sidecar_inspect_obj", inspect_script_path)
-                if spec and spec.loader:
-                    insp_mod = module_from_spec(spec)
-                    spec.loader.exec_module(insp_mod)
+                insp_mod = _load_skill_module_cached(
+                    "_sidecar_inspect_obj", inspect_script_path
+                )
+                if insp_mod is not None:
                     avail_types = insp_mod.get_available_types(api_version)
                     if avail_types:
                         resolved_type, suggestions = insp_mod.resolve_type_name(
@@ -1000,10 +1145,8 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "../../skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py",
                 )
             )
-            spec = spec_from_file_location("_sidecar_troubleshoot_conv", tc_path)
-            if spec and spec.loader:
-                tc_mod = module_from_spec(spec)
-                spec.loader.exec_module(tc_mod)
+            tc_mod = _load_skill_module_cached("_sidecar_troubleshoot_conv", tc_path)
+            if tc_mod is not None:
                 diag = tc_mod.troubleshoot_conversions(
                     client, customer_id, json_output=True, output_dir=payload.get("output_dir")
                 )
@@ -1078,8 +1221,8 @@ class A2AHandler(BaseHTTPRequestHandler):
                 base_dir, "../../skills/execute-mutation/scripts/run_mutation.py"
             )
         )
-        spec = spec_from_file_location("run_mutation", runner_path)
-        if not spec or not spec.loader:
+        mod = _load_skill_module_cached("run_mutation", runner_path)
+        if mod is None:
             return {
                 "task_id": task_id,
                 "status": "FAILED",
@@ -1087,8 +1230,6 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "error": "Unable to load run_mutation verification module.",
             }
 
-        mod = module_from_spec(spec)
-        spec.loader.exec_module(mod)
         now_iso = datetime.now(timezone.utc).isoformat()
         try:
             receipt = mod.write_dry_run_receipt(
@@ -1218,16 +1359,13 @@ class A2AHandler(BaseHTTPRequestHandler):
                 base_dir, "../../skills/execute-mutation/scripts/run_mutation.py"
             )
         )
-        spec = spec_from_file_location("run_mutation", runner_path)
-        if not spec or not spec.loader:
+        mod = _load_skill_module_cached("run_mutation", runner_path)
+        if mod is None:
             return {
                 "task_id": task_id,
                 "status": "FAILED",
                 "error": "Unable to load run_mutation verification module.",
             }
-
-        mod = module_from_spec(spec)
-        spec.loader.exec_module(mod)
 
         if not mod.is_execute_mutates_enabled():
             blocked_iso = datetime.now(timezone.utc).isoformat()
@@ -1404,12 +1542,10 @@ class A2AHandler(BaseHTTPRequestHandler):
                 base_dir, f"../../skills/execute-mutation/scripts/{script_filename}"
             )
         )
-        spec = spec_from_file_location(
+        mod = _load_skill_module_cached(
             script_filename.replace(".py", ""), script_path
         )
-        if spec and spec.loader:
-            mod = module_from_spec(spec)
-            spec.loader.exec_module(mod)
+        if mod is not None:
             return mod
         raise RuntimeError(f"Unable to load mutation script '{script_filename}'.")
 
@@ -2233,15 +2369,30 @@ def run_server() -> None:
     global PORT
     PORT = _resolve_server_port()
 
-    # Sync user-scoped ~/google-ads.yaml into ~/.gemini/config/plugins/.../config ONLY
+    # Sync user-scoped ~/google-ads.yaml into installed user plugin config ONLY
     # (never mutating git-tracked files inside the repository workspace).
     existing_cfg_env = os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH", "").strip()
-    user_cfg_dir = os.path.expanduser(
-        "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
+    raw_home_yaml = os.path.abspath(os.path.expanduser("~/google-ads.yaml"))
+    has_valid_cfg_env = bool(
+        existing_cfg_env
+        and os.path.abspath(os.path.expanduser(existing_cfg_env)) != raw_home_yaml
+        and os.path.isfile(os.path.expanduser(existing_cfg_env))
     )
-    if not (existing_cfg_env and os.path.isfile(existing_cfg_env)) and os.path.isdir(
-        user_cfg_dir
-    ):
+    candidate_user_cfg_dirs = [
+        d
+        for d in (
+            os.environ.get("GOOGLE_ADS_ASSISTANT_CONFIG_DIR", "").strip(),
+            os.path.expanduser(
+                "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
+            ),
+            os.path.expanduser(
+                "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
+            ),
+        )
+        if d and os.path.isdir(d)
+    ]
+    if not has_valid_cfg_env and candidate_user_cfg_dirs:
+        user_cfg_dir = candidate_user_cfg_dirs[0]
         try:
             from config.config_init import (
                 get_configured_customer_id,

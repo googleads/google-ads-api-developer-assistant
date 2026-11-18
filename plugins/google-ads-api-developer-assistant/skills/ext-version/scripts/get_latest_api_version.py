@@ -16,10 +16,87 @@
 
 import argparse
 import importlib
+import importlib.util
+import json
 import os
 import re
 import sys
-from typing import Optional
+import tomllib
+from typing import Any, Optional
+
+
+def _format_toml_value(val: Any) -> str:
+    """Formats a scalar TOML value."""
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    if isinstance(val, (int, float)):
+        return str(val)
+    return json.dumps(str(val))
+
+
+def _render_updated_assistant_config(
+    existing_text: str,
+    ver_clean: str,
+    cid_override: Optional[str] = None,
+) -> str:
+    """Formats assistant_config TOML preserving extra user keys."""
+    parsed_extra: dict[str, Any] = {}
+    cid = "12345678"
+    exec_mutates = False
+    enabled_val: Optional[bool] = None
+    if existing_text.strip():
+        try:
+            loaded = tomllib.loads(existing_text)
+            if isinstance(loaded, dict):
+                for k, v in loaded.items():
+                    if k == "customer_id" and str(v).strip():
+                        cid = str(v).strip()
+                    elif k == "execute_mutates" and isinstance(v, bool):
+                        exec_mutates = v
+                    elif k == "enabled" and isinstance(v, bool):
+                        enabled_val = v
+                    elif k not in (
+                        "api_version",
+                        "customer_id",
+                        "execute_mutates",
+                        "enabled",
+                    ):
+                        parsed_extra[k] = v
+        except tomllib.TOMLDecodeError:
+            m_cid = re.search(
+                r'(?m)^\s*customer_id\s*=\s*["\']?([^"\'\s#]+)["\']?',
+                existing_text,
+            )
+            if m_cid:
+                cid = m_cid.group(1).strip()
+            m_em = re.search(
+                r'(?m)^\s*execute_mutates\s*=\s*["\']?(true|false)["\']?',
+                existing_text,
+                re.IGNORECASE,
+            )
+            if m_em:
+                exec_mutates = m_em.group(1).lower() == "true"
+            m_en = re.search(
+                r'(?m)^\s*enabled\s*=\s*["\']?(true|false)["\']?',
+                existing_text,
+                re.IGNORECASE,
+            )
+            if m_en:
+                enabled_val = m_en.group(1).lower() == "true"
+
+    if cid_override:
+        cid = cid_override
+    lines = [
+        f'api_version = "{ver_clean}"',
+        f'customer_id = "{cid}"',
+        f"execute_mutates = {'true' if exec_mutates else 'false'}",
+    ]
+    if enabled_val is not None:
+        lines.append(f"enabled = {'true' if enabled_val else 'false'}")
+    for k, v in parsed_extra.items():
+        if re.fullmatch(r"[A-Za-z0-9_-]+", str(k)):
+            lines.append(f"{k} = {_format_toml_value(v)}")
+    return "\n".join(lines) + "\n"
 
 
 def _is_git_tracked_plugin_config_dir(cfg_dir: str) -> bool:
@@ -111,37 +188,18 @@ def update_assistant_config_api_version(
             continue
         os.makedirs(cfg_parent, exist_ok=True)
 
-        cid = "12345678"
-        exec_mutates_str = "false"
-        enabled_str: Optional[str] = None
+        existing_text = ""
         if os.path.isfile(norm_path):
             try:
                 with open(norm_path, "r", encoding="utf-8") as f:
                     existing_text = f.read()
-                m_cid = re.search(
-                    r'(?m)^\s*customer_id\s*=\s*["\']?([^"\'\s#]+)["\']?',
-                    existing_text,
-                )
-                if m_cid:
-                    cid = m_cid.group(1).strip()
-                m_em = re.search(
-                    r'(?m)^\s*execute_mutates\s*=\s*["\']?(true|false)["\']?',
-                    existing_text,
-                    re.IGNORECASE,
-                )
-                if m_em:
-                    exec_mutates_str = m_em.group(1).lower()
-                m_en = re.search(
-                    r'(?m)^\s*enabled\s*=\s*["\']?(true|false)["\']?',
-                    existing_text,
-                    re.IGNORECASE,
-                )
-                if m_en:
-                    enabled_str = m_en.group(1).lower()
             except OSError:
-                pass
+                existing_text = ""
 
-        if cid == "12345678":
+        legacy_cid_override: Optional[str] = None
+        if 'customer_id = "12345678"' in _render_updated_assistant_config(
+            existing_text, ver_clean
+        ):
             for legacy_name in ("customer_id", "customer_id.txt"):
                 legacy_file = os.path.join(cfg_parent, legacy_name)
                 if os.path.isfile(legacy_file):
@@ -149,21 +207,26 @@ def update_assistant_config_api_version(
                         with open(legacy_file, "r", encoding="utf-8") as lf:
                             legacy_cid = lf.read().strip().strip("'\"")
                         if legacy_cid and legacy_cid != "12345678":
-                            cid = legacy_cid
+                            legacy_cid_override = legacy_cid
                             break
                     except OSError:
                         pass
 
         try:
-            content_out = (
-                f'api_version = "{ver_clean}"\n'
-                f'customer_id = "{cid}"\n'
-                f"execute_mutates = {exec_mutates_str}\n"
+            content_out = _render_updated_assistant_config(
+                existing_text, ver_clean, cid_override=legacy_cid_override
             )
-            if enabled_str is not None:
-                content_out += f"enabled = {enabled_str}\n"
-            with open(norm_path, "w", encoding="utf-8") as f:
-                f.write(content_out)
+            if content_out != existing_text or not os.path.isfile(norm_path):
+                fd = os.open(
+                    norm_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content_out)
+            if sys.platform != "win32" and os.path.isfile(norm_path):
+                try:
+                    os.chmod(norm_path, 0o600)
+                except OSError:
+                    pass
             updated_paths.append(norm_path)
         except OSError:
             continue
@@ -245,20 +308,31 @@ def detect_latest_api_version(
             discovered_versions.append(version_dirs[-1])
             break
 
-    # 2. Inspect installed python package if available (attributes & __path__).
+    # 2. Inspect installed python package without heavy gRPC/Protobuf import.
     try:
-        gads_mod = importlib.import_module("google.ads.googleads")
-
-        installed_versions: list[str] = [
-            attr for attr in dir(gads_mod) if re.fullmatch(r"v\d+", attr)
-        ]
+        installed_versions: list[str] = []
         pkg_paths: list[str] = []
-        raw_path = getattr(gads_mod, "__path__", None)
-        if raw_path:
-            pkg_paths.extend(list(raw_path))
-        pkg_file = getattr(gads_mod, "__file__", None)
-        if pkg_file:
-            pkg_paths.append(os.path.dirname(pkg_file))
+        if "google.ads.googleads" in sys.modules:
+            gads_mod = sys.modules["google.ads.googleads"]
+            if gads_mod is not None:
+                installed_versions.extend(
+                    attr
+                    for attr in dir(gads_mod)
+                    if re.fullmatch(r"v\d+", attr)
+                )
+                raw_path = getattr(gads_mod, "__path__", None)
+                if raw_path:
+                    pkg_paths.extend(list(raw_path))
+                pkg_file = getattr(gads_mod, "__file__", None)
+                if pkg_file:
+                    pkg_paths.append(os.path.dirname(pkg_file))
+        else:
+            spec = importlib.util.find_spec("google.ads.googleads")
+            if spec is not None:
+                if spec.submodule_search_locations:
+                    pkg_paths.extend(list(spec.submodule_search_locations))
+                elif spec.origin:
+                    pkg_paths.append(os.path.dirname(spec.origin))
         for pkg_dir in pkg_paths:
             installed_versions.extend(_extract_version_dirs(pkg_dir))
         if installed_versions:

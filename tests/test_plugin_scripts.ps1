@@ -261,6 +261,17 @@ try {
     }
     Write-Host "PASS: installed update.ps1 executed successfully from outside the git repository."
 
+    # Test 15: Windows python3 -> python manifest rewrite updates hooks.json inline python3 -c commands
+    Write-Host "Test 15: Windows python3 -> python rewrite regex handles hooks.json inline commands"
+    $RawHooks = Get-Content -LiteralPath (Join-Path $ProjectRoot "plugins\google-ads-api-developer-assistant\hooks.json") -Raw -Encoding UTF8
+    $RewrittenHooks = $RawHooks -replace '"command"\s*:\s*"python3(?=\s|")', '"command": "python'
+    if ($RewrittenHooks -eq $RawHooks -or $RewrittenHooks -match '"python3') {
+        Write-Error "FAIL: hooks.json python3 -> python rewrite left unrewritten python3 command"
+        exit 1
+    }
+    $null = $RewrittenHooks | ConvertFrom-Json
+    Write-Host "PASS: Windows python3 -> python manifest rewrite verified on hooks.json."
+
     Write-Host "=== All PowerShell Tests Passed Successfully! ==="
 }
 finally {

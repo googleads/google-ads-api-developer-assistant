@@ -179,7 +179,7 @@ def _get_cache_file_path(cache_path: Optional[str] = None) -> str:
 
 def _load_disk_cache(file_path: str) -> dict[str, dict[str, Any]]:
     """Loads the JSON validation cache from disk, returning {} on error."""
-    if not os.path.isfile(file_path):
+    if os.path.islink(file_path) or not os.path.isfile(file_path):
         return {}
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -200,6 +200,8 @@ def _save_disk_cache(file_path: str, data: dict[str, dict[str, Any]]) -> None:
     tmp_path: Optional[str] = None
     try:
         abs_file = os.path.abspath(file_path)
+        if os.path.islink(abs_file):
+            return
         parent = os.path.dirname(abs_file)
         if parent:
             os.makedirs(parent, exist_ok=True)
@@ -208,6 +210,8 @@ def _save_disk_cache(file_path: str, data: dict[str, dict[str, Any]]) -> None:
         )
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        if os.name != "nt":
+            os.chmod(tmp_path, 0o600)
         os.replace(tmp_path, abs_file)
         tmp_path = None
     except (OSError, TypeError, ValueError):
@@ -720,21 +724,19 @@ def validate_gaql(
             ):
                 is_metadata_query = True
 
-    # Segment rename check: segments.hour -> segments.hour_of_day in v23+
-    ver_match = re.search(r"v(\d+)", api_version)
-    ver_num = int(ver_match.group(1)) if ver_match else None
-    if ver_num is None or ver_num >= 23:
-        if re.search(r"\bSEGMENTS\.HOUR\b", masked_upper):
-            print(
-                "FAILURE: GAQL query references deprecated segment "
-                "'segments.hour'."
-            )
-            print(
-                "  - In Google Ads API v23+, 'segments.hour' was renamed to "
-                "'segments.hour_of_day'."
-            )
-            print("  - Please update your query to use 'segments.hour_of_day'.")
-            sys.exit(1)
+    # Invalid hourly segment check: segments.hour_of_day is invalid in GAQL;
+    # the valid GAQL field across all API versions is segments.hour.
+    if re.search(r"\bSEGMENTS\.HOUR_OF_DAY\b", masked_upper):
+        print(
+            "FAILURE: GAQL query references unrecognized segment "
+            "'segments.hour_of_day'."
+        )
+        print(
+            "  - 'segments.hour_of_day' is not a valid GAQL field "
+            "(QueryError.UNRECOGNIZED_FIELD)."
+        )
+        print("  - Please update your query to use 'segments.hour'.")
+        sys.exit(1)
 
     if client is None:
         if GoogleAdsClient is None:

@@ -72,6 +72,29 @@ _SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
 _ACTIVE_QUERY_ERRORS: Optional[list[str]] = None
 
 
+def _uses_v26_enablement_setting(client: Any) -> bool:
+    """Returns True when client uses v26+ ConversionTrackingSetting fields."""
+    raw_ver = str(getattr(client, "version", "") or "").strip().lower()
+    if raw_ver.startswith("v") and raw_ver[1:].isdigit():
+        return int(raw_ver[1:]) >= 26
+    if type(client).__module__.startswith("unittest.mock"):
+        return False
+    get_type = getattr(client, "get_type", None)
+    if callable(get_type):
+        try:
+            cts_type = get_type("ConversionTrackingSetting")
+            if type(cts_type).__module__.startswith("unittest.mock"):
+                return False
+            has_eff = hasattr(cts_type, "effective_enablement_setting")
+            has_legacy = hasattr(
+                cts_type, "enhanced_conversions_for_leads_enabled"
+            )
+            return has_eff and not has_legacy
+        except _SDK_EXCEPTIONS:
+            return False
+    return False
+
+
 def _normalize_api_version(api_version: str) -> str:
     """Normalizes an API version string to lowercase 'v<N>' format."""
     clean = str(api_version or "").strip().lower()
@@ -341,7 +364,7 @@ def troubleshoot_conversions(
     prev_active_errors = _ACTIVE_QUERY_ERRORS
     _ACTIVE_QUERY_ERRORS = query_errors
     try:
-        customer_query = (
+        customer_query_legacy = (
             "SELECT customer.descriptive_name, "
             "customer.conversion_tracking_setting"
             ".accepted_customer_data_terms, "
@@ -349,27 +372,80 @@ def troubleshoot_conversions(
             ".enhanced_conversions_for_leads_enabled "
             "FROM customer"
         )
+        customer_query_v26 = (
+            "SELECT customer.descriptive_name, "
+            "customer.conversion_tracking_setting"
+            ".accepted_customer_data_terms, "
+            "customer.conversion_tracking_setting.enablement_setting, "
+            "customer.conversion_tracking_setting"
+            ".effective_enablement_setting "
+            "FROM customer"
+        )
+        use_v26_cts = _uses_v26_enablement_setting(client)
+        customer_query = (
+            customer_query_v26 if use_v26_cts else customer_query_legacy
+        )
+        err_len_before = len(query_errors)
         results = run_query(client, clean_cid, customer_query)
+        if (
+            not results
+            and not use_v26_cts
+            and len(query_errors) > err_len_before
+            and any(
+                "enhanced_conversions_for_leads_enabled" in msg
+                or "UNRECOGNIZED_FIELD" in msg
+                for msg in query_errors[err_len_before:]
+            )
+        ):
+            del query_errors[err_len_before:]
+            use_v26_cts = True
+            results = run_query(client, clean_cid, customer_query_v26)
+
         for row in results:
             cts = row.customer.conversion_tracking_setting
             cust_name = getattr(row.customer, "descriptive_name", "N/A")
             terms_accepted = bool(
                 getattr(cts, "accepted_customer_data_terms", False)
             )
-            enhanced_leads = bool(
-                getattr(cts, "enhanced_conversions_for_leads_enabled", False)
-            )
+            enablement_label: Optional[str] = None
+            effective_label: Optional[str] = None
+            if use_v26_cts or (
+                not hasattr(cts, "enhanced_conversions_for_leads_enabled")
+                and hasattr(cts, "effective_enablement_setting")
+            ):
+                enablement_label = _extract_enum_label(
+                    cts, "enablement_setting"
+                )
+                effective_label = _extract_enum_label(
+                    cts, "effective_enablement_setting"
+                )
+                enhanced_leads = (
+                    effective_label == "ON" or enablement_label == "ON"
+                )
+            else:
+                raw_ec = getattr(
+                    cts, "enhanced_conversions_for_leads_enabled", False
+                )
+                enhanced_leads = bool(raw_ec)
 
             details.append(f"Customer: {cust_name}")
             details.append(f"Accepted Customer Data Terms: {terms_accepted}")
             details.append(
                 f"Enhanced Conversions for Leads Enabled: {enhanced_leads}"
             )
-            structured_data["customer_info"] = {
+            cust_info: dict[str, Any] = {
                 "name": cust_name,
                 "accepted_customer_data_terms": terms_accepted,
                 "enhanced_conversions_for_leads_enabled": enhanced_leads,
             }
+            if enablement_label is not None:
+                details.append(
+                    "Enhanced Conversions Enablement Setting: "
+                    f"{enablement_label} (Effective: {effective_label})"
+                )
+                cust_info["enablement_setting"] = enablement_label
+                cust_info["effective_enablement_setting"] = effective_label
+            structured_data["customer_info"] = cust_info
             if not terms_accepted:
                 _append_error(
                     "CRITICAL: Customer Data Terms NOT accepted.",

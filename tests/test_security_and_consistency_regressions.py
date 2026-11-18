@@ -2034,3 +2034,519 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         assert len(cov_files) == 1
         sub_hits = json.loads(cov_files[0].read_text(encoding="utf-8"))
         assert {2, 3, 5, 8, 9, 11}.issubset(set(sub_hits[abs_sample]))
+
+
+class TestConsistencyEfficiencyAndResilienceAudit:
+    """Verifies consistency, efficiency, and resilience remediations across scripts, hooks, and sidecar."""
+
+    def test_set_financial_limits_help_and_atomic_unchanged_skip(
+        self, tmp_path
+    ):
+        sfl = _load_module(
+            "skills/execute-mutation/scripts/set_financial_limits.py",
+            "sfl_help_reg",
+        )
+        proc = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "set_financial_limits.py"), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0
+        assert "CampaignBudgetService.amount_micros" in proc.stdout
+
+        fl_path = tmp_path / "financial_limits"
+        written1 = sfl.write_financial_limits(
+            {"CampaignBudgetService.amount_micros": 10_000_000},
+            config_file=str(fl_path),
+        )
+        assert Path(written1).is_file()
+        mtime1 = fl_path.stat().st_mtime_ns
+        time.sleep(0.01)
+        # Writing identical limits skips redundant disk rewrite
+        sfl.write_financial_limits(
+            {"CampaignBudgetService.amount_micros": 10_000_000},
+            config_file=str(fl_path),
+        )
+        assert fl_path.stat().st_mtime_ns == mtime1
+
+    def test_pmax_webpage_condition_real_proto_plus_and_raw_protobuf(self):
+        from google.ads.googleads.client import GoogleAdsClient
+        from google.auth.credentials import AnonymousCredentials
+
+        pmax = _load_module(
+            "skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py",
+            "pmax_pp_reg",
+        )
+        for use_pp in (True, False):
+            client = GoogleAdsClient(
+                credentials=AnonymousCredentials(),
+                developer_token="unused",
+                version="v26",
+                use_proto_plus=use_pp,
+            )
+            cond = pmax._build_webpage_condition(client, "/clearance-sale")
+            assert cond.url_contains == "/clearance-sale"
+
+    def test_troubleshoot_conversions_v26_enablement_setting_and_fallback_retry(
+        self, tmp_path
+    ):
+        from types import SimpleNamespace
+        from google.ads.googleads.client import GoogleAdsClient
+        from google.auth.credentials import AnonymousCredentials
+
+        tc = _load_module(
+            "skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py",
+            "tc_v26_reg",
+        )
+        real_v26 = GoogleAdsClient(
+            credentials=AnonymousCredentials(),
+            developer_token="unused",
+            version="v26",
+            use_proto_plus=True,
+        )
+        assert tc._uses_v26_enablement_setting(real_v26) is True
+
+        # 1. Client reporting version="v26" selects enablement_setting & effective_enablement_setting directly
+        executed_queries: list[str] = []
+        v26_row = SimpleNamespace(
+            customer=SimpleNamespace(
+                descriptive_name="V26 Account",
+                conversion_tracking_setting=SimpleNamespace(
+                    accepted_customer_data_terms=True,
+                    enablement_setting=SimpleNamespace(name="ON"),
+                    effective_enablement_setting=SimpleNamespace(name="ON"),
+                ),
+            )
+        )
+
+        class _V26StubClient:
+            version = "v26"
+
+            @staticmethod
+            def get_service(_name: str):
+                def _stream(customer_id: str, query: str):
+                    executed_queries.append(query)
+                    if "FROM customer" in query:
+                        assert "enhanced_conversions_for_leads_enabled" not in query
+                        assert "effective_enablement_setting" in query
+                        return [SimpleNamespace(results=[v26_row])]
+                    return []
+
+                return SimpleNamespace(search_stream=_stream)
+
+        out = tc.troubleshoot_conversions(
+            _V26StubClient(),
+            "123-456-7890",
+            json_output=True,
+            output_dir=str(tmp_path),
+        )
+        assert out["customer_info"]["name"] == "V26 Account"
+        assert out["customer_info"]["enhanced_conversions_for_leads_enabled"] is True
+        assert out["customer_info"]["effective_enablement_setting"] == "ON"
+        assert out["primary_errors"] == []
+
+        # 2. Unversioned client hitting UNRECOGNIZED_FIELD on legacy query retries cleanly with v26 query
+        retry_queries: list[str] = []
+        mock_retry_client = MagicMock()
+        mock_retry_client.version = ""
+
+        def _retry_stream(customer_id: str, query: str):
+            retry_queries.append(query)
+            if "enhanced_conversions_for_leads_enabled" in query:
+                raise RuntimeError(
+                    "QueryError.UNRECOGNIZED_FIELD: enhanced_conversions_for_leads_enabled"
+                )
+            if "FROM customer" in query:
+                return [SimpleNamespace(results=[v26_row])]
+            return []
+
+        mock_retry_client.get_service.return_value.search_stream.side_effect = (
+            _retry_stream
+        )
+        out_retry = tc.troubleshoot_conversions(
+            mock_retry_client,
+            "1234567890",
+            json_output=True,
+            output_dir=str(tmp_path),
+        )
+        assert len([q for q in retry_queries if "FROM customer" in q]) == 2
+        assert out_retry["customer_info"]["effective_enablement_setting"] == "ON"
+        assert not any("UNRECOGNIZED_FIELD" in e for e in out_retry["primary_errors"])
+
+    def test_sync_client_libs_py315_pip_retry_longpaths_and_toml_preservation(
+        self, tmp_path, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        scl = _load_module(
+            "skills/sync-client-libs/scripts/sync_client_libs.py", "scl_py315_reg"
+        )
+        glav = _load_module(
+            "skills/ext-version/scripts/get_latest_api_version.py", "glav_toml_reg"
+        )
+
+        # 1. upgrade_system_package retries with --ignore-requires-python on Python 3.15 pip error
+        pip_cmds: list[list[str]] = []
+
+        def _fake_pip_run(cmd, **_kw):
+            pip_cmds.append(list(cmd))
+            if "--ignore-requires-python" not in cmd:
+                return SimpleNamespace(
+                    returncode=1,
+                    stdout="",
+                    stderr=(
+                        "ERROR: Ignored the following versions that require a "
+                        "different python version: 35.0.0 Requires-Python >=3.10,<3.15"
+                    ),
+                )
+            return SimpleNamespace(returncode=0, stdout="Successfully installed", stderr="")
+
+        monkeypatch.setattr(scl.subprocess, "run", _fake_pip_run)
+        assert scl.upgrade_system_package("google-ads", target_version="35.0.0") is True
+        assert len(pip_cmds) == 2
+        assert "--ignore-requires-python" in pip_cmds[1]
+
+        # 2. update_codebase_via_git passes core.longpaths=true
+        git_cmds: list[list[str]] = []
+
+        def _fake_git_run(cmd, **_kw):
+            git_cmds.append(list(cmd))
+            return SimpleNamespace(returncode=0, stdout="refs/remotes/origin/main\n", stderr="")
+
+        monkeypatch.setattr(scl.subprocess, "run", _fake_git_run)
+        assert scl.update_codebase_via_git(str(tmp_path), "v35.0.0") is True
+        assert any("core.longpaths=true" in c for c in git_cmds)
+
+        # 3. Extra TOML keys preserved in both sync_client_libs and get_latest_api_version
+        cfg_dir = tmp_path / "work" / "config"
+        lib_dir = tmp_path / "work" / "client_libs" / "google-ads-python"
+        (lib_dir / "google" / "ads" / "googleads" / "v27").mkdir(parents=True)
+        cfg_dir.mkdir(parents=True)
+        cfg_file = cfg_dir / "assistant_config"
+        cfg_file.write_text(
+            'api_version = "v25"\n'
+            'customer_id = "5556667770"\n'
+            "execute_mutates = false\n"
+            "timeout_seconds = 90\n",
+            encoding="utf-8",
+        )
+        assert scl.update_api_version_cache_if_needed(str(lib_dir)) == "v27"
+        text_after_scl = cfg_file.read_text(encoding="utf-8")
+        assert 'api_version = "v27"' in text_after_scl
+        assert "timeout_seconds = 90" in text_after_scl
+
+        glav.update_assistant_config_api_version("v28", config_dir=str(cfg_dir))
+        text_after_glav = cfg_file.read_text(encoding="utf-8")
+        assert 'api_version = "v28"' in text_after_glav
+        assert "timeout_seconds = 90" in text_after_glav
+
+    def test_windows_powershell_python3_rewrite_regex_matches_hooks_json(self):
+        import re
+
+        # Verify both install.ps1 and update.ps1 use the lookahead pattern that rewrites hooks.json
+        for ps_name in ("install.ps1", "update.ps1"):
+            ps_text = (REPO_ROOT / ps_name).read_text(encoding="utf-8")
+            assert 'python3(?=\\s|")' in ps_text
+
+        py_equiv = re.compile(r'"command"\s*:\s*"python3(?=\s|")')
+        for rel_manifest in (
+            "hooks.json",
+            "mcp_config.json",
+            "sidecars/google-ads-a2a-service/sidecar.json",
+        ):
+            raw = (PLUGIN_ROOT / rel_manifest).read_text(encoding="utf-8")
+            rewritten = py_equiv.sub('"command": "python', raw)
+            assert rewritten != raw, f"{rel_manifest} was not rewritten"
+            parsed = json.loads(rewritten)
+            assert isinstance(parsed, dict)
+            assert '"python3' not in rewritten
+
+    def test_home_yaml_isolation_sitecustomize_chaining_and_guardrail_parity(
+        self, tmp_path, monkeypatch
+    ):
+        import os
+
+        rm = _load_module(
+            "skills/execute-mutation/scripts/run_mutation.py", "rm_parity_reg"
+        )
+        srv = _load_module(
+            "sidecars/google-ads-a2a-service/server.py", "srv_parity_reg"
+        )
+
+        # 1. Exact financial set parity between config_init.py and run_mutation.py
+        assert config_init._HOOK_FINANCIAL_SERVICES == rm._FINANCIAL_SERVICES
+        assert config_init._HOOK_FINANCIAL_METHODS == rm._FINANCIAL_METHODS
+        assert config_init._HOOK_FINANCIAL_PAYLOAD_KEYS == rm._FINANCIAL_PAYLOAD_KEYS
+
+        # 2. Direct REST custom write verbs blocked
+        for verb in (
+            "customers/123/accountLinks:createAccountLink",
+            "customers/123/batchJobs/1:runBatchJob",
+            "customers/123:startIdentityVerification",
+            "customers/123/campaigns:enablePMaxBrandGuidelines",
+        ):
+            dec, _ = config_init.evaluate_mutation_guard(
+                f"curl -X POST https://googleads.googleapis.com/v26/{verb} -d '{{}}'"
+            )
+            assert dec == "deny", f"REST verb not blocked: {verb}"
+
+        # 3. Home ~/google-ads.yaml rejected across all mutation/MCC skill scripts & run_mutation
+        fake_home = tmp_path / "home_iso"
+        fake_home.mkdir()
+        home_yaml = fake_home / "google-ads.yaml"
+        home_yaml.write_text('client_id: "raw_home"\n', encoding="utf-8")
+        _set_fake_home(monkeypatch, fake_home)
+        monkeypatch.setenv("GOOGLE_ADS_CONFIGURATION_FILE_PATH", "~/google-ads.yaml")
+        monkeypatch.chdir(tmp_path)
+
+        for idx, rel_script in enumerate(
+            (
+                "skills/execute-mutation/scripts/create_account.py",
+                "skills/execute-mutation/scripts/create_ad.py",
+                "skills/execute-mutation/scripts/create_ad_group.py",
+                "skills/execute-mutation/scripts/create_campaign.py",
+                "skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py",
+                "skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py",
+            )
+        ):
+            mod = _load_module(rel_script, f"iso_mod_{idx}")
+            with patch.object(
+                config_init,
+                "sync_and_set_config_kv",
+                return_value=str(tmp_path / "config" / "google-ads.yaml"),
+            ):
+                resolved = mod._get_config_path()
+            assert os.path.abspath(os.path.expanduser(resolved)) != str(home_yaml)
+
+        assert rm._find_google_ads_yaml() != str(home_yaml)
+
+        # 4. sitecustomize idempotency on re-import + downstream sitecustomize chaining
+        downstream_dir = tmp_path / "downstream_sc"
+        downstream_dir.mkdir()
+        marker = tmp_path / "chained_ok.txt"
+        (downstream_dir / "sitecustomize.py").write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('1', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        sub_env = os.environ.copy()
+        sub_env["PYTHONPATH"] = (
+            f"{PLUGIN_ROOT / 'config'}{os.pathsep}{downstream_dir}"
+        )
+        sub_env["PYTHONNOUSERSITE"] = "0"
+        proc_sc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import builtins, importlib, sitecustomize;"
+                    "orig = builtins.open._gads_orig;"
+                    "importlib.reload(sitecustomize);"
+                    "assert builtins.open._gads_orig is orig"
+                ),
+            ],
+            env=sub_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc_sc.returncode == 0, proc_sc.stderr
+        assert marker.is_file()
+
+        # 5. Sidecar module cache, AST MapField/nested message separation, and GAQL parity
+        msg_py = tmp_path / "nested_proto.py"
+        msg_py.write_text(
+            "class OuterMsg:\n"
+            "    class InnerSub:\n"
+            "        sub_only: str = proto.Field(proto.STRING, number=1)\n"
+            "    top_id: int = proto.Field(proto.INT64, number=1)\n"
+            "    tags: dict[str, str] = proto.MapField(proto.STRING, proto.STRING, number=2)\n",
+            encoding="utf-8",
+        )
+        f_top, _ = srv._parse_source_fields_and_enums(str(msg_py), "OuterMsg")
+        assert [f["name"] for f in f_top] == ["top_id", "tags"]
+        assert f_top[1]["label"] == "MAP"
+        f_sub, _ = srv._parse_source_fields_and_enums(
+            str(msg_py), "OuterMsg.InnerSub"
+        )
+        assert [f["name"] for f in f_sub] == ["sub_only"]
+
+        h = srv.A2AHandler.__new__(srv.A2AHandler)
+        assert (
+            h.handle_gaql_validate(
+                "t-cv-today",
+                {
+                    "query": "SELECT click_view.gclid FROM click_view WHERE segments.date DURING TODAY",
+                    "api_version": "v26",
+                },
+            )["status"]
+            == "COMPLETED"
+        )
+        assert (
+            h.handle_gaql_validate(
+                "t-cs-bounds",
+                {
+                    "query": (
+                        "SELECT change_status.resource_name FROM change_status "
+                        "WHERE change_status.last_change_date_time >= '2026-08-01' "
+                        "AND change_status.last_change_date_time <= '2026-08-15' LIMIT 100"
+                    ),
+                    "api_version": "v26",
+                },
+            )["status"]
+            == "COMPLETED"
+        )
+        m1 = h._load_mutation_script("create_account.py")
+        m2 = h._load_mutation_script("create_account.py")
+        assert m1 is m2
+
+        # 6. validate_gaql disk cache enforces 0600 permissions and rejects symlinks
+        vg = _load_module("skills/validate-gaql/scripts/validate_gaql.py", "vg_perm_reg")
+        cache_file = tmp_path / "gaql_perm_cache.json"
+        vg.set_cached_validation(
+            "SELECT campaign.id FROM campaign", "v26", cache_path=str(cache_file)
+        )
+        assert cache_file.is_file()
+        if os.name != "nt":
+            assert (cache_file.stat().st_mode & 0o777) == 0o600
+            symlink_cache = tmp_path / "gaql_symlink.json"
+            symlink_cache.symlink_to(cache_file)
+            assert vg._load_disk_cache(str(symlink_cache)) == {}
+            vg._save_disk_cache(str(symlink_cache), {"k": {"valid": False, "timestamp": 2.0}})
+            assert vg._load_disk_cache(str(cache_file)) != {"k": {"valid": False, "timestamp": 2.0}}
+
+        # 7. validate_conversion_upload handles corrupt non-UTF8 binary CSV cleanly
+        vcu = _load_module(
+            "skills/troubleshoot-conversions/scripts/validate_conversion_upload.py",
+            "vcu_bin_reg",
+        )
+        bad_bin_csv = tmp_path / "binary.csv"
+        bad_bin_csv.write_bytes(b"\xff\xfe\x80\x81\x00\xff")
+        with pytest.raises(SystemExit) as exc_bin:
+            vcu.validate_conversion_csv(str(bad_bin_csv), "v26")
+        assert exc_bin.value.code == 1
+
+        # 8. Sidecar regex fallback on syntax-broken proto, find_spec discovery, and BrokenPipeError
+        import types
+
+        broken_srv_py = tmp_path / "broken_srv_proto.py"
+        broken_srv_py.write_text(
+            "class BrokenSrvMsg:\n"
+            "    id: int = proto.Field(proto.INT64, number=1)\n"
+            "    items: str = proto.RepeatedField(proto.STRING, number=2)\n"
+            "    meta: dict = proto.MapField(proto.STRING, proto.STRING, number=3)\n"
+            "    ACTIVE = 2\n"
+            "class NextClass:\n"
+            "    other: int = proto.Field(proto.INT64, number=1)\n"
+            "def syntax_err(:\n",
+            encoding="utf-8",
+        )
+        fb_fields, fb_enums = srv._parse_source_fields_and_enums(
+            str(broken_srv_py), "BrokenSrvMsg"
+        )
+        assert [f["label"] for f in fb_fields] == ["OPTIONAL", "REPEATED", "MAP"]
+        assert fb_enums == [{"name": "ACTIVE", "number": 2}]
+
+        fake_pkg_dir = tmp_path / "fake_site_gads"
+        (fake_pkg_dir / "v29").mkdir(parents=True)
+        fake_init = fake_pkg_dir / "__init__.py"
+        fake_init.write_text("", encoding="utf-8")
+        orig_srv_isdir = srv.os.path.isdir
+        saved_gads_mod = sys.modules.pop("google.ads.googleads", None)
+        try:
+            with (
+                patch.object(srv.os.path, "isfile", return_value=False),
+                patch.object(
+                    srv.os.path,
+                    "isdir",
+                    side_effect=lambda p: (
+                        orig_srv_isdir(p) if str(fake_pkg_dir) in str(p) else False
+                    ),
+                ),
+                patch.object(
+                    srv.importlib.util,
+                    "find_spec",
+                    return_value=types.SimpleNamespace(
+                        submodule_search_locations=[str(fake_pkg_dir)],
+                        origin=str(fake_init),
+                    ),
+                ),
+            ):
+                assert srv.get_effective_api_version({}, allow_interactive=False) == "v29"
+        finally:
+            if saved_gads_mod is not None:
+                sys.modules["google.ads.googleads"] = saved_gads_mod
+
+        h.send_response = MagicMock()
+        h.send_header = MagicMock()
+        h.end_headers = MagicMock()
+        h.wfile = MagicMock()
+        h.wfile.write.side_effect = BrokenPipeError("client disconnected")
+        h._send_json(200, {"ok": True})
+
+        # 9. get_latest_api_version TOML fallback, legacy customer_id migration, and sys.modules/find_spec paths
+        glav = _load_module(
+            "skills/ext-version/scripts/get_latest_api_version.py", "glav_cov_reg"
+        )
+        malformed_rendered = glav._render_updated_assistant_config(
+            'customer_id = "7778889990"\nexecute_mutates = true\nenabled = false\nbroken = [\n',
+            "v27",
+        )
+        assert 'customer_id = "7778889990"' in malformed_rendered
+        assert "execute_mutates = true" in malformed_rendered
+        assert "enabled = false" in malformed_rendered
+
+        extra_rendered = glav._render_updated_assistant_config(
+            'customer_id = "12345678"\nflag_opt = true\nlabel_opt = "alpha"\nratio_opt = 1.5\n',
+            "v27",
+        )
+        assert "flag_opt = true" in extra_rendered
+        assert 'label_opt = "alpha"' in extra_rendered
+        assert "ratio_opt = 1.5" in extra_rendered
+
+        global_cfg = (
+            fake_home
+            / ".gemini"
+            / "config"
+            / "plugins"
+            / "google-ads-api-developer-assistant"
+            / "config"
+        )
+        global_cfg.mkdir(parents=True, exist_ok=True)
+        (global_cfg / "customer_id.txt").write_text("4445556660\n", encoding="utf-8")
+        updated_cfgs = glav.update_assistant_config_api_version("28")
+        assert str(global_cfg / "assistant_config") in updated_cfgs
+        migrated_text = (global_cfg / "assistant_config").read_text(encoding="utf-8")
+        assert 'api_version = "v28"' in migrated_text
+        assert 'customer_id = "4445556660"' in migrated_text
+
+        orig_glav_isdir = glav.os.path.isdir
+        saved_gads_mod2 = sys.modules.pop("google.ads.googleads", None)
+        try:
+            with patch.object(
+                glav.os.path,
+                "isdir",
+                side_effect=lambda p: (
+                    orig_glav_isdir(p) if str(fake_pkg_dir) in str(p) else False
+                ),
+            ):
+                with patch.object(
+                    glav.importlib.util,
+                    "find_spec",
+                    return_value=types.SimpleNamespace(
+                        submodule_search_locations=None,
+                        origin=str(fake_init),
+                    ),
+                ):
+                    assert glav.detect_latest_api_version(update_config=False) == "v29"
+
+                fake_mod = types.ModuleType("google.ads.googleads")
+                fake_mod.__path__ = [str(fake_pkg_dir)]
+                fake_mod.__file__ = str(fake_init)
+                sys.modules["google.ads.googleads"] = fake_mod
+                assert glav.detect_latest_api_version(update_config=False) == "v29"
+        finally:
+            if saved_gads_mod2 is not None:
+                sys.modules["google.ads.googleads"] = saved_gads_mod2
+            else:
+                sys.modules.pop("google.ads.googleads", None)

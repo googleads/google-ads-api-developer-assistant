@@ -7,6 +7,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 import tomllib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -1872,15 +1873,42 @@ def write_financial_limits(
     primary_written: Optional[str] = None
     for path in target_paths:
         try:
-            parent_dir = os.path.dirname(os.path.abspath(path))
+            abs_path = os.path.abspath(path)
+            parent_dir = os.path.dirname(abs_path)
             if parent_dir:
                 os.makedirs(parent_dir, exist_ok=True)
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(content)
-            if sys.platform != "win32" and os.path.isfile(path):
+            unchanged = False
+            if os.path.isfile(abs_path):
                 try:
-                    os.chmod(path, 0o600)
+                    with open(abs_path, "r", encoding="utf-8") as existing_f:
+                        unchanged = existing_f.read() == content
+                except OSError:
+                    unchanged = False
+            if not unchanged:
+                tmp_fd, tmp_path = tempfile.mkstemp(
+                    prefix=".financial_limits_",
+                    suffix=".tmp",
+                    dir=parent_dir or None,
+                )
+                try:
+                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    if sys.platform != "win32":
+                        try:
+                            os.chmod(tmp_path, 0o600)
+                        except OSError:
+                            pass
+                    os.replace(tmp_path, abs_path)
+                except OSError:
+                    if os.path.exists(tmp_path):
+                        try:
+                            os.remove(tmp_path)
+                        except OSError:
+                            pass
+                    raise
+            if sys.platform != "win32" and os.path.isfile(abs_path):
+                try:
+                    os.chmod(abs_path, 0o600)
                 except OSError:
                     pass
             if primary_written is None:
@@ -2097,6 +2125,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         flag_dot = "--" + key
         flag_dash = "--" + key.lower().replace(".", "-").replace("_", "-")
         flags = [flag_dot] if flag_dot == flag_dash else [flag_dot, flag_dash]
+        safe_desc = str(spec["unit_description"]).replace("%", "%%")
         type_group.add_argument(
             *flags,
             dest=f"limit__{key}",
@@ -2106,7 +2135,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             ),
             help=(
                 f"Upper limit for {key} [{spec['monetary_unit']} "
-                f"({spec['api_format']}): {spec['unit_description']}]"
+                f"({spec['api_format']}): {safe_desc}]"
             ),
         )
 

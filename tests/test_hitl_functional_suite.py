@@ -691,6 +691,7 @@ class TestSimulatedTestAccountSuiteExecution:
             "TC-HOOK-02",
             "TC-HOOK-03",
             "TC-HOOK-06",
+            "TC-HOOK-07",
             "TC-HOOK-08",
             "TC-HOOK-09",
             "TC-RUN-01",
@@ -698,6 +699,7 @@ class TestSimulatedTestAccountSuiteExecution:
             "TC-RUN-03",
             "TC-RUN-05",
             "TC-RUN-06",
+            "TC-RUN-10",
             "TC-AUD-03",
             "TC-A2A-01",
             "TC-A2A-02",
@@ -705,6 +707,9 @@ class TestSimulatedTestAccountSuiteExecution:
             "TC-T1-03",
             "TC-T2-01",
             "TC-T2-03",
+            "TC-T2-04",
+            "TC-T3-01",
+            "TC-T3-02",
             "TC-T3-03",
             "TC-T3-06",
             "TC-T4-01",
@@ -716,18 +721,15 @@ class TestSimulatedTestAccountSuiteExecution:
         ):
             assert by_id[pass_id].passed is True, f"{pass_id} failed: {by_id[pass_id].details}"
 
-        # Known policy conformance gaps (GAP-01..GAP-07) and live v26 WebpageCondition bug (TC-T2-04)
+        # Known policy conformance gaps (GAP-02..GAP-07)
         for gap_id in (
             "TC-CFG-05",
-            "TC-HOOK-07",
-            "TC-RUN-10",
             "TC-RUN-11",
             "TC-RUN-12",
             "TC-RUN-13",
             "TC-MSG-01",
             "TC-MSG-04",
             "TC-AUD-02",
-            "TC-T2-04",
         ):
             assert by_id[gap_id].passed is False
 

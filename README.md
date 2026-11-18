@@ -563,7 +563,7 @@ The sidecar exposes two HTTP endpoints on `http://127.0.0.1:8900`:
 
 | Intent | Function |
 | :--- | :--- |
-| **`GAQL_VALIDATE`** | Runs static analysis checks on a GAQL query. It blocks `OR` operators, rejects `FROM` clauses in `GoogleAdsFieldService` metadata queries, and warns about `segments.hour` in `v23+`. |
+| **`GAQL_VALIDATE`** | Runs static analysis checks on a GAQL query. It blocks `OR` operators, rejects `FROM` clauses in `GoogleAdsFieldService` metadata queries, and blocks invalid `segments.hour_of_day` in favor of `segments.hour`. |
 | **`INSPECT_OBJECT`** | Returns Protobuf resource metadata and selectable fields for a `resource` and `api_version`. |
 | **`GENERATE_CODE`** | Generates `ruff`-checked Python code that calls `GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version=...)` and catches `GoogleAdsException`. |
 | **`TROUBLESHOOT_CONVERSIONS`** | Runs offline conversion upload checks (`offline_conversion_upload_client_summary` and `conversion_time > click_time` validation) for a `customer_id`. |
@@ -946,7 +946,7 @@ The runner marks a benchmark as **`REGRESS`** (and exits with code **`1`**) if *
 | **`version_resolution_in_process`** | Reads the plugin version across `config_init.get_version()` and `server.get_plugin_version()` (1,000 iterations). | Tests in-memory version caching (`_CACHED_VERSION`). |
 | **`config_sync_and_legacy_migration`** | Copies `~/google-ads.yaml` to `config/google-ads.yaml` (`0600`), deletes dummy YAML files in `client_libs/`, and migrates `customer_id` / `api_version.txt` into `config/assistant_config` (50 iterations). | Tests top-level directory checks and config sync speed. |
 | **`hook_pre_tool_use_interception`** | Runs `evaluate_mutation_guard()` on read-only GAQL commands (`allow`), `--dry-run` mutation commands (`allow`), and unverified live `.mutate*()` commands (`deny`) (500 iterations). | Measures `PreToolUse` hook speed on terminal tool calls. |
-| **`gaql_static_analysis`** | Checks GAQL syntax, rejects `OR` clauses, `COUNT()` aggregates, and `segments.hour` + date combinations, and checks dry-run cache hits (200 iterations). | Tests SHA-256 query cache (`compute_gaql_cache_key`) and static validator speed. |
+| **`gaql_static_analysis`** | Checks GAQL syntax, rejects `OR` clauses, `COUNT()` aggregates, and invalid `segments.hour_of_day` fields, and checks dry-run cache hits (200 iterations). | Tests SHA-256 query cache (`compute_gaql_cache_key`) and static validator speed. |
 | **`protobuf_type_discovery_and_inspection`** | Finds available Protobuf message and enum types for the active API version and reads field definitions (200 iterations). | Tests two-tier memory (`_AVAILABLE_TYPES_CACHE`) and disk (`gads_assistant_types_<ver>.json`) caching. |
 | **`client_libs_parallel_release_sync`** | Checks client library repositories against GitHub releases (`check_only=True`) with simulated `25 ms` network latency per repo (5 iterations). | Tests concurrent `ThreadPoolExecutor` release checks. |
 | **`conversion_csv_validation`** | Validates a 100-row offline conversion CSV file (headers, ISO-8601 timestamps with timezones, and GCLIDs) (50 iterations). | Checks CSV validation speed across 5,000 rows. |

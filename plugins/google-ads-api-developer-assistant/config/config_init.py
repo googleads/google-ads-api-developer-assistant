@@ -1,6 +1,7 @@
 """Initializes config/google-ads.yaml from ~/google-ads.yaml and manages key-value pairs."""
 
 import html
+import importlib.util
 import json
 import math
 import os
@@ -8,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -958,34 +960,48 @@ def detect_latest_api_version() -> str:
             break
 
     try:
-        import importlib
-
-        gads_mod = importlib.import_module("google.ads.googleads")
         pkg_paths: list[str] = []
-        raw_path = getattr(gads_mod, "__path__", None)
-        if raw_path:
-            pkg_paths.extend(list(raw_path))
-        pkg_file = getattr(gads_mod, "__file__", None)
-        if pkg_file:
-            pkg_paths.append(os.path.dirname(pkg_file))
-        cache_key = (id(gads_mod), tuple(pkg_paths))
-        if cache_key in _SITE_PKG_API_VERSION_CACHE:
-            cached_pkg_ver = _SITE_PKG_API_VERSION_CACHE[cache_key]
-            if cached_pkg_ver:
-                discovered_versions.append(cached_pkg_ver)
+        mod_attrs: list[str] = []
+        cache_token: Any = None
+        if "google.ads.googleads" in sys.modules:
+            gads_mod = sys.modules["google.ads.googleads"]
+            if gads_mod is not None:
+                cache_token = id(gads_mod)
+                mod_attrs = [
+                    attr for attr in dir(gads_mod) if re.match(r"^v\d+$", attr)
+                ]
+                raw_path = getattr(gads_mod, "__path__", None)
+                if raw_path:
+                    pkg_paths.extend(list(raw_path))
+                pkg_file = getattr(gads_mod, "__file__", None)
+                if pkg_file:
+                    pkg_paths.append(os.path.dirname(pkg_file))
         else:
-            pkg_versions: list[str] = [
-                attr for attr in dir(gads_mod) if re.match(r"^v\d+$", attr)
-            ]
-            for pkg_dir in pkg_paths:
-                pkg_versions.extend(_extract_version_dirs(pkg_dir))
-            if pkg_versions:
-                pkg_versions.sort(key=lambda x: int(x[1:]))
-                latest_pkg_ver: Optional[str] = pkg_versions[-1]
-                _SITE_PKG_API_VERSION_CACHE[cache_key] = latest_pkg_ver
-                discovered_versions.append(latest_pkg_ver)
+            spec = importlib.util.find_spec("google.ads.googleads")
+            if spec is not None:
+                cache_token = "spec"
+                if spec.submodule_search_locations:
+                    pkg_paths.extend(list(spec.submodule_search_locations))
+                elif spec.origin:
+                    pkg_paths.append(os.path.dirname(spec.origin))
+
+        if cache_token is not None:
+            cache_key = (cache_token, tuple(pkg_paths))
+            if cache_key in _SITE_PKG_API_VERSION_CACHE:
+                cached_pkg_ver = _SITE_PKG_API_VERSION_CACHE[cache_key]
+                if cached_pkg_ver:
+                    discovered_versions.append(cached_pkg_ver)
             else:
-                _SITE_PKG_API_VERSION_CACHE[cache_key] = None
+                pkg_versions: list[str] = list(mod_attrs)
+                for pkg_dir in pkg_paths:
+                    pkg_versions.extend(_extract_version_dirs(pkg_dir))
+                if pkg_versions:
+                    pkg_versions.sort(key=lambda x: int(x[1:]))
+                    latest_pkg_ver: Optional[str] = pkg_versions[-1]
+                    _SITE_PKG_API_VERSION_CACHE[cache_key] = latest_pkg_ver
+                    discovered_versions.append(latest_pkg_ver)
+                else:
+                    _SITE_PKG_API_VERSION_CACHE[cache_key] = None
     except Exception:
         pass
 
@@ -1815,15 +1831,7 @@ def _write_assistant_config_to_dir(
         current_data.update(updates)
 
     toml_content = format_assistant_config(current_data)
-    fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(toml_content)
-
-    if sys.platform != "win32" and os.path.isfile(target_path):
-        try:
-            os.chmod(target_path, 0o600)
-        except OSError:
-            pass
+    _write_private_text_if_changed(target_path, toml_content)
 
     return target_path
 
@@ -2113,12 +2121,49 @@ def _set_hooks_json_enabled(hooks_path: str, enabled: bool) -> bool:
             changed = True
 
         if changed:
-            with open(hooks_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-                f.write("\n")
+            _write_json_file_atomic(hooks_path, data, private=False, trailing_newline=True)
         return changed
     except Exception:
         return False
+
+
+def _write_json_file_atomic(
+    target_path: str,
+    data: Any,
+    *,
+    private: bool = False,
+    trailing_newline: bool = False,
+) -> None:
+    """Atomically writes JSON to target_path via a sibling temp file + os.replace."""
+    abs_target = os.path.abspath(target_path)
+    parent_dir = os.path.dirname(abs_target)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+    serialized = json.dumps(data, indent=2) + ("\n" if trailing_newline else "")
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        prefix=".cfg_json_", suffix=".tmp", dir=parent_dir or None
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(serialized)
+        if private and sys.platform != "win32":
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass
+        os.replace(tmp_path, abs_target)
+    except OSError:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
+    if private and sys.platform != "win32" and os.path.isfile(abs_target):
+        try:
+            os.chmod(abs_target, 0o600)
+        except OSError:
+            pass
 
 
 def _is_repo_source_plugin_dir(plugin_dir: str) -> bool:
@@ -2569,9 +2614,11 @@ MUTATION_CALL_PATTERN = re.compile(
     r"upload_user_data|create_offline_user_data_job|add_offline_user_data_job_operations|"
     r"run_offline_user_data_job|add_batch_job_operations|run_batch_job|book_campaigns|"
     r"apply_incentive|provide_lead_feedback|create_customer_client|"
-    r"create_data_link|update_data_link|create_product_link|"
+    r"create_account_link|create_data_link|update_data_link|create_product_link|"
     r"create_product_link_invitation|update_product_link_invitation|"
     r"create_you_tube_video_upload|update_you_tube_video_upload|"
+    r"start_identity_verification|enable_p_max_brand_guidelines|"
+    r"resolve_multi_party_auth_review|regenerate_shareable_link_id|"
     r"move_manager_link|append_lead_conversation|generate_p_max_draft_campaign|"
     r"promote_campaign_draft|graduate_experiment|promote_experiment|"
     r"schedule_experiment|end_experiment)\s*\("
@@ -2581,11 +2628,15 @@ MUTATION_CALL_PATTERN = re.compile(
 
 _NON_VALIDATE_ONLY_CALL_RE = re.compile(
     r"\.\s*(?:mutate_billing_setup|book_campaigns|apply_incentive|"
-    r"provide_lead_feedback|apply_recommendation|dismiss_recommendation|"
+    r"provide_lead_feedback|append_lead_conversation|"
+    r"apply_recommendation|dismiss_recommendation|"
     r"mutate_batch_job|add_batch_job_operations|run_batch_job|"
     r"create_offline_user_data_job|add_offline_user_data_job_operations|run_offline_user_data_job|"
     r"mutate_customer_user_access|mutate_customer_user_access_invitation|"
-    r"upload_user_data)\s*\("
+    r"upload_user_data|create_account_link|create_data_link|update_data_link|"
+    r"create_product_link|create_product_link_invitation|update_product_link_invitation|"
+    r"start_identity_verification|enable_p_max_brand_guidelines|"
+    r"resolve_multi_party_auth_review|regenerate_shareable_link_id)\s*\("
 )
 
 _HOOK_FINANCIAL_SERVICES = frozenset({
@@ -2629,6 +2680,8 @@ _HOOK_FINANCIAL_METHODS = frozenset({
     "mutate_campaign_goal_configs",
     "configure_customer_lifecycle_goals",
     "configure_campaign_lifecycle_goals",
+    "mutate_customer_lifecycle_goals",
+    "mutate_campaign_lifecycle_goals",
     "upload_conversion_adjustments",
     "book_campaigns",
     "apply_incentive",
@@ -2645,6 +2698,10 @@ _HOOK_FINANCIAL_PAYLOAD_KEYS = frozenset({
     "total_amount_micros",
     "recommended_budget_amount_micros",
     "new_budget_amount_micros",
+    "new_campaign_budget_amount_micros",
+    "budget_micros_to_move",
+    "budget_amount_micros",
+    "campaign_budget_amount_micros",
     "recommended_cpa_opt_in_micros",
     "spending_limit_micros",
     "proposed_spending_limit_micros",
@@ -2661,16 +2718,24 @@ _HOOK_FINANCIAL_PAYLOAD_KEYS = frozenset({
     "cpv_bid_micros",
     "target_cpa_micros",
     "target_cpm_micros",
+    "target_cpc_micros",
+    "target_cpv_micros",
+    "manual_cpa_bid_micros",
+    "target_cpa_bid_micros",
     "target_roas",
     "cpc_bid_ceiling_micros",
     "cpc_bid_floor_micros",
     "percent_cpc_bid_micros",
+    "commission_rate_micros",
+    "location_fraction_micros",
     "fixed_cpm_micros",
     "target_spend_micros",
-    "commission_rate_micros",
     "bid_modifier",
+    "conversion_rate_modifier",
     "target_cpa_multiplier",
     "target_roas_multiplier",
+    "target_multiplier",
+    "value_multiplier",
     "high_lifetime_value_multiplier",
     "bidding_strategy",
     "bidding_strategy_operation",
@@ -2688,16 +2753,17 @@ _HOOK_FINANCIAL_PAYLOAD_KEYS = frozenset({
     "target_impression_share",
     "target_spend",
     "conversion_value",
+    "unit_price",
+    "local_transaction_cost",
     "adjusted_value",
     "restatement_value",
     "default_value",
     "additional_value",
     "additional_high_lifetime_value",
+    "transaction_amount_micros",
     "lifetime_value_micros",
     "high_lifetime_value_micros",
-    "transaction_amount_micros",
-    "unit_price",
-    "local_transaction_cost",
+    "average_purchase_value_micros",
     "money_amount_off",
     "orders_over_amount",
     "up_to_amount",
@@ -2961,24 +3027,36 @@ def _verify_dry_run_receipt_for_hook(
 
     this_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.abspath(os.path.join(this_dir, ".."))
+    repo_root = os.path.abspath(os.path.join(plugin_root, "../.."))
     candidate_receipts: list[str] = []
     if effective_ws:
         ws_receipt = os.path.abspath(
             os.path.join(effective_ws, "saved", "data", "last_dry_run.json")
         )
         candidate_receipts.append(ws_receipt)
-    for cand in (
-        os.path.abspath(os.path.join("saved", "data", "last_dry_run.json")),
-        os.path.join(plugin_root, "saved", "data", "last_dry_run.json"),
-        os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/data/last_dry_run.json"
-        ),
-        os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/saved/data/last_dry_run.json"
-        ),
-    ):
-        if cand not in candidate_receipts:
-            candidate_receipts.append(cand)
+    env_receipt = os.environ.get("GOOGLE_ADS_MUTATION_RECEIPT_PATH", "").strip()
+    if env_receipt:
+        cwd_abs = os.path.abspath(".")
+        if cwd_abs not in (repo_root, plugin_root):
+            cwd_cand = os.path.abspath(os.path.join("saved", "data", "last_dry_run.json"))
+            if cwd_cand not in candidate_receipts:
+                candidate_receipts.append(cwd_cand)
+        abs_env_receipt = os.path.abspath(env_receipt)
+        if abs_env_receipt not in candidate_receipts:
+            candidate_receipts.append(abs_env_receipt)
+    else:
+        for cand in (
+            os.path.abspath(os.path.join("saved", "data", "last_dry_run.json")),
+            os.path.join(plugin_root, "saved", "data", "last_dry_run.json"),
+            os.path.expanduser(
+                "~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/data/last_dry_run.json"
+            ),
+            os.path.expanduser(
+                "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/saved/data/last_dry_run.json"
+            ),
+        ):
+            if cand not in candidate_receipts:
+                candidate_receipts.append(cand)
 
     receipt: Optional[Dict[str, Any]] = None
     fallback_receipt: Optional[Dict[str, Any]] = None
@@ -3209,13 +3287,7 @@ def _verify_dry_run_receipt_for_hook(
     for candidate in targets_to_update:
         if os.path.isfile(candidate):
             try:
-                with open(candidate, "w", encoding="utf-8") as f:
-                    json.dump(receipt, f, indent=2)
-                if sys.platform != "win32":
-                    try:
-                        os.chmod(candidate, 0o600)
-                    except OSError:
-                        pass
+                _write_json_file_atomic(candidate, receipt, private=True)
             except OSError:
                 continue
 
@@ -3244,7 +3316,17 @@ _DIRECT_REST_MUTATE_RE = re.compile(
     r"bookCampaigns|applyIncentive|applyRecommendation|dismissRecommendation|"
     r"uploadClickConversions|uploadCallConversions|uploadConversionAdjustments|"
     r"uploadUserData|createOfflineUserDataJob|addOfflineUserDataJobOperations|"
-    r"runOfflineUserDataJob)\b"
+    r"runOfflineUserDataJob|addBatchJobOperations|runBatchJob|"
+    r"createAccountLink|createProductLink|removeProductLink|"
+    r"createProductLinkInvitation|updateProductLinkInvitation|removeProductLinkInvitation|"
+    r"createDataLink|updateDataLink|removeDataLink|moveManagerLink|"
+    r"startIdentityVerification|enablePMaxBrandGuidelines|"
+    r"promoteCampaignDraft|generatePMaxDraftCampaign|"
+    r"graduateExperiment|promoteExperiment|scheduleExperiment|endExperiment|"
+    r"appendLeadConversation|provideLeadFeedback|"
+    r"resolveMultiPartyAuthReview|regenerateShareableLinkId|"
+    r"createYouTubeVideoUpload|updateYouTubeVideoUpload|removeYouTubeVideoUpload|"
+    r"removeAutomaticallyCreatedAssets|removeCampaignAutomaticallyCreatedAsset)\b"
 )
 _SCRIPT_ARG_RE = re.compile(
     r"--script(?:=|\s+)(?:'([^']+)'|\"([^\"]+)\"|([^\s'\"]+))"
@@ -3585,13 +3667,6 @@ def handle_hook() -> None:
             print(json.dumps({}))
         return
 
-    try:
-        config_path = sync_and_set_config_kv()
-    except Exception:
-        config_path = os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
-        )
-
     # 1. PreToolUse hook (shell execution & protected file-write interception)
     if "toolCall" in input_data or "tool_input" in input_data:
         tool_call = input_data.get("toolCall", {})
@@ -3609,7 +3684,7 @@ def handle_hook() -> None:
 
         is_claude = "tool_input" in input_data or bool(os.environ.get("CLAUDE_CODE"))
 
-        # Check file-write tool calls targeting protected receipts, audit logs, or guardrail configs
+        # Check file-write tool calls before touching filesystem credential sync
         target_file = (
             args.get("TargetFile")
             or args.get("file_path")
@@ -3644,6 +3719,13 @@ def handle_hook() -> None:
                 return
             print(json.dumps({"decision": "allow"}))
             return
+
+        try:
+            config_path = sync_and_set_config_kv()
+        except Exception:
+            config_path = os.path.expanduser(
+                "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+            )
 
         workspace_cwd = _extract_workspace_cwd(input_data)
         decision, reason = evaluate_mutation_guard(
@@ -3802,6 +3884,13 @@ def handle_hook() -> None:
         return
 
     # 2. PreInvocation / SessionStart hook (model prompt injection & deduplicated first-prompt parity check)
+    try:
+        config_path = sync_and_set_config_kv()
+    except Exception:
+        config_path = os.path.expanduser(
+            "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+        )
+
     is_first_prompt = _should_run_first_prompt_parity(input_data)
 
     mutates_enabled = is_execute_mutates_enabled()

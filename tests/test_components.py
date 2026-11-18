@@ -144,11 +144,22 @@ class TestValidateGAQL:
             validate_gaql.validate_gaql(
                 customer_id="1234567890",
                 api_version="v25",
-                query="SELECT campaign.id, segments.hour FROM campaign WHERE segments.date DURING LAST_30_DAYS",
+                query="SELECT campaign.id, segments.hour_of_day FROM campaign WHERE segments.date DURING LAST_30_DAYS",
             )
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "segments.hour_of_day" in captured.out
+        assert "segments.hour" in captured.out
+
+        mock_client = MagicMock()
+        mock_client.get_service.return_value.search.return_value = []
+        validate_gaql.validate_gaql(
+            customer_id="1234567890",
+            api_version="v26",
+            query="SELECT campaign.id, segments.hour FROM campaign WHERE segments.date DURING LAST_30_DAYS",
+            client=mock_client,
+            use_cache=False,
+        )
+        assert "SUCCESS" in capsys.readouterr().out
 
     def test_mock_dry_run_success(self, capsys):
         mock_client = MagicMock()
@@ -907,12 +918,21 @@ class TestSidecarA2A:
         res = handler.handle_gaql_validate(
             "task-3",
             {
-                "query": "SELECT campaign.id, segments.hour FROM campaign WHERE segments.date DURING LAST_30_DAYS",
+                "query": "SELECT campaign.id, segments.hour_of_day FROM campaign WHERE segments.date DURING LAST_30_DAYS",
                 "api_version": "v25",
             },
         )
         assert res["status"] == "VALIDATION_FAILED"
-        assert any("segments.hour_of_day" in err for err in res["errors"])
+        assert any("segments.hour" in err for err in res["errors"])
+
+        res_ok = handler.handle_gaql_validate(
+            "task-3b",
+            {
+                "query": "SELECT campaign.id, segments.hour FROM campaign WHERE segments.date DURING LAST_30_DAYS",
+                "api_version": "v26",
+            },
+        )
+        assert res_ok["status"] == "COMPLETED"
 
     def test_inspect_object_task(self):
         handler = server.A2AHandler.__new__(server.A2AHandler)

@@ -108,13 +108,18 @@ class TestPython315SubprocessCLI:
         SKILLS_DIR / "ext-version" / "scripts" / "get_extension_version.py",
         SKILLS_DIR / "sync-client-libs" / "scripts" / "sync_client_libs.py",
         SKILLS_DIR / "execute-mutation" / "scripts" / "run_mutation.py",
+        SKILLS_DIR / "execute-mutation" / "scripts" / "set_financial_limits.py",
+        PLUGIN_ROOT / "config" / "set_financial_limits.py",
+        REPO_ROOT / "set_financial_limits.py",
         SKILLS_DIR / "execute-mutation" / "scripts" / "create_account.py",
         SKILLS_DIR / "execute-mutation" / "scripts" / "create_campaign.py",
         SKILLS_DIR / "execute-mutation" / "scripts" / "create_ad_group.py",
         SKILLS_DIR / "execute-mutation" / "scripts" / "create_ad.py",
     ]
 
-    @pytest.mark.parametrize("script_path", CLI_SCRIPTS, ids=lambda p: p.name)
+    @pytest.mark.parametrize(
+        "script_path", CLI_SCRIPTS, ids=lambda p: str(p.relative_to(REPO_ROOT))
+    )
     def test_cli_script_help_under_python_315(self, script_path):
         """Ensures each CLI script executes with exit code 0 under Python 3.15 without syntax or import errors."""
         assert script_path.is_file(), f"Target script does not exist: {script_path}"

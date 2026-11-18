@@ -29,6 +29,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import tomllib
 from typing import Any, Optional
 import urllib.error
 import urllib.parse
@@ -664,6 +665,18 @@ def _resolve_default_branch(lib_path: str) -> Optional[str]:
     return None
 
 
+_GIT_SAFE_CONFIG_ARGS: tuple[str, ...] = (
+    "-c",
+    "core.longpaths=true",
+    "-c",
+    "maintenance.auto=false",
+    "-c",
+    "gc.auto=0",
+    "-c",
+    "gc.autoDetach=false",
+)
+
+
 def update_codebase_via_git(lib_path: str, tag: str) -> bool:
     """Updates a git repository in lib_path to tag or latest HEAD."""
     if tag and not _is_safe_git_tag(tag):
@@ -672,7 +685,7 @@ def update_codebase_via_git(lib_path: str, tag: str) -> bool:
 
     try:
         fetch_res = subprocess.run(
-            ["git", "fetch", "--tags", "--all"],
+            ["git", *_GIT_SAFE_CONFIG_ARGS, "fetch", "--tags", "--all"],
             cwd=lib_path,
             capture_output=True,
             text=True,
@@ -694,6 +707,7 @@ def update_codebase_via_git(lib_path: str, tag: str) -> bool:
                     co_branch = subprocess.run(
                         [
                             "git",
+                            *_GIT_SAFE_CONFIG_ARGS,
                             "checkout",
                             "-B",
                             default_branch,
@@ -724,7 +738,7 @@ def update_codebase_via_git(lib_path: str, tag: str) -> bool:
                         return True
 
                 co_res = subprocess.run(
-                    ["git", "checkout", candidate_tag],
+                    ["git", *_GIT_SAFE_CONFIG_ARGS, "checkout", candidate_tag],
                     cwd=lib_path,
                     capture_output=True,
                     text=True,
@@ -738,7 +752,7 @@ def update_codebase_via_git(lib_path: str, tag: str) -> bool:
         # Fallback to git pull (ensuring HEAD is attached to default_branch)
         if default_branch:
             subprocess.run(
-                ["git", "checkout", default_branch],
+                ["git", *_GIT_SAFE_CONFIG_ARGS, "checkout", default_branch],
                 cwd=lib_path,
                 capture_output=True,
                 text=True,
@@ -761,7 +775,7 @@ def update_codebase_via_git(lib_path: str, tag: str) -> bool:
                 env=_git_env(),
             )
         pull_res = subprocess.run(
-            ["git", "pull"],
+            ["git", *_GIT_SAFE_CONFIG_ARGS, "pull"],
             cwd=lib_path,
             capture_output=True,
             text=True,
@@ -895,6 +909,7 @@ def update_codebase_via_archive(
             clone_res = subprocess.run(
                 [
                     "git",
+                    *_GIT_SAFE_CONFIG_ARGS,
                     "clone",
                     "--depth",
                     "1",
@@ -914,6 +929,7 @@ def update_codebase_via_archive(
                 clone_res = subprocess.run(
                     [
                         "git",
+                        *_GIT_SAFE_CONFIG_ARGS,
                         "clone",
                         "--depth",
                         "1",
@@ -1157,30 +1173,54 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
             cid = "12345678"
             exec_mutates_str = "false"
             enabled_str: Optional[str] = None
+            extra_toml: dict[str, Any] = {}
+            existing_text = ""
             if os.path.isfile(cfg_path):
                 try:
                     with open(cfg_path, "r", encoding="utf-8") as f:
                         existing_text = f.read()
-                    m_cid = re.search(
-                        r'(?m)^\s*customer_id\s*=\s*["\']?([^"\'\s#]+)["\']?',
-                        existing_text,
-                    )
-                    if m_cid:
-                        cid = m_cid.group(1).strip()
-                    m_em = re.search(
-                        r'(?m)^\s*execute_mutates\s*=\s*["\']?(true|false)["\']?',
-                        existing_text,
-                        re.IGNORECASE,
-                    )
-                    if m_em:
-                        exec_mutates_str = m_em.group(1).lower()
-                    m_en = re.search(
-                        r'(?m)^\s*enabled\s*=\s*["\']?(true|false)["\']?',
-                        existing_text,
-                        re.IGNORECASE,
-                    )
-                    if m_en:
-                        enabled_str = m_en.group(1).lower()
+                    try:
+                        loaded_cfg = tomllib.loads(existing_text)
+                        if isinstance(loaded_cfg, dict):
+                            for k, v in loaded_cfg.items():
+                                if k == "customer_id" and str(v).strip():
+                                    cid = str(v).strip()
+                                elif k == "execute_mutates" and isinstance(
+                                    v, bool
+                                ):
+                                    exec_mutates_str = (
+                                        "true" if v else "false"
+                                    )
+                                elif k == "enabled" and isinstance(v, bool):
+                                    enabled_str = "true" if v else "false"
+                                elif k not in (
+                                    "api_version",
+                                    "customer_id",
+                                    "execute_mutates",
+                                    "enabled",
+                                ):
+                                    extra_toml[k] = v
+                    except tomllib.TOMLDecodeError:
+                        cid_pat = (
+                            r'(?m)^\s*customer_id\s*=\s*["\']?([^"\'\s#]+)'
+                            r'["\']?'
+                        )
+                        em_pat = (
+                            r"(?m)^\s*execute_mutates\s*=\s*"
+                            r'["\']?(true|false)["\']?'
+                        )
+                        en_pat = (
+                            r'(?m)^\s*enabled\s*=\s*["\']?(true|false)["\']?'
+                        )
+                        m_cid = re.search(cid_pat, existing_text)
+                        if m_cid:
+                            cid = m_cid.group(1).strip()
+                        m_em = re.search(em_pat, existing_text, re.IGNORECASE)
+                        if m_em:
+                            exec_mutates_str = m_em.group(1).lower()
+                        m_en = re.search(en_pat, existing_text, re.IGNORECASE)
+                        if m_en:
+                            enabled_str = m_en.group(1).lower()
                 except OSError:
                     pass
             content_out = (
@@ -1190,8 +1230,26 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
             )
             if enabled_str is not None:
                 content_out += f"enabled = {enabled_str}\n"
-            with open(cfg_path, "w", encoding="utf-8") as f:
-                f.write(content_out)
+            for k, v in extra_toml.items():
+                if re.fullmatch(r"[A-Za-z0-9_-]+", str(k)):
+                    if isinstance(v, bool):
+                        fmt_v = "true" if v else "false"
+                    elif isinstance(v, (int, float)):
+                        fmt_v = str(v)
+                    else:
+                        fmt_v = json.dumps(str(v))
+                    content_out += f"{k} = {fmt_v}\n"
+            if content_out != existing_text or not os.path.isfile(cfg_path):
+                fd = os.open(
+                    cfg_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content_out)
+            if sys.platform != "win32" and os.path.isfile(cfg_path):
+                try:
+                    os.chmod(cfg_path, 0o600)
+                except OSError:
+                    pass
             legacy_ver_txt = os.path.join(cfg_dir, "api_version.txt")
             if os.path.isfile(legacy_ver_txt):
                 try:
@@ -1402,7 +1460,37 @@ def upgrade_system_package(
             env=_pip_env(),
         )
         ok = res.returncode == 0
+        combined_out = (
+            f"{getattr(res, 'stderr', '') or ''}\n"
+            f"{getattr(res, 'stdout', '') or ''}"
+        )
         last_err = getattr(res, "stderr", "") or getattr(res, "stdout", "")
+        py_ver_mismatch = (
+            "require a different python version" in combined_out.lower()
+        )
+        if not ok and py_ver_mismatch:
+            py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+            print(
+                f"WARNING: No {package_name} release on PyPI declares support "
+                f"for Python {py_ver}; retrying pip install with "
+                "--ignore-requires-python.",
+                file=sys.stderr,
+            )
+            retry_res = subprocess.run(
+                [*cmd, "--ignore-requires-python"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=180,
+                env=_pip_env(),
+            )
+            ok = retry_res.returncode == 0
+            if not ok:
+                last_err = (
+                    getattr(retry_res, "stderr", "")
+                    or getattr(retry_res, "stdout", "")
+                    or last_err
+                )
         if (
             not ok
             and lib_path

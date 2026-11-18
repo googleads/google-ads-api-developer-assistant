@@ -60,7 +60,7 @@ When a user invokes `/assistant-tutorial` or requests this tutorial:
 
 ### Topic 8: Writing Prompts to Produce Reports & GAQL Validation Caching (`/validate-gaql`)
 - **Prompting Best Practices:** Define main resource, specify metrics, request date/device segments.
-- **GAQL Validation Protocol (`validate_gaql.py`):** Programmatic 4-step sequence (Schema Discovery via `GoogleAdsFieldService` without `FROM` or `google_ads_field.` prefixes, Compatibility Check via `selectable_with`, Static Analysis blocking `OR` / SQL aggregates / deprecated `segments.hour` in favor of `segments.hour_of_day` in v23+, and Runtime Dry Run).
+- **GAQL Validation Protocol (`validate_gaql.py`):** Programmatic 4-step sequence (Schema Discovery via `GoogleAdsFieldService` without `FROM` or `google_ads_field.` prefixes, Compatibility Check via `selectable_with`, Static Analysis blocking `OR` / SQL aggregates / invalid `segments.hour_of_day` in favor of `segments.hour`, and Runtime Dry Run).
 - **Two-Tier GAQL Validation Caching:** `validate_gaql.py` caches validated queries in memory and on disk (`saved/data/gaql_validation_cache.json`) keyed by `SHA-256(query + api_version)`, with `--cache-ttl`, `--no-cache`, and `--clear-cache` flags.
 
 ### Topic 9: Troubleshooting Conversion Problems (`/troubleshoot-conversions`)

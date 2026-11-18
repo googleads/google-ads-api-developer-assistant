@@ -24,12 +24,24 @@ import tomllib
 from typing import Any, Dict, List, Optional, Tuple, Union
 import uuid
 
-try:
-    _MESSAGE_TO_DICT: Any = importlib.import_module(
-        "google.protobuf.json_format"
-    ).MessageToDict
-except ImportError:
-    _MESSAGE_TO_DICT = None
+_MESSAGE_TO_DICT: Any = None
+_MESSAGE_TO_DICT_LOADED = False
+
+
+def _get_message_to_dict() -> Any:
+    """Lazily imports google.protobuf.json_format.MessageToDict on demand."""
+    global _MESSAGE_TO_DICT, _MESSAGE_TO_DICT_LOADED
+    if _MESSAGE_TO_DICT is not None:
+        return _MESSAGE_TO_DICT
+    if not _MESSAGE_TO_DICT_LOADED:
+        _MESSAGE_TO_DICT_LOADED = True
+        try:
+            _MESSAGE_TO_DICT = importlib.import_module(
+                "google.protobuf.json_format"
+            ).MessageToDict
+        except ImportError:
+            _MESSAGE_TO_DICT = None
+    return _MESSAGE_TO_DICT
 
 
 RECEIPT_FILENAME = "last_dry_run.json"
@@ -64,6 +76,7 @@ _MUTATION_METHOD_PREFIXES = (
     "append_lead_conversation",
     "create_customer_client",
     "move_manager_link",
+    "create_account_link",
     "create_data_link",
     "update_data_link",
     "create_product_link",
@@ -71,6 +84,10 @@ _MUTATION_METHOD_PREFIXES = (
     "update_product_link_invitation",
     "create_you_tube_video_upload",
     "update_you_tube_video_upload",
+    "start_identity_verification",
+    "enable_p_max_brand_guidelines",
+    "resolve_multi_party_auth_review",
+    "regenerate_shareable_link_id",
     "generate_p_max_draft_campaign",
     "promote_campaign_draft",
     "graduate_experiment",
@@ -88,6 +105,7 @@ _NON_VALIDATE_ONLY_MUTATION_METHODS = frozenset({
     "book_campaigns",
     "apply_incentive",
     "provide_lead_feedback",
+    "append_lead_conversation",
     "apply_recommendation",
     "dismiss_recommendation",
     "mutate_batch_job",
@@ -96,6 +114,16 @@ _NON_VALIDATE_ONLY_MUTATION_METHODS = frozenset({
     "mutate_customer_user_access",
     "mutate_customer_user_access_invitation",
     "upload_user_data",
+    "create_account_link",
+    "create_data_link",
+    "update_data_link",
+    "create_product_link",
+    "create_product_link_invitation",
+    "update_product_link_invitation",
+    "start_identity_verification",
+    "enable_p_max_brand_guidelines",
+    "resolve_multi_party_auth_review",
+    "regenerate_shareable_link_id",
 })
 
 _FINANCIAL_SERVICES = frozenset({
@@ -110,6 +138,11 @@ _FINANCIAL_SERVICES = frozenset({
     "conversionvalueruleservice",
     "conversionvaluerulesetservice",
     "conversionadjustmentuploadservice",
+    "conversionuploadservice",
+    "offlineuserdatajobservice",
+    "userdataservice",
+    "assetservice",
+    "recommendationservice",
     "reservationservice",
     "incentiveservice",
     "localservicesleadservice",
@@ -141,6 +174,8 @@ _FINANCIAL_METHODS = frozenset({
     "promote_campaign_draft",
     "mutate_goals",
     "mutate_campaign_goal_configs",
+    "configure_customer_lifecycle_goals",
+    "configure_campaign_lifecycle_goals",
     "mutate_customer_lifecycle_goals",
     "mutate_campaign_lifecycle_goals",
 })
@@ -154,6 +189,7 @@ _FINANCIAL_PAYLOAD_KEYS = frozenset({
     "budget_micros_to_move",
     "budget_amount_micros",
     "campaign_budget_amount_micros",
+    "recommended_cpa_opt_in_micros",
     "spending_limit_micros",
     "proposed_spending_limit_micros",
     "approved_spending_limit_micros",
@@ -169,14 +205,20 @@ _FINANCIAL_PAYLOAD_KEYS = frozenset({
     "cpv_bid_micros",
     "target_cpa_micros",
     "target_cpm_micros",
+    "target_cpc_micros",
+    "target_cpv_micros",
+    "manual_cpa_bid_micros",
+    "target_cpa_bid_micros",
     "target_roas",
     "cpc_bid_ceiling_micros",
     "cpc_bid_floor_micros",
     "percent_cpc_bid_micros",
     "commission_rate_micros",
+    "location_fraction_micros",
     "fixed_cpm_micros",
     "target_spend_micros",
     "bid_modifier",
+    "conversion_rate_modifier",
     "target_cpa_multiplier",
     "target_roas_multiplier",
     "target_multiplier",
@@ -207,9 +249,11 @@ _FINANCIAL_PAYLOAD_KEYS = frozenset({
     "additional_high_lifetime_value",
     "transaction_amount_micros",
     "lifetime_value_micros",
+    "high_lifetime_value_micros",
     "average_purchase_value_micros",
     "money_amount_off",
     "orders_over_amount",
+    "up_to_amount",
     "conversion_value_rule_operation",
     "conversion_value_rule_set_operation",
     "selected_incentive_id",
@@ -415,6 +459,25 @@ def get_receipt_paths() -> List[str]:
     """Returns candidate paths for reading/writing the dry-run receipt."""
     this_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
+    repo_root = os.path.abspath(os.path.join(plugin_root, "../.."))
+    env_override = os.environ.get(
+        "GOOGLE_ADS_MUTATION_RECEIPT_PATH", ""
+    ).strip()
+    if env_override:
+        cwd_abs = os.path.abspath(".")
+        override_paths: List[str] = []
+        if cwd_abs not in (repo_root, plugin_root):
+            override_paths.append(
+                os.path.abspath(os.path.join("saved", "data", RECEIPT_FILENAME))
+            )
+        override_paths.append(os.path.abspath(env_override))
+        dedup_override: List[str] = []
+        for p in override_paths:
+            norm = os.path.normpath(p)
+            if norm not in dedup_override:
+                dedup_override.append(norm)
+        return dedup_override
+
     paths = [
         os.path.abspath(os.path.join("saved", "data", RECEIPT_FILENAME)),
         os.path.join(plugin_root, "saved", "data", RECEIPT_FILENAME),
@@ -1519,8 +1582,14 @@ def _find_google_ads_yaml() -> Optional[str]:
     """Locates the active config/google-ads.yaml file if present."""
     this_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
+    raw_home = os.path.abspath(os.path.expanduser("~/google-ads.yaml"))
+    env_cfg = os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH", "").strip()
+    if env_cfg:
+        exp_env = os.path.abspath(os.path.expanduser(env_cfg))
+        if exp_env != raw_home and os.path.isfile(exp_env):
+            return exp_env
+
     candidates = [
-        os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH", ""),
         os.path.abspath(os.path.join("config", "google-ads.yaml")),
         os.path.join(plugin_root, "config", "google-ads.yaml"),
         os.path.expanduser(
@@ -1661,9 +1730,10 @@ def _serialize_rpc_object(obj: Any, depth: int = 0) -> Any:
 
     # 2. Standard google.protobuf.message.Message or wrapped _pb
     pb_candidate = getattr(obj, "_pb", obj)
-    if _MESSAGE_TO_DICT is not None and hasattr(pb_candidate, "DESCRIPTOR"):
+    msg_to_dict = _get_message_to_dict()
+    if msg_to_dict is not None and hasattr(pb_candidate, "DESCRIPTOR"):
         try:
-            pb_dict = _MESSAGE_TO_DICT(
+            pb_dict = msg_to_dict(
                 pb_candidate, preserving_proto_field_name=True
             )
             if isinstance(pb_dict, dict):
@@ -2592,18 +2662,43 @@ def write_dry_run_receipt(
 
     for target_path in get_receipt_paths():
         try:
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-            with open(target_path, "w", encoding="utf-8") as f:
-                json.dump(receipt, f, indent=2)
-            if sys.platform != "win32" and os.path.isfile(target_path):
-                try:
-                    os.chmod(target_path, 0o600)
-                except OSError:
-                    pass
+            _write_json_atomic(target_path, receipt)
         except OSError:
             continue
 
     return receipt
+
+
+def _write_json_atomic(target_path: str, payload: Dict[str, Any]) -> None:
+    """Atomically writes a 0600-permissioned JSON file via os.replace."""
+    abs_target = os.path.abspath(target_path)
+    parent_dir = os.path.dirname(abs_target)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        prefix=".receipt_", suffix=".tmp", dir=parent_dir or None
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        if sys.platform != "win32":
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass
+        os.replace(tmp_path, abs_target)
+    except OSError:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
+    if sys.platform != "win32" and os.path.isfile(abs_target):
+        try:
+            os.chmod(abs_target, 0o600)
+        except OSError:
+            pass
 
 
 def mark_receipt_executed(
@@ -2634,8 +2729,7 @@ def mark_receipt_executed(
                     )
                 if audit_id:
                     data["audit_id"] = audit_id
-                with open(target_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
+                _write_json_atomic(target_path, data)
             except (
                 OSError,
                 UnicodeDecodeError,

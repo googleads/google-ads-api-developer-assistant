@@ -34,6 +34,8 @@ import run_coverage  # noqa: E402
 _INPROC_HITS: dict[str, set[int]] = {}
 _STOP_INPROC: Callable[[], None] | None = None
 _COVERAGE_ACTIVE = False
+_SESSION_ISOLATION_DIR: str | None = None
+_SESSION_OWNED_ENV_KEYS: list[str] = []
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -71,7 +73,19 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    global _COVERAGE_ACTIVE, _INPROC_HITS, _STOP_INPROC
+    global _COVERAGE_ACTIVE, _INPROC_HITS, _STOP_INPROC, _SESSION_ISOLATION_DIR
+    if _SESSION_ISOLATION_DIR is None:
+        import tempfile
+
+        _SESSION_ISOLATION_DIR = tempfile.mkdtemp(prefix="gads_pytest_session_")
+        for env_key, rel_subpath in (
+            ("GOOGLE_ADS_MUTATION_RECEIPT_PATH", ("saved", "data", "last_dry_run.json")),
+            ("GOOGLE_ADS_MUTATION_AUDIT_LOG", ("saved", "logs", "mutation_audit.jsonl")),
+        ):
+            if not os.environ.get(env_key, "").strip():
+                os.environ[env_key] = os.path.join(_SESSION_ISOLATION_DIR, *rel_subpath)
+                _SESSION_OWNED_ENV_KEYS.append(env_key)
+
     if not config.getoption("--coverage"):
         return
 
@@ -121,7 +135,15 @@ def pytest_collection_modifyitems(
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    global _COVERAGE_ACTIVE, _STOP_INPROC
+    global _COVERAGE_ACTIVE, _STOP_INPROC, _SESSION_ISOLATION_DIR
+    if _SESSION_ISOLATION_DIR is not None:
+        import shutil
+
+        for env_key in _SESSION_OWNED_ENV_KEYS:
+            os.environ.pop(env_key, None)
+        _SESSION_OWNED_ENV_KEYS.clear()
+        shutil.rmtree(_SESSION_ISOLATION_DIR, ignore_errors=True)
+        _SESSION_ISOLATION_DIR = None
     if _COVERAGE_ACTIVE:
         print(
             "\n[coverage] Saving and merging in-process coverage data — process is still working, please wait...",

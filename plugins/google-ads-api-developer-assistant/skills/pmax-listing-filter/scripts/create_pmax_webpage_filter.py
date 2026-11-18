@@ -73,11 +73,24 @@ _SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
 )
 
 
+def _normalize_api_version(api_version: str) -> str:
+    """Normalizes an API version string to lowercase 'v<N>' format."""
+    clean = str(api_version or "").strip().lower()
+    if not clean:
+        return "v26"
+    if not clean.startswith("v") and clean.isdigit():
+        return f"v{clean}"
+    return clean
+
+
 def _get_config_path() -> str:
     """Resolves the active assistant google-ads.yaml configuration path."""
     config_path = os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH")
-    if config_path and os.path.isfile(config_path):
-        return config_path
+    if config_path:
+        expanded_env = os.path.abspath(os.path.expanduser(config_path))
+        raw_home_yaml = os.path.abspath(os.path.expanduser("~/google-ads.yaml"))
+        if expanded_env != raw_home_yaml and os.path.isfile(expanded_env):
+            return config_path if os.path.isfile(config_path) else expanded_env
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
@@ -101,7 +114,7 @@ def _get_config_path() -> str:
             return candidate
 
     try:
-        if plugin_root not in sys.path:
+        if plugin_root not in sys.path and os.path.isdir(plugin_root):
             sys.path.insert(0, plugin_root)
         config_init = importlib.import_module("config.config_init")
         return config_init.sync_and_set_config_kv()
@@ -140,15 +153,19 @@ def _build_webpage_condition(client: Any, clean_url: str) -> Any:
                 "ListingGroupFilterDimension"
             ).WebpageCondition()
 
+    has_url_contains = hasattr(condition, "url_contains") or hasattr(
+        type(condition), "url_contains"
+    )
+    has_operand = hasattr(condition, "operand") or hasattr(
+        type(condition), "operand"
+    )
     if isinstance(condition, unittest.mock.MagicMock):
         condition.operand = (
             client.enums.ListingGroupFilterWebpageConditionOperandEnum.URL
         )
         condition.argument = clean_url
         condition.url_contains = clean_url
-    elif hasattr(type(condition), "url_contains") and not hasattr(
-        type(condition), "operand"
-    ):
+    elif has_url_contains and not has_operand:
         condition.url_contains = clean_url
     else:
         operand_enum = getattr(
@@ -210,8 +227,9 @@ def create_pmax_webpage_filter(
             sys.exit(1)
         try:
             cfg_path = _get_config_path()
+            norm_ver = _normalize_api_version(api_version)
             client = GoogleAdsClient.load_from_storage(
-                path=cfg_path, version=api_version
+                path=cfg_path, version=norm_ver
             )
         except _SDK_EXCEPTIONS as e:
             print(
