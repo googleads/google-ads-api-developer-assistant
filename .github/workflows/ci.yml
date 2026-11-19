@@ -5,7 +5,28 @@ on:
     branches: [ "main", "master", "dev_next" ]
   pull_request:
     branches: [ "main", "master", "dev_next" ]
+  schedule:
+    # Weekly Sunday 05:00 UTC live test-account verification (gracefully skips if secrets are absent)
+    - cron: "0 5 * * 0"
   workflow_dispatch:
+    inputs:
+      suite:
+        description: "Functional suites to run against the live Google Ads Test Account"
+        type: choice
+        default: "all"
+        options:
+          - "all"
+          - "hitl"
+          - "skills"
+          - "eval"
+      validate_only:
+        description: "Pass --validate-only to the HITL policy functional suite (read-only/dry-run safe mode)"
+        type: boolean
+        default: true
+      run_llm_evals:
+        description: "Run live LLM-in-the-loop skill evaluations via Gemini API (requires GEMINI_API_KEY secret)"
+        type: boolean
+        default: false
 
 jobs:
   test-unix:
@@ -63,6 +84,14 @@ jobs:
         run: |
           python tests/benchmark_suite.py --run-current --quick
 
+      - name: Run deterministic skill & prompt eval checks (offline)
+        run: |
+          python tests/eval_skills_suite.py --mode offline
+
+      - name: Run offline non-mutation skills functional checks
+        run: |
+          python tests/skills_functional_suite.py --offline
+
   test-windows:
     name: Windows - Python ${{ matrix.python-version }}
     runs-on: windows-latest
@@ -117,3 +146,129 @@ jobs:
       - name: Run quick benchmark smoke checks
         run: |
           python tests/benchmark_suite.py --run-current --quick
+
+      - name: Run deterministic skill & prompt eval checks (offline)
+        run: |
+          python tests/eval_skills_suite.py --mode offline
+
+      - name: Run offline non-mutation skills functional checks
+        run: |
+          python tests/skills_functional_suite.py --offline
+
+  live-functional-test-account:
+    name: Live Google Ads Test Account & Optional LLM Evals
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+
+    steps:
+      - name: Check live functional secrets availability
+        id: check_secrets
+        shell: bash
+        env:
+          TEST_CID: ${{ secrets.GOOGLE_ADS_TEST_CUSTOMER_ID }}
+          YAML_B64: ${{ secrets.GOOGLE_ADS_YAML_B64 }}
+          GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -n "$TEST_CID" ] && [ -n "$YAML_B64" ]; then
+            echo "has_ads_creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_ads_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GOOGLE_ADS_TEST_CUSTOMER_ID / GOOGLE_ADS_YAML_B64 secrets are not configured; skipping live Google Ads Test Account run."
+          fi
+          if [ -n "$GEMINI_KEY" ]; then
+            echo "has_gemini_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_gemini_key=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        if: steps.check_secrets.outputs.has_ads_creds == 'true' || steps.check_secrets.outputs.has_gemini_key == 'true'
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.13
+        if: steps.check_secrets.outputs.has_ads_creds == 'true' || steps.check_secrets.outputs.has_gemini_key == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        if: steps.check_secrets.outputs.has_ads_creds == 'true' || steps.check_secrets.outputs.has_gemini_key == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade -r requirements.txt
+
+      - name: Materialize 0600 temporary google-ads.yaml outside repo
+        if: steps.check_secrets.outputs.has_ads_creds == 'true'
+        shell: bash
+        env:
+          YAML_B64: ${{ secrets.GOOGLE_ADS_YAML_B64 }}
+        run: |
+          umask 077
+          printf '%s' "$YAML_B64" | base64 -d > "${RUNNER_TEMP}/google-ads.yaml"
+          chmod 600 "${RUNNER_TEMP}/google-ads.yaml"
+          mkdir -p "${RUNNER_TEMP}/functional_artifacts"
+
+      - name: Run HITL Policy Functional Suite (Live Test Account)
+        if: steps.check_secrets.outputs.has_ads_creds == 'true' && (github.event_name == 'schedule' || inputs.suite == 'all' || inputs.suite == 'hitl')
+        shell: bash
+        env:
+          TEST_CID: ${{ secrets.GOOGLE_ADS_TEST_CUSTOMER_ID }}
+          LOGIN_CID: ${{ secrets.GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID }}
+          VALIDATE_ONLY: ${{ github.event_name == 'schedule' && 'true' || inputs.validate_only }}
+        run: |
+          args=(
+            --customer-id "$TEST_CID"
+            --credentials-yaml "${RUNNER_TEMP}/google-ads.yaml"
+            --audit-log "${RUNNER_TEMP}/functional_artifacts/hitl_live_audit.jsonl"
+          )
+          if [ -n "$LOGIN_CID" ]; then
+            args+=(--login-customer-id "$LOGIN_CID")
+          fi
+          if [ "$VALIDATE_ONLY" = "true" ]; then
+            args+=(--validate-only)
+          fi
+          python tests/hitl_policy_functional_suite.py "${args[@]}"
+
+      - name: Run Non-Mutation Skills Functional Suite (Live Test Account)
+        if: steps.check_secrets.outputs.has_ads_creds == 'true' && (github.event_name == 'schedule' || inputs.suite == 'all' || inputs.suite == 'skills')
+        shell: bash
+        env:
+          TEST_CID: ${{ secrets.GOOGLE_ADS_TEST_CUSTOMER_ID }}
+          LOGIN_CID: ${{ secrets.GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID }}
+        run: |
+          args=(
+            --customer-id "$TEST_CID"
+            --credentials-yaml "${RUNNER_TEMP}/google-ads.yaml"
+            --audit-log "${RUNNER_TEMP}/functional_artifacts/skills_live_audit.jsonl"
+          )
+          if [ -n "$LOGIN_CID" ]; then
+            args+=(--login-customer-id "$LOGIN_CID")
+          fi
+          python tests/skills_functional_suite.py "${args[@]}"
+
+      - name: Run Live LLM-in-the-Loop Skill Evals (Gemini API)
+        if: steps.check_secrets.outputs.has_gemini_key == 'true' && (inputs.run_llm_evals == true || inputs.suite == 'eval')
+        shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/functional_artifacts"
+          python tests/eval_skills_suite.py \
+            --mode live \
+            --provider gemini-api \
+            --json-out "${RUNNER_TEMP}/functional_artifacts/llm_eval_report.json"
+
+      - name: Shred temporary credentials
+        if: always()
+        shell: bash
+        run: |
+          rm -f "${RUNNER_TEMP}/google-ads.yaml"
+
+      - name: Upload sanitized functional audit logs & eval reports
+        if: always() && (steps.check_secrets.outputs.has_ads_creds == 'true' || steps.check_secrets.outputs.has_gemini_key == 'true')
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-functional-audit-artifacts
+          path: ${{ runner.temp }}/functional_artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

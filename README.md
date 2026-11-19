@@ -483,18 +483,20 @@ To prevent schema mismatches or missing fields:
 *   `plugins/google-ads-api-developer-assistant/config/`: Plugin configuration files (`assistant_config` and `config_init.py`).
 *   `plugins/google-ads-api-developer-assistant/mcp_config.json`: Model Context Protocol configuration.
 *   `config/`: Workspace configuration directory:
-    *   `config/assistant_config`: Unified TOML file that stores `api_version`, `customer_id`, `execute_mutates`, and `enabled`.
-    *   `config/config_init.py`: Session initializer and `PreInvocation` / `PreToolUse` hook handler.
+    *   `config/assistant_config`: Unified TOML file that stores `api_version`, `customer_id`, `execute_mutates`, `allow_tier1_financial_mutates`, and `enabled`.
+    *   `config/config_init.py`: Session initializer and `PreInvocation` / `PreToolUse` / `PostToolUseFailure` hook handler.
     *   `config/google-ads.yaml`: Runtime Google Ads API credentials file (`0600` permissions).
 *   `saved/`: Working directory for saved files and scripts:
     *   `saved/` (or `saved/code/`): Executable Python scripts saved for later use.
     *   `saved/data/`: GAQL validation cache, CSV exports, diagnostic reports, and mutation dry-run receipts.
     *   `saved/logs/`: Append-only audit logs (`mutation_audit.jsonl`).
-*   `tests/`: Unit, coverage, benchmark, and functional test suites:
-    *   `tests/test_account_config.yaml`: Test Account configuration file for live HITL & mutation functional tests.
-    *   `tests/hitl_policy_functional_suite.py`: End-to-end HITL & mutation policy functional test runner against a Google Ads Test Account.
+*   `tests/`: Unit, coverage, benchmark, evaluation, and functional test suites:
+    *   `tests/test_account_config.yaml`: Test Account configuration file for live HITL & skills functional tests.
+    *   `tests/hitl_policy_functional_suite.py`: 72-test HITL & mutation policy functional test runner against a Google Ads Test Account.
+    *   `tests/skills_functional_suite.py`: 30-test functional runner covering all non-mutation skills, creation helpers, A2A/MCP sidecar, and `sitecustomize.py` (`--offline` supported).
+    *   `tests/eval_skills_suite.py`: Dual-mode skill & prompt evaluation harness (`--mode offline` deterministic CI + `--mode live` LLM-in-the-loop across all 11 skills and 13 commands).
     *   `tests/hitl_audit_logger.py`: Correlated JSONL audit logger (`0600` permissions), error filter, and results table formatter.
-    *   `tests/test_hitl_functional_suite.py`: Offline `pytest` unit and simulated Test Account verification suite.
+    *   `tests/test_hitl_functional_suite.py`, `tests/test_skills_functional_suite.py`, `tests/test_eval_skills_suite.py`: Offline `pytest` verification suites.
     *   `tests/benchmark_suite.py`: Two-version performance and functionality benchmark runner.
 
 ## Plugin Architecture
@@ -1098,6 +1100,34 @@ At the conclusion of every run, the runner prints three formatted tables to `std
 **Exit Codes:**
 * **`0`**: All executed tests passed.
 * **`1`**: One or more tests failed (inspect the **Failed Test Cases** table or run `--filter-errors` on the `.jsonl` audit log).
+
+---
+
+### 6. Non-Mutation Skills Functional Suite & Dual-Mode Skill Eval Harness
+
+In addition to the 72-test HITL policy suite, two companion suites provide full functional and prompt-level coverage across all 11 skills, all 13 slash commands, built-in creation helpers, and the A2A/MCP sidecar:
+
+* **Non-Mutation Skills, Creation Helpers & Sidecar Functional Suite ([`tests/skills_functional_suite.py`](tests/skills_functional_suite.py)):** Runs 30 functional tests across 11 suites (`SK-PF`, `SK-VER`, `SK-INSPECT`, `SK-GAQL`, `SK-MCC`, `SK-CONV`, `SK-SYNC`, `SK-LIMITS`, `SK-CREATE`, `SK-SIDECAR`, `SK-CWD`) with the same `customer.test_account == true` fail-closed preflight and correlated `0600` JSONL audit logger:
+  ```bash
+  # Run offline-capable checks (used automatically in CI)
+  python3 tests/skills_functional_suite.py --offline
+
+  # Run full 30-test suite against a verified Google Ads Test Account
+  python3 tests/skills_functional_suite.py --customer-id 123-456-7890 --login-customer-id 987-654-3210
+
+  # Run simulated Test Account verification offline via pytest
+  pytest tests/test_skills_functional_suite.py -v
+  ```
+* **Dual-Mode Skill & Prompt Evaluation Harness ([`tests/eval_skills_suite.py`](tests/eval_skills_suite.py)):** Covers all 11 skills (including prompt-only `explain`, `step-by-step`, and `assistant-tutorial`) and all 13 commands:
+  ```bash
+  # Deterministic offline CI mode (frontmatter, CLI --help flag parity, policy contracts, 22 skill routing & rubric checks)
+  python3 tests/eval_skills_suite.py --mode offline
+
+  # Optional live LLM-in-the-loop mode (supports gemini-api, gemini-cli, or claude)
+  GEMINI_API_KEY=... python3 tests/eval_skills_suite.py --mode live --provider gemini-api
+  python3 tests/eval_skills_suite.py --mode live --provider claude --skill explain
+  ```
+* **Secret-Gated Live CI Job ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):** The `live-functional-test-account` job runs on `workflow_dispatch` (with `suite`, `validate_only`, and `run_llm_evals` inputs) and on a weekly Sunday schedule (`0 5 * * 0`). It activates only when repository secrets `GOOGLE_ADS_TEST_CUSTOMER_ID` and `GOOGLE_ADS_YAML_B64` (base64-encoded `google-ads.yaml`) are configured (with optional `GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID` and `GEMINI_API_KEY`), materializes `0600` temporary credentials outside the repo, shreds them on exit, and uploads sanitized JSONL audit artifacts.
 
 ## Audit Logs
 

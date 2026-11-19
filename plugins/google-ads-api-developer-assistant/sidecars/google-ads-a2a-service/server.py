@@ -761,6 +761,8 @@ class A2AHandler(BaseHTTPRequestHandler):
                 return self.handle_prepare_mutation(task_id, payload)
             if intent == "EXECUTE_MUTATION":
                 return self.handle_execute_mutation(task_id, payload)
+            if intent == "REJECT_MUTATION":
+                return self.handle_reject_mutation(task_id, payload)
             if intent == "CREATE_ACCOUNT":
                 return self.handle_create_account(task_id, payload)
             if intent == "CREATE_CAMPAIGN":
@@ -1453,6 +1455,48 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "error": msg,
             }
 
+        receipt_tier = int(receipt.get("tier_number", 3))
+        if (
+            receipt_tier == 1
+            and hasattr(mod, "is_tier1_financial_mutates_enabled")
+            and not mod.is_tier1_financial_mutates_enabled()
+        ):
+            blocked_iso = datetime.now(timezone.utc).isoformat()
+            t1_err = (
+                "EXECUTE_MUTATION blocked (TIER 1 FINANCIAL POSTURE): "
+                "Tier 1 Financial Services are read-only by default even when execute_mutates = true. "
+                "Set 'allow_tier1_financial_mutates = true' in config/assistant_config to enable live Tier 1 writes."
+            )
+            mod.append_mutation_audit_log(
+                phase="EXECUTE",
+                status="BLOCKED_TIER1_READONLY_POSTURE",
+                customer_id=str(receipt.get("customer_id", "")),
+                operation_summary=str(receipt.get("operation_summary", "")),
+                before_state=str(receipt.get("before_state", "")),
+                after_state=str(receipt.get("after_state", "")),
+                consequences=[
+                    str(c) for c in receipt.get("consequences", []) if str(c).strip()
+                ],
+                reversibility=str(receipt.get("reversibility", "REVERSIBLE")),
+                script_path=script_path,
+                script_sha256=str(receipt.get("script_sha256", "")),
+                validate_only=False,
+                request_sent_at_iso=blocked_iso,
+                response_received_at_iso=blocked_iso,
+                duration_ms=0.0,
+                exit_code=2,
+                stdout="",
+                stderr=t1_err,
+                command=["A2A:EXECUTE_MUTATION"],
+                receipt=receipt,
+            )
+            return {
+                "task_id": task_id,
+                "status": "HITL_BLOCKED",
+                "destructive_hint": True,
+                "error": t1_err,
+            }
+
         if run_script:
             if not script_path or not os.path.isfile(os.path.abspath(script_path)):
                 return {
@@ -1493,7 +1537,7 @@ class A2AHandler(BaseHTTPRequestHandler):
         now_iso = datetime.now(timezone.utc).isoformat()
         audit_entry = mod.append_mutation_audit_log(
             phase="EXECUTE",
-            status="SUCCESS",
+            status="HUMAN_APPROVED",
             customer_id=str(receipt.get("customer_id", "")),
             operation_summary=str(receipt.get("operation_summary", "")),
             before_state=str(receipt.get("before_state", "")),
@@ -1533,6 +1577,37 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "execution_mode": "receipt_verified_only",
                 "status_message": "HITL receipt verified and marked EXECUTED.",
             },
+        }
+
+    def handle_reject_mutation(
+        self, task_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Invalidates pending dry-run receipt (REJECTED) and logs HUMAN_REJECTED."""
+        reason = str(
+            payload.get("reason")
+            or payload.get("rejection_reason")
+            or "Operator rejected mutation via A2A sidecar."
+        ).strip()
+        script_path = payload.get("script_path")
+        runner_path = os.path.abspath(
+            os.path.join(
+                base_dir, "../../skills/execute-mutation/scripts/run_mutation.py"
+            )
+        )
+        mod = _load_skill_module_cached("run_mutation", runner_path)
+        if mod is None:
+            return {
+                "task_id": task_id,
+                "status": "FAILED",
+                "error": "Unable to load run_mutation verification module.",
+            }
+        rej = mod.reject_dry_run_receipt(script_path=script_path, reason=reason)
+        return {
+            "task_id": task_id,
+            "status": "HUMAN_REJECTED",
+            "destructive_hint": True,
+            "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+            "result": rej,
         }
 
     def _load_mutation_script(self, script_filename: str) -> Any:

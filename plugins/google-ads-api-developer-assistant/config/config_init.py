@@ -1962,6 +1962,61 @@ def set_execute_mutates(
     )
 
 
+def parse_allow_tier1_financial_mutates_value(raw_text: str) -> Optional[bool]:
+    """Parses 'allow_tier1_financial_mutates = <true, false>' from TOML or text."""
+    parsed_cfg = parse_assistant_config(raw_text)
+    if (
+        "allow_tier1_financial_mutates" in parsed_cfg
+        and isinstance(parsed_cfg["allow_tier1_financial_mutates"], bool)
+    ):
+        return parsed_cfg["allow_tier1_financial_mutates"]
+    for raw_line in raw_text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = re.match(
+            r"^allow_tier1_financial_mutates\s*[=:]\s*['\"]?(true|false)['\"]?\s*$",
+            line,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).lower() == "true"
+        bare = line.strip("'\"").lower()
+        if bare in ("true", "false"):
+            return bare == "true"
+    return None
+
+
+def is_tier1_financial_mutates_enabled(config_dir: Optional[str] = None) -> bool:
+    """Returns whether Account Owner explicitly enabled Tier 1 financial mutations."""
+    env_override = os.environ.get("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", "").strip()
+    if env_override:
+        parsed_env = parse_allow_tier1_financial_mutates_value(env_override)
+        return bool(parsed_env) if parsed_env is not None else False
+
+    for candidate in get_assistant_config_paths(config_dir=config_dir):
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    parsed = parse_allow_tier1_financial_mutates_value(f.read())
+                if parsed is not None:
+                    return parsed
+            except OSError:
+                continue
+    return False
+
+
+def set_allow_tier1_financial_mutates(
+    enabled: bool,
+    config_dir: Optional[str] = None,
+) -> str:
+    """Updates 'allow_tier1_financial_mutates = <true|false>' in assistant_config."""
+    return write_assistant_config(
+        {"allow_tier1_financial_mutates": bool(enabled)},
+        config_dir=config_dir,
+    )
+
+
 def parse_plugin_enabled_value(raw_text: str) -> Optional[bool]:
     """Parses 'enabled = <true, false>' (or bare true/false/on/off/1/0) and returns a boolean."""
     parsed_cfg = parse_assistant_config(raw_text)
@@ -1988,7 +2043,13 @@ def parse_plugin_enabled_value(raw_text: str) -> Optional[bool]:
     return None
 
 
-_HOOK_LIFECYCLE_EVENTS = ("PreToolUse", "PostToolUse", "PreInvocation", "SessionStart")
+_HOOK_LIFECYCLE_EVENTS = (
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PreInvocation",
+    "SessionStart",
+)
 
 
 def _collect_hook_array_enabled_flags(container: Dict[str, Any]) -> list[bool]:
@@ -3283,6 +3344,94 @@ def _verify_dry_run_receipt_for_hook(
                 receipt,
             )
 
+    rm_mod = _load_run_mutation_for_hook()
+    dry_rpc_list = (
+        receipt.get("dry_run_rpc_calls")
+        if isinstance(receipt.get("dry_run_rpc_calls"), list)
+        else None
+    )
+    cls_info: Dict[str, Any] = {}
+    payload_facts: Dict[str, Any] = {}
+    ato_details: Dict[str, Any] = {}
+    if rm_mod is not None:
+        if receipt.get("classification_tier") and "tier_number" in receipt:
+            cls_info = {
+                "tier_number": int(receipt["tier_number"]),
+                "classification_tier": str(receipt["classification_tier"]),
+                "classification_category": str(receipt.get("classification_category", "")),
+                "template_header": str(receipt.get("template_header", "")),
+            }
+        elif hasattr(rm_mod, "classify_mutation"):
+            cls_info = rm_mod.classify_mutation(
+                operation_summary=str(receipt.get("operation_summary", "")),
+                before_state=str(receipt.get("before_state", "")),
+                after_state=str(receipt.get("after_state", "")),
+                rpc_calls=dry_rpc_list,
+                script_path=resolved_script,
+            )
+        if isinstance(receipt.get("payload_bound_facts"), dict):
+            payload_facts = receipt["payload_bound_facts"]
+        elif hasattr(rm_mod, "extract_payload_bound_facts"):
+            payload_facts = rm_mod.extract_payload_bound_facts(
+                rpc_calls=dry_rpc_list,
+                cli_customer_id=str(receipt.get("customer_id", "")),
+                cli_after_state=str(receipt.get("after_state", "")),
+            )
+        if isinstance(receipt.get("ato_escalation"), dict):
+            ato_details = receipt["ato_escalation"]
+        elif hasattr(rm_mod, "extract_ato_escalation_details"):
+            ato_details = rm_mod.extract_ato_escalation_details(
+                rpc_calls=dry_rpc_list,
+                script_path=resolved_script,
+                operation_summary=str(receipt.get("operation_summary", "")),
+            )
+
+    payload_parts: list[str] = []
+    p_cids = payload_facts.get("payload_customer_ids") or []
+    p_amts = payload_facts.get("micro_amounts") or []
+    if p_cids:
+        payload_parts.append(f"Customer ID(s): {', '.join(p_cids)}")
+    if p_amts:
+        amt_desc = ", ".join(
+            f"{a['field']}={a['formatted_currency']} ({a['micros']} micros)"
+            for a in p_amts
+        )
+        payload_parts.append(f"Monetary Fields: {amt_desc}")
+    payload_line = ""
+    if payload_parts:
+        drift_flag = (
+            " [WARNING: CLI PROSE DIFFERS FROM RPC PAYLOAD]"
+            if (
+                payload_facts.get("customer_id_mismatch")
+                or payload_facts.get("micro_unit_drift_detected")
+            )
+            else ""
+        )
+        payload_line = f"• Payload-Bound: {' | '.join(payload_parts)}{drift_flag}\n"
+
+    ato_line = ""
+    if ato_details.get("is_ato_risk"):
+        em_txt = ", ".join(ato_details.get("emails") or []) or "N/A"
+        role_txt = ", ".join(ato_details.get("access_roles") or []) or "N/A"
+        ato_line = (
+            f"• SECURITY ALERT (Account Takeover / ATO Risk): "
+            f"Email(s)={em_txt} | AccessRole={role_txt}\n"
+        )
+
+    # Enforce Tier 1 Financial Services default read-only posture (Policy §2.3A & §4.1)
+    if (
+        int(cls_info.get("tier_number", 3)) == 1
+        and not is_tier1_financial_mutates_enabled()
+    ):
+        tier1_block_msg = (
+            "BLOCKED BY HITL MUTATION GUARD (TIER 1 FINANCIAL POSTURE): "
+            "Tier 1 Financial Services are read-only by default even when execute_mutates = true. "
+            "An Account Owner must explicitly set 'allow_tier1_financial_mutates = true' in "
+            "config/assistant_config (or GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES=true) before --execute.\n"
+            f"{payload_line}"
+        ).rstrip()
+        return False, tier1_block_msg, receipt
+
     receipt["hook_prompted_at_iso"] = datetime.now(timezone.utc).isoformat()
     if isinstance(hook_context, dict):
         conv_id = hook_context.get("conversationId") or hook_context.get("session_id")
@@ -3312,9 +3461,21 @@ def _verify_dry_run_receipt_for_hook(
     consequences_formatted = "; ".join(str(c).strip() for c in consequences if str(c).strip())
     req_sha_display = str(receipt.get("request_sha256", "N/A"))
     fin_badge = " [FINANCIAL TRANSACTION]" if is_financial_txn else ""
+    tier_header_line = (
+        f"{cls_info['template_header']}\n" if cls_info.get("template_header") else ""
+    )
+    tier_meta_line = (
+        f"• Tier: {cls_info['classification_tier']} — {cls_info['classification_category']}\n"
+        if cls_info.get("classification_tier")
+        else ""
+    )
     prompt_reason = (
+        f"{tier_header_line}"
         f"⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION{fin_badge} [Customer ID: {receipt.get('customer_id', 'Unknown')}]\n"
+        f"{tier_meta_line}"
         f"• Operation: {receipt.get('operation_summary', 'Unknown')}\n"
+        f"{payload_line}"
+        f"{ato_line}"
         f"• Change: {receipt.get('before_state', 'N/A')} -> {receipt.get('after_state', 'N/A')}\n"
         f"• Request SHA256: {req_sha_display}\n"
         f"• Reversibility: {receipt.get('reversibility', 'UNKNOWN')}\n"
@@ -3363,7 +3524,8 @@ _SH_FILE_ARG_RE = re.compile(
 )
 _PY_MODULE_ARG_RE = re.compile(r"\bpython3?(?:\.\d+)?\s+-m\s+([A-Za-z_][A-Za-z0-9_.]*)")
 _SET_EXEC_MUTATES_TRUE_RE = re.compile(
-    r"--set-execute-mutates(?:=|\s+)(?:true|1|yes|on)\b", re.IGNORECASE
+    r"--(?:set-execute-mutates|allow-tier1-financial-mutates)(?:=|\s+)(?:true|1|yes|on)\b",
+    re.IGNORECASE,
 )
 _COMMENT_LINE_RE = re.compile(r"(?m)^\s*#.*$")
 _HELP_KW_RE = re.compile(r"\bhelp\s*=\s*(?:'[^']*'|\"[^\"]*\")")
@@ -3431,7 +3593,7 @@ def evaluate_mutation_guard(
     if "config_init.py" in cmd and _SET_EXEC_MUTATES_TRUE_RE.search(cmd):
         return (
             "force_ask",
-            "⚠️ ENABLE LIVE MUTATIONS: Confirm setting 'execute_mutates = true' in config/assistant_config?",
+            "⚠️ ENABLE LIVE MUTATIONS: Confirm enabling live mutation configuration in config/assistant_config?",
         )
 
     # Inspect referenced .sh / .bash wrapper scripts (excluding official lifecycle scripts)
@@ -3476,6 +3638,8 @@ def evaluate_mutation_guard(
 
     # 1. Explicit invocation of skills/execute-mutation/scripts/run_mutation.py
     if "run_mutation.py" in effective_cmd:
+        if "--reject" in effective_cmd and "--execute" not in effective_cmd:
+            return "allow", None
         script_match = _SCRIPT_ARG_RE.search(effective_cmd)
         raw_target_script = (
             script_match.group(1) or script_match.group(2) or script_match.group(3)
@@ -3710,6 +3874,69 @@ def handle_hook() -> None:
             or ""
         )
         cmd = args.get("CommandLine") or args.get("command") or ""
+
+        # Handle operator rejection / PostToolUseFailure callbacks for gated mutations
+        hook_event = str(
+            input_data.get("hook_event_name")
+            or input_data.get("hookEventName")
+            or input_data.get("event")
+            or ""
+        ).strip()
+        user_dec = str(
+            input_data.get("userDecision")
+            or input_data.get("user_decision")
+            or ""
+        ).strip().lower()
+        is_rejection_event = (
+            hook_event in ("PostToolUseFailure", "ToolRejected", "PermissionDenied")
+            or user_dec in ("deny", "reject", "rejected", "cancelled", "canceled")
+            or input_data.get("rejected") is True
+        )
+        if is_rejection_event and cmd and (
+            "run_mutation.py" in cmd or "--execute" in cmd
+        ):
+            rm_mod = _load_run_mutation_for_hook()
+            workspace_cwd_rej = _extract_workspace_cwd(input_data)
+            script_m = _SCRIPT_ARG_RE.search(cmd)
+            raw_sp = (
+                script_m.group(1) or script_m.group(2) or script_m.group(3)
+                if script_m
+                else None
+            )
+            rej_script = _resolve_candidate_script_path(raw_sp, workspace_cwd_rej)
+            rej_reason = str(
+                input_data.get("error")
+                or input_data.get("reason")
+                or "Operator rejected live mutation at native CLI confirmation prompt."
+            ).strip()
+            rej_result: Dict[str, Any] = {}
+            if rm_mod is not None and hasattr(rm_mod, "reject_dry_run_receipt"):
+                prev_rpath = os.environ.get("GOOGLE_ADS_MUTATION_RECEIPT_PATH")
+                try:
+                    if workspace_cwd_rej and not prev_rpath:
+                        os.environ["GOOGLE_ADS_MUTATION_RECEIPT_PATH"] = os.path.join(
+                            workspace_cwd_rej, "saved", "data", "last_dry_run.json"
+                        )
+                    rej_result = rm_mod.reject_dry_run_receipt(
+                        script_path=rej_script,
+                        reason=rej_reason,
+                        hook_context=input_data,
+                    )
+                finally:
+                    if workspace_cwd_rej and not prev_rpath:
+                        os.environ.pop("GOOGLE_ADS_MUTATION_RECEIPT_PATH", None)
+            print(
+                json.dumps(
+                    {
+                        "decision": "allow",
+                        "rejection_recorded": True,
+                        "audit_status": "HUMAN_REJECTED",
+                        "receipt_status": rej_result.get("status", "REJECTED"),
+                    }
+                )
+            )
+            return
+
         if (tool_name in _FILE_WRITE_TOOLS or (target_file and not cmd)) and isinstance(
             target_file, str
         ):
@@ -4003,6 +4230,12 @@ def main() -> None:
         help="Configure whether the plugin supports live mutations (execute_mutates = <true, false> in config/assistant_config)",
     )
     parser.add_argument(
+        "--allow-tier1-financial-mutates",
+        default=None,
+        choices=["true", "false"],
+        help="Account Owner override enabling live Tier 1 Financial Services mutations (allow_tier1_financial_mutates = <true, false>)",
+    )
+    parser.add_argument(
         "--enable",
         action="store_true",
         help="Enable the plugin so it is active in Jetski/Antigravity and Claude Code sessions",
@@ -4073,6 +4306,12 @@ def main() -> None:
 
     if args.execute_mutates is not None:
         set_execute_mutates(args.execute_mutates.lower() == "true", config_dir=args.config_dir)
+
+    if args.allow_tier1_financial_mutates is not None:
+        set_allow_tier1_financial_mutates(
+            args.allow_tier1_financial_mutates.lower() == "true",
+            config_dir=args.config_dir,
+        )
 
     if args.plugin_enabled is not None:
         set_plugin_enabled(

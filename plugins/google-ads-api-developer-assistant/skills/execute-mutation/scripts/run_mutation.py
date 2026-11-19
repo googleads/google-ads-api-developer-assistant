@@ -19,6 +19,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -305,6 +306,473 @@ _SENSITIVE_KEYS = frozenset({
     "json_key",
 })
 
+_TEMPLATE_HEADERS: Dict[int, str] = {
+    1: "[CRITICAL FINANCIAL INFRASTRUCTURE MUTATION — HITL CONFIRMATION REQUIRED]",
+    2: "[HIGH-IMPACT OPERATIONAL & SPEND MUTATION — HITL CONFIRMATION REQUIRED]",
+    3: "[STRUCTURAL / ADMINISTRATIVE MUTATION — HITL CONFIRMATION REQUIRED]",
+}
+
+_TIER_1_SERVICE_CATEGORIES: Dict[str, str] = {
+    "account_budget_proposal_service": "Budgeting & Billing",
+    "billing_setup_service": "Budgeting & Billing",
+    "campaign_budget_service": "Budgeting & Billing",
+    "bidding_strategy_service": "Budgeting & Billing",
+    "bidding_seasonality_adjustment_service": "Budgeting & Billing",
+    "bidding_data_exclusion_service": "Budgeting & Billing",
+}
+
+_TIER_2_GROUPS: Dict[str, Tuple[str, ...]] = {
+    "Core Spend & Status Control": (
+        "campaign_service",
+        "ad_group_service",
+        "ad_group_ad_service",
+        "asset_group_service",
+        "smart_campaign_setting_service",
+        "google_ads_service",
+    ),
+    "Bidding & Auction Mechanics": (
+        "ad_group_criterion_service",
+        "ad_group_bid_modifier_service",
+        "campaign_bid_modifier_service",
+        "ad_parameter_service",
+        "ad_service",
+        "ad_group_asset_service",
+        "ad_group_asset_set_service",
+        "campaign_asset_service",
+        "campaign_asset_set_service",
+        "customer_asset_service",
+        "customer_asset_set_service",
+        "asset_set_asset_service",
+    ),
+    "Smart Bidding & Conversion Optimization": (
+        "conversion_action_service",
+        "conversion_upload_service",
+        "conversion_adjustment_upload_service",
+        "conversion_custom_variable_service",
+        "conversion_value_rule_service",
+        "conversion_value_rule_set_service",
+        "campaign_conversion_goal_service",
+        "conversion_goal_campaign_config_service",
+        "custom_conversion_goal_service",
+        "customer_conversion_goal_service",
+        "goal_service",
+        "campaign_goal_config_service",
+        "customer_sk_ad_network_conversion_value_schema_service",
+    ),
+    "Performance Max & AI Steering": (
+        "asset_group_asset_service",
+        "asset_group_listing_group_filter_service",
+        "asset_group_signal_service",
+        "automatically_created_asset_removal_service",
+    ),
+    "Traffic Boundaries & Exclusions": (
+        "campaign_criterion_service",
+        "customer_negative_criterion_service",
+        "shared_set_service",
+        "shared_criterion_service",
+        "campaign_shared_set_service",
+    ),
+    "Testing, Recommendations & Automation": (
+        "campaign_draft_service",
+        "experiment_service",
+        "experiment_arm_service",
+        "recommendation_service",
+        "recommendation_subscription_service",
+    ),
+    "Guaranteed Spend & Lead Credits": (
+        "reservation_service",
+        "local_services_lead_service",
+    ),
+}
+
+_TIER_3_GROUPS: Dict[str, Tuple[str, ...]] = {
+    "Account Structure & Linking": (
+        "account_link_service",
+        "customer_client_link_service",
+        "customer_manager_link_service",
+        "data_link_service",
+        "product_link_invitation_service",
+        "product_link_service",
+        "third_party_app_analytics_link_service",
+    ),
+    "Administrative & Verification": (
+        "batch_job_service",
+        "customer_service",
+        "customer_user_access_invitation_service",
+        "customer_user_access_service",
+        "identity_verification_service",
+        "incentive_service",
+    ),
+    "Organization & Labeling": (
+        "label_service",
+        "campaign_label_service",
+        "ad_group_label_service",
+        "ad_group_ad_label_service",
+        "ad_group_criterion_label_service",
+        "customer_label_service",
+        "campaign_group_service",
+    ),
+    "Planning & Forecasting": (
+        "keyword_plan_service",
+        "keyword_plan_campaign_service",
+        "keyword_plan_campaign_keyword_service",
+        "keyword_plan_ad_group_service",
+        "keyword_plan_ad_group_keyword_service",
+    ),
+    "Audience & User Data Management": (
+        "audience_service",
+        "custom_audience_service",
+        "custom_interest_service",
+        "offline_user_data_job_service",
+        "remarketing_action_service",
+        "user_data_service",
+        "user_list_customer_type_service",
+        "user_list_service",
+    ),
+    "Asset & Customization Infrastructure": (
+        "asset_service",
+        "asset_set_service",
+        "customizer_attribute_service",
+        "customer_customizer_service",
+        "campaign_customizer_service",
+        "ad_group_customizer_service",
+        "ad_group_criterion_customizer_service",
+        "you_tube_video_upload_service",
+    ),
+}
+
+_SERVICE_CATALOG: Dict[str, Tuple[int, str]] = {}
+for _svc, _cat in _TIER_1_SERVICE_CATEGORIES.items():
+    _SERVICE_CATALOG[_svc] = (1, _cat)
+for _cat, _svcs in _TIER_2_GROUPS.items():
+    for _svc in _svcs:
+        _SERVICE_CATALOG.setdefault(_svc, (2, _cat))
+for _cat, _svcs in _TIER_3_GROUPS.items():
+    for _svc in _svcs:
+        _SERVICE_CATALOG.setdefault(_svc, (3, _cat))
+
+_COMPACT_TO_SERVICE: Dict[str, str] = {
+    svc.replace("_", ""): svc for svc in _SERVICE_CATALOG
+}
+
+_ATO_ESCALATION_SERVICES = frozenset({
+    "customer_user_access_invitation_service",
+    "customer_user_access_service",
+    "customer_manager_link_service",
+    "customer_client_link_service",
+    "account_link_service",
+    "product_link_service",
+    "product_link_invitation_service",
+    "data_link_service",
+})
+
+_RESOURCE_CID_RE = re.compile(r"\bcustomers/(\d{7,12})(?:/|$)")
+_DOLLAR_AMT_RE = re.compile(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)")
+_EMAIL_LITERAL_RE = re.compile(
+    r"email_address\s*=\s*['\"]([^'\"\s]+@[^'\"\s]+)['\"]"
+)
+_ACCESS_ROLE_CODE_RE = re.compile(
+    r"(?:AccessRoleEnum\.(ADMIN|STANDARD|READ_ONLY|EMAIL_ONLY)|"
+    r"access_role\s*=\s*['\"]?(ADMIN|STANDARD|READ_ONLY|EMAIL_ONLY)['\"]?)"
+)
+
+
+def _normalize_service_snake(name: str) -> str:
+    """Normalizes CamelCase, snake_case, or *_operation names to snake service."""
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    s1 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", raw)
+    snake = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s1).lower()
+    snake = re.sub(r"[^a-z0-9_]+", "_", snake).strip("_")
+    if snake.endswith("_operation"):
+        snake = f"{snake[:-10]}_service"
+    elif snake in _COMPACT_TO_SERVICE:
+        return _COMPACT_TO_SERVICE[snake]
+    elif f"{snake}_service" in _SERVICE_CATALOG:
+        snake = f"{snake}_service"
+    compact = snake.replace("_", "")
+    return _COMPACT_TO_SERVICE.get(compact, snake)
+
+
+def _extract_inner_operation_services(obj: Any, depth: int = 0) -> List[str]:
+    """Extracts inner Google Ads services from BatchJob/GoogleAds mutate_operations."""
+    if depth > 10:
+        return []
+    found: List[str] = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            key_norm = _normalize_service_snake(str(k))
+            if str(k).lower().endswith("_operation") and key_norm in _SERVICE_CATALOG:
+                if key_norm not in found:
+                    found.append(key_norm)
+            for inner in _extract_inner_operation_services(v, depth + 1):
+                if inner not in found:
+                    found.append(inner)
+    elif isinstance(obj, list):
+        for item in obj:
+            for inner in _extract_inner_operation_services(item, depth + 1):
+                if inner not in found:
+                    found.append(inner)
+    return found
+
+
+def _infer_services_from_text(text: str) -> List[str]:
+    """Infers canonical snake_case Google Ads service names from prose or code."""
+    if not text:
+        return []
+    found: List[str] = []
+    # Normalize CamelCase tokens to snake_case so word boundaries work uniformly
+    norm = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text)
+    norm = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", norm).lower()
+    remaining = norm
+    ordered_svcs = sorted(_SERVICE_CATALOG.keys(), key=len, reverse=True)
+
+    # Pass 1: exact full service names (longest first, masking matched spans)
+    for svc in ordered_svcs:
+        pat = re.compile(rf"(?<![a-z0-9_]){re.escape(svc)}(?![a-z0-9_])")
+        if pat.search(remaining):
+            if svc not in found:
+                found.append(svc)
+            remaining = pat.sub(" ", remaining)
+
+    # Pass 2: service stems when no full service name matched (longest first)
+    if not found:
+        for svc in ordered_svcs:
+            stem = svc[: -len("_service")]
+            if len(stem) < 6:
+                continue
+            stem_pat = re.compile(
+                rf"(?<![a-z0-9_]){re.escape(stem)}(?:s)?(?![a-z0-9_])"
+            )
+            if stem_pat.search(remaining):
+                if svc not in found:
+                    found.append(svc)
+                remaining = stem_pat.sub(" ", remaining)
+
+    # Pass 3: high-level resource keyword fallback
+    if not found:
+        if re.search(r"\bbudget\b", remaining):
+            found.append("campaign_budget_service")
+        elif re.search(r"\blabel\b", remaining):
+            found.append("label_service")
+        elif re.search(r"\bad[_\s]*group\b", remaining):
+            found.append("ad_group_service")
+        elif re.search(r"\bcampaign\b", remaining):
+            found.append("campaign_service")
+    return found
+
+
+def classify_mutation(
+    operation_summary: str = "",
+    before_state: str = "",
+    after_state: str = "",
+    rpc_calls: Optional[List[Dict[str, Any]]] = None,
+    script_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Classifies a mutation into Policy Tiers 1–3, elevating wrapper inner ops."""
+    detected: List[str] = []
+    wrapper_tiers: List[int] = []
+    inner_tiers: List[int] = []
+
+    for call in rpc_calls or []:
+        if not isinstance(call, dict):
+            continue
+        svc_snake = _normalize_service_snake(str(call.get("service", "")))
+        if svc_snake in _SERVICE_CATALOG:
+            if svc_snake not in detected:
+                detected.append(svc_snake)
+            wrapper_tiers.append(_SERVICE_CATALOG[svc_snake][0])
+        for inner_svc in _extract_inner_operation_services(call.get("request_payload")):
+            if inner_svc not in detected:
+                detected.append(inner_svc)
+            if inner_svc in _SERVICE_CATALOG:
+                inner_tiers.append(_SERVICE_CATALOG[inner_svc][0])
+
+    prose = " ".join(
+        p for p in (operation_summary, before_state, after_state) if p
+    )
+    for svc in _infer_services_from_text(prose):
+        if svc not in detected:
+            detected.append(svc)
+
+    if not rpc_calls and script_path and os.path.isfile(script_path):
+        try:
+            with open(script_path, "r", encoding="utf-8") as sf:
+                src_text = re.sub(r"(?m)^\s*#.*$", "", sf.read())
+            for svc in _infer_services_from_text(src_text):
+                if svc not in detected:
+                    detected.append(svc)
+        except OSError:
+            pass
+
+    best_tier = 3
+    best_cat = "Administrative & Verification"
+    matched_any = False
+    for svc in detected:
+        entry = _SERVICE_CATALOG.get(svc)
+        if entry is None:
+            continue
+        t_num, cat = entry
+        if not matched_any or t_num < best_tier:
+            best_tier = t_num
+            best_cat = cat
+            matched_any = True
+
+    if not matched_any and is_financial_mutation(
+        operation_summary=operation_summary,
+        before_state=before_state,
+        after_state=after_state,
+        rpc_calls=rpc_calls,
+    ):
+        best_tier = 2
+        best_cat = "Core Spend & Status Control"
+
+    elevated = bool(
+        inner_tiers and wrapper_tiers and min(inner_tiers) < min(wrapper_tiers)
+    )
+    return {
+        "tier_number": best_tier,
+        "classification_tier": f"Tier {best_tier}",
+        "classification_category": best_cat,
+        "template_header": _TEMPLATE_HEADERS[best_tier],
+        "detected_services": detected,
+        "elevated_from_inner_op": elevated,
+    }
+
+
+def extract_payload_bound_facts(
+    rpc_calls: Optional[List[Dict[str, Any]]] = None,
+    cli_customer_id: str = "",
+    cli_after_state: str = "",
+) -> Dict[str, Any]:
+    """Extracts authoritative customer IDs and micro-unit amounts from RPC payloads."""
+    customer_ids: List[str] = []
+    micro_amounts: List[Dict[str, Any]] = []
+
+    def _walk(obj: Any, depth: int = 0) -> None:
+        if depth > 12:
+            return
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                kl = str(k).strip().lower()
+                if kl == "customer_id" and v is not None:
+                    digits = re.sub(r"\D+", "", str(v))
+                    if digits and digits not in customer_ids:
+                        customer_ids.append(digits)
+                elif kl == "resource_name" and isinstance(v, str):
+                    m = _RESOURCE_CID_RE.search(v)
+                    if m and m.group(1) not in customer_ids:
+                        customer_ids.append(m.group(1))
+                elif kl.endswith("_micros") and v is not None and not isinstance(v, bool):
+                    try:
+                        raw_int = int(str(v).strip())
+                        dollars = raw_int / 1_000_000.0
+                        micro_amounts.append({
+                            "field": kl,
+                            "micros": raw_int,
+                            "formatted_currency": f"${dollars:,.2f}",
+                        })
+                    except (TypeError, ValueError):
+                        pass
+                _walk(v, depth + 1)
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk(item, depth + 1)
+
+    for call in rpc_calls or []:
+        if isinstance(call, dict):
+            _walk(call.get("request_payload"))
+
+    cli_cid_digits = re.sub(r"\D+", "", str(cli_customer_id or ""))
+    cid_mismatch = bool(
+        cli_cid_digits and customer_ids and cli_cid_digits not in customer_ids
+    )
+    cli_dollars = [
+        float(m.replace(",", ""))
+        for m in _DOLLAR_AMT_RE.findall(str(cli_after_state or ""))
+    ]
+    drift_detected = False
+    if cli_dollars and micro_amounts:
+        max_payload_dollars = max(
+            abs(int(item["micros"])) / 1_000_000.0 for item in micro_amounts
+        )
+        max_cli_dollars = max(cli_dollars)
+        if max_cli_dollars > 0 and max_payload_dollars >= max_cli_dollars * 2.0:
+            drift_detected = True
+
+    return {
+        "payload_customer_ids": customer_ids,
+        "micro_amounts": micro_amounts,
+        "customer_id_mismatch": cid_mismatch,
+        "micro_unit_drift_detected": drift_detected,
+    }
+
+
+def extract_ato_escalation_details(
+    rpc_calls: Optional[List[Dict[str, Any]]] = None,
+    script_path: Optional[str] = None,
+    operation_summary: str = "",
+) -> Dict[str, Any]:
+    """Detects account-access / ATO escalation risks from payloads or script source."""
+    emails: List[str] = []
+    roles: List[str] = []
+    services: List[str] = []
+
+    def _walk(obj: Any, depth: int = 0) -> None:
+        if depth > 12:
+            return
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                kl = str(k).strip().lower()
+                if kl == "email_address" and isinstance(v, str) and v.strip():
+                    if v.strip() not in emails:
+                        emails.append(v.strip())
+                elif kl == "access_role" and v is not None:
+                    r_str = str(v).strip().upper()
+                    if r_str and r_str not in roles:
+                        roles.append(r_str)
+                _walk(v, depth + 1)
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk(item, depth + 1)
+
+    for call in rpc_calls or []:
+        if not isinstance(call, dict):
+            continue
+        svc = _normalize_service_snake(str(call.get("service", "")))
+        if svc in _ATO_ESCALATION_SERVICES and svc not in services:
+            services.append(svc)
+        _walk(call.get("request_payload"))
+
+    for svc in _infer_services_from_text(operation_summary):
+        if svc in _ATO_ESCALATION_SERVICES and svc not in services:
+            services.append(svc)
+
+    if script_path and os.path.isfile(script_path):
+        try:
+            with open(script_path, "r", encoding="utf-8") as sf:
+                src = re.sub(r"(?m)^\s*#.*$", "", sf.read())
+            for svc in _infer_services_from_text(src):
+                if svc in _ATO_ESCALATION_SERVICES and svc not in services:
+                    services.append(svc)
+            for em in _EMAIL_LITERAL_RE.findall(src):
+                if em not in emails:
+                    emails.append(em)
+            for g1, g2 in _ACCESS_ROLE_CODE_RE.findall(src):
+                r_str = (g1 or g2).strip().upper()
+                if r_str and r_str not in roles:
+                    roles.append(r_str)
+        except OSError:
+            pass
+
+    return {
+        "is_ato_risk": bool(services or emails or roles),
+        "services": services,
+        "emails": emails,
+        "access_roles": roles,
+    }
+
 
 def _payload_contains_financial_fields(obj: Any, depth: int = 0) -> bool:
     """Recursively checks whether an RPC payload contains financial fields."""
@@ -358,6 +826,11 @@ def is_financial_mutation(
             return True
         if _payload_contains_financial_fields(call.get("request_payload")):
             return True
+        for inner_svc in _extract_inner_operation_services(
+            call.get("request_payload")
+        ):
+            if inner_svc in _TIER_1_SERVICE_CATEGORIES:
+                return True
 
     combined_text = " | ".join(
         part.strip()
@@ -609,6 +1082,61 @@ def is_execute_mutates_enabled() -> bool:
                 if parsed is not None:
                     return parsed
                 continue
+            except OSError:
+                continue
+
+    return False
+
+
+def parse_allow_tier1_financial_mutates_value(raw_text: str) -> Optional[bool]:
+    """Parses 'allow_tier1_financial_mutates = <true, false>' from TOML or text."""
+    try:
+        parsed_toml = tomllib.loads(raw_text)
+        if (
+            isinstance(parsed_toml, dict)
+            and "allow_tier1_financial_mutates" in parsed_toml
+        ):
+            val = parsed_toml["allow_tier1_financial_mutates"]
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, str) and val.strip().lower() in ("true", "false"):
+                return val.strip().lower() == "true"
+    except (tomllib.TOMLDecodeError, TypeError, ValueError):
+        pass
+
+    for raw_line in raw_text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = re.fullmatch(
+            r"allow_tier1_financial_mutates\s*[=:]\s*['\"]?(true|false)['\"]?\s*",
+            line,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).lower() == "true"
+        bare = line.strip("'\"").lower()
+        if bare in ("true", "false"):
+            return bare == "true"
+    return None
+
+
+def is_tier1_financial_mutates_enabled() -> bool:
+    """Returns whether Account Owner explicitly enabled Tier 1 live financial mutates."""
+    env_override = os.environ.get(
+        "GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", ""
+    ).strip()
+    if env_override:
+        parsed_env = parse_allow_tier1_financial_mutates_value(env_override)
+        return bool(parsed_env) if parsed_env is not None else False
+
+    for candidate in get_execute_mutates_paths():
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    parsed = parse_allow_tier1_financial_mutates_value(f.read())
+                if parsed is not None:
+                    return parsed
             except OSError:
                 continue
 
@@ -2009,6 +2537,42 @@ def _wrap_service_for_audit(
                     captured_calls.append(call_record)
                     raise PermissionError(err_msg)
 
+                # Pre-RPC Tier 1 Read-Only Posture check
+                if (
+                    is_live_rpc
+                    and classify_mutation(rpc_calls=[call_record])["tier_number"]
+                    == 1
+                    and not is_tier1_financial_mutates_enabled()
+                ):
+                    err_msg = (
+                        "BLOCKED BEFORE RPC (TIER 1 FINANCIAL POSTURE): "
+                        f"{svc_name}.{m_name} is a Tier 1 Financial Service "
+                        "(read-only by default). Set "
+                        "'allow_tier1_financial_mutates = true' in "
+                        "config/assistant_config to enable live Tier 1 writes."
+                    )
+                    call_record.update({
+                        "received_at_iso": (
+                            datetime.datetime.now(
+                                datetime.timezone.utc
+                            ).isoformat()
+                        ),
+                        "duration_ms": round(
+                            (time.perf_counter() - t0) * 1000.0, 3
+                        ),
+                        "status": "BLOCKED_TIER1_READONLY_POSTURE",
+                        "expected_request_sha256": None,
+                        "request_sha256_verified": False,
+                        "google_ads_request_id": None,
+                        "response_payload": {
+                            "exception_type": "PermissionError",
+                            "message": err_msg,
+                        },
+                        "error": err_msg,
+                    })
+                    captured_calls.append(call_record)
+                    raise PermissionError(err_msg)
+
                 # Pre-RPC SHA-256 verification: ensure live request matches
                 # dry-run BEFORE sending.
                 if should_enforce:
@@ -2080,6 +2644,8 @@ def _wrap_service_for_audit(
                     call_record["expected_request_sha256"] = req_sha256
                     call_record["request_sha256_verified"] = True
 
+                _prev_depth = getattr(_IN_AUDITED_SERVICE_CALL, "depth", 0)
+                _IN_AUDITED_SERVICE_CALL.depth = _prev_depth + 1
                 try:
                     response = method_fn(*args, **kwargs)
                     received_at_iso = datetime.datetime.now(
@@ -2124,6 +2690,8 @@ def _wrap_service_for_audit(
                     })
                     captured_calls.append(call_record)
                     raise
+                finally:
+                    _IN_AUDITED_SERVICE_CALL.depth = _prev_depth
 
             setattr(_wrapped, "_is_audit_wrapped", True)
             return _wrapped
@@ -2140,12 +2708,168 @@ def _wrap_service_for_audit(
     return service
 
 
+_IN_AUDITED_SERVICE_CALL = threading.local()
+_GRPC_METHOD_RE = re.compile(
+    r"^/google\.ads\.googleads\.v\d+\.services\.([^/]+)/([^/]+)$"
+)
+
+try:
+    import grpc as _grpc_mod  # type: ignore[import-untyped]
+
+    _GRPC_UNARY_BASE: Any = _grpc_mod.UnaryUnaryClientInterceptor
+except ImportError:
+    _grpc_mod = None
+    _GRPC_UNARY_BASE = object
+
+
+class FinancialGuardrailInterceptor(_GRPC_UNARY_BASE):
+    """Layer 4 gRPC channel interceptor enforcing HITL, Tier 1, and financial caps."""
+
+    def __init__(
+        self,
+        captured_calls: Optional[List[Dict[str, Any]]] = None,
+        expected_request_hashes: Optional[List[str]] = None,
+        enforce_request_hash: bool = False,
+        dry_run_mode: bool = False,
+    ) -> None:
+        self.captured_calls: List[Dict[str, Any]] = (
+            captured_calls if captured_calls is not None else []
+        )
+        self.expected_request_hashes: List[str] = (
+            list(expected_request_hashes) if expected_request_hashes else []
+        )
+        self.enforce_request_hash = bool(
+            enforce_request_hash or expected_request_hashes is not None
+        )
+        self.dry_run_mode = bool(dry_run_mode)
+
+    @staticmethod
+    def _parse_method_path(method_path: str) -> Optional[Tuple[str, str]]:
+        m = _GRPC_METHOD_RE.match(str(method_path or "").strip())
+        if not m:
+            return None
+        svc_name, grpc_method = m.group(1), m.group(2)
+        snake_m = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", grpc_method).lower()
+        return svc_name, snake_m
+
+    def intercept_unary_unary(
+        self,
+        continuation: Any,
+        client_call_details: Any,
+        request: Any,
+    ) -> Any:
+        """Intercepts direct GAPIC gRPC calls bypassing GoogleAdsClient.get_service."""
+        if getattr(_IN_AUDITED_SERVICE_CALL, "depth", 0) > 0:
+            return continuation(client_call_details, request)
+
+        parsed = self._parse_method_path(
+            getattr(client_call_details, "method", "")
+        )
+        if parsed is None:
+            return continuation(client_call_details, request)
+        svc_name, method_snake = parsed
+        if not method_snake.startswith(_MUTATION_METHOD_PREFIXES):
+            return continuation(client_call_details, request)
+
+        sent_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        t0 = time.perf_counter()
+        req_payload = _serialize_rpc_object(request)
+        req_sha = compute_mutate_request_sha256(svc_name, method_snake, req_payload)
+        call_rec: Dict[str, Any] = {
+            "service": svc_name,
+            "method": method_snake,
+            "sent_at_iso": sent_at_iso,
+            "request_sha256": req_sha,
+            "request_payload": req_payload,
+            "intercepted_layer": "layer4_grpc_channel",
+        }
+
+        def _block(status_code: str, err_msg: str) -> None:
+            call_rec.update({
+                "received_at_iso": datetime.datetime.now(
+                    datetime.timezone.utc
+                ).isoformat(),
+                "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                "status": status_code,
+                "request_sha256_verified": False,
+                "error": err_msg,
+            })
+            self.captured_calls.append(call_rec)
+            raise PermissionError(err_msg)
+
+        ok_del, del_err, _ = check_prohibited_deletion_mutation(
+            rpc_calls=[call_rec]
+        )
+        if not ok_del and del_err:
+            _block("BLOCKED_PROHIBITED_DELETION", f"LAYER 4 gRPC: {del_err}")
+
+        supports_vo = method_snake not in _NON_VALIDATE_ONLY_MUTATION_METHODS
+        payload_vo = (
+            req_payload.get("validate_only")
+            if isinstance(req_payload, dict)
+            else None
+        )
+        is_vo_true = supports_vo and isinstance(payload_vo, bool) and payload_vo
+        if self.dry_run_mode and not is_vo_true:
+            _block(
+                "BLOCKED_MISSING_VALIDATE_ONLY",
+                f"LAYER 4 gRPC: Blocked {svc_name}.{method_snake} during "
+                "--dry-run without validate_only=True.",
+            )
+
+        ok_fin, fin_err, _ = check_financial_transaction_limits(
+            rpc_calls=[call_rec]
+        )
+        if not ok_fin and fin_err:
+            _block("BLOCKED_FINANCIAL_LIMIT_EXCEEDED", f"LAYER 4 gRPC: {fin_err}")
+
+        is_live = (not is_vo_true) or self.enforce_request_hash
+        if is_live and not is_execute_mutates_enabled():
+            _block(
+                "BLOCKED_MUTATES_DISABLED",
+                f"LAYER 4 gRPC: execute_mutates = false blocks {svc_name}.{method_snake}.",
+            )
+        if (
+            is_live
+            and classify_mutation(rpc_calls=[call_rec])["tier_number"] == 1
+            and not is_tier1_financial_mutates_enabled()
+        ):
+            _block(
+                "BLOCKED_TIER1_READONLY_POSTURE",
+                f"LAYER 4 gRPC: Tier 1 service {svc_name}.{method_snake} "
+                "requires allow_tier1_financial_mutates = true.",
+            )
+        if self.enforce_request_hash:
+            idx = len(self.captured_calls)
+            if idx >= len(self.expected_request_hashes) or (
+                req_sha != self.expected_request_hashes[idx]
+            ):
+                _block(
+                    "BLOCKED_SHA256_MISMATCH",
+                    f"LAYER 4 gRPC: Unapproved or drifted direct gRPC call "
+                    f"to {svc_name}.{method_snake} (sha256={req_sha}).",
+                )
+
+        resp = continuation(client_call_details, request)
+        call_rec.update({
+            "received_at_iso": datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat(),
+            "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+            "status": "SUCCESS",
+            "request_sha256_verified": True,
+            "error": None,
+        })
+        self.captured_calls.append(call_rec)
+        return resp
+
+
 def _run_target_script_with_interception(
     script_path: str,
     script_args: List[str],
     trace_file: str,
 ) -> None:
-    """Executes target mutation script while intercepting service calls."""
+    """Executes target mutation script while intercepting service & gRPC calls."""
     captured_calls: List[Dict[str, Any]] = []
     enforce_hash = os.environ.get(_ENFORCE_HASH_ENV_VAR, "") == "1"
     dry_run_mode = os.environ.get(_DRY_RUN_MODE_ENV_VAR, "") == "1"
@@ -2196,10 +2920,43 @@ def _run_target_script_with_interception(
     except (ImportError, AttributeError, TypeError):
         pass
 
+    orig_grpc_secure = None
+    orig_grpc_insecure = None
+    grpc_live: Any = None
+    try:
+        grpc_live = importlib.import_module("grpc")
+        l4_interceptor = FinancialGuardrailInterceptor(
+            captured_calls=captured_calls,
+            expected_request_hashes=expected_hashes,
+            enforce_request_hash=enforce_hash,
+            dry_run_mode=dry_run_mode,
+        )
+        orig_grpc_secure = grpc_live.secure_channel
+        orig_grpc_insecure = grpc_live.insecure_channel
+
+        def _hooked_secure_channel(*args: Any, **kwargs: Any) -> Any:
+            return grpc_live.intercept_channel(
+                orig_grpc_secure(*args, **kwargs), l4_interceptor
+            )
+
+        def _hooked_insecure_channel(*args: Any, **kwargs: Any) -> Any:
+            return grpc_live.intercept_channel(
+                orig_grpc_insecure(*args, **kwargs), l4_interceptor
+            )
+
+        grpc_live.secure_channel = _hooked_secure_channel
+        grpc_live.insecure_channel = _hooked_insecure_channel
+    except (ImportError, AttributeError, TypeError):
+        grpc_live = None
+
     sys.argv = [script_path, *script_args]
     try:
         runpy.run_path(script_path, run_name="__main__")
     finally:
+        if grpc_live is not None and orig_grpc_secure is not None:
+            grpc_live.secure_channel = orig_grpc_secure
+        if grpc_live is not None and orig_grpc_insecure is not None:
+            grpc_live.insecure_channel = orig_grpc_insecure
         if trace_file:
             try:
                 with open(trace_file, "w", encoding="utf-8") as f:
@@ -2407,6 +3164,32 @@ def append_mutation_audit_log(
         after_state=after_state,
         rpc_calls=calls,
     )
+    cls_info = (
+        {
+            "tier_number": receipt_data.get("tier_number", 3),
+            "classification_tier": str(receipt_data["classification_tier"]),
+            "classification_category": str(
+                receipt_data.get("classification_category", "")
+            ),
+            "template_header": str(receipt_data.get("template_header", "")),
+        }
+        if receipt_data.get("classification_tier")
+        else classify_mutation(
+            operation_summary=operation_summary,
+            before_state=before_state,
+            after_state=after_state,
+            rpc_calls=calls,
+            script_path=script_path,
+        )
+    )
+    rendered_warning = str(
+        receipt_data.get("rendered_verification_card")
+        or (
+            format_verification_card(receipt_data)
+            if receipt_data.get("operation_summary")
+            else cls_info.get("template_header", "")
+        )
+    )
 
     request_ids = [
         str(c["google_ads_request_id"])
@@ -2418,7 +3201,9 @@ def append_mutation_audit_log(
     if exit_code != 0 or status in (
         "FAILED",
         "DRY_RUN_FAILED",
+        "HUMAN_REJECTED",
         "BLOCKED_MUTATES_DISABLED",
+        "BLOCKED_TIER1_READONLY_POSTURE",
         "BLOCKED_SHA256_MISMATCH",
         "BLOCKED_MISSING_VALIDATE_ONLY",
         "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING",
@@ -2439,6 +3224,7 @@ def append_mutation_audit_log(
         "receipt_id": str(receipt_data.get("receipt_id") or uuid.uuid4()),
         "phase": phase,
         "status": status,
+        "execution_status": "SUCCESS" if status == "HUMAN_APPROVED" else status,
         "actor": resolve_actor_metadata(
             customer_id=customer_id, receipt=receipt_data
         ),
@@ -2478,6 +3264,9 @@ def append_mutation_audit_log(
             "hook_prompted_at_iso": receipt_data.get("hook_prompted_at_iso"),
             "user_approved_at_iso": user_approved_at_iso,
             "is_financial_transaction": is_financial,
+            "classification_tier": cls_info["classification_tier"],
+            "classification_category": cls_info["classification_category"],
+            "rendered_warning": rendered_warning,
             "before_state": before_state.strip(),
             "after_state": after_state.strip(),
             "consequences": [c.strip() for c in consequences if str(c).strip()],
@@ -2507,6 +3296,10 @@ def append_mutation_audit_log(
             "error": error_summary,
         },
     }
+    if receipt_data.get("rejection_reason"):
+        audit_record["approval"]["rejection_reason"] = receipt_data[
+            "rejection_reason"
+        ]
 
     serialized_line = json.dumps(audit_record, default=str) + "\n"
     for log_path in get_audit_log_paths():
@@ -2607,11 +3400,32 @@ def write_dry_run_receipt(
         _remove_stale_receipts()
         raise ValueError(fin_limit_err)
 
-    is_financial = is_financial_mutation(
+    classification = classify_mutation(
         operation_summary=operation_summary,
         before_state=before_state,
         after_state=after_state,
         rpc_calls=normalized_calls,
+        script_path=resolved_script if resolved_script else None,
+    )
+    payload_facts = extract_payload_bound_facts(
+        rpc_calls=normalized_calls,
+        cli_customer_id=customer_id,
+        cli_after_state=after_state,
+    )
+    ato_details = extract_ato_escalation_details(
+        rpc_calls=normalized_calls,
+        script_path=resolved_script if resolved_script else None,
+        operation_summary=operation_summary,
+    )
+
+    is_financial = (
+        classification["tier_number"] == 1
+        or is_financial_mutation(
+            operation_summary=operation_summary,
+            before_state=before_state,
+            after_state=after_state,
+            rpc_calls=normalized_calls,
+        )
     )
     if is_financial and not has_financial_consequence_disclosure(
         clean_consequences
@@ -2644,6 +3458,14 @@ def write_dry_run_receipt(
         "customer_id": str(customer_id).strip(),
         "operation_summary": operation_summary.strip(),
         "is_financial_transaction": is_financial,
+        "tier_number": classification["tier_number"],
+        "classification_tier": classification["classification_tier"],
+        "classification_category": classification["classification_category"],
+        "template_header": classification["template_header"],
+        "detected_services": classification["detected_services"],
+        "elevated_from_inner_op": classification["elevated_from_inner_op"],
+        "payload_bound_facts": payload_facts,
+        "ato_escalation": ato_details,
         "before_state": before_state.strip(),
         "after_state": after_state.strip(),
         "consequences": clean_consequences,
@@ -2658,6 +3480,7 @@ def write_dry_run_receipt(
     }
     if normalized_calls:
         receipt["dry_run_rpc_calls"] = normalized_calls
+    receipt["rendered_verification_card"] = format_verification_card(receipt)
 
     for target_path in get_receipt_paths():
         try:
@@ -2666,6 +3489,86 @@ def write_dry_run_receipt(
             continue
 
     return receipt
+
+
+def reject_dry_run_receipt(
+    script_path: Optional[str] = None,
+    reason: str = "Operator rejected mutation at HITL confirmation prompt.",
+    hook_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Invalidates active dry-run receipts (REJECTED) and logs HUMAN_REJECTED."""
+    rejected_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    latest_receipt: Dict[str, Any] = {}
+    for target_path in get_receipt_paths():
+        if os.path.isfile(target_path):
+            try:
+                with open(target_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    continue
+                if isinstance(hook_context, dict):
+                    conv_id = hook_context.get(
+                        "conversationId"
+                    ) or hook_context.get("session_id")
+                    if conv_id:
+                        data["cli_conversation_id"] = str(conv_id)
+                data["status"] = "REJECTED"
+                data["rejected_at_iso"] = rejected_iso
+                data["rejection_reason"] = reason
+                _write_json_atomic(target_path, data)
+                if not latest_receipt:
+                    latest_receipt = data
+            except (
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ):
+                continue
+
+    effective_script = script_path or str(latest_receipt.get("script_path", ""))
+    script_hash = (
+        compute_file_sha256(effective_script)
+        if effective_script and os.path.isfile(effective_script)
+        else str(latest_receipt.get("script_sha256", ""))
+    )
+    audit_entry = append_mutation_audit_log(
+        phase="EXECUTE",
+        status="HUMAN_REJECTED",
+        customer_id=str(latest_receipt.get("customer_id", "")),
+        operation_summary=str(
+            latest_receipt.get("operation_summary", "Operator rejected mutation")
+        ),
+        before_state=str(latest_receipt.get("before_state", "")),
+        after_state=str(latest_receipt.get("after_state", "")),
+        consequences=[
+            str(c)
+            for c in latest_receipt.get("consequences", [])
+            if str(c).strip()
+        ],
+        reversibility=str(latest_receipt.get("reversibility", "REVERSIBLE")),
+        script_path=effective_script or None,
+        script_sha256=script_hash,
+        validate_only=False,
+        request_sent_at_iso=rejected_iso,
+        response_received_at_iso=rejected_iso,
+        duration_ms=0.0,
+        exit_code=2,
+        stdout="",
+        stderr=reason,
+        command=["HITL:REJECT"],
+        rpc_calls=[],
+        receipt=latest_receipt if latest_receipt else {"rejection_reason": reason},
+        user_approved_at_iso=None,
+    )
+    return {
+        "status": "REJECTED",
+        "rejected_at_iso": rejected_iso,
+        "rejection_reason": reason,
+        "audit_id": audit_entry.get("audit_id"),
+        "receipt_id": latest_receipt.get("receipt_id"),
+    }
 
 
 def _write_json_atomic(target_path: str, payload: Dict[str, Any]) -> None:
@@ -3001,7 +3904,7 @@ def load_and_verify_receipt(
 
 
 def format_verification_card(receipt: Dict[str, Any]) -> str:
-    """Formats a human-readable Mutation & Consequence Verification Card."""
+    """Formats a classification-driven 5-part Mutation & Consequence Card."""
     consequences_lines = "\n".join(
         f"  - {c}" for c in receipt.get("consequences", [])
     )
@@ -3017,6 +3920,101 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
         mutates_cfg_line = (
             "DISABLED (execute_mutates = false — set execute_mutates = true "
             "in config/assistant_config before --execute)"
+        )
+
+    rpc_calls = receipt.get("dry_run_rpc_calls")
+    rpc_list = rpc_calls if isinstance(rpc_calls, list) else None
+    cls_info = (
+        {
+            "tier_number": int(receipt.get("tier_number", 3)),
+            "classification_tier": str(receipt["classification_tier"]),
+            "classification_category": str(
+                receipt.get("classification_category", "")
+            ),
+            "template_header": str(
+                receipt.get(
+                    "template_header",
+                    _TEMPLATE_HEADERS.get(
+                        int(receipt.get("tier_number", 3)),
+                        _TEMPLATE_HEADERS[3],
+                    ),
+                )
+            ),
+            "elevated_from_inner_op": bool(
+                receipt.get("elevated_from_inner_op", False)
+            ),
+        }
+        if receipt.get("classification_tier")
+        else classify_mutation(
+            operation_summary=str(receipt.get("operation_summary", "")),
+            before_state=str(receipt.get("before_state", "")),
+            after_state=str(receipt.get("after_state", "")),
+            rpc_calls=rpc_list,
+            script_path=str(receipt.get("script_path", "")) or None,
+        )
+    )
+    payload_facts = (
+        receipt["payload_bound_facts"]
+        if isinstance(receipt.get("payload_bound_facts"), dict)
+        else extract_payload_bound_facts(
+            rpc_calls=rpc_list,
+            cli_customer_id=str(receipt.get("customer_id", "")),
+            cli_after_state=str(receipt.get("after_state", "")),
+        )
+    )
+    ato_details = (
+        receipt["ato_escalation"]
+        if isinstance(receipt.get("ato_escalation"), dict)
+        else extract_ato_escalation_details(
+            rpc_calls=rpc_list,
+            script_path=str(receipt.get("script_path", "")) or None,
+            operation_summary=str(receipt.get("operation_summary", "")),
+        )
+    )
+
+    tier_num = int(cls_info["tier_number"])
+    elev_tag = (
+        " [ELEVATED FROM INNER OPERATION]"
+        if cls_info.get("elevated_from_inner_op")
+        else ""
+    )
+    tier_line = (
+        f"Tier / Class  : {cls_info['classification_tier']} — "
+        f"{cls_info['classification_category']}{elev_tag}\n"
+    )
+    spend_delta_line = (
+        "Spend Delta   : $0.00 direct spend impact (structural/administrative)\n"
+        if tier_num == 3 and not receipt.get("is_financial_transaction")
+        else ""
+    )
+
+    payload_block = ""
+    p_cids = payload_facts.get("payload_customer_ids") or []
+    p_amts = payload_facts.get("micro_amounts") or []
+    if p_cids or p_amts:
+        parts: List[str] = []
+        if p_cids:
+            parts.append(f"Customer ID(s): {', '.join(p_cids)}")
+        if p_amts:
+            amt_strs = [
+                f"{a['field']}={a['formatted_currency']} ({a['micros']} micros)"
+                for a in p_amts
+            ]
+            parts.append(f"Monetary Fields: {', '.join(amt_strs)}")
+        drift_warn = ""
+        if payload_facts.get("customer_id_mismatch") or payload_facts.get(
+            "micro_unit_drift_detected"
+        ):
+            drift_warn = " [WARNING: CLI PROSE DIFFERS FROM ACTUAL RPC PAYLOAD]"
+        payload_block = f"Payload-Bound : {' | '.join(parts)}{drift_warn}\n"
+
+    ato_block = ""
+    if ato_details.get("is_ato_risk"):
+        em_txt = ", ".join(ato_details.get("emails") or []) or "N/A"
+        role_txt = ", ".join(ato_details.get("access_roles") or []) or "N/A"
+        ato_block = (
+            "SECURITY ALERT: Account Takeover (ATO) & Permission Escalation "
+            f"Risk — Target Email(s): {em_txt} | AccessRole: {role_txt}\n"
         )
 
     financial_line = ""
@@ -3037,11 +4035,16 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
     sep = "=" * 70
     return (
         f"{sep}\n"
+        f"{cls_info['template_header']}\n"
         "GOOGLE ADS API MUTATION & CONSEQUENCE VERIFICATION CARD\n"
         f"{sep}\n"
+        f"{tier_line}"
         f"Customer ID   : {receipt.get('customer_id', 'Unknown')}\n"
         f"Operation     : {receipt.get('operation_summary', 'Unknown')}\n"
+        f"{payload_block}"
+        f"{ato_block}"
         f"{financial_line}"
+        f"{spend_delta_line}"
         f"Mutates Config: {mutates_cfg_line}\n"
         f"Dry-Run Status: PASSED (validate_only=True verified at {ts_iso})\n"
         f"Request SHA256: {receipt.get('request_sha256', 'N/A')}\n"
@@ -3053,13 +4056,13 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
         f"{sep}\n"
         "NEXT STEP: Present this card to the user and obtain explicit "
         "confirmation\n"
-        "before running with --execute.\n"
+        "before running with --execute (or run --reject on denial).\n"
         f"{sep}"
     )
 
 
 def main() -> None:
-    """CLI entrypoint for two-phase dry-run and live Google Ads mutations."""
+    """CLI entrypoint for --dry-run, --execute, and --reject Google Ads HITL mutations."""
     if len(sys.argv) >= 3 and sys.argv[1] == "--_exec-target":
         target_script = sys.argv[2]
         target_args = sys.argv[3:]
@@ -3072,12 +4075,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Run Google Ads API mutations with mandatory validate_only=True "
-            "dry-run, HITL consequence verification, and audit logging."
+            "dry-run, HITL consequence verification, --reject invalidation, "
+            "and audit logging."
         )
     )
     parser.add_argument(
         "--script",
-        required=True,
+        default="",
         help="Path to the Python mutation script in saved/code/.",
     )
     mode_group = parser.add_mutually_exclusive_group(required=True)
@@ -3096,6 +4100,19 @@ def main() -> None:
             "Phase 2: Verify signed dry-run receipt and execute live mutation "
             "(validate_only=False)."
         ),
+    )
+    mode_group.add_argument(
+        "--reject",
+        action="store_true",
+        help=(
+            "Invalidate the pending dry-run receipt (REJECTED) and append a "
+            "HUMAN_REJECTED record to mutation_audit.jsonl."
+        ),
+    )
+    parser.add_argument(
+        "--rejection-reason",
+        default="Operator rejected mutation at HITL confirmation prompt.",
+        help="Reason recorded when invoking --reject.",
     )
     parser.add_argument(
         "--customer-id",
@@ -3152,6 +4169,18 @@ def main() -> None:
     )
 
     args, unknown_args = parser.parse_known_args()
+
+    if args.reject:
+        rej_res = reject_dry_run_receipt(
+            script_path=os.path.abspath(args.script) if args.script else None,
+            reason=args.rejection_reason,
+        )
+        print(json.dumps(rej_res, indent=2))
+        return
+
+    if not args.script:
+        parser.error("the following arguments are required: --script")
+
     script_path = os.path.abspath(args.script)
 
     if not os.path.isfile(script_path):
@@ -3551,6 +4580,63 @@ def main() -> None:
         print(err_out, file=sys.stderr)
         sys.exit(2)
 
+    # Enforce Tier 1 Financial Services default read-only posture (Policy §2.3A & §4.1)
+    receipt_cls = (
+        {"tier_number": int(receipt["tier_number"])}
+        if "tier_number" in receipt
+        else classify_mutation(
+            operation_summary=str(receipt.get("operation_summary", "")),
+            before_state=str(receipt.get("before_state", "")),
+            after_state=str(receipt.get("after_state", "")),
+            rpc_calls=receipt.get("dry_run_rpc_calls")
+            if isinstance(receipt.get("dry_run_rpc_calls"), list)
+            else None,
+            script_path=script_path,
+        )
+    )
+    if (
+        int(receipt_cls.get("tier_number", 3)) == 1
+        and not is_tier1_financial_mutates_enabled()
+    ):
+        blocked_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        tier1_err = (
+            "BLOCKED BY TIER 1 FINANCIAL POSTURE: Tier 1 Financial Services "
+            "are read-only by default even when execute_mutates = true. "
+            "An Account Owner must explicitly set "
+            "'allow_tier1_financial_mutates = true' in config/assistant_config "
+            "(or GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES=true) before --execute."
+        )
+        append_mutation_audit_log(
+            phase="EXECUTE",
+            status="BLOCKED_TIER1_READONLY_POSTURE",
+            customer_id=args.customer_id or str(receipt.get("customer_id", "")),
+            operation_summary=str(
+                args.operation or receipt.get("operation_summary", "")
+            ),
+            before_state=str(receipt.get("before_state", args.before)),
+            after_state=str(
+                receipt.get("after_state", args.after or args.operation)
+            ),
+            consequences=[
+                str(c) for c in receipt.get("consequences", []) if str(c).strip()
+            ],
+            reversibility=str(receipt.get("reversibility", args.reversibility)),
+            script_path=script_path,
+            script_sha256=script_sha256,
+            validate_only=False,
+            request_sent_at_iso=blocked_iso,
+            response_received_at_iso=blocked_iso,
+            duration_ms=0.0,
+            exit_code=2,
+            stdout="",
+            stderr=tier1_err,
+            command=[sys.executable, script_path, "--execute", *extra_args],
+            rpc_calls=[],
+            receipt=receipt,
+        )
+        print(tier1_err, file=sys.stderr)
+        sys.exit(2)
+
     recorded_script_args = receipt.get("script_args")
     if isinstance(recorded_script_args, list):
         receipt_extra_args = [str(a) for a in recorded_script_args]
@@ -3671,6 +4757,10 @@ def main() -> None:
         c.get("status") == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
         for c in captured_calls
     )
+    blocked_by_tier1 = any(
+        c.get("status") == "BLOCKED_TIER1_READONLY_POSTURE"
+        for c in captured_calls
+    )
     blocked_by_sha_mismatch = any(
         c.get("status") == "BLOCKED_SHA256_MISMATCH" for c in captured_calls
     )
@@ -3689,6 +4779,7 @@ def main() -> None:
         result.returncode != 0
         or blocked_by_deletion
         or blocked_by_fin_limit
+        or blocked_by_tier1
         or blocked_by_sha_mismatch
         or missing_expected_calls
     ):
@@ -3696,6 +4787,8 @@ def main() -> None:
             failure_status = "BLOCKED_PROHIBITED_DELETION"
         elif blocked_by_fin_limit:
             failure_status = "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+        elif blocked_by_tier1:
+            failure_status = "BLOCKED_TIER1_READONLY_POSTURE"
         elif blocked_by_sha_mismatch or missing_expected_calls:
             failure_status = "BLOCKED_SHA256_MISMATCH"
         else:
@@ -3704,6 +4797,7 @@ def main() -> None:
         if (
             blocked_by_deletion
             or blocked_by_fin_limit
+            or blocked_by_tier1
             or result.returncode == 0
         ):
             effective_exit_code = 2
@@ -3750,7 +4844,7 @@ def main() -> None:
 
     audit_entry = append_mutation_audit_log(
         phase="EXECUTE",
-        status="SUCCESS",
+        status="HUMAN_APPROVED",
         customer_id=cid,
         operation_summary=operation_summary,
         before_state=before_state,

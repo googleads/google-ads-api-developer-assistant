@@ -1,4 +1,5 @@
 api_version = ""
 customer_id = "12345678"
 execute_mutates = false
+allow_tier1_financial_mutates = false
 enabled = true

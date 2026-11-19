@@ -23,6 +23,7 @@ from config.config_init import evaluate_mutation_guard
 def _enable_mutates_for_hitl_tests(monkeypatch: Any, tmp_path: Path) -> None:
     """Enables execute_mutates=true and permissive financial limits for general HITL workflow tests unless overridden."""
     monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates=true")
+    monkeypatch.setenv("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", "true")
     monkeypatch.setenv("GOOGLE_ADS_ASSISTANT_ENABLED", "true")
     run_mutation = _load_run_mutation_module()
     permissive_fin_file = tmp_path / "_default_permissive_financial_limits"
@@ -268,7 +269,9 @@ def test_mutation_audit_trail_end_to_end(tmp_path: Path, monkeypatch: Any) -> No
     assert dry_entry["phase"] == "DRY_RUN"
     assert dry_entry["status"] == "DRY_RUN_PASSED"
     assert exec_entry["phase"] == "EXECUTE"
-    assert exec_entry["status"] == "SUCCESS"
+    assert exec_entry["status"] == "HUMAN_APPROVED"
+    assert exec_entry["execution_status"] == "SUCCESS"
+    assert exec_entry["approval"]["classification_tier"] == "Tier 1"
     assert dry_entry["receipt_id"] == exec_entry["receipt_id"]
 
     # 1. Who made the request
@@ -523,7 +526,8 @@ def test_subprocess_google_ads_client_interception_and_failure_audit(
         == "ACCOUNT_INACTIVE"
     )
 
-    assert ok_rec["status"] == "SUCCESS"
+    assert ok_rec["status"] == "HUMAN_APPROVED"
+    assert ok_rec["execution_status"] == "SUCCESS"
     assert ok_rec["request"]["payload"]["validate_only"] is False
     assert (
         ok_rec["request"]["payload"]["operations"][0]["update"]["amount_micros"]
@@ -1836,8 +1840,9 @@ def test_security_hardening_direct_script_spoofing_executable_and_sidecar(
     assert [e["status"] for e in entries] == [
         "DRY_RUN_PASSED",
         "BLOCKED_MUTATES_DISABLED",
-        "SUCCESS",
+        "HUMAN_APPROVED",
     ]
+    assert entries[2]["execution_status"] == "SUCCESS"
 
     for receipt_path in run_mutation.get_receipt_paths():
         if os.path.isfile(receipt_path):
@@ -2749,11 +2754,13 @@ def test_end_to_end_financial_transactions_preflight_and_atomic_sha256_workflows
     assert [e["status"] for e in audit_entries] == [
         "BLOCKED_MISSING_VALIDATE_ONLY",
         "DRY_RUN_PASSED",
-        "SUCCESS",
+        "HUMAN_APPROVED",
         "DRY_RUN_PASSED",
         "BLOCKED_SHA256_MISMATCH",
-        "SUCCESS",
+        "HUMAN_APPROVED",
     ]
+    assert audit_entries[2]["execution_status"] == "SUCCESS"
+    assert audit_entries[5]["execution_status"] == "SUCCESS"
     assert all(e["request"]["is_financial_transaction"] is True for e in audit_entries)
     # Verify both Workflow A live book_campaigns and Workflow B live multi-RPC bundle have verified SHA-256 and request IDs
     assert audit_entries[2]["request"]["request_sha256_verified"] is True
@@ -5152,6 +5159,356 @@ def test_only_allow_create_or_update_and_prohibit_deletion_across_all_layers(
     for receipt_path in run_mutation.get_receipt_paths():
         if os.path.isfile(receipt_path):
             os.remove(receipt_path)
+
+
+def test_layer4_financial_guardrail_interceptor_all_enforcement_paths(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Verifies Layer 4 FinancialGuardrailInterceptor directly across every allow/block path."""
+    import pytest
+    from types import SimpleNamespace
+
+    run_mutation = _load_run_mutation_module()
+    fin_file = tmp_path / "financial_limits"
+    fin_file.write_text("CampaignBudgetService.amount_micros = 50000000\n", encoding="utf-8")
+    monkeypatch.setenv("GOOGLE_ADS_FINANCIAL_LIMITS_FILE", str(fin_file))
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "true")
+    monkeypatch.setenv("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", "true")
+
+    # 1. Method path parsing
+    assert run_mutation.FinancialGuardrailInterceptor._parse_method_path("invalid") is None
+    assert run_mutation.FinancialGuardrailInterceptor._parse_method_path(
+        "/google.ads.googleads.v26.services.CampaignBudgetService/MutateCampaignBudgets"
+    ) == ("CampaignBudgetService", "mutate_campaign_budgets")
+
+    def _details(method: str) -> Any:
+        return SimpleNamespace(method=method)
+
+    def _cont(_details_arg: Any, _req: Any) -> dict[str, str]:
+        return {"ok": "sent"}
+
+    # 2. Re-entrancy bypass when already inside Layer 3 _wrap_service_for_audit
+    captured: list[dict[str, Any]] = []
+    ic = run_mutation.FinancialGuardrailInterceptor(captured)
+    run_mutation._IN_AUDITED_SERVICE_CALL.depth = 1
+    try:
+        assert ic.intercept_unary_unary(
+            _cont,
+            _details("/google.ads.googleads.v26.services.CampaignService/MutateCampaigns"),
+            {"customer_id": "123"},
+        ) == {"ok": "sent"}
+        assert captured == []
+    finally:
+        run_mutation._IN_AUDITED_SERVICE_CALL.depth = 0
+
+    # 3. Non-matching path & read-only RPC pass straight through
+    assert ic.intercept_unary_unary(_cont, _details("/custom.Other/Ping"), {}) == {"ok": "sent"}
+    assert ic.intercept_unary_unary(
+        _cont,
+        _details("/google.ads.googleads.v26.services.GoogleAdsService/SearchStream"),
+        {"customer_id": "123"},
+    ) == {"ok": "sent"}
+    assert captured == []
+
+    # 4. Deletion blocked at Layer 4
+    with pytest.raises(PermissionError, match="LAYER 4 gRPC.*DELETION PROHIBITION"):
+        ic.intercept_unary_unary(
+            _cont,
+            _details("/google.ads.googleads.v26.services.CampaignService/MutateCampaigns"),
+            {"customer_id": "123", "operations": [{"remove": "customers/123/campaigns/1"}]},
+        )
+    assert captured[-1]["status"] == "BLOCKED_PROHIBITED_DELETION"
+
+    # 5. Dry-run mode blocks missing validate_only=True
+    cap_dry: list[dict[str, Any]] = []
+    ic_dry = run_mutation.FinancialGuardrailInterceptor(cap_dry, dry_run_mode=True)
+    with pytest.raises(PermissionError, match="without validate_only=True"):
+        ic_dry.intercept_unary_unary(
+            _cont,
+            _details("/google.ads.googleads.v26.services.CampaignService/MutateCampaigns"),
+            {"customer_id": "123", "validate_only": False, "operations": [{"update": {"status": "PAUSED"}}]},
+        )
+    assert cap_dry[-1]["status"] == "BLOCKED_MISSING_VALIDATE_ONLY"
+
+    # 6. Financial limit exceeded blocked at Layer 4
+    cap_fin: list[dict[str, Any]] = []
+    ic_fin = run_mutation.FinancialGuardrailInterceptor(cap_fin)
+    with pytest.raises(PermissionError, match="FINANCIAL UPPER LIMIT"):
+        ic_fin.intercept_unary_unary(
+            _cont,
+            _details("/google.ads.googleads.v26.services.CampaignBudgetService/MutateCampaignBudgets"),
+            {
+                "customer_id": "123",
+                "validate_only": False,
+                "operations": [{"update": {"amount_micros": 999_000_000}}],
+            },
+        )
+    assert cap_fin[-1]["status"] == "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+
+    # 7. execute_mutates = false blocks live call at Layer 4
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "false")
+    cap_dis: list[dict[str, Any]] = []
+    ic_dis = run_mutation.FinancialGuardrailInterceptor(cap_dis)
+    with pytest.raises(PermissionError, match="execute_mutates = false"):
+        ic_dis.intercept_unary_unary(
+            _cont,
+            _details("/google.ads.googleads.v26.services.CampaignService/MutateCampaigns"),
+            {"customer_id": "123", "validate_only": False, "operations": [{"update": {"status": "PAUSED"}}]},
+        )
+    assert cap_dis[-1]["status"] == "BLOCKED_MUTATES_DISABLED"
+
+    # 8. Tier 1 read-only posture blocks live Tier 1 RPC when allow_tier1_financial_mutates=false
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "true")
+    monkeypatch.setenv("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", "false")
+    cap_t1: list[dict[str, Any]] = []
+    ic_t1 = run_mutation.FinancialGuardrailInterceptor(cap_t1)
+    with pytest.raises(PermissionError, match="allow_tier1_financial_mutates = true"):
+        ic_t1.intercept_unary_unary(
+            _cont,
+            _details("/google.ads.googleads.v26.services.CampaignBudgetService/MutateCampaignBudgets"),
+            {
+                "customer_id": "123",
+                "validate_only": False,
+                "operations": [{"update": {"amount_micros": 10_000_000}}],
+            },
+        )
+    assert cap_t1[-1]["status"] == "BLOCKED_TIER1_READONLY_POSTURE"
+
+    # 9. SHA-256 mismatch blocked when enforce_request_hash=True, matching SHA-256 allowed
+    monkeypatch.setenv("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", "true")
+    valid_req = {
+        "customer_id": "123",
+        "validate_only": False,
+        "operations": [{"update": {"amount_micros": 10_000_000}}],
+    }
+    good_sha = run_mutation.compute_mutate_request_sha256(
+        "CampaignBudgetService", "mutate_campaign_budgets", valid_req
+    )
+    cap_sha: list[dict[str, Any]] = []
+    ic_bad = run_mutation.FinancialGuardrailInterceptor(
+        cap_sha, expected_request_hashes=["0" * 64], enforce_request_hash=True
+    )
+    with pytest.raises(PermissionError, match="Unapproved or drifted direct gRPC call"):
+        ic_bad.intercept_unary_unary(
+            _cont,
+            _details("/google.ads.googleads.v26.services.CampaignBudgetService/MutateCampaignBudgets"),
+            valid_req,
+        )
+    assert cap_sha[-1]["status"] == "BLOCKED_SHA256_MISMATCH"
+
+    cap_ok: list[dict[str, Any]] = []
+    ic_ok = run_mutation.FinancialGuardrailInterceptor(
+        cap_ok, expected_request_hashes=[good_sha], enforce_request_hash=True
+    )
+    out = ic_ok.intercept_unary_unary(
+        _cont,
+        _details("/google.ads.googleads.v26.services.CampaignBudgetService/MutateCampaignBudgets"),
+        valid_req,
+    )
+    assert out == {"ok": "sent"}
+    assert cap_ok[-1]["status"] == "SUCCESS"
+    assert cap_ok[-1]["request_sha256_verified"] is True
+
+
+def test_tier1_posture_classification_payload_drift_ato_and_reject_lifecycle(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Covers GAP-02..GAP-06 features: Tier 1 posture block/override, BatchJob elevation, payload drift, ATO card, --reject, and PostToolUseFailure."""
+    import io
+    import json
+    import subprocess
+    import sys
+    from config import config_init
+
+    run_mutation = _load_run_mutation_module()
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    (cfg_dir / "assistant_config").write_text(
+        'api_version = "v26"\nexecute_mutates = true\nallow_tier1_financial_mutates = false\n',
+        encoding="utf-8",
+    )
+    receipt_path = tmp_path / "last_dry_run.json"
+    audit_path = tmp_path / "mutation_audit.jsonl"
+    monkeypatch.setenv("GOOGLE_ADS_ASSISTANT_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("GOOGLE_ADS_MUTATION_RECEIPT_PATH", str(receipt_path))
+    monkeypatch.setenv("GOOGLE_ADS_MUTATION_AUDIT_LOG", str(audit_path))
+    monkeypatch.delenv("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", raising=False)
+    monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "true")
+
+    # 1. Tier 1 posture config helpers (run_mutation + config_init)
+    assert run_mutation.parse_allow_tier1_financial_mutates_value("true") is True
+    assert run_mutation.parse_allow_tier1_financial_mutates_value("false") is False
+    assert run_mutation.parse_allow_tier1_financial_mutates_value("maybe") is None
+    assert run_mutation.is_tier1_financial_mutates_enabled() is False
+    assert config_init.is_tier1_financial_mutates_enabled(config_dir=str(cfg_dir)) is False
+
+    # 2. Classification: Tier 3 label vs Tier 1 BatchJob inner-op elevation
+    cls_t3 = run_mutation.classify_mutation(operation_summary="campaign_label_service: attach label")
+    assert cls_t3["tier_number"] == 3
+    assert "STRUCTURAL / ADMINISTRATIVE MUTATION" in cls_t3["template_header"]
+
+    cls_batch = run_mutation.classify_mutation(
+        operation_summary="BatchJobService.add_batch_job_operations",
+        rpc_calls=[{
+            "service": "BatchJobService",
+            "method": "add_batch_job_operations",
+            "request_payload": {
+                "mutate_operations": [
+                    {"campaign_budget_operation": {"update": {"amount_micros": 50000000}}}
+                ]
+            },
+        }],
+    )
+    assert cls_batch["tier_number"] == 1
+    assert cls_batch["elevated_from_inner_op"] is True
+
+    # 3. Payload-bound drift detection + ATO extraction
+    facts = run_mutation.extract_payload_bound_facts(
+        rpc_calls=[{
+            "service": "CampaignBudgetService",
+            "method": "mutate_campaign_budgets",
+            "request_payload": {
+                "customer_id": "9999999999",
+                "operations": [{"update": {"amount_micros": 50_000_000_000}}],
+            },
+        }],
+        cli_customer_id="1234567890",
+        cli_after_state="Update budget to $50.00/day",
+    )
+    assert "9999999999" in facts["payload_customer_ids"]
+    assert facts["customer_id_mismatch"] is True
+    assert facts["micro_unit_drift_detected"] is True
+    assert any("$50,000.00" == m["formatted_currency"] for m in facts["micro_amounts"])
+
+    ato = run_mutation.extract_ato_escalation_details(
+        rpc_calls=[{
+            "service": "CustomerUserAccessInvitationService",
+            "method": "mutate_customer_user_access_invitation",
+            "request_payload": {
+                "operation": {
+                    "create": {"email_address": "external@attacker.example", "access_role": "ADMIN"}
+                }
+            },
+        }]
+    )
+    assert ato["is_ato_risk"] is True
+    assert "external@attacker.example" in ato["emails"]
+    assert "ADMIN" in ato["access_roles"]
+
+    # 4. Write a Tier 1 receipt and verify --execute blocks under Tier 1 default read-only posture
+    script_file = tmp_path / "t1_budget.py"
+    script_file.write_text("print('should not run')\n", encoding="utf-8")
+    run_mutation.write_dry_run_receipt(
+        customer_id="1234567890",
+        operation_summary="CampaignBudgetService.mutate_campaign_budgets",
+        before_state="$10.00/day",
+        after_state="$20.00/day",
+        consequences=["Increases daily spend cap by $10.00/day ($304.00/month max)."],
+        reversibility="REVERSIBLE",
+        script_path=str(script_file),
+        script_args=["--budget-id", "111"],
+    )
+    runner_path = (
+        Path(__file__).resolve().parent.parent
+        / "plugins"
+        / "google-ads-api-developer-assistant"
+        / "skills"
+        / "execute-mutation"
+        / "scripts"
+        / "run_mutation.py"
+    )
+    sub_env = os.environ.copy()
+    sub_env.pop("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", None)
+    sub_env["GOOGLE_ADS_ASSISTANT_CONFIG_DIR"] = str(cfg_dir)
+    sub_env["GOOGLE_ADS_MUTATION_RECEIPT_PATH"] = str(receipt_path)
+    sub_env["GOOGLE_ADS_MUTATION_AUDIT_LOG"] = str(audit_path)
+    sub_env["GOOGLE_ADS_EXECUTE_MUTATES"] = "true"
+
+    p_t1_block = subprocess.run(
+        [sys.executable, str(runner_path), "--script", str(script_file), "--execute"],
+        capture_output=True,
+        text=True,
+        env=sub_env,
+        check=False,
+    )
+    assert p_t1_block.returncode == 2
+    assert "BLOCKED BY TIER 1 FINANCIAL POSTURE" in p_t1_block.stderr
+
+    # 5. Enable Tier 1 via config_init and verify --script-args mismatch blocks with BLOCKED_SHA256_MISMATCH
+    config_init.set_allow_tier1_financial_mutates(True, config_dir=str(cfg_dir))
+    assert config_init.is_tier1_financial_mutates_enabled(config_dir=str(cfg_dir)) is True
+    p_args_mismatch = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(script_file),
+            "--execute",
+            "--script-args",
+            "--budget-id 999",
+        ],
+        capture_output=True,
+        text=True,
+        env=sub_env,
+        check=False,
+    )
+    assert p_args_mismatch.returncode == 2
+    assert "differs from verified dry-run script_args" in p_args_mismatch.stderr
+
+    # 6. CLI --reject marks receipt REJECTED & writes HUMAN_REJECTED audit record
+    p_rej = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(script_file),
+            "--reject",
+            "--rejection-reason",
+            "User declined budget increase",
+        ],
+        capture_output=True,
+        text=True,
+        env=sub_env,
+        check=False,
+    )
+    assert p_rej.returncode == 0, p_rej.stderr
+    assert "REJECTED" in p_rej.stdout
+    rej_data = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert rej_data["status"] == "REJECTED"
+
+    # 7. Hook PostToolUseFailure callback also logs HUMAN_REJECTED cleanly
+    run_mutation.write_dry_run_receipt(
+        customer_id="1234567890",
+        operation_summary="CampaignLabelService.mutate_campaign_labels",
+        before_state="No label",
+        after_state="Label attached",
+        consequences=["Zero spend impact."],
+        reversibility="REVERSIBLE",
+        script_path=str(script_file),
+    )
+    monkeypatch.setattr(config_init, "is_plugin_enabled", lambda **kw: True)
+    monkeypatch.setattr(
+        config_init, "sync_and_set_config_kv", lambda **kw: str(tmp_path / "google-ads.yaml")
+    )
+    hook_payload = json.dumps({
+        "hook_event_name": "PostToolUseFailure",
+        "userDecision": "deny",
+        "error": "User clicked Deny on confirmation modal",
+        "tool_input": {"command": f"python3 run_mutation.py --script {script_file} --execute"},
+    })
+    monkeypatch.setattr(sys, "stdin", io.StringIO(hook_payload))
+    config_init.handle_hook()
+    assert json.loads(receipt_path.read_text(encoding="utf-8"))["status"] == "REJECTED"
+
+    audit_statuses = [
+        json.loads(line)["status"]
+        for line in audit_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert "BLOCKED_TIER1_READONLY_POSTURE" in audit_statuses
+    assert "BLOCKED_SHA256_MISMATCH" in audit_statuses
+    assert audit_statuses.count("HUMAN_REJECTED") >= 2
+
 
 
 

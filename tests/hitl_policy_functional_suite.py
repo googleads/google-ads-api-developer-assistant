@@ -534,6 +534,7 @@ class FunctionalTestContext:
         self,
         *,
         execute_mutates: bool = False,
+        allow_tier1_financial_mutates: bool = False,
         customer_id: str | None = None,
         api_version: str | None = None,
         enabled: bool = True,
@@ -544,6 +545,7 @@ class FunctionalTestContext:
             f'api_version = "{ver}"\n'
             f'customer_id = "{cid}"\n'
             f"execute_mutates = {'true' if execute_mutates else 'false'}\n"
+            f"allow_tier1_financial_mutates = {'true' if allow_tier1_financial_mutates else 'false'}\n"
             f"enabled = {'true' if enabled else 'false'}\n"
         )
         fd = os.open(self.sandbox_assistant_cfg, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -556,6 +558,7 @@ class FunctionalTestContext:
         env = os.environ.copy()
         env.pop("PYTEST_CURRENT_TEST", None)
         env.pop("GOOGLE_ADS_EXECUTE_MUTATES", None)
+        env.pop("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", None)
         env.pop("ANTIGRAVITY_SIDECAR_WEB_PORT", None)
         env["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = self.sandbox_yaml
         env["GOOGLE_ADS_ASSISTANT_CONFIG_DIR"] = self.sandbox_cfg_dir
@@ -1857,7 +1860,9 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
     @register("TC-HOOK-09", "TC-HOOK", "Anti-splitting per-invocation gate")
     def tc_hook_09(ctx: FunctionalTestContext) -> str:
         ctx.clear_all_receipts()
-        ctx.write_sandbox_assistant_config(execute_mutates=True)
+        ctx.write_sandbox_assistant_config(
+            execute_mutates=True, allow_tier1_financial_mutates=True
+        )
         cid = ctx.cfg.test_customer_id if is_valid_customer_id(ctx.cfg.test_customer_id) else "4863089361"
         sp = ctx.write_sandbox_script("hook09_split.py", "print('budget +$10')\n")
         ctx.logged_subprocess(
@@ -2063,7 +2068,9 @@ svc.mutate_billing_setup(request=req)
     def tc_run_05(ctx: FunctionalTestContext) -> str:
         ctx.require_verified_test_account("TC-RUN-05")
         ctx.clear_all_receipts()
-        ctx.write_sandbox_assistant_config(execute_mutates=True)
+        ctx.write_sandbox_assistant_config(
+            execute_mutates=True, allow_tier1_financial_mutates=True
+        )
         sp = ctx.write_sandbox_script(
             "run05_drift.py",
             _budget_mutation_script_source(
@@ -2105,7 +2112,9 @@ svc.mutate_billing_setup(request=req)
     @register("TC-RUN-06", "TC-RUN", "Unapproved extra or missing RPC calls during --execute")
     def tc_run_06(ctx: FunctionalTestContext) -> str:
         ctx.require_verified_test_account("TC-RUN-06")
-        ctx.write_sandbox_assistant_config(execute_mutates=True)
+        ctx.write_sandbox_assistant_config(
+            execute_mutates=True, allow_tier1_financial_mutates=True
+        )
         for label, extra_flag, skip_flag in (
             ("extra_call", True, False),
             ("missing_call", False, True),
@@ -2640,7 +2649,9 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
     def tc_aud_01(ctx: FunctionalTestContext) -> str:
         ctx.require_verified_test_account("TC-AUD-01")
         ctx.clear_all_receipts()
-        ctx.write_sandbox_assistant_config(execute_mutates=True)
+        ctx.write_sandbox_assistant_config(
+            execute_mutates=True, allow_tier1_financial_mutates=True
+        )
         sp = ctx.write_sandbox_script(
             "aud01_live.py",
             _budget_mutation_script_source(
@@ -2726,7 +2737,7 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
                 "Enables campaign serving and $5.00/day spend",
             ],
         )
-        # Trigger native CLI force_ask prompt; operator rejects at CLI prompt (so --execute is cancelled)
+        # Step 1: Trigger native CLI force_ask prompt
         ctx.logged_subprocess(
             "aud02_hook_force_ask",
             [sys.executable, CONFIG_INIT_SCRIPT, "--hook"],
@@ -2741,23 +2752,55 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
                 },
             }),
         )
+        # Step 2: Operator rejects at CLI prompt -> PostToolUseFailure rejection hook fires
+        ctx.logged_subprocess(
+            "aud02_hook_rejection",
+            [sys.executable, CONFIG_INIT_SCRIPT, "--hook"],
+            stdin_text=json.dumps({
+                "hook_event_name": "PostToolUseFailure",
+                "conversationId": "conv-aud-02",
+                "userDecision": "reject",
+                "error": "Operator rejected mutation at CLI confirmation prompt",
+                "toolCall": {
+                    "name": "run_command",
+                    "args": {
+                        "CommandLine": f'python3 "{RUN_MUTATION_SCRIPT}" --script "{sp}" --execute',
+                        "Cwd": ctx.sandbox_dir,
+                    },
+                },
+            }),
+        )
         with open(ctx.sandbox_receipt, "r", encoding="utf-8") as f:
             post_reject_receipt = json.load(f)
+        # Step 3: Verify retry after rejection is hard-blocked
+        retry_proc = ctx.logged_subprocess(
+            "aud02_retry_after_reject",
+            [sys.executable, RUN_MUTATION_SCRIPT, "--script", sp, "--execute"],
+        )
         entries: list[dict[str, Any]] = []
         if os.path.isfile(ctx.sandbox_plugin_audit):
             with open(ctx.sandbox_plugin_audit, "r", encoding="utf-8") as f:
                 entries = [json.loads(ln) for ln in f if ln.strip()]
-        has_reject_flag = "--reject" in RUN_MUTATION_MOD.main.__doc__ if RUN_MUTATION_MOD.main.__doc__ else False
+        has_reject_flag = (
+            "--reject" in RUN_MUTATION_MOD.main.__doc__
+            if RUN_MUTATION_MOD.main.__doc__
+            else False
+        )
         has_human_rejected = any(e.get("status") == "HUMAN_REJECTED" for e in entries)
         ctx.write_sandbox_assistant_config(execute_mutates=False)
         ctx.clear_all_receipts()
-        if post_reject_receipt.get("status") == "DRY_RUN_PASSED" or not has_human_rejected:
+        if (
+            post_reject_receipt.get("status") != "REJECTED"
+            or not has_human_rejected
+            or not has_reject_flag
+            or retry_proc.returncode == 0
+        ):
             raise AssertionError(
-                "GAP-06 (Policy §1.3 #4 & §2.2 #5): After native CLI prompt rejection, "
-                f"last_dry_run.json remained in status={post_reject_receipt.get('status')!r} "
-                f"(reusable for 30m) and HUMAN_REJECTED was not logged (reject_cli={has_reject_flag})."
+                "GAP-06 (Policy §1.3 #4 & §2.2 #5): Rejection failed to invalidate receipt or log HUMAN_REJECTED "
+                f"(status={post_reject_receipt.get('status')!r}, has_human_rejected={has_human_rejected}, "
+                f"reject_cli={has_reject_flag}, retry_rc={retry_proc.returncode})."
             )
-        return "HUMAN_REJECTED logged and receipt invalidated upon rejection."
+        return "HUMAN_REJECTED logged, receipt marked REJECTED, and retry suppressed."
 
     @register("TC-AUD-03", "TC-AUD", "Credential & PII redaction")
     def tc_aud_03(ctx: FunctionalTestContext) -> str:
@@ -3987,20 +4030,21 @@ else:
     def scenario_h6(ctx: FunctionalTestContext) -> str:
         return tc_aud_02(ctx)
 
-    @register("H7", "SCENARIOS", "Destructive REMOVE operation handling & IRREVERSIBLE warning")
+    @register("H7", "SCENARIOS", "Deletion Prohibition (REMOVE blocked) & IRREVERSIBLE create warning")
     def scenario_h7(ctx: FunctionalTestContext) -> str:
         ctx.clear_all_receipts()
-        sp = ctx.write_sandbox_script(
+        # Part 1: Strict Deletion Prohibition — remove operations must be hard-blocked pre-RPC
+        sp_del = ctx.write_sandbox_script(
             "h7_remove.py",
             "op.remove = 'customers/4863089361/campaignCriteria/1~2'\nsvc.mutate_campaign_criteria(request=req)\n",
         )
-        proc = ctx.logged_subprocess(
-            "h7_remove_criterion_check",
+        proc_del = ctx.logged_subprocess(
+            "h7_remove_criterion_blocked",
             [
                 sys.executable,
                 RUN_MUTATION_SCRIPT,
                 "--script",
-                sp,
+                sp_del,
                 "--dry-run",
                 "--customer-id",
                 "4863089361",
@@ -4012,16 +4056,45 @@ else:
                 "Permanently removes negative keyword and expands traffic",
             ],
         )
-        # Note: current plugin enforces strict Deletion Prohibition (blocking remove operations pre-RPC)
-        # while Scenario H7 in the test plan expects remove with IRREVERSIBLE warning.
-        if proc.returncode != 0 and "BLOCKED BY DELETION PROHIBITION" in proc.stderr:
+        if proc_del.returncode != 2 or "BLOCKED BY DELETION PROHIBITION" not in proc_del.stderr:
             raise AssertionError(
-                "Policy vs. Plugin mismatch on H7: Test Plan Scenario H7 expects REMOVE negative "
-                "keyword to present Reversibility: IRREVERSIBLE for HITL approval, whereas "
-                "run_mutation.py hard-blocks all remove operations (BLOCKED_PROHIBITED_DELETION)."
+                f"H7 Deletion Prohibition failed: expected exit code 2 & BLOCKED BY DELETION PROHIBITION, "
+                f"got rc={proc_del.returncode}, stderr={proc_del.stderr}"
             )
+        if os.path.isfile(ctx.sandbox_receipt):
+            raise AssertionError("H7 wrote a receipt despite prohibited deletion.")
+
+        # Part 2: Allowed irreversible CREATE operation renders IRREVERSIBLE (PERMANENT) HITL warning
+        sp_irrev = ctx.write_sandbox_script(
+            "h7_irrev_create.py",
+            "print('AccountBudgetProposalService create dry-run')\n",
+        )
+        proc_irrev = ctx.logged_subprocess(
+            "h7_irreversible_create_warning",
+            [
+                sys.executable,
+                RUN_MUTATION_SCRIPT,
+                "--script",
+                sp_irrev,
+                "--dry-run",
+                "--record-only",
+                "--customer-id",
+                "4863089361",
+                "--operation",
+                "AccountBudgetProposalService: CREATE billing order ($500.00)",
+                "--reversibility",
+                "IRREVERSIBLE",
+                "--consequences",
+                "Commits $500.00 account budget proposal on billing setup",
+            ],
+        )
         ctx.clear_all_receipts()
-        return "H7 destructive remove IRREVERSIBLE flow verified."
+        if proc_irrev.returncode != 0 or "IRREVERSIBLE (PERMANENT)" not in proc_irrev.stdout:
+            raise AssertionError(
+                f"H7 IRREVERSIBLE warning missing on allowed create op: rc={proc_irrev.returncode}, "
+                f"stdout={proc_irrev.stdout}, stderr={proc_irrev.stderr}"
+            )
+        return "H7 verified strict Deletion Prohibition on remove and IRREVERSIBLE (PERMANENT) card on allowed create."
 
     @register("H8", "SCENARIOS", "LLM Threat-Vector Red-Team Suite (IPI, 1000x drift, tamper, replay)")
     def scenario_h8(ctx: FunctionalTestContext) -> str:

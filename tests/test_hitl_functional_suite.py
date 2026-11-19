@@ -721,22 +721,40 @@ class TestSimulatedTestAccountSuiteExecution:
         ):
             assert by_id[pass_id].passed is True, f"{pass_id} failed: {by_id[pass_id].details}"
 
-        # Known policy conformance gaps (GAP-02..GAP-07)
-        for gap_id in (
+        # Every single one of the 72 functional tests must pass (0 gaps remaining)
+        assert len(results) == 72
+        failed_results = [r for r in results if not r.passed]
+        assert failed_results == [], (
+            "Unexpected functional suite failure(s): "
+            + "; ".join(f"{r.test_id}: {r.details}" for r in failed_results)
+        )
+
+        # Verify all previously tracked policy gap checks now pass
+        for resolved_id in (
             "TC-CFG-05",
             "TC-RUN-11",
             "TC-RUN-12",
             "TC-RUN-13",
             "TC-MSG-01",
+            "TC-MSG-02",
+            "TC-MSG-03",
             "TC-MSG-04",
+            "TC-AUD-01",
             "TC-AUD-02",
+            "H2",
+            "H5",
+            "H6",
+            "H7",
+            "H8",
+            "H9",
         ):
-            assert by_id[gap_id].passed is False
+            assert by_id[resolved_id].passed is True, (
+                f"{resolved_id} failed: {by_id[resolved_id].details}"
+            )
 
-        # Audit log integrity & error filtering match failed count
+        # Audit log integrity & error filtering match zero failed count
         integrity = hal.verify_audit_log_integrity(str(audit_log))
-        failed_results = [r for r in results if not r.passed]
         error_records = hal.filter_error_records(str(audit_log))
-        assert integrity["error_records"] == len(error_records)
-        assert len(error_records) == len(failed_results)
-        assert audit.error_count == len(failed_results)
+        assert integrity["error_records"] == 0
+        assert len(error_records) == 0
+        assert audit.error_count == 0
