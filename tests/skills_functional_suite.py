@@ -910,20 +910,48 @@ def _build_skill_test_specs() -> list[SkillTestSpec]:
     # ------------------------------------------------------------------
     @register("SK-SYNC-01", "SK-SYNC", "sync_client_libs.py discovers local client_libs without mutating")
     def sk_sync_01(ctx: SkillsFunctionalContext) -> str:
+        real_py_path = os.path.join(PLUGIN_ROOT, "client_libs", "google-ads-python")
+        has_real_clone = os.path.isdir(
+            os.path.join(real_py_path, "google", "ads", "googleads")
+        ) and (
+            os.path.isfile(os.path.join(real_py_path, "pyproject.toml"))
+            or os.path.isfile(os.path.join(real_py_path, "ChangeLog"))
+        )
+        if has_real_clone:
+            target_py_path = real_py_path
+            source_label = "workspace client_libs"
+        else:
+            # Fresh CI checkouts do not clone gitignored client_libs/ repositories;
+            # stage a realistic google-ads-python fixture inside the isolated sandbox.
+            target_py_path = os.path.join(
+                ctx.sandbox_dir, "client_libs", "google-ads-python"
+            )
+            os.makedirs(
+                os.path.join(
+                    target_py_path, "google", "ads", "googleads", ctx.cfg.api_version
+                ),
+                exist_ok=True,
+            )
+            with open(
+                os.path.join(target_py_path, "pyproject.toml"), "w", encoding="utf-8"
+            ) as pf:
+                pf.write('[project]\nname = "google-ads"\nversion = "29.0.0"\n')
+            source_label = "sandbox fixture"
+
         proc = ctx.logged_subprocess(
             "sync_client_libs_help_and_module",
             [
                 sys.executable,
                 "-c",
                 (
-                    "import importlib.util, json, os; "
+                    "import importlib.util, json; "
                     f"spec=importlib.util.spec_from_file_location('scl', {SCRIPTS['sync_client_libs']!r}); "
                     "m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); "
-                    f"d=os.path.join({PLUGIN_ROOT!r}, 'client_libs'); "
-                    "py_path=os.path.join(d, 'google-ads-python'); "
+                    f"py_path={target_py_path!r}; "
                     "py_ver=m.detect_installed_version('google-ads-python', py_path); "
                     "api_ver=m.detect_lib_api_version(py_path); "
-                    "print(json.dumps({'python_local': py_ver, 'api_version': api_ver}))"
+                    "sys_ver=m.detect_system_package_version(); "
+                    "print(json.dumps({'python_local': py_ver, 'api_version': api_ver, 'system_pkg': sys_ver}))"
                 ),
             ],
         )
@@ -932,9 +960,12 @@ def _build_skill_test_specs() -> list[SkillTestSpec]:
         parsed = json.loads(proc.stdout.strip())
         if not parsed.get("python_local") or not parsed.get("api_version"):
             raise AssertionError(f"Could not detect local google-ads-python version: {parsed}")
+        if not parsed.get("system_pkg"):
+            raise AssertionError(f"Could not detect installed system google-ads package: {parsed}")
         return (
-            f"Detected local google-ads-python={parsed['python_local']} "
-            f"(api_version={parsed['api_version']})."
+            f"Detected google-ads-python={parsed['python_local']} "
+            f"(api_version={parsed['api_version']}, source={source_label}, "
+            f"site-packages={parsed['system_pkg']})."
         )
 
     # ------------------------------------------------------------------
