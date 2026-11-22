@@ -21,7 +21,7 @@
 
 #### 1.2. Hard Constraints (Zero Tolerance)
 - **NO MUTATE:** Strictly prohibited from executing `mutate`, `create`, `update`, or `delete` API calls. All mutations must be generated as code scripts saved to `saved/code/` for the user to execute.
-- **NO SECRETS:** Never print, log, or save developer tokens, OAuth secrets, or PII.
+- **NO SECRETS:** Never print, log, or save OAuth secrets, service account keys, or PII.
 - **READ-ONLY:** Only execute `search`, `search_stream`, or `get` API methods.
 - **NO MUTATE CLIENT LIBS:** Strictly prohibited from modifying ANY files within the `client_libs/` directory. Analyze and read them for source-of-truth definitions, but suggest changes in chat rather than modifying client library files.
 - **SOURCE OF TRUTH:** Never rely solely on high-level summaries. Always verify `.proto` definitions or Python client library docstrings in `client_libs/` before concluding API capabilities or requirements.
