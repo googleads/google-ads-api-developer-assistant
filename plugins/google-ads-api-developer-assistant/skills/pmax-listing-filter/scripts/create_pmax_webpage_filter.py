@@ -21,7 +21,6 @@ Performance Max Asset Group to exclude matching URLs from URL expansion.
 
 import argparse
 import importlib
-import importlib.util
 import json
 import os
 import re
@@ -74,46 +73,43 @@ _SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
 )
 
 
-def _resolve_default_api_version() -> str:
-    """Resolves the active Google Ads API version dynamically."""
-    env_ver = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip().lower()
-    if env_ver:
-        return f"v{env_ver}" if env_ver.isdigit() else env_ver
+def _resolve_active_api_version(explicit: Optional[str] = None) -> str:
+    """Returns the API version from config_init.resolve_active_api_version.
+
+    Order: explicit argument, GOOGLE_ADS_API_VERSION, api_version in the active
+    assistant_config, then the highest version in local client_libs and the
+    installed google-ads package.
+
+    Raises:
+        ValueError: If the version is invalid or cannot be determined.
+    """
+    clean = str(explicit or "").strip().lower()
+    if clean:
+        if not re.fullmatch(r"v?\d+", clean):
+            raise ValueError(
+                f"Invalid Google Ads API version {explicit!r}: expected 'vN' "
+                "(for example v23)."
+            )
+        return f"v{int(clean.lstrip('v'))}"
     script_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
     try:
         if plugin_root not in sys.path and os.path.isdir(plugin_root):
             sys.path.insert(0, plugin_root)
-        cfg_mod = importlib.import_module("config.config_init")
-        detected = cfg_mod.get_configured_api_version() or (
-            cfg_mod.detect_latest_api_version()
-        )
-        if detected:
-            return str(detected)
-    except (AttributeError, ImportError, OSError, ValueError):
-        pass
-    spec = importlib.util.find_spec("google.ads.googleads")
-    for loc in (spec.submodule_search_locations or ()) if spec else ():
-        if os.path.isdir(loc):
-            v_dirs = sorted(
-                (d for d in os.listdir(loc) if re.fullmatch(r"v\d+", d)),
-                key=lambda d: int(d[1:]),
-            )
-            if v_dirs:
-                return v_dirs[-1]
-    raise ValueError(
-        "Google Ads API version could not be automatically determined."
-    )
+        resolver = importlib.import_module(
+            "config.config_init"
+        ).resolve_active_api_version
+    except (AttributeError, ImportError, OSError, SyntaxError) as e:
+        raise ValueError(
+            "Could not determine Google Ads API version (config_init is "
+            f"unavailable: {e}); pass --api_version vN"
+        ) from e
+    return str(resolver())
 
 
 def _normalize_api_version(api_version: Optional[str] = None) -> str:
-    """Normalizes an API version string to lowercase 'v<N>' format."""
-    clean = str(api_version or "").strip().lower()
-    if not clean:
-        clean = _resolve_default_api_version()
-    if not clean.startswith("v") and clean.isdigit():
-        return f"v{clean}"
-    return clean
+    """Returns api_version as 'vN', defaulting to the active version."""
+    return _resolve_active_api_version(api_version)
 
 
 def _get_config_path() -> str:

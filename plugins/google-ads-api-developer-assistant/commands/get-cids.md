@@ -11,21 +11,25 @@ Retrieves the complete account hierarchy and child CIDs under a Google Ads Manag
 1. **Extract Parameters**:
    - Extract the Manager Account ID (MCC) from `$ARGUMENTS`.
    - If not provided, check `config/assistant_config` (`customer_id`) or prompt the user.
-   - Resolve API version from `config/assistant_config` (`api_version`).
+   - Omit `--api_version` to use the active API version (`GOOGLE_ADS_API_VERSION`, then `api_version` in `config/assistant_config`, then the highest installed version). Pass `--api_version vN` only when the user names a version.
+   - The first line of each command sets `GADS_DIR` to the installed plugin directory; run both lines together as one command.
 
 2. **Execute Retrieval**:
    - Run the hierarchy retrieval script:
      ```bash
-     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id "<mcc_customer_id>" --api_version "<api_version>" --print_cids
+     GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+     python3 "$GADS_DIR/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id "<mcc_customer_id>" --print_cids
      ```
    - If the user requested saving to CSV:
      ```bash
-     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id "<mcc_customer_id>" --api_version "<api_version>" --save_csv
+     GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+     python3 "$GADS_DIR/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id "<mcc_customer_id>" --save_csv
      ```
 
    - If the user requested structured JSON output:
      ```bash
-     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id "<mcc_customer_id>" --api_version "<api_version>" --json
+     GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+     python3 "$GADS_DIR/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id "<mcc_customer_id>" --json
      ```
 
 3. **Output Format**:

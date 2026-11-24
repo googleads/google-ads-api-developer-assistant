@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import sys
@@ -40,6 +41,7 @@ def _write_fake_googleads_shim(shim_dir: str) -> None:
     os.makedirs(shim_dir, exist_ok=True)
     shim_code = '''import importlib.abc
 import importlib.machinery
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -585,7 +587,7 @@ class TestAccountConfigAndAuditLogger:
         out = capsys.readouterr().out
         assert "TC-HOOK" in out
         assert "SCENARIOS" in out
-        assert "72" in out
+        assert str(len(hpfs._build_all_tests())) in out
 
         parser = hpfs.build_arg_parser()
         parsed_upper = parser.parse_args(
@@ -721,8 +723,9 @@ class TestSimulatedTestAccountSuiteExecution:
         ):
             assert by_id[pass_id].passed is True, f"{pass_id} failed: {by_id[pass_id].details}"
 
-        # Every single one of the 72 functional tests must pass (0 gaps remaining)
-        assert len(results) == 72
+        # Every registered functional test runs and passes (0 gaps remaining)
+        assert {r.test_id for r in results} == {sp.test_id for sp in hpfs._build_all_tests()}
+        assert not any(r.skipped for r in results)
         failed_results = [r for r in results if not r.passed]
         assert failed_results == [], (
             "Unexpected functional suite failure(s): "
@@ -758,3 +761,142 @@ class TestSimulatedTestAccountSuiteExecution:
         assert integrity["error_records"] == 0
         assert len(error_records) == 0
         assert audit.error_count == 0
+
+    def test_validate_only_main_spawns_no_execute_subprocess(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`--validate-only` must never spawn `run_mutation.py --execute` (weekly CI safety)."""
+        shim_dir = str(tmp_path / "shim")
+        _write_fake_googleads_shim(shim_dir)
+        monkeypatch.setenv("_GADS_FAKE_TEST_ACCOUNT_SUBPROC", "1")
+
+        creds = tmp_path / "google-ads.yaml"
+        creds.write_text(
+            yaml.safe_dump({
+                "client_id": "1234567890-abc.apps.googleusercontent.com",
+                "client_secret": "secret",
+                "refresh_token": "refresh",
+                "use_proto_plus": True,
+            }),
+            encoding="utf-8",
+        )
+        fake_test_client = _make_fake_live_client(is_test_account=True)
+
+        spawned: list[list[str]] = []
+        real_run = hpfs.subprocess.run
+
+        def _recording_run(cmd: Any, *args: Any, **kwargs: Any) -> Any:
+            if isinstance(cmd, (list, tuple)):
+                spawned.append([str(c) for c in cmd])
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(hpfs.subprocess, "run", _recording_run)
+
+        captured: dict[str, Any] = {}
+        real_suite = hpfs.run_functional_suite
+
+        def _suite_with_fake_client(cfg: Any, **kwargs: Any) -> Any:
+            captured["cfg"] = cfg
+            kwargs["client_factory"] = lambda _c, _p: fake_test_client
+            kwargs["extra_pythonpath"] = shim_dir
+            kwargs["print_output"] = False
+            results, audit = real_suite(cfg, **kwargs)
+            captured["results"] = results
+            return results, audit
+
+        monkeypatch.setattr(hpfs, "run_functional_suite", _suite_with_fake_client)
+
+        hpfs.main([
+            "--validate-only",
+            "--customer-id",
+            "486-308-9361",
+            "--credentials-yaml",
+            str(creds),
+            "--audit-log",
+            str(tmp_path / "validate_only_audit.jsonl"),
+        ])
+
+        assert captured["cfg"].allow_live_execute is False
+        assert spawned, "suite spawned no subprocesses; the recorder is not wired up"
+        execute_calls = [
+            argv for argv in spawned
+            if "--execute" in argv and any(a.endswith("run_mutation.py") for a in argv)
+        ]
+        assert execute_calls == [], f"--validate-only spawned --execute: {execute_calls}"
+
+        by_id = {r.test_id: r for r in captured["results"]}
+        for gated_id in (
+            "TC-CFG-01",
+            "TC-CFG-03",
+            "TC-HOOK-09",
+            "TC-RUN-04",
+            "TC-RUN-05",
+            "TC-RUN-06",
+            "TC-RUN-07",
+            "TC-RUN-08",
+            "TC-RUN-09",
+            "TC-AUD-01",
+            "TC-AUD-02",
+        ):
+            assert by_id[gated_id].skipped is True, f"{gated_id}: {by_id[gated_id].details}"
+
+
+def test_redaction_masks_secret_values_inside_strings(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Value-pattern redaction covers tokens, secrets, keys and secret CIDs under any key."""
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GOOGLE_ADS_AUDIT_REDACT_CUSTOMER_IDS", raising=False)
+    monkeypatch.setenv("GOOGLE_ADS_TEST_CUSTOMER_ID", "")
+    monkeypatch.setenv("GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID", "")
+    monkeypatch.setattr(hal, "_registered_secret_customer_ids", set())
+
+    pem = "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----"
+    # Fake values are assembled at runtime so secret scanners don't flag the fixture.
+    fake_refresh = "1/" + "/" + "0gAbCdEfGhIjKlMnOpQrStUv"
+    fake_access = "ya" + "29." + "a0AfH6SMBxYz-123"
+    stdout_tail = (
+        f"refresh={fake_refresh} access={fake_access} "
+        f"secret=GOCSPX-AbCdEf_123-xyz key={pem} auth=Bearer abc.def.ghi"
+    )
+    red = hal.redact_sensitive_data({"stdout_tail": stdout_tail, "argv": [stdout_tail]})
+    for leaked in (
+        fake_refresh,
+        fake_access,
+        "GOCSPX-AbCdEf_123-xyz",
+        "MIIEvAIBADANBgkqhkiG9w0BAQEFAASC",
+        "abc.def.ghi",
+    ):
+        assert leaked not in json.dumps(red)
+    assert "[REDACTED_REFRESH_TOKEN]" in red["stdout_tail"]
+    assert "[REDACTED_PRIVATE_KEY]" in red["argv"][0]
+
+    # Customer IDs stay visible locally unless registered as secret.
+    assert hal.redact_sensitive_data("cid 4863089361") == "cid 4863089361"
+
+    # In CI the logger registers its configured CIDs and masks them in every string.
+    monkeypatch.setenv("CI", "true")
+    log_file = tmp_path / "ci_redacted.jsonl"
+    logger = hal.FunctionalAuditLogger(
+        log_path=str(log_file),
+        target_customer_id="4863089361",
+        login_customer_id="8601651289",
+        api_version="v26",
+    )
+    req_id = logger.log_request(
+        test_id="T",
+        suite="S",
+        action="subprocess",
+        payload={
+            "argv": ["--customer-id", "486-308-9361", "--login", "8601651289"],
+            "stdout": "customers/4863089361/campaigns/1 and 48630893610 (not a CID)",
+            "numeric": 4863089361,
+        },
+    )
+    assert req_id
+    raw = log_file.read_text(encoding="utf-8")
+    assert "4863089361" not in raw.replace("48630893610", "")
+    assert "486-308-9361" not in raw
+    assert "8601651289" not in raw
+    assert "48630893610" in raw
+    assert "[REDACTED_CID_...9361]" in raw

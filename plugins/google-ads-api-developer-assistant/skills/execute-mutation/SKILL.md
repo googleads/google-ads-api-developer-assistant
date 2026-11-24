@@ -19,6 +19,17 @@ When a user requests a write or mutation operation against the Google Ads API (`
 
 Live mutations without both `execute_mutates = true` in `config/assistant_config` and a verified `validate_only=True` dry-run receipt (`saved/data/last_dry_run.json`) are deterministically blocked by the `PreToolUse` hook.
 
+> **Tier 1 Financial Services — Read-Only by Default:**
+> Every mutation is classified into Policy Tier 1, 2, or 3, and the tier is shown on the verification card. Tier 1 covers the services that directly commit money: `CampaignBudgetService`, `AccountBudgetProposalService`, `BillingSetupService`, `BiddingStrategyService`, `BiddingSeasonalityAdjustmentService`, and `BiddingDataExclusionService`. A wrapper call (`GoogleAdsService.mutate`, `BatchJobService`) that carries a Tier 1 inner operation is also Tier 1.
+> - `--dry-run` (`validate_only=True`) works for Tier 1 services as usual.
+> - Live `--execute` of a Tier 1 mutation is blocked (`BLOCKED_TIER1_READONLY_POSTURE`) by the `PreToolUse` hook, `run_mutation.py`, and the Layer 4 gRPC interceptor until an Account Owner opts in with `allow_tier1_financial_mutates = true` in `config/assistant_config` (separate from, and in addition to, `execute_mutates = true`).
+> - Only enable it when the user explicitly asks for it and confirms they accept live financial changes. Tell the user what the flag allows, get their explicit consent, then run:
+>   ```bash
+>   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/config/config_init.py" --allow-tier1-financial-mutates true
+>   ```
+>   The hook asks for confirmation before this command runs. Never edit `config/assistant_config` by other means to turn this flag on, and never enable it on your own initiative. To return to the read-only posture, run the same command with `false`.
+> - When a Tier 1 `--execute` is blocked, explain the Tier 1 rule to the user and ask whether they want to opt in; do not retry or work around the block.
+
 ---
 
 ## Step 1: Pre-Mutation State & Blast Radius Lookup (Mandatory Read)
@@ -69,9 +80,18 @@ Evaluate and articulate the exact consequences of the requested change across th
 
 ## Step 4: User Verification Prompt & Hook-Gated Execution
 
-1. After `--dry-run` succeeds, present the **Mutation & Consequence Verification Card** output to the user and ask for explicit confirmation (`ask_question` in `agy` or an explicit confirmation prompt in `Claude Code CLI`).
+1. After `--dry-run` succeeds, present the **Mutation & Consequence Verification Card** output to the user and ask for explicit confirmation, using your CLI's normal way of asking the user a question.
 2. **Wait for the user's response.** Do NOT invoke `--execute` in the same turn as `--dry-run`.
-3. Verify that `config/assistant_config` contains `execute_mutates = true` (or update it via `python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/config/config_init.py" --execute-mutates true` if the user explicitly requests enabling mutations). Once confirmed by the user, execute the live mutation (including `--script-args "..."` if extra CLI arguments were passed during `--dry-run`):
+   - **If the user declines** (says no, cancels, or asks for changes), invalidate the pending receipt and record the rejection in the audit log, then stop. Do not run `--execute`:
+     ```bash
+     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
+       --reject \
+       --script saved/code/<mutation_name>.py \
+       --rejection-reason "<the user's reason, in their words>"
+     ```
+     `--reject` only marks receipts that are still pending (`DRY_RUN_PASSED`) and match `--script`. It writes a `HUMAN_REJECTED` audit record and exits non-zero when no matching pending receipt exists. If the user wants a changed mutation, run a new `--dry-run` after the rejection.
+   - If the user declines the native CLI confirmation prompt that the hook shows for `--execute`, the hook records the rejection itself.
+3. Verify that `config/assistant_config` contains `execute_mutates = true` (or update it via `python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/config/config_init.py" --execute-mutates true` if the user explicitly requests enabling mutations). For a Tier 1 mutation, also check `allow_tier1_financial_mutates = true` (see **Tier 1 Financial Services** above). Once confirmed by the user, execute the live mutation (including `--script-args "..."` if extra CLI arguments were passed during `--dry-run`):
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
      --script saved/code/<mutation_name>.py \
@@ -81,8 +101,11 @@ Evaluate and articulate the exact consequences of the requested change across th
 4. **Automatic Mutation Audit Trail (`saved/logs/mutation_audit.jsonl`)**: Both `--dry-run` and `--execute` phases automatically intercept `GoogleAdsClient` mutation RPCs, verify canonical request SHA-256 digests before sending any live RPC, and append a structured JSONL audit record (`0600` permissions) containing:
    - `actor`: OS user, hostname, `login_customer_id`, `target_customer_id`, auth type, and CLI session/transcript identifiers.
    - `request`: `sent_at_iso`, `validate_only`, script path/SHA-256, canonical `request_sha256` / `request_sha256_verified`, and serialized Protobuf `Mutate*Request` payload(s).
-   - `approval`: `dry_run_validated_at_iso`, `hook_prompted_at_iso`, `user_approved_at_iso`, and disclosed before/after state and consequences.
+   - `approval`: `decision` (`HUMAN_APPROVED` / `HUMAN_REJECTED`), `dry_run_validated_at_iso`, `hook_prompted_at_iso`, `user_approved_at_iso`, and disclosed before/after state and consequences.
    - `response`: `received_at_iso`, `duration_ms`, `google_ads_request_ids`, and serialized Protobuf `Mutate*Response` (or `GoogleAdsFailure`) payload(s).
+   - `status` / `execution_status`: `SUCCESS` for a completed live mutation; `FAILED` or a `BLOCKED_*` value otherwise; `HUMAN_REJECTED` after `--reject`. Email addresses are masked (for example `j***@example.com`) in stored receipts and audit records; the full value appears only on the on-screen verification card.
+
+> **Other `--dry-run` blocks:** `run_mutation.py` refuses to write a receipt (`BLOCKED_CUSTOMER_ID_MISMATCH`) when `--customer-id` does not match the customer ID in the RPC payload. Fix the command or script and re-run `--dry-run`. The card also flags amounts in `--after` that differ from the payload by 2x or more in either direction, and labels services the classifier does not know as "unclassified service, review manually"; point these out to the user before asking for confirmation.
 
 ---
 
@@ -170,6 +193,7 @@ The skill includes ready-to-use, HITL-compliant creation scripts supporting `--d
      --reversibility "REVERSIBLE" \
      --script-args '--campaign-name "<campaign_name>" --budget-amount-micros 5000000 --channel-type "SEARCH" --status "PAUSED"'
    ```
+   > **Tier 1 note:** creating a new budget calls `CampaignBudgetService`, which is Tier 1. The `--dry-run` above works, but `--execute` is blocked until `allow_tier1_financial_mutates = true` is set with the user's explicit consent (see **Tier 1 Financial Services**). To create a campaign without a Tier 1 budget write, pass an existing budget with `--budget-resource-name "customers/<customer_id>/campaignBudgets/<budget_id>"` instead of `--budget-amount-micros`.
 3. **Create Ad Group (`create_ad_group.py`)** — `AdGroupService.mutate_ad_groups`
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \

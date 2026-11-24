@@ -383,7 +383,16 @@ The assistant includes sync tools to keep your runtime credentials, `config/assi
 
 ### 1. What Syncs at Session Startup (`config/config_init.py`)
 
-When you enter your first prompt in Antigravity (`agy`) or Claude Code (`claude`), the `PreInvocation` hook in [`hooks.json`](plugins/google-ads-api-developer-assistant/hooks.json) runs `python3 config/config_init.py --hook`. This command syncs your credentials and runs a 5-step version check:
+When you enter your first prompt in Antigravity (`agy`) or Claude Code (`claude`), a lifecycle hook runs `config/config_init.py --hook`. This command syncs your credentials and runs a 5-step version check.
+
+The two CLIs load different hook files:
+
+* **Antigravity (`agy`):** The `PreInvocation`, `SessionStart`, and `PreToolUse` entries in [`hooks.json`](plugins/google-ads-api-developer-assistant/hooks.json). The hook command looks for `config/config_init.py` only in the installed plugin directories. If it cannot find the script, it blocks tool calls.
+* **Claude Code (`claude`):** [`hooks/hooks.json`](plugins/google-ads-api-developer-assistant/hooks/hooks.json) (`SessionStart`, `PreToolUse` for `Bash` and `Write|Edit|MultiEdit`, and `PostToolUseFailure` for `Bash`), [`.mcp.json`](plugins/google-ads-api-developer-assistant/.mcp.json), and [`.claude-plugin/plugin.json`](plugins/google-ads-api-developer-assistant/.claude-plugin/plugin.json). The hooks run `${CLAUDE_PLUGIN_ROOT}/config/config_init.py` with `python3`, then `python`, then `py -3`. If Python or the script is missing, the hook exits with code 2, which blocks the tool call. The `SessionStart` hook also writes `GOOGLE_ADS_ASSISTANT_DIR` and `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `CLAUDE_ENV_FILE`, so every `Bash` command in the session has them.
+
+The guard returns `deny` or `ask` in the format of each CLI. In Claude Code, a `deny` also exits with code 2. When the guard has no objection, it does not approve the command for you: your Claude Code permission rules still apply.
+
+The 5-step version check:
 
 | Startup Step | Execution Mode | What Happens | What Changes |
 | :--- | :--- | :--- | :--- |
@@ -1127,7 +1136,7 @@ In addition to the 72-test HITL policy suite, two companion suites provide full 
   GEMINI_API_KEY=... python3 tests/eval_skills_suite.py --mode live --provider gemini-api
   python3 tests/eval_skills_suite.py --mode live --provider claude --skill explain
   ```
-* **Secret-Gated Live CI Job ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):** The `live-functional-test-account` job runs on `workflow_dispatch` (with `suite`, `validate_only`, and `run_llm_evals` inputs) and on a weekly Sunday schedule (`0 5 * * 0`). It activates only when repository secrets `GOOGLE_ADS_TEST_CUSTOMER_ID` and `GOOGLE_ADS_YAML_B64` (base64-encoded `google-ads.yaml`) are configured (with optional `GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID` and `GEMINI_API_KEY`), materializes `0600` temporary credentials outside the repo, shreds them on exit, and uploads sanitized JSONL audit artifacts.
+* **Secret-Gated Live CI Job ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):** The `live-functional-test-account` job runs on `workflow_dispatch` (with `suite`, `validate_only`, and `run_llm_evals` inputs) and on a weekly Sunday schedule (`0 5 * * 0`). It runs only from `main` or `dev_next`, uses the `live-test-account` GitHub environment (which can add required reviewers and a branch restriction), and activates only when the secrets `GOOGLE_ADS_TEST_CUSTOMER_ID` and `GOOGLE_ADS_YAML_B64` (base64-encoded `google-ads.yaml`) are configured, preferably as environment secrets (with optional `GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID` and `GEMINI_API_KEY`). It materializes `0600` temporary credentials outside the repo, shreds them on exit, and uploads only a pass/fail summary (kept for 3 days). Scheduled runs are validate-only and skip every test that runs `run_mutation.py --execute`.
 
 ## Audit Logs
 

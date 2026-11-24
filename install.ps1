@@ -334,7 +334,13 @@ function Set-LatestApiVersion {
         if (Test-Path -LiteralPath $CfgFile) {
             $Existing = Get-Content -LiteralPath $CfgFile -Raw
             if (-not $Latest -and ($Existing -match '(?m)^\s*api_version\s*=\s*["'']?([^"''\s#]+)["'']?')) {
-                $ApiVer = $Matches[1].Trim()
+                $ExistingVer = $Matches[1].Trim()
+                if ($ExistingVer -match '^v?(\d+)$') {
+                    $ApiVer = "v$($Matches[1])"
+                }
+                else {
+                    Write-Warning "Ignoring invalid api_version '$ExistingVer' in $CfgFile (expected vNN)."
+                }
             }
             if ($Existing -match '(?m)^\s*customer_id\s*=\s*["'']?([^"''\s#]+)["'']?') {
                 $Cid = $Matches[1].Trim()
@@ -370,8 +376,23 @@ function Set-LatestApiVersion {
         }
         $TomlContent = "api_version = `"$ApiVer`"`ncustomer_id = `"$Cid`"`nexecute_mutates = $ExecMutates`nenabled = $PluginEnabled`n"
         Set-Content -Path $CfgFile -Value $TomlContent -NoNewline
-        Write-Host "Configured API version $ApiVer in $CfgFile"
+        if ($ApiVer) {
+            Write-Host "Configured API version $ApiVer in $CfgFile"
+        }
+        else {
+            Write-NoApiVersionWarning -CfgPath $CfgFile
+        }
     }
+    else {
+        Write-NoApiVersionWarning -CfgPath (Join-Path $TargetConfigDir "assistant_config")
+    }
+}
+
+# Warn when no Google Ads API version could be detected for config/assistant_config
+function Write-NoApiVersionWarning {
+    param([string]$CfgPath)
+    Write-Warning "No Google Ads API version was detected (no client_libs/google-ads-python and no installed google-ads package)."
+    Write-Warning "api_version is not set in $CfgPath. Install the google-ads Python package, or set api_version = `"vNN`" in that file, or pass --api_version vNN to the skill scripts."
 }
 
 # --- Environment Verification ---
@@ -616,7 +637,7 @@ function Install-PluginCopy {
             } catch {}
         }
         if (-not $HasWorkingPython3 -and (Get-Command "python" -ErrorAction SilentlyContinue)) {
-            foreach ($RelJson in @("hooks.json", "mcp_config.json", "sidecars\google-ads-a2a-service\sidecar.json")) {
+            foreach ($RelJson in @("hooks.json", "mcp_config.json", ".mcp.json", "sidecars\google-ads-a2a-service\sidecar.json")) {
                 $ManifestPath = Join-Path $TargetPluginDir $RelJson
                 if (Test-Path -LiteralPath $ManifestPath) {
                     $RawJson = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8

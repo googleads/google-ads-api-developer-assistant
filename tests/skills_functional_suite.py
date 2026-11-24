@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import hashlib
+import importlib.metadata
 from http.server import HTTPServer
 from importlib.util import module_from_spec, spec_from_file_location
 import json
@@ -176,6 +177,39 @@ def _load_module(name: str, path: str) -> Any:
     return mod
 
 
+def _assert_clean_rejection(
+    proc: subprocess.CompletedProcess[str], label: str, expected_texts: tuple[str, ...]
+) -> None:
+    """Asserts a rejection printed its specific reason and did not crash with a traceback."""
+    combined = f"{proc.stdout}\n{proc.stderr}"
+    if "Traceback (most recent call last)" in combined:
+        raise AssertionError(f"{label}: rejected via an unhandled traceback: {combined[-1500:]}")
+    missing = [t for t in expected_texts if t not in combined]
+    if missing:
+        raise AssertionError(
+            f"{label}: rejection output is missing {missing!r} "
+            f"(rc={proc.returncode}): {combined[-1500:]}"
+        )
+
+
+def _snapshot_tree_mtimes(roots: list[str]) -> dict[str, int]:
+    """Maps every path under `roots` to its mtime_ns (used to prove a check is read-only)."""
+    snap: dict[str, int] = {}
+    for root in roots:
+        if not os.path.exists(root):
+            continue
+        snap[root] = os.stat(root).st_mtime_ns
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in (".git", "__pycache__")]
+            for name in dirnames + filenames:
+                full = os.path.join(dirpath, name)
+                try:
+                    snap[full] = os.stat(full).st_mtime_ns
+                except OSError:
+                    continue
+    return snap
+
+
 def _proto_to_dict(obj: Any) -> Any:
     if obj is None or isinstance(obj, (str, int, float, bool)):
         return obj
@@ -256,7 +290,9 @@ class SkillsFunctionalContext:
 
     def _seed_sandbox(self) -> None:
         creds_data: dict[str, Any] = {}
-        if os.path.isfile(self.cfg.credentials_yaml_path):
+        # Offline runs never read the developer's real google-ads.yaml: results must not
+        # depend on the machine, and real tokens must never reach a fall-through API call.
+        if not self.offline_only and os.path.isfile(self.cfg.credentials_yaml_path):
             with open(self.cfg.credentials_yaml_path, "r", encoding="utf-8") as f:
                 loaded = yaml.safe_load(f) or {}
             if isinstance(loaded, dict):
@@ -265,7 +301,6 @@ class SkillsFunctionalContext:
             creds_data["login_customer_id"] = str(self.cfg.login_customer_id)
         if not creds_data:
             creds_data = {
-                "developer_token": "OFFLINE_SANDBOX_TOKEN",
                 "client_id": "1234567890-offline.apps.googleusercontent.com",
                 "client_secret": "offline-secret",
                 "refresh_token": "offline-refresh",
@@ -718,12 +753,17 @@ def _build_skill_test_specs() -> list[SkillTestSpec]:
 
     @register("SK-GAQL-03", "SK-GAQL", "validate_gaql.py rejects OR, COUNT(), and segments.hour_of_day")
     def sk_gaql_03(ctx: SkillsFunctionalContext) -> str:
+        # Each forbidden pattern must be rejected statically with its own message. A bare
+        # non-zero exit is not enough: an auth failure or a crash would also exit non-zero.
         bad_queries = [
-            "SELECT campaign.id FROM campaign WHERE campaign.id = 1 OR campaign.id = 2",
-            "SELECT COUNT(campaign.id) FROM campaign",
-            "SELECT segments.hour_of_day FROM campaign",
+            (
+                "SELECT campaign.id FROM campaign WHERE campaign.id = 1 OR campaign.id = 2",
+                "forbidden OR operator",
+            ),
+            ("SELECT COUNT(campaign.id) FROM campaign", "forbidden aggregate function 'COUNT'"),
+            ("SELECT segments.hour_of_day FROM campaign", "segments.hour_of_day"),
         ]
-        for idx, bq in enumerate(bad_queries, 1):
+        for idx, (bq, expected_text) in enumerate(bad_queries, 1):
             proc = ctx.logged_subprocess(
                 f"validate_gaql_bad_{idx}",
                 [
@@ -740,6 +780,7 @@ def _build_skill_test_specs() -> list[SkillTestSpec]:
             )
             if proc.returncode == 0:
                 raise AssertionError(f"Forbidden GAQL unexpectedly passed: {bq}")
+            _assert_clean_rejection(proc, f"GAQL {bq!r}", ("FAILURE:", expected_text))
         return "All 3 forbidden GAQL patterns rejected statically."
 
     @register("SK-GAQL-04", "SK-GAQL", "validate_gaql.py --clear-cache clears disk cache")
@@ -903,6 +944,9 @@ def _build_skill_test_specs() -> list[SkillTestSpec]:
         )
         if proc.returncode == 0:
             raise AssertionError("Malformed CSV (missing tz + unhashed email) unexpectedly passed.")
+        _assert_clean_rejection(
+            proc, "malformed conversion CSV", ("Unhashed raw PII", "Pre-validation failed")
+        )
         return "Malformed CSV and unhashed PII rejected cleanly."
 
     # ------------------------------------------------------------------
@@ -910,34 +954,26 @@ def _build_skill_test_specs() -> list[SkillTestSpec]:
     # ------------------------------------------------------------------
     @register("SK-SYNC-01", "SK-SYNC", "sync_client_libs.py discovers local client_libs without mutating")
     def sk_sync_01(ctx: SkillsFunctionalContext) -> str:
-        real_py_path = os.path.join(PLUGIN_ROOT, "client_libs", "google-ads-python")
-        has_real_clone = os.path.isdir(
-            os.path.join(real_py_path, "google", "ads", "googleads")
-        ) and (
-            os.path.isfile(os.path.join(real_py_path, "pyproject.toml"))
-            or os.path.isfile(os.path.join(real_py_path, "ChangeLog"))
+        # Always use an isolated sandbox fixture so results never depend on whether the
+        # developer has a (gitignored) client_libs clone, and pin the fixture version to
+        # the google-ads package actually installed in this interpreter.
+        try:
+            installed_ver = importlib.metadata.version("google-ads")
+        except importlib.metadata.PackageNotFoundError as exc:
+            raise AssertionError("google-ads is not installed in this interpreter.") from exc
+        target_py_path = os.path.join(ctx.sandbox_dir, "client_libs", "google-ads-python")
+        os.makedirs(
+            os.path.join(target_py_path, "google", "ads", "googleads", ctx.cfg.api_version),
+            exist_ok=True,
         )
-        if has_real_clone:
-            target_py_path = real_py_path
-            source_label = "workspace client_libs"
-        else:
-            # Fresh CI checkouts do not clone gitignored client_libs/ repositories;
-            # stage a realistic google-ads-python fixture inside the isolated sandbox.
-            target_py_path = os.path.join(
-                ctx.sandbox_dir, "client_libs", "google-ads-python"
-            )
-            os.makedirs(
-                os.path.join(
-                    target_py_path, "google", "ads", "googleads", ctx.cfg.api_version
-                ),
-                exist_ok=True,
-            )
-            with open(
-                os.path.join(target_py_path, "pyproject.toml"), "w", encoding="utf-8"
-            ) as pf:
-                pf.write('[project]\nname = "google-ads"\nversion = "29.0.0"\n')
-            source_label = "sandbox fixture"
+        with open(os.path.join(target_py_path, "pyproject.toml"), "w", encoding="utf-8") as pf:
+            pf.write(f'[project]\nname = "google-ads"\nversion = "{installed_ver}"\n')
 
+        watched_roots = [
+            os.path.join(ctx.sandbox_dir, "client_libs"),
+            os.path.join(PLUGIN_ROOT, "client_libs"),
+        ]
+        before = _snapshot_tree_mtimes(watched_roots)
         proc = ctx.logged_subprocess(
             "sync_client_libs_help_and_module",
             [
@@ -955,17 +991,29 @@ def _build_skill_test_specs() -> list[SkillTestSpec]:
                 ),
             ],
         )
+        after = _snapshot_tree_mtimes(watched_roots)
         if proc.returncode != 0:
             raise AssertionError(f"sync_client_libs local discovery failed: {proc.stderr}")
+        if before != after:
+            changed = sorted(
+                p for p in set(before) | set(after) if before.get(p) != after.get(p)
+            )
+            raise AssertionError(f"sync_client_libs discovery mutated client_libs: {changed[:20]}")
         parsed = json.loads(proc.stdout.strip())
-        if not parsed.get("python_local") or not parsed.get("api_version"):
-            raise AssertionError(f"Could not detect local google-ads-python version: {parsed}")
+        if parsed.get("python_local") != installed_ver:
+            raise AssertionError(
+                f"Expected fixture google-ads-python={installed_ver}, got: {parsed}"
+            )
+        if parsed.get("api_version") != ctx.cfg.api_version:
+            raise AssertionError(
+                f"Expected fixture api_version={ctx.cfg.api_version}, got: {parsed}"
+            )
         if not parsed.get("system_pkg"):
             raise AssertionError(f"Could not detect installed system google-ads package: {parsed}")
         return (
             f"Detected google-ads-python={parsed['python_local']} "
-            f"(api_version={parsed['api_version']}, source={source_label}, "
-            f"site-packages={parsed['system_pkg']})."
+            f"(api_version={parsed['api_version']}, source=sandbox fixture, "
+            f"site-packages={parsed['system_pkg']}); client_libs mtimes unchanged."
         )
 
     # ------------------------------------------------------------------
@@ -1046,7 +1094,7 @@ def _build_skill_test_specs() -> list[SkillTestSpec]:
 
     @register("SK-LIMITS-03", "SK-LIMITS", "set_financial_limits.py rejects negative and NaN values")
     def sk_limits_03(ctx: SkillsFunctionalContext) -> str:
-        for bad_val in ("-100", "nan", "inf"):
+        for bad_val, reason_text in (("-100", ">= 0"), ("nan", "int64"), ("inf", "int64")):
             proc = ctx.logged_subprocess(
                 f"fin_limits_bad_{bad_val}",
                 [
@@ -1058,6 +1106,11 @@ def _build_skill_test_specs() -> list[SkillTestSpec]:
             )
             if proc.returncode == 0:
                 raise AssertionError(f"Invalid financial limit {bad_val!r} unexpectedly accepted.")
+            _assert_clean_rejection(
+                proc,
+                f"financial limit {bad_val!r}",
+                (f"Invalid amount '{bad_val}'", reason_text),
+            )
         return "Negative, NaN, and Inf financial limits rejected cleanly."
 
     # ------------------------------------------------------------------
@@ -1251,7 +1304,13 @@ def _build_skill_test_specs() -> list[SkillTestSpec]:
             if inspect_out.get("status") != "COMPLETED":
                 raise AssertionError(f"Sidecar INSPECT_OBJECT failed: {inspect_out}")
 
-            # 3. POST /v1/a2a/tasks PREPARE_MUTATION + REJECT_MUTATION
+            # 3. POST /v1/a2a/tasks PREPARE_MUTATION + REJECT_MUTATION. REJECT_MUTATION
+            # targets the receipt of a specific saved/code/*.py script.
+            sc_code_dir = os.path.join(ctx.sandbox_dir, "saved", "code")
+            os.makedirs(sc_code_dir, exist_ok=True)
+            sc_script = os.path.join(sc_code_dir, "sk_sidecar_label.py")
+            with open(sc_script, "w", encoding="utf-8") as f:
+                f.write("print('sidecar label check')\n")
             last_out: dict[str, Any] = {}
             for payload_body in (
                 {
@@ -1261,12 +1320,16 @@ def _build_skill_test_specs() -> list[SkillTestSpec]:
                         "customer_id": "4863089361",
                         "operation_summary": "Attach label",
                         "consequences": ["Organizational label change"],
+                        "script_path": sc_script,
                     },
                 },
                 {
                     "task_id": "sk-sc-rej",
                     "intent": "REJECT_MUTATION",
-                    "payload": {"reason": "Functional test sidecar rejection"},
+                    "payload": {
+                        "reason": "Functional test sidecar rejection",
+                        "script_path": sc_script,
+                    },
                 },
             ):
                 r_post = urllib.request.Request(
@@ -1458,7 +1521,7 @@ def run_skills_functional_suite(
     selected = [s for s in all_specs if s.suite in allowed_suites]
     if test_id_filter:
         upper = {t.upper() for t in test_id_filter}
-        selected = [s for s in all_specs if s.test_id.upper() in upper]
+        selected = [s for s in selected if s.test_id.upper() in upper]
     if offline_only:
         selected = [s for s in selected if not s.requires_account]
 

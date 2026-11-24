@@ -644,14 +644,25 @@ def sync_and_set_config_kv(
             config_dir = os.path.abspath(env_cfg_dir)
             explicit_config_dir = True
         else:
+            this_cfg_dir = os.path.dirname(os.path.abspath(__file__))
+            claude_root_cfg = _claude_plugin_root_config_dir()
+            if claude_root_cfg:
+                config_dir = claude_root_cfg
+            elif os.path.basename(this_cfg_dir) == "config" and not _is_repo_source_plugin_dir(
+                os.path.dirname(this_cfg_dir)
+            ):
+                # Running from an installed plugin: keep config next to this script
+                config_dir = this_cfg_dir
             for cand_plugin_cfg in (
-                os.path.expanduser(
-                    "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
-                ),
                 os.path.expanduser(
                     "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
                 ),
+                os.path.expanduser(
+                    "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
+                ),
             ):
+                if config_dir:
+                    break
                 if os.path.isdir(cand_plugin_cfg) or os.path.isdir(
                     os.path.dirname(cand_plugin_cfg)
                 ):
@@ -800,7 +811,10 @@ def sync_and_set_config_kv(
             config_dir=config_dir if explicit_config_dir else None,
         )
     elif key == "api_version":
-        api_ver_val = str(value).strip() if value is not None else detect_latest_api_version()
+        if value is not None and str(value).strip():
+            api_ver_val = validate_api_version(str(value))
+        else:
+            api_ver_val = detect_latest_api_version()
         write_assistant_config(
             {"api_version": api_ver_val},
             config_dir=config_dir if explicit_config_dir else None,
@@ -930,6 +944,66 @@ DEFAULT_CUSTOMER_ID = "12345678"
 DEFAULT_EXECUTE_MUTATES = False
 DEFAULT_PLUGIN_ENABLED = True
 _SITE_PKG_API_VERSION_CACHE: Dict[Tuple[int, Tuple[str, ...]], Optional[str]] = {}
+_API_VERSION_VALUE_RE = re.compile(r"v?(\d+)")
+_API_VERSION_UNRESOLVED_MSG = (
+    "Could not determine Google Ads API version; pass --api_version vN"
+)
+
+
+def validate_api_version(value: str) -> str:
+    """Validates a Google Ads API version string and returns it normalized as 'vN'.
+
+    Accepts 'vN' or 'N' (surrounding whitespace is stripped). Raises ValueError for
+    anything else (e.g. 'latest', '../../x', 'v24beta') so unvalidated values never
+    reach path joins or get persisted to assistant_config.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid Google Ads API version {value!r}: expected 'vN' (e.g. v24).")
+    m = _API_VERSION_VALUE_RE.fullmatch(value.strip())
+    if not m:
+        raise ValueError(f"Invalid Google Ads API version {value!r}: expected 'vN' (e.g. v24).")
+    return f"v{int(m.group(1))}"
+
+
+def _validated_api_version_or_none(value: Any) -> Optional[str]:
+    """Returns validate_api_version(value), or None if value is empty or invalid."""
+    if value is None:
+        return None
+    try:
+        return validate_api_version(str(value))
+    except ValueError:
+        return None
+
+
+def resolve_active_api_version(explicit: Optional[str] = None) -> str:
+    """Resolves the active Google Ads API version shared by every skill script.
+
+    Order: explicit argument -> GOOGLE_ADS_API_VERSION env -> api_version in the active
+    assistant_config (see get_assistant_config_paths) -> highest version found in the
+    local client_libs and the installed google.ads.googleads package. Every candidate is
+    validated with validate_api_version. An invalid explicit argument or env value raises
+    ValueError; invalid persisted config values are skipped. Raises ValueError with
+    _API_VERSION_UNRESOLVED_MSG when nothing is found. Never raises ModuleNotFoundError.
+    """
+    if explicit is not None and str(explicit).strip():
+        return validate_api_version(str(explicit))
+
+    env_ver = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip()
+    if env_ver:
+        try:
+            return validate_api_version(env_ver)
+        except ValueError as exc:
+            raise ValueError(f"GOOGLE_ADS_API_VERSION: {exc}") from exc
+
+    configured = _validated_api_version_or_none(get_configured_api_version())
+    if configured:
+        return configured
+
+    detected = _validated_api_version_or_none(_detect_installed_api_version())
+    if detected:
+        return detected
+
+    raise ValueError(_API_VERSION_UNRESOLVED_MSG)
 
 
 def _extract_version_dirs(base_dir: str) -> list[str]:
@@ -949,7 +1023,19 @@ def _extract_version_dirs(base_dir: str) -> list[str]:
 
 
 def detect_latest_api_version() -> str:
-    """Detects the latest Google Ads API version across local client_libs and installed google.ads.googleads."""
+    """Detects the latest Google Ads API version across local client_libs and installed google.ads.googleads.
+
+    Falls back to a validated GOOGLE_ADS_API_VERSION env value; invalid values are ignored.
+    Returns "" when nothing is found.
+    """
+    detected = _detect_installed_api_version()
+    if detected:
+        return detected
+    return _validated_api_version_or_none(os.environ.get("GOOGLE_ADS_API_VERSION", "")) or ""
+
+
+def _detect_installed_api_version() -> str:
+    """Returns the highest vN across local client_libs and installed google.ads.googleads, or ""."""
     this_dir = os.path.dirname(os.path.abspath(__file__))
     candidate_paths = [
         os.path.abspath("client_libs/google-ads-python/google/ads/googleads"),
@@ -1022,10 +1108,6 @@ def detect_latest_api_version() -> str:
     if discovered_versions:
         discovered_versions.sort(key=lambda x: int(x[1:]))
         return discovered_versions[-1]
-
-    env_ver = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip().lower()
-    if env_ver:
-        return f"v{env_ver}" if env_ver.isdigit() else env_ver
 
     return ""
 
@@ -1637,12 +1719,17 @@ def parse_assistant_config(raw_text: str) -> Dict[str, Any]:
             else:
                 data[k] = v_raw
 
-    # Normalize known keys
+    # Normalize known keys (invalid api_version values are dropped, never persisted)
     if "api_version" in data and data["api_version"] is not None:
         ver_str = str(data["api_version"]).strip().strip("'\"")
-        if ver_str and not ver_str.startswith("v") and ver_str.isdigit():
-            ver_str = f"v{ver_str}"
-        data["api_version"] = ver_str
+        if ver_str:
+            valid_ver = _validated_api_version_or_none(ver_str)
+            if valid_ver:
+                data["api_version"] = valid_ver
+            else:
+                del data["api_version"]
+        else:
+            data["api_version"] = ""
 
     if "customer_id" in data and data["customer_id"] is not None:
         data["customer_id"] = str(data["customer_id"]).strip().strip("'\"")
@@ -1688,11 +1775,11 @@ def _escape_toml_basic_string(val: str) -> str:
 
 def format_assistant_config(data: Dict[str, Any]) -> str:
     """Formats assistant configuration dictionary as a canonical TOML string."""
-    api_ver = str(
-        data.get("api_version") or detect_latest_api_version() or ""
-    ).strip().strip("'\"")
-    if api_ver and not api_ver.startswith("v") and ver_str_is_digit(api_ver):
-        api_ver = f"v{api_ver}"
+    api_ver = (
+        _validated_api_version_or_none(data.get("api_version"))
+        or _validated_api_version_or_none(detect_latest_api_version())
+        or ""
+    )
     cid = str(
         data.get("customer_id")
         if data.get("customer_id") is not None
@@ -1729,8 +1816,23 @@ def ver_str_is_digit(s: str) -> bool:
     return s.isdigit()
 
 
+def _claude_plugin_root_config_dir() -> Optional[str]:
+    """Returns $CLAUDE_PLUGIN_ROOT/config when CLAUDE_PLUGIN_ROOT points at this plugin."""
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
+    if root:
+        cfg_dir = os.path.join(os.path.abspath(root), "config")
+        if os.path.isdir(cfg_dir):
+            return cfg_dir
+    return None
+
+
 def get_assistant_config_paths(config_dir: Optional[str] = None) -> list[str]:
-    """Returns candidate paths for reading/writing config/assistant_config."""
+    """Returns candidate paths for reading/writing config/assistant_config.
+
+    Precedence: explicit config_dir or GOOGLE_ADS_ASSISTANT_CONFIG_DIR, then the
+    current plugin root (CLAUDE_PLUGIN_ROOT/config and this file's config dir), then
+    the cwd-relative config/, then the Claude Code install, then the Antigravity install.
+    """
     this_dir = os.path.dirname(os.path.abspath(__file__))
     candidates: list[str] = []
     if config_dir:
@@ -1743,14 +1845,17 @@ def get_assistant_config_paths(config_dir: Optional[str] = None) -> list[str]:
             candidates.append(
                 os.path.join(os.path.abspath(env_cfg_dir), ASSISTANT_CONFIG_FILENAME)
             )
+    claude_cfg_dir = _claude_plugin_root_config_dir()
+    if claude_cfg_dir:
+        candidates.append(os.path.join(claude_cfg_dir, ASSISTANT_CONFIG_FILENAME))
     candidates.extend([
-        os.path.abspath(os.path.join("config", ASSISTANT_CONFIG_FILENAME)),
         os.path.join(this_dir, ASSISTANT_CONFIG_FILENAME),
-        os.path.expanduser(
-            f"~/.gemini/config/plugins/google-ads-api-developer-assistant/config/{ASSISTANT_CONFIG_FILENAME}"
-        ),
+        os.path.abspath(os.path.join("config", ASSISTANT_CONFIG_FILENAME)),
         os.path.expanduser(
             f"~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/{ASSISTANT_CONFIG_FILENAME}"
+        ),
+        os.path.expanduser(
+            f"~/.gemini/config/plugins/google-ads-api-developer-assistant/config/{ASSISTANT_CONFIG_FILENAME}"
         ),
     ])
     deduped: list[str] = []
@@ -1791,14 +1896,13 @@ def _read_legacy_config_dir(d: str) -> Dict[str, str]:
                 pass
 
     legacy_ver_file = os.path.join(d, "api_version.txt")
-    if os.path.isfile(legacy_ver_file):
+    if legacy_ver_file and os.path.isfile(legacy_ver_file):
         try:
             with open(legacy_ver_file, "r", encoding="utf-8") as f:
                 ver_content = f.read().strip().strip("'\"")
-            if ver_content:
-                if not ver_content.startswith("v") and ver_content.isdigit():
-                    ver_content = f"v{ver_content}"
-                legacy["api_version"] = ver_content
+            valid_legacy_ver = _validated_api_version_or_none(ver_content)
+            if valid_legacy_ver:
+                legacy["api_version"] = valid_legacy_ver
         except OSError:
             pass
     return legacy
@@ -1963,13 +2067,26 @@ def set_execute_mutates(
 
 
 def parse_allow_tier1_financial_mutates_value(raw_text: str) -> Optional[bool]:
-    """Parses 'allow_tier1_financial_mutates = <true, false>' from TOML or text."""
-    parsed_cfg = parse_assistant_config(raw_text)
-    if (
-        "allow_tier1_financial_mutates" in parsed_cfg
-        and isinstance(parsed_cfg["allow_tier1_financial_mutates"], bool)
-    ):
-        return parsed_cfg["allow_tier1_financial_mutates"]
+    """Parses 'allow_tier1_financial_mutates = <true, false>' from TOML or text.
+
+    When the text parses as TOML, only the top-level key counts (a bare 'true' line or a
+    nested table key never enables the flag). The line scan runs only for non-TOML text,
+    such as a bare env value.
+    """
+    toml_parsed: Optional[Dict[str, Any]] = None
+    try:
+        import tomllib  # type: ignore
+
+        loaded = tomllib.loads(raw_text or "")
+        if isinstance(loaded, dict):
+            toml_parsed = loaded
+    except Exception:
+        toml_parsed = None
+    if toml_parsed is not None:
+        val = toml_parsed.get("allow_tier1_financial_mutates")
+        return val if isinstance(val, bool) else None
+    # Key/value text (e.g. tomllib unavailable or malformed file): honor only the key itself
+    allow_bare = not re.search(r"(?m)^\s*[A-Za-z0-9_]+\s*[=:]", raw_text or "")
     for raw_line in raw_text.splitlines():
         line = raw_line.split("#", 1)[0].strip()
         if not line:
@@ -1982,7 +2099,7 @@ def parse_allow_tier1_financial_mutates_value(raw_text: str) -> Optional[bool]:
         if match:
             return match.group(1).lower() == "true"
         bare = line.strip("'\"").lower()
-        if bare in ("true", "false"):
+        if allow_bare and bare in ("true", "false"):
             return bare == "true"
     return None
 
@@ -2275,7 +2392,11 @@ def _toggle_installed_plugin_manifests(
     if is_repo_source is None:
         is_repo_source = _is_repo_source_plugin_dir(plugin_dir)
 
-    for hooks_rel in ("hooks.json", os.path.join("hooks", "hooks.json")):
+    # Only the Antigravity hooks.json carries 'enabled' flags. The Claude Code hooks/hooks.json
+    # follows Claude's strict hook schema, so Claude Code is disabled through the
+    # .claude-plugin/plugin.json rename below and the assistant_config 'enabled' flag that
+    # handle_hook() checks on every call.
+    for hooks_rel in ("hooks.json",):
         hooks_path = os.path.join(plugin_dir, hooks_rel)
         if _set_hooks_json_enabled(hooks_path, enabled):
             result["updated_files"].append(hooks_path)
@@ -2649,20 +2770,24 @@ def get_configured_customer_id(config_dir: Optional[str] = None) -> Optional[str
 
 
 def get_configured_api_version(config_dir: Optional[str] = None) -> Optional[str]:
-    """Reads api_version from config/assistant_config (with fallback to legacy api_version.txt)."""
+    """Reads a validated api_version from config/assistant_config (with fallback to legacy api_version.txt).
+
+    Invalid persisted values (e.g. 'latest' or path fragments) are skipped.
+    """
     for candidate in get_assistant_config_paths(config_dir=config_dir):
         if os.path.isfile(candidate):
             try:
                 with open(candidate, "r", encoding="utf-8") as f:
                     cfg = parse_assistant_config(f.read())
-                ver = str(cfg.get("api_version", "")).strip()
+                ver = _validated_api_version_or_none(cfg.get("api_version"))
                 if ver:
                     return ver
             except OSError:
                 continue
         legacy_vals = _read_legacy_config_dir(os.path.dirname(candidate))
-        if "api_version" in legacy_vals:
-            return legacy_vals["api_version"]
+        legacy_ver = _validated_api_version_or_none(legacy_vals.get("api_version"))
+        if legacy_ver:
+            return legacy_ver
     return None
 
 
@@ -3294,6 +3419,17 @@ def _verify_dry_run_receipt_for_hook(
                 call.get("request_payload"),
             )
             call_sha = str(call.get("request_sha256", "")).strip()
+            if call.get("request_payload_masked") is True:
+                # run_mutation masked PII (e.g. ATO emails) in the stored payload after hashing
+                # the unmasked request; trust the per-call hash it recorded at dry-run time.
+                if not call_sha:
+                    return (
+                        False,
+                        f"BLOCKED BY HITL MUTATION GUARD: Masked dry-run RPC call #{idx + 1} has no "
+                        "request_sha256. Re-run --dry-run first.",
+                        receipt,
+                    )
+                recomputed_sha = call_sha
             if call_sha and call_sha != recomputed_sha:
                 return (
                     False,
@@ -3385,6 +3521,16 @@ def _verify_dry_run_receipt_for_hook(
                 script_path=resolved_script,
                 operation_summary=str(receipt.get("operation_summary", "")),
             )
+
+    if payload_facts.get("customer_id_mismatch"):
+        p_cids_txt = ", ".join(str(c) for c in (payload_facts.get("payload_customer_ids") or []))
+        return (
+            False,
+            "BLOCKED BY HITL MUTATION GUARD: The customer ID in the dry-run RPC payload "
+            f"({p_cids_txt or 'unknown'}) does not match --customer-id "
+            f"({receipt.get('customer_id', '')}). Fix the script or --customer-id and re-run --dry-run.",
+            receipt,
+        )
 
     payload_parts: list[str] = []
     p_cids = payload_facts.get("payload_customer_ids") or []
@@ -3548,8 +3694,10 @@ _QUOTED_HOME_YAML_RE = re.compile(
 _BARE_HOME_YAML_RE = re.compile(
     r"(?:~/google-ads\.yaml|/(?:home|Users)/[^/\s'\"]+/google-ads\.yaml|/usr/local/google/home/[^/\s'\"]+/google-ads\.yaml|client_libs/[^/\s'\"]+/google-ads\.yaml)"
 )
+# Only bare relative paths are rewritten; already-rooted paths such as
+# "$GADS_DIR/skills/..." or "${CLAUDE_PLUGIN_ROOT}/skills/..." or "/abs/skills/..." pass through.
 _SKILL_REL_PATH_RE = re.compile(
-    r"\b(?:skills/[a-zA-Z0-9_\-]+/(?:scripts|references)/[a-zA-Z0-9_\-\.]+|config/(?:config_init|set_financial_limits)\.py|set_financial_limits\.py)\b"
+    r"(?<![\w/.$}~-])(?:skills/[a-zA-Z0-9_\-]+/(?:scripts|references)/[a-zA-Z0-9_\-\.]+|config/(?:config_init|set_financial_limits)\.py|set_financial_limits\.py)\b"
 )
 _LEADING_SHELL_COMMENTS_RE = re.compile(r"\A(?:\s*#[^\n]*\n)+")
 
@@ -3568,6 +3716,326 @@ _FILE_WRITE_TOOLS = frozenset({
     "Edit",
     "MultiEdit",
 })
+
+_RUN_MUTATION_REL_SUFFIX = "skills/execute-mutation/scripts/run_mutation.py"
+_PYTHON_ARGV0_RE = re.compile(r"(?:.*[/\\])?python(?:3(?:\.\d+)?)?(?:\.exe)?", re.IGNORECASE)
+# Shell constructs that make static analysis of a shortcut unreliable (comments, command
+# substitution, process substitution, multi-line scripts).
+_SHORTCUT_FORBIDDEN_SUBSTRINGS = ("#", "$(", "`", "<(", ">(", "\n", "\r")
+_REDIRECTION_STRIP_RE = re.compile(
+    r"(?<![\w-])[0-9&]?(?:>{1,2}|<)(?:&[0-9-]|\s*(?:'[^']*'|\"[^\"]*\"|[^\s;|&<>]+))"
+)
+_GADS_DIR_PREAMBLE_LITERAL = (
+    'GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; '
+    'if [ -z "$GADS_DIR" ]; then '
+    'GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; '
+    'if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then '
+    'GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; '
+    "fi; fi"
+)
+# The canonical SKILL.md preamble only ever selects a trusted install dir, so "$GADS_DIR/..."
+# after it is as trustworthy as the plugin root itself.
+_GADS_DIR_PREAMBLE_RE = re.compile(
+    r"\A\s*"
+    + re.escape(_GADS_DIR_PREAMBLE_LITERAL).replace(r"\ ", r"\s+")
+    + r"\s*(?:&&|;|\n)\s*"
+)
+_TRUSTED_ROOT_VAR_PREFIXES = {
+    "GADS_DIR": ("$GADS_DIR/", "${GADS_DIR}/"),
+    "CLAUDE_PLUGIN_ROOT": ("$CLAUDE_PLUGIN_ROOT/", "${CLAUDE_PLUGIN_ROOT}/"),
+}
+
+_PROTECTED_CONFIG_BASENAMES = _PROTECTED_DENY_FILES | _PROTECTED_ASK_FILES
+_SHELL_REDIRECT_TARGET_RE = re.compile(
+    r"(?<![<>&0-9])[0-9&]?>{1,2}\|?\s*(?!&)(?:'([^']*)'|\"([^\"]*)\"|([^\s;|&<>()]+))"
+)
+_INPLACE_EDIT_RE = re.compile(
+    r"\b(?:sed|perl)\b[^;|&\n]*?\s(?:-[A-Za-z]*i[A-Za-z]*\b|--in-place\b)"
+)
+_SHELL_WRITER_CMD_RE = re.compile(
+    r"(?:^|[;&|\n(]|\bsudo\s+|\bthen\s+|\bdo\s+)\s*(tee|cp|mv|install|ln|rm|truncate|dd|rsync)\b"
+)
+_PY_WRITE_RE = re.compile(
+    r"open\s*\([^)]*?,\s*(?:mode\s*=\s*)?['\"][^'\"]*[waxWAX+][^'\"]*['\"]|"
+    r"\.write_(?:text|bytes)\s*\(|\.unlink\s*\(|"
+    r"\bos\.(?:remove|unlink|rename|replace|truncate)\b|\bshutil\.(?:copy\w*|move)\b|"
+    r"\bjson\.dump\s*\(|\bfs\.(?:writeFile|appendFile)\w*\b|\bFile\.(?:write|open)\b"
+)
+
+
+def _split_shell_segments(cmd: str) -> Optional[list[str]]:
+    """Splits cmd on unquoted &&, ||, ;, |, & and newlines; returns None on unbalanced quotes."""
+    segments: list[str] = []
+    buf: list[str] = []
+    quote: Optional[str] = None
+    i = 0
+    n = len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if quote:
+            buf.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                buf.append(cmd[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            buf.extend((ch, cmd[i + 1]))
+            i += 2
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        two = cmd[i:i + 2]
+        if two in ("&&", "||"):
+            segments.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        if ch == "&" and (
+            (i > 0 and cmd[i - 1] in "<>") or (i + 1 < n and cmd[i + 1] == ">")
+        ):
+            buf.append(ch)
+            i += 1
+            continue
+        if ch in ";|&\n\r":
+            segments.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    if quote:
+        return None
+    segments.append("".join(buf))
+    return [s for s in (seg.strip() for seg in segments) if s]
+
+
+def _strip_gads_dir_preamble(cmd: str) -> Tuple[str, bool]:
+    """Removes the canonical SKILL.md GADS_DIR preamble; returns (body, preamble_found)."""
+    m = _GADS_DIR_PREAMBLE_RE.match(cmd or "")
+    if not m:
+        return cmd, False
+    return cmd[m.end():], True
+
+
+def _trusted_gads_dir_root(cmd: str) -> Optional[str]:
+    """Returns the plugin root that the canonical GADS_DIR preamble selects, if cmd uses it.
+
+    Mirrors the preamble: CLAUDE_PLUGIN_ROOT, then GOOGLE_ADS_ASSISTANT_DIR, then the
+    Antigravity install unless running in Claude Code or it is missing, then the Claude
+    Code install. Returns None when the preamble is absent or GADS_DIR is reassigned later.
+    """
+    body, has_preamble = _strip_gads_dir_preamble(cmd)
+    if not has_preamble or "GADS_DIR=" in body:
+        return None
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.environ.get("GOOGLE_ADS_ASSISTANT_DIR")
+    if not root:
+        root = os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant")
+        if os.environ.get("CLAUDECODE") or not os.path.isdir(root):
+            root = os.path.expanduser(
+                "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"
+            )
+    return root
+
+
+def _expand_trusted_path_vars(path: str, gads_root: Optional[str]) -> str:
+    """Expands $GADS_DIR (when trusted), environment variables, and ~ in a script path."""
+    expanded = path
+    if gads_root:
+        expanded = expanded.replace("${GADS_DIR}", gads_root).replace("$GADS_DIR", gads_root)
+    return os.path.expanduser(os.path.expandvars(expanded))
+
+
+def _trusted_run_mutation_paths() -> set[str]:
+    """Realpaths of run_mutation.py inside every known plugin install root."""
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    roots = [
+        os.path.dirname(this_dir),
+        os.environ.get("CLAUDE_PLUGIN_ROOT", ""),
+        os.environ.get("GOOGLE_ADS_ASSISTANT_DIR", ""),
+        os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant"),
+        os.path.expanduser(
+            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"
+        ),
+    ]
+    trusted: set[str] = set()
+    for root in roots:
+        if root and root.strip():
+            trusted.add(os.path.realpath(os.path.join(root.strip(), _RUN_MUTATION_REL_SUFFIX)))
+    return trusted
+
+
+def _is_trusted_run_mutation_script(
+    script_arg: str,
+    workspace_cwd: Optional[str],
+    trusted_vars: Tuple[str, ...],
+) -> bool:
+    """Returns True if script_arg names the plugin's own run_mutation.py (not a lookalike)."""
+    norm = script_arg.replace("\\", "/")
+    if not norm.endswith(_RUN_MUTATION_REL_SUFFIX) or "/../" in f"/{norm}":
+        return False
+    if "$" in norm:
+        for var in trusted_vars:
+            for prefix in _TRUSTED_ROOT_VAR_PREFIXES.get(var, ()):
+                if norm.startswith(prefix) and "$" not in norm[len(prefix):]:
+                    return True
+        return False
+    expanded = os.path.expanduser(script_arg)
+    candidates = [expanded]
+    if workspace_cwd and not os.path.isabs(expanded):
+        candidates.append(os.path.join(workspace_cwd, expanded))
+    existing = [c for c in candidates if os.path.isfile(c)]
+    if not existing:
+        # Nonexistent relative paths are re-rooted onto the plugin dir by the hook rewrite.
+        return True
+    trusted = _trusted_run_mutation_paths()
+    return all(os.path.realpath(c) in trusted for c in existing)
+
+
+def _run_mutation_shortcut_flag(
+    segment: str,
+    workspace_cwd: Optional[str],
+    trusted_vars: Tuple[str, ...] = (),
+) -> Optional[str]:
+    """Returns '--reject' or '--dry-run' when segment is exactly one safe run_mutation.py call.
+
+    The segment must be `python* <plugin>/skills/execute-mutation/scripts/run_mutation.py ...`
+    with --reject or --dry-run as a real argv token, no --execute/--record-only, and no shell
+    comments, substitutions, or newlines.
+    """
+    if not segment or any(tok in segment for tok in _SHORTCUT_FORBIDDEN_SUBSTRINGS):
+        return None
+    pieces = _split_shell_segments(segment)
+    if pieces is None or len(pieces) != 1:
+        return None
+    # Output redirections are harmless here (protected targets are caught earlier by
+    # _protected_shell_write_decision); strip them so their targets never count as flags.
+    cleaned = _REDIRECTION_STRIP_RE.sub(" ", segment)
+    try:
+        import shlex
+
+        argv = shlex.split(cleaned)
+    except ValueError:
+        return None
+    if len(argv) < 3 or not _PYTHON_ARGV0_RE.fullmatch(argv[0]):
+        return None
+    if not _is_trusted_run_mutation_script(argv[1], workspace_cwd, trusted_vars):
+        return None
+    flags = argv[2:]
+    if any(
+        f == "--execute" or f.startswith("--execute=") or f == "--record-only"
+        for f in flags
+    ):
+        return None
+    if "--reject" in flags:
+        return "--reject"
+    if "--dry-run" in flags:
+        return "--dry-run"
+    return None
+
+
+def _reduce_run_mutation_shortcuts(
+    cmd: str,
+    workspace_cwd: Optional[str],
+) -> Tuple[str, list[Tuple[str, str]]]:
+    """Drops safe run_mutation.py --reject/--dry-run segments from cmd.
+
+    Returns (remaining_command, dropped) where dropped lists (flag, segment) pairs. The
+    remainder still goes through the full guard, so chaining a shortcut with other code
+    (`&&`, `;`, `|`) never bypasses checks. Commands with comments, substitutions, or
+    newlines are returned unchanged.
+    """
+    body, has_preamble = _strip_gads_dir_preamble(cmd)
+    trusted_vars: list[str] = []
+    if has_preamble and "GADS_DIR=" not in body:
+        trusted_vars.append("GADS_DIR")
+    if "CLAUDE_PLUGIN_ROOT=" not in body and os.environ.get("CLAUDE_PLUGIN_ROOT"):
+        trusted_vars.append("CLAUDE_PLUGIN_ROOT")
+    if any(tok in body for tok in _SHORTCUT_FORBIDDEN_SUBSTRINGS):
+        return cmd, []
+    segments = _split_shell_segments(body)
+    if not segments:
+        return cmd, []
+    kept: list[str] = []
+    dropped: list[Tuple[str, str]] = []
+    for seg in segments:
+        flag = _run_mutation_shortcut_flag(seg, workspace_cwd, tuple(trusted_vars))
+        if flag:
+            dropped.append((flag, seg))
+        else:
+            kept.append(seg)
+    if not dropped:
+        return cmd, []
+    return " ; ".join(kept), dropped
+
+
+def _protected_shell_write_decision(cmd: str) -> Optional[Tuple[str, str]]:
+    """Detects shell/python writes to protected config, receipt, or audit files.
+
+    Returns ("deny", reason) for receipt/audit files, ("force_ask", reason) for config
+    files, or None when no protected write is found.
+    """
+    if not cmd:
+        return None
+    lowered = cmd
+    named = sorted(b for b in _PROTECTED_CONFIG_BASENAMES if b in lowered)
+    if not named:
+        return None
+
+    hits: set[str] = set()
+
+    def _basename_hits(text: str) -> set[str]:
+        found: set[str] = set()
+        for b in named:
+            if re.search(r"(?<![\w.-])" + re.escape(b) + r"(?![\w.-])", text):
+                found.add(b)
+        return found
+
+    # 1. Redirections (> file, >> file, >| file)
+    for m in _SHELL_REDIRECT_TARGET_RE.finditer(cmd):
+        target = m.group(1) or m.group(2) or m.group(3) or ""
+        base = os.path.basename(target.strip().rstrip("/"))
+        if base in named:
+            hits.add(base)
+
+    segments = _split_shell_segments(cmd) or [cmd]
+    for seg in segments:
+        seg_hits = _basename_hits(seg)
+        if not seg_hits:
+            continue
+        # 2. In-place editors (sed -i, perl -pi)
+        if _INPLACE_EDIT_RE.search(seg):
+            hits |= seg_hits
+            continue
+        # 3. Writer commands: tee, cp, mv, install, ln, rm, truncate, dd, rsync
+        if _SHELL_WRITER_CMD_RE.search(" " + seg):
+            hits |= seg_hits
+            continue
+
+    # 4. Interpreter snippets (python -c / heredocs) that open protected files for writing
+    if _PY_WRITE_RE.search(cmd):
+        hits |= _basename_hits(cmd)
+
+    if not hits:
+        return None
+    deny_hits = sorted(h for h in hits if h in _PROTECTED_DENY_FILES)
+    if deny_hits:
+        return (
+            "deny",
+            f"BLOCKED BY HITL MUTATION GUARD: Shell writes to {', '.join(deny_hits)} are prohibited. "
+            "Receipts and audit logs may only be written by run_mutation.py.",
+        )
+    return (
+        "force_ask",
+        f"⚠️ PROTECTED CONFIGURATION EDIT: This command modifies {', '.join(sorted(hits))}. "
+        "Confirm this change to the assistant's protected configuration?",
+    )
 
 
 def evaluate_mutation_guard(
@@ -3589,12 +4057,48 @@ def evaluate_mutation_guard(
 
     effective_ws = workspace_cwd or _extract_workspace_cwd(hook_context)
 
+    # Gate shell/interpreter writes to protected config, receipt, and audit files
+    protected_write = _protected_shell_write_decision(cmd)
+    if protected_write is not None and protected_write[0] == "deny":
+        return protected_write
+
     # Gate CLI self-modification enabling live mutations via config_init.py
     if "config_init.py" in cmd and _SET_EXEC_MUTATES_TRUE_RE.search(cmd):
         return (
             "force_ask",
             "⚠️ ENABLE LIVE MUTATIONS: Confirm enabling live mutation configuration in config/assistant_config?",
         )
+    if protected_write is not None:
+        return protected_write
+
+    # Safe run_mutation.py --reject / --dry-run segments are removed; the rest of the
+    # command (if any) is evaluated by the full guard below.
+    if "run_mutation.py" in cmd:
+        reduced_cmd, dropped_shortcuts = _reduce_run_mutation_shortcuts(cmd, effective_ws)
+        if dropped_shortcuts:
+            # Dry runs still go through the deletion prohibition (remove ops / REMOVED status).
+            gads_root_sc = _trusted_gads_dir_root(cmd)
+            for flag, seg in dropped_shortcuts:
+                if flag != "--dry-run":
+                    continue
+                sm = _SCRIPT_ARG_RE.search(seg)
+                raw_sc = (sm.group(1) or sm.group(2) or sm.group(3)) if sm else None
+                if raw_sc and ("$" in raw_sc or raw_sc.startswith("~")):
+                    raw_sc = _expand_trusted_path_vars(raw_sc, gads_root_sc)
+                om = _OPERATION_ARG_RE.search(seg)
+                am = _AFTER_ARG_RE.search(seg)
+                sc_ok, sc_err, _ = _check_prohibited_deletion_for_hook(
+                    script_path=_resolve_candidate_script_path(raw_sc, effective_ws),
+                    operation_summary=(om.group(1) or om.group(2) or om.group(3)) if om else "",
+                    after_state=(am.group(1) or am.group(2) or am.group(3)) if am else "",
+                )
+                if not sc_ok:
+                    return "deny", sc_err
+            if not reduced_cmd.strip():
+                return "allow", None
+            return evaluate_mutation_guard(
+                reduced_cmd, hook_context=hook_context, workspace_cwd=effective_ws
+            )
 
     # Inspect referenced .sh / .bash wrapper scripts (excluding official lifecycle scripts)
     sh_blobs: list[str] = []
@@ -3637,9 +4141,8 @@ def evaluate_mutation_guard(
         return "allow", None
 
     # 1. Explicit invocation of skills/execute-mutation/scripts/run_mutation.py
+    #    (safe single-segment --reject / --dry-run calls were already removed above)
     if "run_mutation.py" in effective_cmd:
-        if "--reject" in effective_cmd and "--execute" not in effective_cmd:
-            return "allow", None
         script_match = _SCRIPT_ARG_RE.search(effective_cmd)
         raw_target_script = (
             script_match.group(1) or script_match.group(2) or script_match.group(3)
@@ -3674,8 +4177,6 @@ def evaluate_mutation_guard(
                 "a live validate_only=True Google Ads API call?",
             )
 
-        if "--dry-run" in effective_cmd and "--execute" not in effective_cmd:
-            return "allow", None
         if "--execute" in effective_cmd:
             if not is_execute_mutates_enabled():
                 return (
@@ -3710,8 +4211,11 @@ def evaluate_mutation_guard(
 
     code_blobs: list[str] = [effective_cmd]
     resolved_target_script: Optional[str] = None
+    gads_root = _trusted_gads_dir_root(cmd)
+    unverifiable: list[str] = []
     for py_file in py_files:
-        resolved_py = _resolve_candidate_script_path(py_file, effective_ws)
+        expanded_py = _expand_trusted_path_vars(py_file, gads_root) if "$" in py_file or py_file.startswith("~") else py_file
+        resolved_py = _resolve_candidate_script_path(expanded_py, effective_ws)
         if resolved_py and os.path.isfile(resolved_py):
             resolved_target_script = resolved_py
             try:
@@ -3719,6 +4223,16 @@ def evaluate_mutation_guard(
                     code_blobs.append(f.read())
             except OSError:
                 pass
+        elif "$" in py_file:
+            unverifiable.append(py_file)
+
+    if unverifiable:
+        return (
+            "force_ask",
+            "⚠️ UNVERIFIED SCRIPT PATH: The HITL mutation guard cannot resolve "
+            f"{', '.join(unverifiable)} to inspect it for Google Ads mutations. "
+            "Confirm running this command?",
+        )
 
     combined_code = "\n".join(code_blobs)
     uncommented_code = _COMMENT_LINE_RE.sub("", combined_code)
@@ -3809,10 +4323,203 @@ def _should_run_first_prompt_parity(input_data: Dict[str, Any]) -> bool:
     return True
 
 
-def handle_hook() -> None:
-    """Handles Jetski and Claude Code CLI lifecycle hook execution (PreInvocation and PreToolUse)."""
+_CLAUDE_PERMISSION_DECISIONS = {"allow": "allow", "deny": "deny", "force_ask": "ask", "ask": "ask"}
+_EXECUTE_FLAG_RE = re.compile(r"(?<!\S)--execute(?:=\S*)?(?!\S)")
+
+
+def _format_pretooluse_response(
+    decision: str,
+    reason: Optional[str],
+    is_claude: bool,
+    overwrite: Optional[Dict[str, Any]] = None,
+    original_args: Optional[Dict[str, Any]] = None,
+) -> Tuple[Dict[str, Any], int]:
+    """Builds the PreToolUse hook response for the active CLI and returns (payload, exit_code).
+
+    Claude Code reads only hookSpecificOutput (permissionDecision allow|deny|ask). A deny also
+    exits with code 2 so Claude Code blocks the call even if the JSON is ignored. When the
+    guard has no objection, no permissionDecision is sent so Claude Code's own permission
+    rules still apply; a rewritten command is passed as updatedInput.
+    Antigravity keeps its {"decision": ..., "reason": ..., "overwrite": ...} format.
+    """
+    if is_claude:
+        hso: Dict[str, Any] = {"hookEventName": "PreToolUse"}
+        claude_decision = _CLAUDE_PERMISSION_DECISIONS.get(decision, "deny")
+        if claude_decision != "allow":
+            hso["permissionDecision"] = claude_decision
+            hso["permissionDecisionReason"] = reason or "Blocked by the HITL mutation guard."
+        if overwrite and claude_decision != "deny":
+            hso["updatedInput"] = {**(original_args or {}), **overwrite}
+        payload: Dict[str, Any] = {"hookSpecificOutput": hso} if len(hso) > 1 else {}
+        return payload, (2 if claude_decision == "deny" else 0)
+    payload = {"decision": decision}
+    if reason and decision != "allow":
+        payload["reason"] = reason
+    if overwrite and decision != "deny":
+        payload["overwrite"] = overwrite
+    return payload, 0
+
+
+def _emit_pretooluse_response(
+    decision: str,
+    reason: Optional[str],
+    is_claude: bool,
+    overwrite: Optional[Dict[str, Any]] = None,
+    original_args: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Prints the PreToolUse response (and the deny reason to stderr) and returns the exit code."""
+    payload, exit_code = _format_pretooluse_response(
+        decision, reason, is_claude, overwrite=overwrite, original_args=original_args
+    )
+    print(json.dumps(payload))
+    if exit_code == 2:
+        print(reason or "Blocked by the HITL mutation guard.", file=sys.stderr)
+    return exit_code
+
+
+def _has_run_mutation_execute_segment(cmd: str) -> bool:
+    """True if a single shell segment invokes run_mutation.py with a real --execute flag."""
+    segments = _split_shell_segments(cmd) or [s for s in re.split(r"[\n;]", cmd) if s.strip()]
+    return any(
+        "run_mutation.py" in seg and _EXECUTE_FLAG_RE.search(seg) for seg in segments
+    )
+
+
+def _session_marker_path(input_data: Dict[str, Any], tag: str) -> Optional[str]:
+    """Returns a per-user, per-session marker path in the temp dir, or None without a session id."""
+    conv_id = input_data.get("conversationId") or input_data.get("session_id")
+    if not conv_id:
+        return None
+    import hashlib
+
+    uid_tag = str(os.getuid()) if hasattr(os, "getuid") else "user"
+    conv_hash = hashlib.sha256(f"{tag}:{conv_id}".encode("utf-8")).hexdigest()[:24]
+    return os.path.join(
+        tempfile.gettempdir(), f"gads_assistant_sessions_{uid_tag}", f"{conv_hash}.{tag}"
+    )
+
+
+def _sync_config_cached(input_data: Dict[str, Any]) -> str:
+    """Runs sync_and_set_config_kv at most once per session and returns the google-ads.yaml path."""
+    marker = None if os.environ.get("PYTEST_CURRENT_TEST") else _session_marker_path(
+        input_data, "synced"
+    )
+    if marker and os.path.isfile(marker):
+        try:
+            with open(marker, "r", encoding="utf-8") as f:
+                cached = f.read().strip()
+            if cached and os.path.isfile(cached):
+                os.environ["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = cached
+                return cached
+        except OSError:
+            pass
+    config_path = sync_and_set_config_kv()
+    if marker:
+        try:
+            os.makedirs(os.path.dirname(marker), mode=0o700, exist_ok=True)
+            fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(config_path)
+        except OSError:
+            pass
+    return config_path
+
+
+def _resolve_hook_plugin_root() -> str:
+    """Returns the plugin root used for path rewriting and session environment exports."""
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(this_dir, ".."))
+    if not os.path.isdir(os.path.join(plugin_root, "skills")):
+        for cand in (
+            os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant"),
+            os.path.expanduser(
+                "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"
+            ),
+        ):
+            if os.path.isdir(cand):
+                plugin_root = cand
+                break
+    env_dir = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.environ.get("GOOGLE_ADS_ASSISTANT_DIR")
+    if env_dir and os.path.isdir(env_dir):
+        plugin_root = os.path.abspath(env_dir)
+    return plugin_root
+
+
+def _log_execute_failure_for_hook(
+    cmd: str,
+    script_path: Optional[str],
+    error_text: str,
+    hook_context: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Records a failed run_mutation.py --execute (tool error, not a human decision) as EXECUTE_FAILED.
+
+    The receipt is left untouched: a tool failure is not an operator rejection.
+    """
+    rm_mod = _load_run_mutation_for_hook()
+    if rm_mod is None or not hasattr(rm_mod, "append_mutation_audit_log"):
+        return None
+    import datetime
+
+    receipt: Dict[str, Any] = {}
+    abs_script = os.path.realpath(script_path) if script_path else None
+    try:
+        receipt_paths = list(rm_mod.get_receipt_paths())
+    except Exception:
+        receipt_paths = []
+    for rpath in receipt_paths:
+        try:
+            with open(rpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        rec_script = data.get("script_path")
+        if abs_script and rec_script and os.path.realpath(str(rec_script)) != abs_script:
+            continue
+        receipt = data
+        break
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    exit_code_raw = hook_context.get("exit_code", hook_context.get("exitCode", 1))
+    try:
+        exit_code = int(exit_code_raw)
+    except (TypeError, ValueError):
+        exit_code = 1
+    try:
+        return rm_mod.append_mutation_audit_log(
+            phase="EXECUTE",
+            status="EXECUTE_FAILED",
+            customer_id=str(receipt.get("customer_id", "")),
+            operation_summary=str(receipt.get("operation_summary", "run_mutation.py --execute failed")),
+            before_state=str(receipt.get("before_state", "")),
+            after_state=str(receipt.get("after_state", "")),
+            consequences=[str(c) for c in receipt.get("consequences", []) if str(c).strip()],
+            reversibility=str(receipt.get("reversibility", "UNKNOWN")),
+            script_path=str(receipt.get("script_path") or script_path or "") or None,
+            script_sha256=str(receipt.get("script_sha256", "")),
+            validate_only=False,
+            request_sent_at_iso=now_iso,
+            response_received_at_iso=now_iso,
+            duration_ms=0.0,
+            exit_code=exit_code or 1,
+            stdout="",
+            stderr=error_text[:2000],
+            command=["HOOK:PostToolUseFailure", cmd[:2000]],
+            rpc_calls=[],
+            receipt=receipt or None,
+            user_approved_at_iso=None,
+            approval_decision=None,
+        )
+    except Exception:
+        return None
+
+
+def handle_hook() -> int:
+    """Handles Antigravity and Claude Code CLI lifecycle hooks (PreInvocation, SessionStart,
+    PreToolUse, PostToolUseFailure). Returns the process exit code (2 = Claude Code deny)."""
     input_data: Dict[str, Any] = {}
     raw_stdin = ""
+    malformed_reason = "BLOCKED BY HITL MUTATION GUARD: Malformed hook JSON payload."
     if not sys.stdin.isatty():
         try:
             raw_stdin = sys.stdin.read()
@@ -3821,36 +4528,37 @@ def handle_hook() -> None:
                 if isinstance(parsed, dict):
                     input_data = parsed
                 elif "toolCall" in raw_stdin or "tool_input" in raw_stdin:
-                    print(
-                        json.dumps(
-                            {
-                                "decision": "deny",
-                                "reason": "BLOCKED BY HITL MUTATION GUARD: Malformed hook JSON payload.",
-                            }
-                        )
+                    return _emit_pretooluse_response(
+                        "deny", malformed_reason, "tool_input" in raw_stdin
                     )
-                    return
         except Exception:
             if "toolCall" in raw_stdin or "tool_input" in raw_stdin:
-                print(
-                    json.dumps(
-                        {
-                            "decision": "deny",
-                            "reason": "BLOCKED BY HITL MUTATION GUARD: Malformed hook JSON payload.",
-                        }
-                    )
+                return _emit_pretooluse_response(
+                    "deny", malformed_reason, "tool_input" in raw_stdin
                 )
-                return
+
+    hook_event = str(
+        input_data.get("hook_event_name")
+        or input_data.get("hookEventName")
+        or input_data.get("event")
+        or ""
+    ).strip()
+    is_tool_event = "toolCall" in input_data or "tool_input" in input_data
+    is_claude_payload = (
+        "tool_input" in input_data
+        or "hook_event_name" in input_data
+        or bool(os.environ.get("CLAUDE_CODE"))
+    )
 
     if not is_plugin_enabled():
-        if "toolCall" in input_data or "tool_input" in input_data:
+        if is_tool_event and not is_claude_payload and hook_event != "PostToolUseFailure":
             print(json.dumps({"decision": "allow"}))
         else:
             print(json.dumps({}))
-        return
+        return 0
 
     # 1. PreToolUse hook (shell execution & protected file-write interception)
-    if "toolCall" in input_data or "tool_input" in input_data:
+    if is_tool_event:
         tool_call = input_data.get("toolCall", {})
         tool_name = str(
             (tool_call.get("name") if isinstance(tool_call, dict) else None)
@@ -3864,7 +4572,7 @@ def handle_hook() -> None:
         if not isinstance(args, dict):
             args = {}
 
-        is_claude = "tool_input" in input_data or bool(os.environ.get("CLAUDE_CODE"))
+        is_claude = is_claude_payload
 
         # Check file-write tool calls before touching filesystem credential sync
         target_file = (
@@ -3874,28 +4582,30 @@ def handle_hook() -> None:
             or ""
         )
         cmd = args.get("CommandLine") or args.get("command") or ""
+        if not isinstance(cmd, str):
+            cmd = ""
 
-        # Handle operator rejection / PostToolUseFailure callbacks for gated mutations
-        hook_event = str(
-            input_data.get("hook_event_name")
-            or input_data.get("hookEventName")
-            or input_data.get("event")
-            or ""
-        ).strip()
+        # Post-execution callbacks: tool failures vs. explicit operator rejections
         user_dec = str(
             input_data.get("userDecision")
             or input_data.get("user_decision")
             or ""
         ).strip().lower()
-        is_rejection_event = (
-            hook_event in ("PostToolUseFailure", "ToolRejected", "PermissionDenied")
+        is_user_rejection = (
+            hook_event in ("ToolRejected", "PermissionDenied")
             or user_dec in ("deny", "reject", "rejected", "cancelled", "canceled")
             or input_data.get("rejected") is True
         )
-        if is_rejection_event and cmd and (
-            "run_mutation.py" in cmd or "--execute" in cmd
-        ):
-            rm_mod = _load_run_mutation_for_hook()
+        is_failure_event = hook_event == "PostToolUseFailure" or (
+            hook_event == "PostToolUse" and bool(input_data.get("error"))
+        )
+        if hook_event == "PostToolUse" and not is_failure_event and not is_user_rejection:
+            print(json.dumps({}))
+            return 0
+        if is_user_rejection or is_failure_event:
+            if not cmd or not _has_run_mutation_execute_segment(cmd):
+                print(json.dumps({}))
+                return 0
             workspace_cwd_rej = _extract_workspace_cwd(input_data)
             script_m = _SCRIPT_ARG_RE.search(cmd)
             raw_sp = (
@@ -3904,73 +4614,75 @@ def handle_hook() -> None:
                 else None
             )
             rej_script = _resolve_candidate_script_path(raw_sp, workspace_cwd_rej)
-            rej_reason = str(
+            error_text = str(
                 input_data.get("error")
                 or input_data.get("reason")
-                or "Operator rejected live mutation at native CLI confirmation prompt."
+                or input_data.get("tool_response")
+                or ""
             ).strip()
-            rej_result: Dict[str, Any] = {}
-            if rm_mod is not None and hasattr(rm_mod, "reject_dry_run_receipt"):
-                prev_rpath = os.environ.get("GOOGLE_ADS_MUTATION_RECEIPT_PATH")
-                try:
-                    if workspace_cwd_rej and not prev_rpath:
-                        os.environ["GOOGLE_ADS_MUTATION_RECEIPT_PATH"] = os.path.join(
-                            workspace_cwd_rej, "saved", "data", "last_dry_run.json"
-                        )
-                    rej_result = rm_mod.reject_dry_run_receipt(
-                        script_path=rej_script,
-                        reason=rej_reason,
-                        hook_context=input_data,
+            prev_rpath = os.environ.get("GOOGLE_ADS_MUTATION_RECEIPT_PATH")
+            try:
+                if workspace_cwd_rej and not prev_rpath:
+                    os.environ["GOOGLE_ADS_MUTATION_RECEIPT_PATH"] = os.path.join(
+                        workspace_cwd_rej, "saved", "data", "last_dry_run.json"
                     )
-                finally:
-                    if workspace_cwd_rej and not prev_rpath:
-                        os.environ.pop("GOOGLE_ADS_MUTATION_RECEIPT_PATH", None)
-            print(
-                json.dumps(
-                    {
-                        "decision": "allow",
-                        "rejection_recorded": True,
-                        "audit_status": "HUMAN_REJECTED",
-                        "receipt_status": rej_result.get("status", "REJECTED"),
-                    }
+                if is_user_rejection:
+                    # The operator declined the native CLI confirmation prompt.
+                    rm_mod = _load_run_mutation_for_hook()
+                    rej_result: Dict[str, Any] = {}
+                    if rm_mod is not None and hasattr(rm_mod, "reject_dry_run_receipt"):
+                        rej_result = rm_mod.reject_dry_run_receipt(
+                            script_path=rej_script,
+                            reason=error_text
+                            or "Operator rejected live mutation at native CLI confirmation prompt.",
+                            hook_context=input_data,
+                        ) or {}
+                    if is_claude:
+                        print(json.dumps({}))
+                    else:
+                        print(
+                            json.dumps(
+                                {
+                                    "decision": "allow",
+                                    "rejection_recorded": rej_result.get("status") == "REJECTED",
+                                    "audit_status": "HUMAN_REJECTED",
+                                    "receipt_status": rej_result.get("status", "UNKNOWN"),
+                                }
+                            )
+                        )
+                    return 0
+                # A failed tool run (API error, crash, timeout) is not a human decision:
+                # log EXECUTE_FAILED and leave the receipt as is.
+                _log_execute_failure_for_hook(
+                    cmd,
+                    rej_script,
+                    error_text or "run_mutation.py --execute failed.",
+                    input_data,
                 )
-            )
-            return
+            finally:
+                if workspace_cwd_rej and not prev_rpath:
+                    os.environ.pop("GOOGLE_ADS_MUTATION_RECEIPT_PATH", None)
+            print(json.dumps({}))
+            return 0
 
         if (tool_name in _FILE_WRITE_TOOLS or (target_file and not cmd)) and isinstance(
             target_file, str
         ):
             base = os.path.basename(target_file.strip())
             if base in _PROTECTED_DENY_FILES:
-                reason_fw = (
+                return _emit_pretooluse_response(
+                    "deny",
                     f"BLOCKED BY HITL MUTATION GUARD: Direct file writes to '{base}' are prohibited. "
-                    "Receipts and audit logs may only be written by run_mutation.py."
+                    "Receipts and audit logs may only be written by run_mutation.py.",
+                    is_claude,
                 )
-                deny_fw: Dict[str, Any] = {"decision": "deny", "reason": reason_fw}
-                if is_claude:
-                    deny_fw["permissionDecision"] = "deny"
-                    deny_fw["permissionDecisionReason"] = reason_fw
-                print(json.dumps(deny_fw))
-                return
             if base in _PROTECTED_ASK_FILES:
-                reason_cfg = (
-                    f"⚠️ PROTECTED CONFIGURATION EDIT: Confirm modification of '{target_file}'?"
+                return _emit_pretooluse_response(
+                    "force_ask",
+                    f"⚠️ PROTECTED CONFIGURATION EDIT: Confirm modification of '{target_file}'?",
+                    is_claude,
                 )
-                ask_fw: Dict[str, Any] = {"decision": "force_ask", "reason": reason_cfg}
-                if is_claude:
-                    ask_fw["permissionDecision"] = "ask"
-                    ask_fw["permissionDecisionReason"] = reason_cfg
-                print(json.dumps(ask_fw))
-                return
-            print(json.dumps({"decision": "allow"}))
-            return
-
-        try:
-            config_path = sync_and_set_config_kv()
-        except Exception:
-            config_path = os.path.expanduser(
-                "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
-            )
+            return _emit_pretooluse_response("allow", None, is_claude)
 
         workspace_cwd = _extract_workspace_cwd(input_data)
         decision, reason = evaluate_mutation_guard(
@@ -3979,15 +4691,7 @@ def handle_hook() -> None:
             workspace_cwd=workspace_cwd,
         )
         if decision == "deny":
-            deny_payload: Dict[str, Any] = {
-                "decision": "deny",
-                "reason": reason,
-            }
-            if is_claude:
-                deny_payload["permissionDecision"] = "deny"
-                deny_payload["permissionDecisionReason"] = reason
-            print(json.dumps(deny_payload))
-            return
+            return _emit_pretooluse_response("deny", reason, is_claude)
 
         needs_interception = any(
             token in cmd
@@ -4003,6 +4707,12 @@ def handle_hook() -> None:
         )
         overwrite: Dict[str, Any] = {}
         if needs_interception:
+            try:
+                config_path = _sync_config_cached(input_data)
+            except Exception:
+                config_path = os.path.expanduser(
+                    "~/.gemini/config/plugins/google-ads-api-developer-assistant/config/google-ads.yaml"
+                )
             updated_cmd = _LEADING_SHELL_COMMENTS_RE.sub("", cmd)
             if not updated_cmd.strip():
                 updated_cmd = cmd
@@ -4109,24 +4819,13 @@ def handle_hook() -> None:
             if "CommandLine" in args or not overwrite:
                 overwrite["CommandLine"] = updated_cmd
 
-        response_payload: Dict[str, Any] = {"decision": decision}
-        if decision == "force_ask":
-            if is_claude:
-                response_payload["permissionDecision"] = "ask"
-                if reason:
-                    response_payload["permissionDecisionReason"] = reason
-            if reason:
-                response_payload["reason"] = reason
-        if overwrite:
-            response_payload["overwrite"] = overwrite
-            if is_claude:
-                response_payload["hookSpecificOutput"] = {
-                    "hookEventName": "PreToolUse",
-                    "updatedInput": {**args, **overwrite},
-                }
-
-        print(json.dumps(response_payload))
-        return
+        return _emit_pretooluse_response(
+            decision,
+            reason,
+            is_claude,
+            overwrite=overwrite or None,
+            original_args=args,
+        )
 
     # 2. PreInvocation / SessionStart hook (model prompt injection & deduplicated first-prompt parity check)
     try:
@@ -4200,6 +4899,32 @@ def handle_hook() -> None:
             f"4. ACTIVE API CONFIGURATION: Active Google Ads API version: \"{active_api_version}\". Parity verification was completed on the first prompt."
         )
 
+    if is_claude_payload and hook_event == "SessionStart":
+        _export_claude_session_env(config_path)
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": msg,
+                    }
+                }
+            )
+        )
+        return 0
+    if is_claude_payload and hook_event == "UserPromptSubmit":
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": msg,
+                    }
+                }
+            )
+        )
+        return 0
+
     response_payload = {
         "injectSteps": [
             {
@@ -4208,6 +4933,30 @@ def handle_hook() -> None:
         ]
     }
     print(json.dumps(response_payload))
+    return 0
+
+
+def _export_claude_session_env(config_path: str) -> bool:
+    """Persists GOOGLE_ADS_ASSISTANT_DIR / GOOGLE_ADS_CONFIGURATION_FILE_PATH for Claude Code Bash calls.
+
+    Claude Code exposes CLAUDE_ENV_FILE to SessionStart hooks; lines appended there are
+    sourced before every Bash tool call. Antigravity has no equivalent, so there the
+    PreToolUse rewrite prepends the same exports to each Ads-related command instead.
+    """
+    env_file = os.environ.get("CLAUDE_ENV_FILE", "").strip()
+    if not env_file:
+        return False
+    import shlex
+
+    lines = [f"export GOOGLE_ADS_ASSISTANT_DIR={shlex.quote(_resolve_hook_plugin_root())}"]
+    if config_path:
+        lines.append(f"export GOOGLE_ADS_CONFIGURATION_FILE_PATH={shlex.quote(config_path)}")
+    try:
+        with open(env_file, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        return True
+    except OSError:
+        return False
 
 
 def main() -> None:
@@ -4215,7 +4964,9 @@ def main() -> None:
     import argparse
 
     if "--hook" in sys.argv or (not sys.stdin.isatty() and len(sys.argv) == 1):
-        handle_hook()
+        exit_code = handle_hook()
+        if exit_code:
+            sys.exit(exit_code)
         return
 
     parser = argparse.ArgumentParser(

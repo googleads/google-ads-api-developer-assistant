@@ -5,6 +5,10 @@ description: Retrieves a list of all child customer account IDs (CIDs) under a g
 
 # Get CIDs Under MCC
 
+> **API version:** `--api_version` is optional. Omit it to use the active version (`GOOGLE_ADS_API_VERSION`, then `api_version` in `config/assistant_config`, then the highest version in local `client_libs` and the installed `google-ads` package). Pass `--api_version vN` only to override it.
+
+> **Plugin directory:** Every command starts with a `GADS_DIR=...` line that finds the installed plugin: `CLAUDE_PLUGIN_ROOT` or `GOOGLE_ADS_ASSISTANT_DIR` when set, otherwise the Claude Code install (`~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant`) when running in Claude Code or when the Antigravity install (`~/.gemini/config/plugins/google-ads-api-developer-assistant`) is missing. Run both lines together in one command.
+
 Use this skill to retrieve the hierarchy of child accounts under a Google Ads Manager Account (MCC). This is useful when you need to perform operations across multiple client accounts or understand the account structure.
 
 ## Protocol
@@ -15,17 +19,20 @@ Use this skill to retrieve the hierarchy of child accounts under a Google Ads Ma
 
     * **To get a summary count only:**
         ```bash
-        python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id> --api_version <api_version>
+        GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+        python3 "$GADS_DIR/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id>
         ```
 
     * **To print the detailed list to console:**
         ```bash
-        python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id> --api_version <api_version> --print_cids
+        GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+        python3 "$GADS_DIR/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id> --print_cids
         ```
 
     * **To save the list to a CSV file (saved in `saved/data/`):**
         ```bash
-        python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id> --api_version <api_version> --save_csv
+        GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+        python3 "$GADS_DIR/skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py" --customer_id <mcc_id> --save_csv
         ```
 
 3. **Output Processing:**

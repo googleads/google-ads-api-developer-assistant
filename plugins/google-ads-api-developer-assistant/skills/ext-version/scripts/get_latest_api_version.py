@@ -357,20 +357,60 @@ def detect_latest_api_version(
     return detected
 
 
+def get_active_api_version() -> str:
+    """Returns the API version the skill scripts use, without writing config.
+
+    Delegates to config_init.resolve_active_api_version: GOOGLE_ADS_API_VERSION,
+    then api_version in the active assistant_config, then the highest version
+    in local client_libs and the installed google-ads package.
+
+    Raises:
+        ValueError: If the version is invalid or cannot be determined.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    try:
+        if plugin_root not in sys.path and os.path.isdir(plugin_root):
+            sys.path.insert(0, plugin_root)
+        resolver = importlib.import_module(
+            "config.config_init"
+        ).resolve_active_api_version
+    except (AttributeError, ImportError, OSError, SyntaxError) as e:
+        raise ValueError(
+            "Could not determine Google Ads API version (config_init is "
+            f"unavailable: {e}); pass --api_version vN"
+        ) from e
+    return str(resolver())
+
+
 def main() -> None:
-    """Detects the latest API version, updates config, and prints the version."""
+    """Prints the active or highest installed API version."""
     parser = argparse.ArgumentParser(
         description=(
-            "Detect the latest Google Ads API version and update "
-            "config/assistant_config."
+            "Detect the highest installed Google Ads API version and update "
+            "config/assistant_config (default), print the active version "
+            "(--active / --no-update), or print the highest installed version "
+            "(--installed)."
         )
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--active",
         "--no-update",
+        dest="active",
         action="store_true",
         help=(
-            "Print the detected API version without updating "
-            "config/assistant_config."
+            "Print the active API version that the skill scripts use "
+            "(GOOGLE_ADS_API_VERSION, then assistant_config, then the highest "
+            "installed version). Never writes config/assistant_config."
+        ),
+    )
+    mode.add_argument(
+        "--installed",
+        action="store_true",
+        help=(
+            "Print the highest installed API version (local client_libs and "
+            "the google-ads package) without updating config/assistant_config."
         ),
     )
     parser.add_argument(
@@ -380,11 +420,14 @@ def main() -> None:
     )
     args = parser.parse_args()
     try:
-        version = detect_latest_api_version(
-            update_config=not args.no_update,
-            config_dir=args.config_dir,
-        )
-    except RuntimeError as e:
+        if args.active:
+            version = get_active_api_version()
+        else:
+            version = detect_latest_api_version(
+                update_config=not args.installed,
+                config_dir=None if args.installed else args.config_dir,
+            )
+    except (RuntimeError, ValueError) as e:
         sys.stderr.write(f"ERROR: {e}\n")
         sys.exit(1)
     print(version)

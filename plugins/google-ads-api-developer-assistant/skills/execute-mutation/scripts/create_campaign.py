@@ -75,46 +75,35 @@ _SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
 )
 
 
-def _resolve_default_api_version() -> str:
-    """Resolves the active Google Ads API version dynamically."""
-    env_ver = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip().lower()
-    if env_ver:
-        return f"v{env_ver}" if env_ver.isdigit() else env_ver
+def _load_config_init() -> Any:
+    """Imports the plugin's config/config_init.py (shared API version resolver)."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
-    try:
-        if plugin_root not in sys.path and os.path.isdir(plugin_root):
-            sys.path.insert(0, plugin_root)
-        cfg_mod = importlib.import_module("config.config_init")
-        detected = cfg_mod.get_configured_api_version() or (
-            cfg_mod.detect_latest_api_version()
-        )
-        if detected:
-            return str(detected)
-    except (AttributeError, ImportError, OSError, ValueError):
-        pass
-    spec = importlib.util.find_spec("google.ads.googleads")
-    for loc in (spec.submodule_search_locations or ()) if spec else ():
-        if os.path.isdir(loc):
-            v_dirs = sorted(
-                (d for d in os.listdir(loc) if re.fullmatch(r"v\d+", d)),
-                key=lambda d: int(d[1:]),
-            )
-            if v_dirs:
-                return v_dirs[-1]
-    raise ValueError(
-        "Google Ads API version could not be automatically determined."
-    )
+    if plugin_root not in sys.path and os.path.isdir(plugin_root):
+        sys.path.insert(0, plugin_root)
+    return importlib.import_module("config.config_init")
 
 
 def _normalize_api_version(api_version: Optional[str] = None) -> str:
-    """Normalizes an API version string to lowercase 'v<N>' format."""
-    clean = str(api_version or "").strip().lower()
-    if not clean:
-        clean = _resolve_default_api_version()
-    if not clean.startswith("v") and clean.isdigit():
-        return f"v{clean}"
-    return clean
+    """Returns a validated 'vN' API version.
+
+    Delegates to config_init.resolve_active_api_version (explicit value, then
+    GOOGLE_ADS_API_VERSION, then assistant_config, then installed versions).
+
+    Raises:
+        ValueError: If the version is invalid or cannot be determined.
+    """
+    try:
+        resolver = _load_config_init().resolve_active_api_version
+    except (ImportError, AttributeError) as exc:
+        clean = str(api_version or "").strip().lower()
+        if re.fullmatch(r"v?\d+", clean):
+            return f"v{int(clean.lstrip('v'))}"
+        raise ValueError(
+            "Could not load config/config_init.py to resolve the Google Ads "
+            f"API version ({exc}); pass --api_version vN"
+        ) from exc
+    return str(resolver(api_version))
 
 
 def _get_config_path() -> str:
@@ -824,6 +813,10 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+    try:
+        args.api_version = _normalize_api_version(args.api_version)
+    except ValueError as exc:
+        parser.error(str(exc))
     create_campaign(
         customer_id=args.customer_id,
         api_version=args.api_version,

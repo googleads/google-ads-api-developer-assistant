@@ -33,6 +33,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -152,6 +153,48 @@ def parse_frontmatter(md_text: str) -> tuple[dict[str, Any], str]:
     if not isinstance(parsed, dict):
         raise ValueError("Frontmatter did not deserialize to a mapping.")
     return parsed, body
+
+
+def validate_skill_entry(s_name: str, info: dict[str, Any]) -> list[str]:
+    """Returns schema errors for one skill catalog entry (empty list when valid)."""
+    errors: list[str] = []
+    fm = info.get("frontmatter") or {}
+    if fm.get("name") != s_name:
+        errors.append(f"Skill '{s_name}' frontmatter name mismatch: {fm.get('name')!r}")
+    if not str(fm.get("description", "")).strip():
+        errors.append(f"Skill '{s_name}' missing frontmatter description.")
+    if not str(info.get("body", "")).strip():
+        errors.append(f"Skill '{s_name}' has empty markdown body.")
+    return errors
+
+
+def load_skill_entry(skill_name: str, skill_md: str) -> dict[str, Any]:
+    """Parses one SKILL.md file into a catalog entry (no slash commands attached)."""
+    with open(skill_md, "r", encoding="utf-8") as f:
+        text = f.read()
+    fm, body = parse_frontmatter(text)
+    return {"name": skill_name, "path": skill_md, "frontmatter": fm, "body": body, "commands": []}
+
+
+def build_mutated_skill_fixture(skill_name: str, dest_dir: str) -> str:
+    """Writes a copy of a real SKILL.md with its required `description` and body removed.
+
+    The schema validator and the router must both reject this fixture. It is derived
+    from the live SKILL.md at run time so it cannot drift from the real file.
+    """
+    src = os.path.join(SKILLS_DIR, skill_name, "SKILL.md")
+    with open(src, "r", encoding="utf-8") as f:
+        text = f.read()
+    fm, _body = parse_frontmatter(text)
+    fm = dict(fm)
+    fm.pop("description", None)
+    mutated = "---\n" + yaml.safe_dump(fm, sort_keys=False) + "---\n"
+    out_dir = os.path.join(dest_dir, skill_name)
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "SKILL.md")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(mutated)
+    return out_path
 
 
 def load_skill_catalog() -> dict[str, dict[str, Any]]:
@@ -784,6 +827,61 @@ def _get_script_supported_flags(script_abs_path: str, cache: dict[str, set[str]]
     return found
 
 
+GLOBAL_OFFLINE_CHECK_IDS = (
+    "EV-SCHEMA-01",
+    "EV-SCHEMA-02",
+    "EV-CLI-01",
+    "EV-POLICY-01",
+    "EV-SELFTEST-01",
+)
+
+
+def expected_offline_check_ids() -> set[str]:
+    """Registry of every check `run_offline_checks()` runs without filters."""
+    return set(GLOBAL_OFFLINE_CHECK_IDS) | {c.case_id for c in build_eval_cases()}
+
+
+def run_mutated_skill_negative_control(catalog: dict[str, dict[str, Any]]) -> str:
+    """Asserts a SKILL.md with a required section removed fails schema and routing."""
+    cases = [
+        c for c in build_eval_cases()
+        if not re.search(r"(?:^|\s)/[a-z0-9-]+\b", c.prompt.lower()) and c.skill in catalog
+    ]
+    if not cases:
+        raise AssertionError("No non-slash EvalCase available for the negative control.")
+    checked: list[str] = []
+    routing_checked: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="gads_eval_mutated_skill_") as tmp:
+        for case in cases:
+            mutated_path = build_mutated_skill_fixture(case.skill, tmp)
+            entry = load_skill_entry(case.skill, mutated_path)
+            schema_errs = validate_skill_entry(case.skill, entry)
+            if not schema_errs:
+                raise AssertionError(
+                    f"Schema validator accepted mutated {case.skill}/SKILL.md "
+                    "(description and body removed)."
+                )
+            checked.append(case.case_id)
+            if set(_tokenize(case.skill)) & set(_tokenize(case.prompt)):
+                # The router scores skill-name tokens without reading SKILL.md, so only
+                # prompts that share no token with the skill name test content routing.
+                continue
+            mutated_catalog = dict(catalog)
+            mutated_catalog[case.skill] = dict(entry, commands=[])
+            routed, _scores = route_prompt_to_skill(case.prompt, mutated_catalog)
+            if routed == case.skill:
+                raise AssertionError(
+                    f"Router still sent {case.case_id} to mutated skill '{case.skill}'."
+                )
+            routing_checked.append(case.case_id)
+    if not routing_checked:
+        raise AssertionError("No case exercised content-based routing in the negative control.")
+    return (
+        f"Mutated SKILL.md fixtures rejected by schema for {len(checked)} cases and by "
+        f"routing for {len(routing_checked)} cases (self-test of the offline checks)."
+    )
+
+
 def run_offline_checks(
     *,
     skill_filter: str | None = None,
@@ -828,15 +926,9 @@ def run_offline_checks(
             if missing:
                 raise AssertionError(f"Missing expected skills: {missing}")
             for s_name, info in catalog.items():
-                fm = info["frontmatter"]
-                if fm.get("name") != s_name:
-                    raise AssertionError(
-                        f"Skill '{s_name}' frontmatter name mismatch: {fm.get('name')!r}"
-                    )
-                if not str(fm.get("description", "")).strip():
-                    raise AssertionError(f"Skill '{s_name}' missing frontmatter description.")
-                if not info["body"].strip():
-                    raise AssertionError(f"Skill '{s_name}' has empty markdown body.")
+                errs = validate_skill_entry(s_name, info)
+                if errs:
+                    raise AssertionError("; ".join(errs))
             return f"Validated YAML frontmatter & bodies for all {len(catalog)} skills."
 
         _run_check("EV-SCHEMA-01", "EV-SCHEMA", "all", _ev_schema_01)
@@ -946,7 +1038,18 @@ def run_offline_checks(
 
         _run_check("EV-POLICY-01", "EV-POLICY", "all", _ev_policy_01)
 
-    # EV-ROUTE & Rubric Self-Check across all 22 EvalCases
+        # EV-SELFTEST-01: negative control for the schema validator and the router.
+        # A real SKILL.md with its required description and body removed must fail
+        # validation and must stop winning the routing for its own non-slash prompts.
+        def _ev_selftest_01() -> str:
+            return run_mutated_skill_negative_control(catalog)
+
+        _run_check("EV-SELFTEST-01", "EV-SELFTEST", "all", _ev_selftest_01)
+
+    # EV-ROUTE: real routing check + rubric SELF-TEST. The rubric step grades each
+    # case's hand-written reference_response, so it validates the rubric patterns
+    # themselves (plus an empty-response negative control), not SKILL.md behavior.
+    # Live mode (`--mode live`) is what grades real model responses.
     cases = build_eval_cases()
     if skill_filter:
         cases = [c for c in cases if c.skill == skill_filter]
@@ -973,7 +1076,8 @@ def run_offline_checks(
                 raise AssertionError("Rubric grader failed negative control on empty response.")
             return (
                 f"Routed -> '{routed}' (score={scores.get(routed, 0.0)}); "
-                f"rubric verified ({len(_case.required_patterns)} req / "
+                f"rubric self-test on reference answer passed "
+                f"({len(_case.required_patterns)} req / "
                 f"{len(_case.forbidden_patterns)} forbid)."
             )
 
@@ -1042,9 +1146,11 @@ def invoke_live_provider(
             raise RuntimeError(
                 "GEMINI_API_KEY environment variable is required for --provider gemini-api."
             )
+        # The key goes in the x-goog-api-key header, never the URL: URLs end up in
+        # proxy logs and in exception objects (HTTPError.url).
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={api_key}"
+            f"{model}:generateContent"
         )
         body = json.dumps({
             "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -1054,7 +1160,7 @@ def invoke_live_provider(
         req = urllib.request.Request(
             url,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
             method="POST",
         )
         try:

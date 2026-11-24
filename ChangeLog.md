@@ -2,6 +2,52 @@
 
 ## 4.1.0
 
+- **HITL Guard Hook Fixes for Antigravity and Claude Code (`config/config_init.py`, `hooks.json`, `hooks/hooks.json`, `.mcp.json`, `.claude-plugin/plugin.json`, `server.py`, `install.*`, `update.*`):**
+  - Fixed a bypass of the `run_mutation.py --reject` and `--dry-run` shortcuts. The guard now allows a shortcut only when a shell segment is exactly `python* .../skills/execute-mutation/scripts/run_mutation.py` with a real `--reject` or `--dry-run` argument. Commands with `#`, `$(`, backticks, `<(`, or newlines get the full check. Other chained segments (`&&`, `;`, `|`) still get the full check, and dry runs still get the deletion check.
+  - Claude Code now gets only `hookSpecificOutput` (`permissionDecision` `allow`, `deny`, or `ask`). A `deny` also writes the reason to stderr and exits with code 2. When the guard has no objection, it sends no `permissionDecision`, so Claude Code permission rules still apply. Antigravity output is unchanged.
+  - Added the Claude Code plugin files `hooks/hooks.json`, `.mcp.json`, and `.claude-plugin/plugin.json`, which use `${CLAUDE_PLUGIN_ROOT}`. The Claude Code hooks try `python3`, then `python`, then `py -3`, and exit with code 2 when Python or `config_init.py` is missing. The Antigravity `hooks.json` no longer looks for `config_init.py` relative to the current directory and blocks tool calls when it cannot find the script.
+  - Shell and Python writes to `assistant_config`, `financial_limits`, `google-ads.yaml`, and `hooks.json` now need confirmation. Writes to `last_dry_run.json` and `mutation_audit.jsonl` are blocked.
+  - `PostToolUseFailure` for `run_mutation.py --execute` now writes `EXECUTE_FAILED` with the error text and does not change the receipt. Only an explicit operator rejection writes `HUMAN_REJECTED`.
+  - Added `validate_api_version()` and `resolve_active_api_version()` to `config_init.py`. Values that are not `vNN` are rejected and never written to `config/assistant_config`. The config lookup now checks the explicit config directory, `CLAUDE_PLUGIN_ROOT`, and the current plugin before the Claude Code and Antigravity installs.
+  - `allow_tier1_financial_mutates` now uses only the top-level TOML key. A bare `true` line no longer turns it on.
+  - The `SessionStart` hook gives Claude Code the session context as `additionalContext` and writes `GOOGLE_ADS_ASSISTANT_DIR` and `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `CLAUDE_ENV_FILE`. Credential sync runs only for Ads-related commands, once per session.
+  - The A2A sidecar now reclassifies receipts that have no policy tier (and blocks when it cannot), logs `RECEIPT_VERIFIED` for its verify-only path, records `approval_decision` separately from `status = SUCCESS`, and rejects only receipts for a `script_path` under `saved/code/`.
+  - The install and update scripts show a warning when they find no API version, and ignore invalid `api_version` values.
+  - The hook no longer rewrites command paths that already start with a variable, `~`, or `/` (for example `"$GADS_DIR/skills/..."` or `${CLAUDE_PLUGIN_ROOT}/skills/...`). Only bare relative `skills/...` and `config/...` paths are rewritten.
+  - `run_mutation.py --execute` is blocked when the stored receipt records a customer ID mismatch between the payload and `--customer-id`.
+
+- **Mutation Runner Fixes (`skills/execute-mutation/`):**
+  - The Layer 4 gRPC interceptor now records failed RPCs as `FAILED` with the gRPC code and details, instead of `SUCCESS`. Layer 4 also covers `grpc.aio.secure_channel` and `grpc.aio.insecure_channel`.
+  - Successful live mutations are logged as `status = SUCCESS` with `approval.decision = HUMAN_APPROVED`, so the CLI and the A2A sidecar use the same status values.
+  - `--reject` now rejects only receipts in `DRY_RUN_PASSED` state that match the `--script` path or its SHA-256. It no longer overwrites `EXECUTED` receipts, and it exits with code 1 when nothing matched. `reject_dry_run_receipt()` returns `status` (`REJECTED` or `NO_PENDING_RECEIPT`) and `rejected_count`.
+  - A customer ID mismatch between the payload and `--customer-id` now blocks the dry-run receipt (exit code 2, audit status `BLOCKED_CUSTOMER_ID_MISMATCH`) instead of only showing a warning.
+  - Amount drift between the stated amount and the payload is now detected in both directions, per field.
+  - `MultiPartyAuthReviewService.resolve_multi_party_auth_review` is classified as Tier 3 "Account Structure & Linking" and as an account-takeover escalation. Unclassified services show "unclassified service, review manually" instead of a `$0.00` spend delta.
+  - `execute_mutates` and `allow_tier1_financial_mutates` use only the top-level TOML key when the file parses.
+  - Email addresses are masked (`j***@domain.com`) in stored receipts and audit records, including `dry_run_rpc_calls` payloads. Masked payloads are flagged with `request_payload_masked` and verified against the `request_sha256` recorded before masking.
+  - `create_account.py`, `create_ad.py`, `create_ad_group.py`, and `create_campaign.py` use `config_init.resolve_active_api_version()` and print a usage error (no traceback) for invalid versions.
+  - `SKILL.md` documents the Tier 1 financial default, the `config_init.py --allow-tier1-financial-mutates true` opt-in (only with the user's explicit consent), that budget creation in `create_campaign.py` is Tier 1, and the decline step `run_mutation.py --reject --script ... --rejection-reason "..."`.
+
+- **Skill Script Fixes (`skills/*/scripts/`, `skills/*/SKILL.md`, `commands/`, `rules/`):**
+  - `inspect_object.py` no longer crashes with a traceback when the Google Ads SDK is not installed. It prints `ERROR: ... pass --api_version vN` instead.
+  - `get_cids_under_mcc.py`, `create_pmax_webpage_filter.py`, `inspect_object.py`, `troubleshoot_conversions.py`, `get_recent_gclids.py`, and `validate_gaql.py` use the shared `config_init.resolve_active_api_version()` instead of separate copies.
+  - `--api_version` is now optional in every skill script. When omitted, the active version is used (explicit argument, then `GOOGLE_ADS_API_VERSION`, then `api_version` in `config/assistant_config`, then the higher of local `client_libs` and the installed package).
+  - `get_latest_api_version.py` has two new read-only modes. `--active` (alias `--no-update`) prints the version the scripts will use, and `--installed` prints the highest installed version. Running it without flags still detects the version and writes it.
+  - `troubleshoot_conversions.py` masks GCLIDs (first and last 6 characters) in console output, reports, and JSON. Use `--show-gclids` to show full values.
+  - `SKILL.md` and `commands/*.md` start each command block with a `GADS_DIR` line that resolves the plugin directory for both Antigravity and Claude Code (`CLAUDE_PLUGIN_ROOT`, `GOOGLE_ADS_ASSISTANT_DIR`, then the install directory).
+  - Corrected the API version resolution order described in `assistant-tutorial/SKILL.md`.
+
+- **Test Suite & CI Hardening (`tests/`, `.github/workflows/ci.yml`):**
+  - `--validate-only` now skips every functional test that runs `run_mutation.py --execute`, so the scheduled CI job no longer makes live mutations.
+  - The live CI job runs only on `workflow_dispatch` or `schedule` from `main` or `dev_next`, uses the `live-test-account` environment, and has `permissions: contents: read`. All GitHub Actions are pinned to commit SHAs.
+  - The live CI job no longer uploads raw functional artifacts. It uploads only a pass/fail summary, kept for 3 days.
+  - The audit logger now also redacts by value: refresh tokens (`1//`), access tokens (`ya29.`), client secrets (`GOCSPX-`), private keys, bearer tokens, and the test customer IDs.
+  - Offline runs always use fake credentials and never read the developer's `google-ads.yaml`.
+  - The Gemini API key is sent in the `x-goog-api-key` header instead of the URL.
+  - Rejection tests for GAQL, conversion uploads, and financial limits check the specific error text and that no traceback appears.
+  - Added regression suites `test_guard_hook_regressions.py`, `test_run_mutation_regressions.py`, and `test_skill_version_resolution.py`. Hook tests cover both Antigravity (`run_command`, `write_to_file`) and Claude Code (`Bash`, `Write`, `Edit`, `MultiEdit`) payloads.
+  - Replaced hard-coded test counts with registry comparisons, made `--test-id` respect `--suite`, made `SK-SYNC-01` check that `client_libs` is unchanged, and added a mutated `SKILL.md` self-test to the offline eval suite.
+
 - **Dynamic API Version Resolution Across Runtime, Installers & Test Harnesses (`config/`, `skills/*/scripts/`, `sidecars/`, `install.*`, `update.*`, `tests/`):**
   - Removed hardcoded `v26` defaults and fallbacks across `config/config_init.py` (`DEFAULT_API_VERSION`), `config/assistant_config`, `install.sh`, `install.ps1`, `update.sh`, `update.ps1`, `inspect_object.py`, `create_account.py`, `create_ad.py`, `create_ad_group.py`, `create_campaign.py`, `get_cids_under_mcc.py`, `create_pmax_webpage_filter.py`, `skills/execute-mutation/SKILL.md`, `skills/assistant-tutorial/SKILL.md`, and `sidecars/google-ads-a2a-service/server.py`, resolving the active Google Ads API version dynamically from caller/environment overrides, `config/assistant_config`, `client_libs/google-ads-python`, and installed `google.ads.googleads` packages.
   - Replaced version-number threshold branching in `troubleshoot_conversions.py` (`_uses_enablement_setting()`) with `ConversionTrackingSetting` Protobuf descriptor inspection, and updated `tests/mutate_test_harness.py`, `tests/hitl_audit_logger.py`, `tests/test_account_config.yaml`, `tests/hitl_policy_functional_suite.py`, `tests/test_hitl_functional_suite.py`, and `tests/test_hitl_mutation_guard.py` to discover and load the active SDK version dynamically.

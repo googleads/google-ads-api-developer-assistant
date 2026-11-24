@@ -28,6 +28,10 @@ on:
         type: boolean
         default: false
 
+# Least-privilege token for every job: the workflow only reads repository contents.
+permissions:
+  contents: read
+
 jobs:
   test-unix:
     name: ${{ matrix.os }} - Python ${{ matrix.python-version }}
@@ -41,10 +45,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
@@ -103,10 +107,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
@@ -158,7 +162,15 @@ jobs:
   live-functional-test-account:
     name: Live Google Ads Test Account & Optional LLM Evals
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # Live credentials are only exposed to protected branches, never to fork PRs
+    # (pull_request events never match), and only after the environment's required
+    # reviewers approve the run.
+    if: >-
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+      && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev_next')
+    environment: live-test-account
+    permissions:
+      contents: read
 
     steps:
       - name: Check live functional secrets availability
@@ -183,11 +195,11 @@ jobs:
 
       - name: Checkout repository
         if: steps.check_secrets.outputs.has_ads_creds == 'true' || steps.check_secrets.outputs.has_gemini_key == 'true'
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Python 3.13
         if: steps.check_secrets.outputs.has_ads_creds == 'true' || steps.check_secrets.outputs.has_gemini_key == 'true'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
 
@@ -258,17 +270,48 @@ jobs:
             --provider gemini-api \
             --json-out "${RUNNER_TEMP}/functional_artifacts/llm_eval_report.json"
 
-      - name: Shred temporary credentials
+      - name: Build redacted pass/fail summary
+        if: always() && (steps.check_secrets.outputs.has_ads_creds == 'true' || steps.check_secrets.outputs.has_gemini_key == 'true')
+        shell: bash
+        run: |
+          # The raw audit JSONL files hold customer IDs, subprocess argv and stdout/stderr.
+          # The repository is public, so only test IDs and outcomes leave the runner.
+          mkdir -p "${RUNNER_TEMP}/functional_summary"
+          python - "${RUNNER_TEMP}/functional_artifacts" "${RUNNER_TEMP}/functional_summary/summary.json" <<'PY'
+          import glob, json, os, sys
+          src, out = sys.argv[1], sys.argv[2]
+          summary = {}
+          for path in sorted(glob.glob(os.path.join(src, "*.jsonl"))):
+              rows = []
+              with open(path, encoding="utf-8") as f:
+                  for line in f:
+                      try:
+                          rec = json.loads(line)
+                      except ValueError:
+                          continue
+                      if rec.get("record_type") == "TEST_RESULT":
+                          rows.append({
+                              "test_id": str(rec.get("test_id", "")),
+                              "suite": str(rec.get("suite", "")),
+                              "outcome": str(rec.get("outcome", "")),
+                          })
+              summary[os.path.basename(path)] = rows
+          with open(out, "w", encoding="utf-8") as f:
+              json.dump(summary, f, indent=2)
+          PY
+
+      - name: Shred temporary credentials and raw audit logs
         if: always()
         shell: bash
         run: |
           rm -f "${RUNNER_TEMP}/google-ads.yaml"
+          rm -rf "${RUNNER_TEMP}/functional_artifacts"
 
-      - name: Upload sanitized functional audit logs & eval reports
+      - name: Upload redacted pass/fail summary
         if: always() && (steps.check_secrets.outputs.has_ads_creds == 'true' || steps.check_secrets.outputs.has_gemini_key == 'true')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: live-functional-audit-artifacts
-          path: ${{ runner.temp }}/functional_artifacts/
+          name: live-functional-summary
+          path: ${{ runner.temp }}/functional_summary/summary.json
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 3

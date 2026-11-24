@@ -38,35 +38,31 @@ DEFAULT_ASSISTANT_CONFIG_PATH = "config/assistant_config"
 AUDIT_LOG_DIR = os.path.join(".", "saved", "mutate_test_logs")
 
 
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
+from hitl_audit_logger import detect_importable_api_version  # noqa: E402
+
+
 def _detect_default_api_version() -> str:
-    """Resolves the active Google Ads API version dynamically from SDK or config."""
+    """Resolves the API version via the shared test helper (highest importable version).
+
+    A version configured in assistant_config wins only when the installed SDK can
+    import it, so `GoogleAdsClient(version=...)` never receives an unusable version.
+    """
     plugin_root = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "plugins",
-            "google-ads-api-developer-assistant",
-        )
+        os.path.join(_TESTS_DIR, "..", "plugins", "google-ads-api-developer-assistant")
     )
+    configured = ""
     try:
         if plugin_root not in sys.path and os.path.isdir(plugin_root):
             sys.path.insert(0, plugin_root)
         cfg_mod = importlib.import_module("config.config_init")
-        ver = cfg_mod.get_configured_api_version() or cfg_mod.detect_latest_api_version()
-        if ver:
-            return str(ver)
+        configured = str(cfg_mod.get_configured_api_version() or "")
     except Exception:
-        pass
-    spec = importlib.util.find_spec("google.ads.googleads")
-    for loc in (spec.submodule_search_locations or ()) if spec else ():
-        if os.path.isdir(loc):
-            v_dirs = sorted(
-                (d for d in os.listdir(loc) if re.fullmatch(r"v\d+", d)),
-                key=lambda d: int(d[1:]),
-            )
-            if v_dirs:
-                return v_dirs[-1]
-    return ""
+        configured = ""
+    return detect_importable_api_version(preferred=configured or None)
+
 
 PREFLIGHT_GAQL_QUERY = """
 SELECT customer.id, customer.descriptive_name, customer.test_account, customer.status

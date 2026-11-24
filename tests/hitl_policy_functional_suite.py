@@ -69,6 +69,7 @@ from hitl_audit_logger import (  # noqa: E402
     DEFAULT_TEST_ACCOUNT_CONFIG_PATH,
     PLUGIN_ROOT,
     FunctionalAuditLogger,
+    FunctionalTestSkipped,
     TestAccountConfig,
     TestCaseResult,
     filter_error_records,
@@ -641,6 +642,35 @@ class FunctionalTestContext:
             payload={"blocked_reason": reason},
         )
         raise AssertionError(f"Requires accessible Google Ads Test Account: {reason}")
+
+    def require_live_execute(self, action_desc: str) -> None:
+        """Skips the current test unless live `--execute` runs are allowed.
+
+        Every test that spawns `run_mutation.py --execute` calls this first, so
+        `--validate-only` (and `execution.allow_live_execute: false`) never relies on
+        the guard alone to stop a write against the verified test account.
+        """
+        if self.cfg.allow_live_execute:
+            return
+        req_id = self.audit.log_request(
+            test_id=self.current_test_id,
+            suite=self.current_suite,
+            action=f"LiveExecuteGateCheck:{action_desc}",
+            payload={"allow_live_execute": False},
+        )
+        self.last_request_record_id = req_id
+        self.audit.log_response(
+            request_record_id=req_id,
+            test_id=self.current_test_id,
+            suite=self.current_suite,
+            status="SKIPPED_LIVE_EXECUTE_DISABLED",
+            duration_ms=0.0,
+            payload={"skipped_reason": "allow_live_execute is false (--validate-only)"},
+        )
+        raise FunctionalTestSkipped(
+            f"{action_desc} runs run_mutation.py --execute; skipped because live execute "
+            "is disabled (--validate-only)."
+        )
 
     def logged_local_check(
         self,
@@ -1431,6 +1461,7 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
 
     @register("TC-CFG-01", "TC-CFG", "Default safe state (execute_mutates = false)")
     def tc_cfg_01(ctx: FunctionalTestContext) -> str:
+        ctx.require_live_execute("TC-CFG-01")
         fresh_cfg_dir = os.path.join(ctx.sandbox_dir, "cfg_01_fresh")
         ctx.logged_local_check(
             "sync_and_set_config_kv",
@@ -1491,6 +1522,7 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
 
     @register("TC-CFG-03", "TC-CFG", "Environment variable precedence (GOOGLE_ADS_EXECUTE_MUTATES)")
     def tc_cfg_03(ctx: FunctionalTestContext) -> str:
+        ctx.require_live_execute("TC-CFG-03")
         ctx.write_sandbox_assistant_config(execute_mutates=True)
         noop_script = ctx.write_sandbox_script("cfg03_env.py", "print('noop')\n")
         proc = ctx.logged_subprocess(
@@ -1693,7 +1725,8 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
         )
         agy_out = json.loads(agy_proc.stdout.strip())
         cl_out = json.loads(claude_proc.stdout.strip())
-        if agy_out.get("decision") != "deny" or cl_out.get("permissionDecision") != "deny":
+        cl_decision = (cl_out.get("hookSpecificOutput") or {}).get("permissionDecision")
+        if agy_out.get("decision") != "deny" or cl_decision != "deny":
             raise AssertionError(f"Expected deny in agy & Claude: agy={agy_out}, claude={cl_out}")
         return "Fabricated --confirm=true inline bypass denied in both agy and Claude Code CLI."
 
@@ -1845,8 +1878,9 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
             stamped = json.load(f)
         ctx.write_sandbox_assistant_config(execute_mutates=False)
         ctx.clear_all_receipts()
-        if out.get("decision") != "force_ask" or out.get("permissionDecision") != "ask":
-            raise AssertionError(f"Expected force_ask + ask, got {out}")
+        # Claude Code shape: hookSpecificOutput.permissionDecision == "ask" (native prompt).
+        if (out.get("hookSpecificOutput") or {}).get("permissionDecision") != "ask":
+            raise AssertionError(f"Expected hookSpecificOutput.permissionDecision=ask, got {out}")
         for req_field in (
             "hook_prompted_at_iso",
             "cli_conversation_id",
@@ -1855,10 +1889,11 @@ def _build_all_tests() -> list[FunctionalTestSpec]:
         ):
             if not stamped.get(req_field):
                 raise AssertionError(f"Receipt missing stamped field {req_field!r}: {stamped}")
-        return "Hook emitted force_ask / ask and stamped all 4 session fields onto last_dry_run.json."
+        return "Hook emitted Claude 'ask' and stamped all 4 session fields onto last_dry_run.json."
 
     @register("TC-HOOK-09", "TC-HOOK", "Anti-splitting per-invocation gate")
     def tc_hook_09(ctx: FunctionalTestContext) -> str:
+        ctx.require_live_execute("TC-HOOK-09")
         ctx.clear_all_receipts()
         ctx.write_sandbox_assistant_config(
             execute_mutates=True, allow_tier1_financial_mutates=True
@@ -2025,6 +2060,7 @@ svc.mutate_billing_setup(request=req)
 
     @register("TC-RUN-04", "TC-RUN", "Post-dry-run script file edit (script_sha256)")
     def tc_run_04(ctx: FunctionalTestContext) -> str:
+        ctx.require_live_execute("TC-RUN-04")
         ctx.clear_all_receipts()
         ctx.write_sandbox_assistant_config(execute_mutates=True)
         cid = ctx.cfg.test_customer_id if is_valid_customer_id(ctx.cfg.test_customer_id) else "4863089361"
@@ -2066,6 +2102,7 @@ svc.mutate_billing_setup(request=req)
 
     @register("TC-RUN-05", "TC-RUN", "Runtime request payload drift (request_sha256)")
     def tc_run_05(ctx: FunctionalTestContext) -> str:
+        ctx.require_live_execute("TC-RUN-05")
         ctx.require_verified_test_account("TC-RUN-05")
         ctx.clear_all_receipts()
         ctx.write_sandbox_assistant_config(
@@ -2111,6 +2148,7 @@ svc.mutate_billing_setup(request=req)
 
     @register("TC-RUN-06", "TC-RUN", "Unapproved extra or missing RPC calls during --execute")
     def tc_run_06(ctx: FunctionalTestContext) -> str:
+        ctx.require_live_execute("TC-RUN-06")
         ctx.require_verified_test_account("TC-RUN-06")
         ctx.write_sandbox_assistant_config(
             execute_mutates=True, allow_tier1_financial_mutates=True
@@ -2162,6 +2200,7 @@ svc.mutate_billing_setup(request=req)
 
     @register("TC-RUN-07", "TC-RUN", "Synchronous session TTL (1800s expiry)")
     def tc_run_07(ctx: FunctionalTestContext) -> str:
+        ctx.require_live_execute("TC-RUN-07")
         ctx.clear_all_receipts()
         ctx.write_sandbox_assistant_config(execute_mutates=True)
         sp = ctx.write_sandbox_script("run07_ttl.py", "print('ttl')\n")
@@ -2205,6 +2244,7 @@ svc.mutate_billing_setup(request=req)
 
     @register("TC-RUN-08", "TC-RUN", "Single-use receipt anti-replay (EXECUTED)")
     def tc_run_08(ctx: FunctionalTestContext) -> str:
+        ctx.require_live_execute("TC-RUN-08")
         ctx.clear_all_receipts()
         ctx.write_sandbox_assistant_config(execute_mutates=True)
         sp = ctx.write_sandbox_script("run08_replay.py", "print('once')\n")
@@ -2241,6 +2281,7 @@ svc.mutate_billing_setup(request=req)
 
     @register("TC-RUN-09", "TC-RUN", "Receipt JSON tampering detection")
     def tc_run_09(ctx: FunctionalTestContext) -> str:
+        ctx.require_live_execute("TC-RUN-09")
         ctx.clear_all_receipts()
         ctx.write_sandbox_assistant_config(execute_mutates=True)
         sp = ctx.write_sandbox_script("run09_tamper.py", "print('tamper')\n")
@@ -2346,9 +2387,30 @@ svc.mutate_billing_setup(request=req)
             },
         }
 
+        # A --customer-id that disagrees with the payload customer is now a hard block.
+        try:
+            RUN_MUTATION_MOD.write_dry_run_receipt(
+                customer_id="1111111111",
+                operation_summary="Update daily budget",
+                before_state="$40.00/day",
+                after_state="$50.00/day",
+                consequences=["Sets daily budget to $50.00/day"],
+                reversibility="REVERSIBLE",
+                script_path=sp,
+                rpc_calls=[fake_call],
+            )
+        except ValueError as mismatch_exc:
+            if "CUSTOMER ID MISMATCH" not in str(mismatch_exc):
+                raise
+        else:
+            ctx.clear_all_receipts()
+            raise AssertionError(
+                "GAP-02: --customer-id '1111111111' vs payload '9999999999' did not block the receipt."
+            )
+
         def _check() -> dict[str, Any]:
             receipt = RUN_MUTATION_MOD.write_dry_run_receipt(
-                customer_id="1111111111",
+                customer_id="9999999999",
                 operation_summary="Update daily budget",
                 before_state="$40.00/day",
                 after_state="$50.00/day",
@@ -2378,10 +2440,13 @@ svc.mutate_billing_setup(request=req)
         if not (has_true_amount and has_true_cid):
             raise AssertionError(
                 "GAP-02 (Policy §1.3 #2): Confirmation card/hook displayed deceptive LLM CLI prose "
-                "('1111111111', '$50.00/day') without surfacing payload customer_id '9999999999' "
+                "('$50.00/day') without surfacing payload customer_id '9999999999' "
                 "and payload amount_micros=50_000_000_000 ($50,000.00/day)."
             )
-        return "Payload-bound $50,000.00 and customer_id 9999999999 surfaced in HITL prompt."
+        return (
+            "Customer-ID mismatch blocked; payload-bound $50,000.00 and customer_id "
+            "9999999999 surfaced in HITL prompt."
+        )
 
     @register("TC-RUN-12", "TC-RUN", "BatchJobService & GoogleAdsService Inner-Op Tier Elevation (GAP-04)")
     def tc_run_12(ctx: FunctionalTestContext) -> str:
@@ -2647,6 +2712,7 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
 
     @register("TC-AUD-01", "TC-AUD", "HUMAN_APPROVED audit schema & 0600 permissions")
     def tc_aud_01(ctx: FunctionalTestContext) -> str:
+        ctx.require_live_execute("TC-AUD-01")
         ctx.require_verified_test_account("TC-AUD-01")
         ctx.clear_all_receipts()
         ctx.write_sandbox_assistant_config(
@@ -2706,17 +2772,23 @@ print("DIRECT_CLIENT_CREATED_WITHOUT_GET_SERVICE")
             raise AssertionError(f"Expected 0o600 on mutation_audit.jsonl, got {mode}")
         if not rec.get("request", {}).get("request_sha256_verified"):
             raise AssertionError("request_sha256_verified was not True.")
-        if rec.get("status") != "HUMAN_APPROVED" or "classification_tier" not in rec.get(
-            "approval", {}
-        ):
+        approval = rec.get("approval", {}) or {}
+        # Current schema: status="SUCCESS" + approval.decision="HUMAN_APPROVED".
+        # Legacy records used status="HUMAN_APPROVED".
+        approved = rec.get("status") == "HUMAN_APPROVED" or (
+            rec.get("status") == "SUCCESS" and approval.get("decision") == "HUMAN_APPROVED"
+        )
+        if not approved or "classification_tier" not in approval:
             raise AssertionError(
-                f"GAP-03/GAP-06 (Policy §1.3 #4): Audit record recorded status={rec.get('status')!r} "
-                "instead of 'HUMAN_APPROVED' and omitted classification_tier / rendered warning."
+                f"GAP-03/GAP-06 (Policy §1.3 #4): Audit record recorded status={rec.get('status')!r}, "
+                f"approval.decision={approval.get('decision')!r} instead of SUCCESS + "
+                "HUMAN_APPROVED, or omitted classification_tier / rendered warning."
             )
         return "0600 HUMAN_APPROVED audit schema verified."
 
     @register("TC-AUD-02", "TC-AUD", "HUMAN_REJECTED audit record & receipt invalidation (GAP-06)")
     def tc_aud_02(ctx: FunctionalTestContext) -> str:
+        ctx.require_live_execute("TC-AUD-02")
         ctx.clear_all_receipts()
         ctx.write_sandbox_assistant_config(execute_mutates=True)
         sp = ctx.write_sandbox_script("aud02_reject.py", "print('reject test')\n")
@@ -4311,6 +4383,33 @@ def run_functional_suite(
                 )
                 if print_output:
                     print(f"[PASS] {spec.test_id:<10} ({spec.suite:<9}) {spec.name}")
+            except FunctionalTestSkipped as skip_exc:
+                dur_ms = (time.perf_counter() - t0) * 1000.0
+                skip_msg = f"SKIPPED: {str(skip_exc).strip()}"
+                audit.log_test_result(
+                    test_id=spec.test_id,
+                    suite=spec.suite,
+                    name=spec.name,
+                    passed=True,
+                    duration_ms=dur_ms,
+                    details=skip_msg,
+                    last_request_record_id=ctx.last_request_record_id,
+                    skipped=True,
+                )
+                results.append(
+                    TestCaseResult(
+                        test_id=spec.test_id,
+                        suite=spec.suite,
+                        name=spec.name,
+                        passed=True,
+                        duration_ms=dur_ms,
+                        details=skip_msg,
+                        request_record_id=ctx.last_request_record_id,
+                        skipped=True,
+                    )
+                )
+                if print_output:
+                    print(f"[SKIP] {spec.test_id:<10} ({spec.suite:<9}) {spec.name}: {skip_msg}")
             except Exception as exc:
                 dur_ms = (time.perf_counter() - t0) * 1000.0
                 err_msg = str(exc).strip() or type(exc).__name__

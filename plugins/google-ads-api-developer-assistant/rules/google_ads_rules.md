@@ -11,7 +11,7 @@
 
 #### 1.0. Protocol: "Validate Before Act & Interactive Sync"
 **ABSOLUTE FIRST ACTION:**
-1. **API Version & Cache Validation:** Check if `config/assistant_config` exists and contains a valid `api_version`. If it does, automatically load it and use it without prompting the user. If it does not exist or is empty, identify the latest stable API version by inspecting the version directories in `client_libs/google-ads-python/google/ads/googleads/v*` (or running `python3 skills/ext-version/scripts/get_latest_api_version.py`), present it to the user for confirmation, and write it to `config/assistant_config` (`api_version = "<version>"`). Only fall back to web release notes if local client library discovery is unavailable. For all subsequent operations, use this cached version and DO NOT prompt the user again.
+1. **API Version & Cache Validation:** Check if `config/assistant_config` exists and contains a valid `api_version`. If it does, automatically load it and use it without prompting the user. If it does not exist or is empty, identify the latest stable API version by inspecting the version directories in `client_libs/google-ads-python/google/ads/googleads/v*` (or running `python3 skills/ext-version/scripts/get_latest_api_version.py --installed`, which does not write config), present it to the user for confirmation, and write it to `config/assistant_config` (`api_version = "<version>"`). Only fall back to web release notes if local client library discovery is unavailable. For all subsequent operations, use this cached version and DO NOT prompt the user again.
 2. **5-Step Client Library & Site-Directory Synchronization Protocol (First Prompt Execution):** When the user enters their first prompt in the `agy` session (or when checking for client library updates), the PreInvocation hook automatically performs version parity checks. The assistant MUST display the formatted comparison table at the very beginning of its first response:
    - **Step 1:** Check the version of `google-ads` installed in the Python site directory (`site.getsitepackages()`, `importlib.metadata.version('google-ads')`) against `pypi.org` (`https://pypi.org/pypi/google-ads/json`).
    - **Step 2:** Check the version of the Python client library in `client_libs/google-ads-python` against GitHub (`googleads/google-ads-python/releases/latest`).
@@ -80,7 +80,7 @@ Before presenting or executing ANY GAQL query, pass this sequence:
    - `OR` operator is forbidden.
    - Metadata queries MUST NOT contain `FROM`.
    - Use `segments.hour` for hourly segmentation (`segments.hour_of_day` is not a valid GAQL field).
-4. **Runtime Dry Run:** Execute `python3 skills/validate-gaql/scripts/validate_gaql.py --customer_id <customer_id> --api_version <api_version>`.
+4. **Runtime Dry Run:** Execute `python3 skills/validate-gaql/scripts/validate_gaql.py --customer_id <customer_id>` (omit `--api_version` to use the active version).
 
 #### 3.2. Code Generation Protocol (Python)
 Python is the mandatory default language for all code generation and execution across the assistant. The assistant must only generate or run code in other supported languages (PHP, Ruby, Java, C#/.NET) if explicitly instructed by the user. Every Python script generated MUST follow this automated linting pipeline:
@@ -104,7 +104,7 @@ Python is the mandatory default language for all code generation and execution a
 
 #### 4.1. Protobuf Object Inspection & Code Reference
 - NEVER guess the structure of an API resource, message, or Enum.
-- Always run `python3 skills/inspect-object/scripts/inspect_object.py --object_name <ObjectName> --api_version <api_version>` to inspect fields.
+- Always run `python3 skills/inspect-object/scripts/inspect_object.py --object_name <ObjectName>` (omit `--api_version` to use the active version) to inspect fields.
 - Refer to `client_libs/google-ads-python/` for exact proto definitions and official Google code examples.
 - **Version Parity Check & Warning:** When discovering a new version of the python client library or `google-ads`, check the versions in the system site-directory. If the installed `google-ads` version does not match the latest upstream release or the `client_libs/google-ads-python` version used for Protobuf inspection, issue an explicit warning/alert to the user, ask if they would like Gemini to upgrade the system version, and update it upon confirmation.
 

@@ -1455,11 +1455,38 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "error": msg,
             }
 
-        receipt_tier = int(receipt.get("tier_number", 3))
-        if (
-            receipt_tier == 1
-            and hasattr(mod, "is_tier1_financial_mutates_enabled")
-            and not mod.is_tier1_financial_mutates_enabled()
+        receipt_tier: Optional[int] = None
+        tier_error = ""
+        if receipt.get("classification_tier") and "tier_number" in receipt:
+            try:
+                receipt_tier = int(receipt["tier_number"])
+            except (TypeError, ValueError):
+                receipt_tier = None
+        if receipt_tier is None:
+            # Older or unclassified receipts: reclassify exactly like the PreToolUse hook does.
+            classify_fn = getattr(mod, "classify_mutation", None)
+            if callable(classify_fn):
+                try:
+                    dry_rpc_list = receipt.get("dry_run_rpc_calls")
+                    cls_info = classify_fn(
+                        operation_summary=str(receipt.get("operation_summary", "")),
+                        before_state=str(receipt.get("before_state", "")),
+                        after_state=str(receipt.get("after_state", "")),
+                        rpc_calls=dry_rpc_list if isinstance(dry_rpc_list, list) else None,
+                        script_path=script_path,
+                    )
+                    receipt_tier = int(cls_info["tier_number"])
+                except Exception as cls_exc:  # pylint: disable=broad-except
+                    tier_error = f"classification failed: {cls_exc}"
+            else:
+                tier_error = "run_mutation.classify_mutation is unavailable"
+        if receipt_tier is None:
+            # Fail closed: an unclassifiable receipt is treated as Tier 1.
+            receipt_tier = 1
+        if receipt_tier == 1 and (
+            not hasattr(mod, "is_tier1_financial_mutates_enabled")
+            or not mod.is_tier1_financial_mutates_enabled()
+            or tier_error
         ):
             blocked_iso = datetime.now(timezone.utc).isoformat()
             t1_err = (
@@ -1467,6 +1494,11 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "Tier 1 Financial Services are read-only by default even when execute_mutates = true. "
                 "Set 'allow_tier1_financial_mutates = true' in config/assistant_config to enable live Tier 1 writes."
             )
+            if tier_error:
+                t1_err = (
+                    "EXECUTE_MUTATION blocked (TIER CLASSIFICATION UNAVAILABLE): the receipt has no "
+                    f"policy tier and it could not be reclassified ({tier_error}). Re-run the dry run."
+                )
             mod.append_mutation_audit_log(
                 phase="EXECUTE",
                 status="BLOCKED_TIER1_READONLY_POSTURE",
@@ -1535,9 +1567,11 @@ class A2AHandler(BaseHTTPRequestHandler):
             }
 
         now_iso = datetime.now(timezone.utc).isoformat()
+        # Verify-only path: the sidecar confirmed the receipt but no human approved anything here
+        # and no API call was made, so this is RECEIPT_VERIFIED (not HUMAN_APPROVED).
         audit_entry = mod.append_mutation_audit_log(
             phase="EXECUTE",
-            status="HUMAN_APPROVED",
+            status="RECEIPT_VERIFIED",
             customer_id=str(receipt.get("customer_id", "")),
             operation_summary=str(receipt.get("operation_summary", "")),
             before_state=str(receipt.get("before_state", "")),
@@ -1557,7 +1591,8 @@ class A2AHandler(BaseHTTPRequestHandler):
             stderr="",
             command=["A2A:EXECUTE_MUTATION"],
             receipt=receipt,
-            user_approved_at_iso=now_iso,
+            user_approved_at_iso=None,
+            approval_decision="RECEIPT_VERIFIED",
         )
         mod.mark_receipt_executed(
             user_approved_at_iso=now_iso,
@@ -1589,6 +1624,23 @@ class A2AHandler(BaseHTTPRequestHandler):
             or "Operator rejected mutation via A2A sidecar."
         ).strip()
         script_path = payload.get("script_path")
+        if not isinstance(script_path, str) or not script_path.strip():
+            return {
+                "task_id": task_id,
+                "status": "VALIDATION_FAILED",
+                "error": "REJECT_MUTATION requires 'script_path' (the saved/code/*.py script whose dry-run receipt to reject).",
+            }
+        real_script = os.path.realpath(os.path.expanduser(script_path.strip()))
+        parts = real_script.replace("\\", "/").split("/")
+        in_saved_code = any(
+            parts[i] == "saved" and parts[i + 1] == "code" for i in range(len(parts) - 2)
+        )
+        if not in_saved_code or not real_script.endswith(".py"):
+            return {
+                "task_id": task_id,
+                "status": "VALIDATION_FAILED",
+                "error": "REJECT_MUTATION 'script_path' must resolve to a .py file under a saved/code/ directory.",
+            }
         runner_path = os.path.abspath(
             os.path.join(
                 base_dir, "../../skills/execute-mutation/scripts/run_mutation.py"
@@ -1601,7 +1653,15 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "status": "FAILED",
                 "error": "Unable to load run_mutation verification module.",
             }
-        rej = mod.reject_dry_run_receipt(script_path=script_path, reason=reason)
+        rej = mod.reject_dry_run_receipt(script_path=real_script, reason=reason) or {}
+        if rej.get("status") != "REJECTED":
+            return {
+                "task_id": task_id,
+                "status": "FAILED",
+                "destructive_hint": True,
+                "error": "No pending DRY_RUN_PASSED receipt matches this script; nothing was rejected.",
+                "result": rej,
+            }
         return {
             "task_id": task_id,
             "status": "HUMAN_REJECTED",
@@ -1731,13 +1791,19 @@ class A2AHandler(BaseHTTPRequestHandler):
         stderr: str = "",
         command: Optional[list[str]] = None,
     ) -> None:
-        """Records a live A2A creation event in mutation_audit.jsonl when run_mutation is real."""
+        """Records a live A2A creation event in mutation_audit.jsonl when run_mutation is real.
+
+        Successful executions keep status="SUCCESS"; the operator confirmation
+        (user_confirmed=True, enforced by _check_live_execution_gate) is recorded separately
+        as approval_decision="HUMAN_APPROVED".
+        """
         if run_mod is None:
             return
         audit_fn = getattr(run_mod, "append_mutation_audit_log", None)
         if not callable(audit_fn) or isinstance(audit_fn, unittest.mock.MagicMock):
             return
         now_iso = datetime.now(timezone.utc).isoformat()
+        approved = status == "SUCCESS"
         try:
             audit_fn(
                 phase="EXECUTE",
@@ -1758,7 +1824,8 @@ class A2AHandler(BaseHTTPRequestHandler):
                 stdout=stdout,
                 stderr=stderr,
                 command=command or ["A2A:CREATE"],
-                user_approved_at_iso=now_iso,
+                user_approved_at_iso=now_iso if approved else None,
+                approval_decision="HUMAN_APPROVED" if approved else None,
             )
         except Exception:
             pass

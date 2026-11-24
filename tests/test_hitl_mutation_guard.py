@@ -269,7 +269,8 @@ def test_mutation_audit_trail_end_to_end(tmp_path: Path, monkeypatch: Any) -> No
     assert dry_entry["phase"] == "DRY_RUN"
     assert dry_entry["status"] == "DRY_RUN_PASSED"
     assert exec_entry["phase"] == "EXECUTE"
-    assert exec_entry["status"] == "HUMAN_APPROVED"
+    assert exec_entry["status"] == "SUCCESS"
+    assert exec_entry["approval"]["decision"] == "HUMAN_APPROVED"
     assert exec_entry["execution_status"] == "SUCCESS"
     assert exec_entry["approval"]["classification_tier"] == "Tier 1"
     assert dry_entry["receipt_id"] == exec_entry["receipt_id"]
@@ -526,7 +527,8 @@ def test_subprocess_google_ads_client_interception_and_failure_audit(
         == "ACCOUNT_INACTIVE"
     )
 
-    assert ok_rec["status"] == "HUMAN_APPROVED"
+    assert ok_rec["status"] == "SUCCESS"
+    assert ok_rec["approval"]["decision"] == "HUMAN_APPROVED"
     assert ok_rec["execution_status"] == "SUCCESS"
     assert ok_rec["request"]["payload"]["validate_only"] is False
     assert (
@@ -1174,11 +1176,16 @@ def test_handle_hook_command_rewriting_and_dual_host_payloads(
         "session_id": "claude-s1",
     }
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(claude_payload)))
-    config_init.handle_hook()
-    out_claude = json.loads(capsys.readouterr().out)
-    assert out_claude["decision"] == "deny"
-    assert out_claude["permissionDecision"] == "deny"
-    assert "BLOCKED BY HITL MUTATION GUARD" in out_claude["permissionDecisionReason"]
+    rc_claude = config_init.handle_hook()
+    captured_claude = capsys.readouterr()
+    out_claude = json.loads(captured_claude.out)
+    # Claude Code reads only hookSpecificOutput; a deny also exits 2 with the reason on stderr.
+    hso = out_claude["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PreToolUse"
+    assert hso["permissionDecision"] == "deny"
+    assert "BLOCKED BY HITL MUTATION GUARD" in hso["permissionDecisionReason"]
+    assert rc_claude == 2
+    assert "BLOCKED BY HITL MUTATION GUARD" in captured_claude.err
 
 
 def test_compute_mutate_request_sha256_canonical_normalization() -> None:
@@ -1840,9 +1847,10 @@ def test_security_hardening_direct_script_spoofing_executable_and_sidecar(
     assert [e["status"] for e in entries] == [
         "DRY_RUN_PASSED",
         "BLOCKED_MUTATES_DISABLED",
-        "HUMAN_APPROVED",
+        # Sidecar verify-only path: receipt confirmed, no API call, no human approval here.
+        "RECEIPT_VERIFIED",
     ]
-    assert entries[2]["execution_status"] == "SUCCESS"
+    assert entries[2]["approval"]["decision"] == "RECEIPT_VERIFIED"
 
     for receipt_path in run_mutation.get_receipt_paths():
         if os.path.isfile(receipt_path):
@@ -2754,11 +2762,13 @@ def test_end_to_end_financial_transactions_preflight_and_atomic_sha256_workflows
     assert [e["status"] for e in audit_entries] == [
         "BLOCKED_MISSING_VALIDATE_ONLY",
         "DRY_RUN_PASSED",
-        "HUMAN_APPROVED",
+        "SUCCESS",
         "DRY_RUN_PASSED",
         "BLOCKED_SHA256_MISMATCH",
-        "HUMAN_APPROVED",
+        "SUCCESS",
     ]
+    assert audit_entries[2]["approval"]["decision"] == "HUMAN_APPROVED"
+    assert audit_entries[5]["approval"]["decision"] == "HUMAN_APPROVED"
     assert audit_entries[2]["execution_status"] == "SUCCESS"
     assert audit_entries[5]["execution_status"] == "SUCCESS"
     assert all(e["request"]["is_financial_transaction"] is True for e in audit_entries)
@@ -2784,40 +2794,23 @@ def test_real_v26_financial_protobuf_requests_serialization_sha256_and_intercept
     2. Protobuf3 default validate_only=False (omitted by to_dict / MessageToDict) is blocked in dry-run and when execute_mutates=false.
     3. Canonical SHA-256 parity across validate_only=True and validate_only=False on real financial protos, plus monetary field tamper detection.
     """
-    bundled_sdk = (
-        Path(__file__).resolve().parent.parent
-        / "plugins"
-        / "google-ads-api-developer-assistant"
-        / "client_libs"
-        / "google-ads-python"
-    )
     import importlib
-    import importlib.util
-    import re
 
-    sdk_ver = ""
-    bundled_gads = bundled_sdk / "google" / "ads" / "googleads"
-    if bundled_gads.is_dir():
-        b_vers = sorted(
-            (d.name for d in bundled_gads.iterdir() if d.is_dir() and re.fullmatch(r"v\d+", d.name)),
-            key=lambda d: int(d[1:]),
+    from hitl_audit_logger import candidate_api_versions, detect_importable_api_version
+
+    def _unavailable(reason: str) -> None:
+        # In CI the SDK is always installed: a missing/unimportable version is a real
+        # regression, so fail loudly instead of silently skipping the key financial test.
+        if os.environ.get("CI"):
+            pytest.fail(reason)
+        pytest.skip(reason)
+
+    sdk_ver = detect_importable_api_version()
+    if not sdk_ver:
+        _unavailable(
+            "No importable Google Ads API version "
+            f"(client_libs/site-packages candidates: {candidate_api_versions()})"
         )
-        if b_vers:
-            monkeypatch.syspath_prepend(str(bundled_sdk))
-            sdk_ver = b_vers[-1]
-    if not sdk_ver:
-        spec = importlib.util.find_spec("google.ads.googleads")
-        for loc in (spec.submodule_search_locations or ()) if spec else ():
-            if os.path.isdir(loc):
-                p_vers = sorted(
-                    (d for d in os.listdir(loc) if re.fullmatch(r"v\d+", d)),
-                    key=lambda d: int(d[1:]),
-                )
-                if p_vers:
-                    sdk_ver = p_vers[-1]
-                    break
-    if not sdk_ver:
-        pytest.skip("Google Ads Python SDK not available in client_libs or site-packages")
 
     try:
         svc_types_pkg = f"google.ads.googleads.{sdk_ver}.services.types"
@@ -2872,8 +2865,8 @@ def test_real_v26_financial_protobuf_requests_serialization_sha256_and_intercept
         reservation_service = importlib.import_module(
             f"{svc_types_pkg}.reservation_service"
         )
-    except ImportError:
-        pytest.skip(f"Google Ads Python {sdk_ver} SDK service types could not be imported")
+    except ImportError as exc:
+        _unavailable(f"Google Ads Python {sdk_ver} SDK service types could not be imported: {exc}")
 
     run_mutation = _load_run_mutation_module()
 

@@ -4747,8 +4747,10 @@ class TestRemainingModulesAbove80Coverage:
         )
         config_init.handle_hook()
         hook_out = json.loads(capsys.readouterr().out)
-        assert hook_out["decision"] == "allow"
-        assert 'path="config/google-ads.yaml"' in hook_out["overwrite"]["command"]
+        # Claude Code shape (tool_input): rewrite is in hookSpecificOutput.updatedInput.
+        hso = hook_out["hookSpecificOutput"]
+        assert hso.get("permissionDecision") in (None, "allow")
+        assert 'path="config/google-ads.yaml"' in hso["updatedInput"]["command"]
 
         # PreInvocation hook (invocationNum = 1 and invocationNum = 2)
         fake_stdin.read.return_value = json.dumps({"invocationNum": 1})

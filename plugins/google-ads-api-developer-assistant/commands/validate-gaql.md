@@ -10,7 +10,8 @@ Validates Google Ads Query Language (GAQL) queries against Google Ads API schema
 ## Instructions:
 1. **Extract Parameters**:
    - Extract the query from `$ARGUMENTS`. If not provided, prompt the user for the GAQL query to validate.
-   - Resolve the target API version from `config/assistant_config` (`api_version`) or the latest discovered version in `client_libs/`.
+   - Omit `--api_version` to use the active API version (`GOOGLE_ADS_API_VERSION`, then `api_version` in `config/assistant_config`, then the highest installed version). Pass `--api_version vN` only when the user names a version.
+   - The first line of each command sets `GADS_DIR` to the installed plugin directory; run both lines together as one command.
    - Resolve the customer ID from `$ARGUMENTS`, `config/assistant_config` (`customer_id`), or session context.
 
 2. **Execute Validation Protocol**:
@@ -25,7 +26,8 @@ Validates Google Ads Query Language (GAQL) queries against Google Ads API schema
    - **Step 4: Dry-Run Execution** (if credentials and customer ID are available):
      Run `skills/validate-gaql/scripts/validate_gaql.py` (validation results are cached locally keyed by `SHA-256(query + api_version)` in `saved/data/gaql_validation_cache.json`; pass `--no-cache` to bypass or `--clear-cache` to invalidate):
      ```bash
-     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/validate-gaql/scripts/validate_gaql.py" --query "<query>" --customer_id "<customer_id>" --api_version "<api_version>"
+     GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+     python3 "$GADS_DIR/skills/validate-gaql/scripts/validate_gaql.py" --query "<query>" --customer_id "<customer_id>"
      ```
 
 3. **Output Format**:

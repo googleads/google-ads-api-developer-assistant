@@ -82,7 +82,9 @@ def _cts_supports_enablement_setting(cts_type: Any) -> bool:
         except _SDK_EXCEPTIONS:
             desc = None
     fields = getattr(desc, "fields_by_name", None)
-    if isinstance(fields, dict) and fields:
+    # upb's _ByNameMap is neither a dict nor a collections.abc.Mapping, so
+    # duck-type on membership instead of isinstance.
+    if fields is not None and hasattr(fields, "__contains__") and fields:
         return (
             "effective_enablement_setting" in fields
             and "enhanced_conversions_for_leads_enabled" not in fields
@@ -118,12 +120,43 @@ def _uses_enablement_setting(client: Any) -> bool:
     return False
 
 
-def _normalize_api_version(api_version: str) -> str:
-    """Normalizes an API version string to lowercase 'v<N>' format."""
-    clean = str(api_version or "").strip().lower()
-    if clean and not clean.startswith("v") and clean.isdigit():
-        clean = f"v{clean}"
-    return clean
+def _resolve_active_api_version(explicit: Optional[str] = None) -> str:
+    """Returns the API version from config_init.resolve_active_api_version.
+
+    Order: explicit argument, GOOGLE_ADS_API_VERSION, api_version in the active
+    assistant_config, then the highest version in local client_libs and the
+    installed google-ads package.
+
+    Raises:
+        ValueError: If the version is invalid or cannot be determined.
+    """
+    clean = str(explicit or "").strip().lower()
+    if clean:
+        if not re.fullmatch(r"v?\d+", clean):
+            raise ValueError(
+                f"Invalid Google Ads API version {explicit!r}: expected 'vN' "
+                "(for example v23)."
+            )
+        return f"v{int(clean.lstrip('v'))}"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    try:
+        if plugin_root not in sys.path and os.path.isdir(plugin_root):
+            sys.path.insert(0, plugin_root)
+        resolver = importlib.import_module(
+            "config.config_init"
+        ).resolve_active_api_version
+    except (AttributeError, ImportError, OSError, SyntaxError) as e:
+        raise ValueError(
+            "Could not determine Google Ads API version (config_init is "
+            f"unavailable: {e}); pass --api_version vN"
+        ) from e
+    return str(resolver())
+
+
+def _normalize_api_version(api_version: Optional[str] = None) -> str:
+    """Returns api_version as 'vN', defaulting to the active version."""
+    return _resolve_active_api_version(api_version)
 
 
 def _get_config_path() -> str:
@@ -338,13 +371,26 @@ def _append_error(
         structured_data["primary_errors"].append(msg)
 
 
+def _mask_gclid(gclid: str) -> str:
+    """Masks a GCLID, keeping only the first and last 6 characters."""
+    clean = str(gclid or "")
+    if len(clean) <= 12:
+        return "*" * len(clean)
+    return f"{clean[:6]}...{clean[-6:]}"
+
+
 def troubleshoot_conversions(
     client: Any,
     customer_id: str,
     json_output: bool = False,
     output_dir: Optional[str] = None,
+    show_gclids: bool = False,
 ) -> dict[str, Any]:
-    """Collects and reports conversion upload diagnostics."""
+    """Collects and reports conversion upload diagnostics.
+
+    GCLIDs are masked (first and last 6 characters) in the console output,
+    the report file, and the structured data unless show_gclids is True.
+    """
     global _ACTIVE_QUERY_ERRORS
     clean_cid = re.sub(r"\D", "", str(customer_id or ""))
     if not clean_cid:
@@ -753,6 +799,8 @@ def troubleshoot_conversions(
             if results:
                 for row in results:
                     g_val = str(getattr(row.click_view, "gclid", ""))
+                    if not show_gclids:
+                        g_val = _mask_gclid(g_val)
                     gclids_found.append(
                         {"gclid": g_val, "date": query_date, "age_days": i}
                     )
@@ -818,8 +866,16 @@ def main() -> None:
         "-v",
         "--api_version",
         type=str,
-        required=True,
-        help="The Google Ads API version.",
+        default=None,
+        help="The Google Ads API version. Omit to use the active version.",
+    )
+    parser.add_argument(
+        "--show-gclids",
+        "--show_gclids",
+        dest="show_gclids",
+        action="store_true",
+        default=False,
+        help="Print full GCLIDs instead of masking them (first/last 6 chars).",
     )
     parser.add_argument(
         "--json",
@@ -850,7 +906,11 @@ def main() -> None:
         sys.exit(1)
 
     troubleshoot_conversions(
-        googleads_client, args.customer_id, json_output=args.json
+        googleads_client,
+        args.customer_id,
+        json_output=args.json,
+        # Only pass the flag when set, so wrappers with the old signature work.
+        **({"show_gclids": True} if args.show_gclids else {}),
     )
 
 

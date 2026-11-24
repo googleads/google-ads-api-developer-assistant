@@ -85,6 +85,68 @@ _SENSITIVE_KEY_NAMES = frozenset({
 
 _CUSTOMER_ID_DIGITS_RE = re.compile(r"^\d{10}$")
 
+# Value-pattern redaction for credential material that can appear inside free-form
+# strings (argv, stdout/stderr tails, exception messages) under non-sensitive keys.
+_SECRET_VALUE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+            re.DOTALL,
+        ),
+        "[REDACTED_PRIVATE_KEY]",
+    ),
+    (re.compile(r"1//[A-Za-z0-9_\-]{10,}"), "[REDACTED_REFRESH_TOKEN]"),
+    (re.compile(r"ya29\.[A-Za-z0-9._\-]+"), "[REDACTED_ACCESS_TOKEN]"),
+    (re.compile(r"GOCSPX-[A-Za-z0-9_\-]+"), "[REDACTED_CLIENT_SECRET]"),
+    (re.compile(r"Bearer\s+[A-Za-z0-9._\-]+"), "Bearer [REDACTED]"),
+)
+
+# Environment variables whose customer IDs are treated as secrets (CI stores them as
+# GitHub secrets; artifacts are not covered by GitHub log masking).
+SECRET_CUSTOMER_ID_ENV_VARS = (
+    "GOOGLE_ADS_TEST_CUSTOMER_ID",
+    "GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID",
+)
+_registered_secret_customer_ids: set[str] = set()
+
+
+def register_secret_customer_ids(*customer_ids: Any) -> None:
+    """Marks customer IDs that `redact_sensitive_data` must mask inside every string value."""
+    for raw in customer_ids:
+        norm = normalize_customer_id(raw)
+        if _CUSTOMER_ID_DIGITS_RE.fullmatch(norm) and norm not in PLACEHOLDER_CUSTOMER_IDS:
+            _registered_secret_customer_ids.add(norm)
+
+
+def _secret_customer_ids() -> set[str]:
+    ids = set(_registered_secret_customer_ids)
+    for env_key in SECRET_CUSTOMER_ID_ENV_VARS:
+        norm = normalize_customer_id(os.environ.get(env_key, ""))
+        if _CUSTOMER_ID_DIGITS_RE.fullmatch(norm) and norm not in PLACEHOLDER_CUSTOMER_IDS:
+            ids.add(norm)
+    return ids
+
+
+def _mask_customer_id(cid: str) -> str:
+    return f"[REDACTED_CID_...{cid[-4:]}]"
+
+
+def redact_secret_values(text: str, secret_cids: set[str] | None = None) -> str:
+    """Masks refresh/access tokens, client secrets, private keys, and secret customer IDs."""
+    if not text:
+        return text
+    for pattern, replacement in _SECRET_VALUE_PATTERNS:
+        text = pattern.sub(replacement, text)
+    cids = _secret_customer_ids() if secret_cids is None else secret_cids
+    for cid in cids:
+        dashed = f"{cid[:3]}-{cid[3:6]}-{cid[6:]}"
+        text = re.sub(
+            rf"(?<!\d)(?:{re.escape(cid)}|{re.escape(dashed)})(?!\d)",
+            _mask_customer_id(cid),
+            text,
+        )
+    return text
+
 
 def normalize_customer_id(raw_value: Any) -> str:
     """Strips hyphens/spaces from a customer ID while preserving non-numeric placeholders."""
@@ -107,8 +169,17 @@ def is_valid_customer_id(customer_id: str) -> bool:
     return bool(_CUSTOMER_ID_DIGITS_RE.fullmatch(norm))
 
 
-def redact_sensitive_data(obj: Any, _depth: int = 0) -> Any:
-    """Recursively masks OAuth secrets, private keys, bearer tokens, and client IDs."""
+def redact_sensitive_data(
+    obj: Any, _depth: int = 0, *, _secret_cids: set[str] | None = None
+) -> Any:
+    """Recursively masks OAuth secrets, private keys, bearer tokens, client IDs, and secret CIDs.
+
+    Sensitive keys are masked wholesale. Every other string value is scanned for
+    credential patterns (`1//` refresh tokens, `ya29.` access tokens, `GOCSPX-`
+    client secrets, PEM private keys) and for customer IDs registered as secret.
+    """
+    if _secret_cids is None:
+        _secret_cids = _secret_customer_ids()
     if _depth > 16:
         return "[MAX_DEPTH]"
     if isinstance(obj, dict):
@@ -121,14 +192,19 @@ def redact_sensitive_data(obj: Any, _depth: int = 0) -> Any:
             elif key_lower in ("client_id", "oauth2_client_id") and isinstance(v, str):
                 sanitized[key_str] = f"{v[:8]}...[REDACTED]" if len(v) > 8 else "[REDACTED]"
             else:
-                sanitized[key_str] = redact_sensitive_data(v, _depth + 1)
+                sanitized[key_str] = redact_sensitive_data(
+                    v, _depth + 1, _secret_cids=_secret_cids
+                )
         return sanitized
     if isinstance(obj, (list, tuple)):
-        return [redact_sensitive_data(item, _depth + 1) for item in obj]
+        return [
+            redact_sensitive_data(item, _depth + 1, _secret_cids=_secret_cids)
+            for item in obj
+        ]
     if isinstance(obj, str):
-        if "Bearer " in obj:
-            return re.sub(r"Bearer\s+[A-Za-z0-9._\-]+", "Bearer [REDACTED]", obj)
-        return obj
+        return redact_secret_values(obj, _secret_cids)
+    if isinstance(obj, int) and not isinstance(obj, bool) and str(obj) in _secret_cids:
+        return _mask_customer_id(str(obj))
     return obj
 
 
@@ -171,29 +247,61 @@ def resolve_credentials_yaml_path(configured_path: str) -> str:
     return os.path.abspath(clean)
 
 
-def _detect_default_api_version() -> str:
-    """Resolves the active Google Ads API version dynamically from SDK or config."""
+def candidate_api_versions() -> list[str]:
+    """Lists `vN` directories in the bundled client_libs SDK and the installed SDK, newest first."""
     import importlib.util
 
-    plugin_root = os.path.join(
-        REPO_ROOT, "plugins", "google-ads-api-developer-assistant"
-    )
     sdk_sub = os.path.join("client_libs", "google-ads-python", "google", "ads", "googleads")
-    search_dirs = [os.path.join(plugin_root, sdk_sub)]
-    spec = importlib.util.find_spec("google.ads.googleads")
+    search_dirs = [os.path.join(PLUGIN_ROOT, sdk_sub)]
+    try:
+        spec = importlib.util.find_spec("google.ads.googleads")
+    except (ImportError, ValueError):
+        spec = None
     if spec and spec.submodule_search_locations:
         search_dirs.extend(list(spec.submodule_search_locations))
-    found = [
+    found = {
         d
         for p in search_dirs
         if os.path.isdir(p)
         for d in os.listdir(p)
         if re.fullmatch(r"v\d+", d)
-    ]
-    if found:
-        found.sort(key=lambda d: int(d[1:]))
-        return found[-1]
+    }
+    return sorted(found, key=lambda d: int(d[1:]), reverse=True)
+
+
+def is_api_version_importable(version: str) -> bool:
+    """Returns True when `google.ads.googleads.<version>` resolves in the running interpreter."""
+    import importlib.util
+
+    if not version or not re.fullmatch(r"v\d+", version):
+        return False
+    try:
+        return importlib.util.find_spec(f"google.ads.googleads.{version}") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def detect_importable_api_version(preferred: str | None = None) -> str:
+    """Shared test helper: the highest Google Ads API version that actually imports.
+
+    A version that exists only in a newer client_libs clone (but not in the SDK that
+    `GoogleAdsClient` imports) is skipped. `preferred` wins when it is importable.
+    Returns "" when no version imports.
+    """
+    pref = str(preferred or "").strip()
+    if pref and not pref.startswith("v") and pref.isdigit():
+        pref = f"v{pref}"
+    if pref and is_api_version_importable(pref):
+        return pref
+    for ver in candidate_api_versions():
+        if is_api_version_importable(ver):
+            return ver
     return ""
+
+
+def _detect_default_api_version() -> str:
+    """Resolves the active Google Ads API version (highest importable SDK version)."""
+    return detect_importable_api_version()
 
 
 @dataclass
@@ -363,8 +471,18 @@ class FunctionalAuditLogger:
         target_customer_id: str = "",
         login_customer_id: str = "",
         api_version: str = "",
+        redact_customer_ids: bool | None = None,
     ) -> None:
         self.run_id = str(uuid.uuid4())
+        if redact_customer_ids is None:
+            # CI runs on a public repository: mask the (secret) account IDs in every
+            # string value. Local runs keep them for operator debugging.
+            redact_customer_ids = bool(
+                os.environ.get("CI")
+                or os.environ.get("GOOGLE_ADS_AUDIT_REDACT_CUSTOMER_IDS")
+            )
+        if redact_customer_ids:
+            register_secret_customer_ids(target_customer_id, login_customer_id)
         try:
             self.operator = getpass.getuser()
         except Exception:
@@ -562,6 +680,7 @@ class FunctionalAuditLogger:
         details: str,
         last_request_record_id: str | None = None,
         error_record_id: str | None = None,
+        skipped: bool = False,
     ) -> str:
         """Writes a TEST_RESULT record summarizing a single test case outcome."""
         rec_id = self._next_record_id()
@@ -577,7 +696,8 @@ class FunctionalAuditLogger:
             "suite": suite,
             "name": name,
             "passed": bool(passed),
-            "outcome": "PASSED" if passed else "FAILED",
+            "skipped": bool(skipped),
+            "outcome": "SKIPPED" if skipped else ("PASSED" if passed else "FAILED"),
             "duration_ms": round(float(duration_ms), 3),
             "details": details,
             "last_request_record_id": last_request_record_id,
@@ -703,6 +823,11 @@ class TestCaseResult:
     details: str
     request_record_id: str | None = None
     error_record_id: str | None = None
+    skipped: bool = False
+
+
+class FunctionalTestSkipped(Exception):
+    """Raised by a functional test to record a SKIPPED (not failed) outcome."""
 
 
 def format_results_tables(
@@ -717,6 +842,7 @@ def format_results_tables(
     total = len(results)
     passed = sum(1 for r in results if r.passed)
     failed = total - passed
+    skipped = sum(1 for r in results if getattr(r, "skipped", False))
     pass_rate = (passed / total * 100.0) if total > 0 else 0.0
 
     lines: list[str] = []
@@ -733,6 +859,7 @@ def format_results_tables(
     lines.append(f"| {'Total Tests Executed':<34} | {str(total):<67} |")
     lines.append(f"| {'Tests Passed':<34} | {str(passed):<67} |")
     lines.append(f"| {'Tests Failed':<34} | {str(failed):<67} |")
+    lines.append(f"| {'Tests Skipped (counted as passed)':<34} | {str(skipped):<67} |")
     lines.append(f"| {'Pass Rate':<34} | {f'{pass_rate:.1f}%':<67} |")
     lines.append(f"| {'Error Records in JSONL Log':<34} | {str(error_record_count):<67} |")
     lines.append(f"| {'Total Duration':<34} | {f'{total_duration_ms / 1000.0:.2f}s':<67} |")

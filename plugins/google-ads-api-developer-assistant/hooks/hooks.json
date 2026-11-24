@@ -1,0 +1,50 @@
+{
+  "description": "Google Ads API Developer Assistant: config sync and session context (SessionStart), HITL mutation guard and protected-file checks (PreToolUse), and EXECUTE_FAILED audit logging for failed run_mutation.py --execute calls (PostToolUseFailure). Antigravity uses ../hooks.json instead.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "S=\"${CLAUDE_PLUGIN_ROOT}/config/config_init.py\"; if [ ! -f \"$S\" ]; then echo \"Google Ads API Developer Assistant: config_init.py not found under CLAUDE_PLUGIN_ROOT; reinstall the plugin. The HITL mutation guard cannot run.\" >&2; exit 2; fi; if command -v python3 >/dev/null 2>&1; then exec python3 \"$S\" --hook; fi; if command -v python >/dev/null 2>&1; then exec python \"$S\" --hook; fi; if command -v py >/dev/null 2>&1; then exec py -3 \"$S\" --hook; fi; echo \"Google Ads API Developer Assistant: Python 3 was not found on PATH (tried python3, python, py -3). The HITL mutation guard cannot run.\" >&2; exit 2",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "S=\"${CLAUDE_PLUGIN_ROOT}/config/config_init.py\"; if [ ! -f \"$S\" ]; then echo \"Google Ads API Developer Assistant: config_init.py not found under CLAUDE_PLUGIN_ROOT; reinstall the plugin. The HITL mutation guard cannot run.\" >&2; exit 2; fi; if command -v python3 >/dev/null 2>&1; then exec python3 \"$S\" --hook; fi; if command -v python >/dev/null 2>&1; then exec python \"$S\" --hook; fi; if command -v py >/dev/null 2>&1; then exec py -3 \"$S\" --hook; fi; echo \"Google Ads API Developer Assistant: Python 3 was not found on PATH (tried python3, python, py -3). The HITL mutation guard cannot run.\" >&2; exit 2",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "S=\"${CLAUDE_PLUGIN_ROOT}/config/config_init.py\"; if [ ! -f \"$S\" ]; then echo \"Google Ads API Developer Assistant: config_init.py not found under CLAUDE_PLUGIN_ROOT; reinstall the plugin. The HITL mutation guard cannot run.\" >&2; exit 2; fi; if command -v python3 >/dev/null 2>&1; then exec python3 \"$S\" --hook; fi; if command -v python >/dev/null 2>&1; then exec python \"$S\" --hook; fi; if command -v py >/dev/null 2>&1; then exec py -3 \"$S\" --hook; fi; echo \"Google Ads API Developer Assistant: Python 3 was not found on PATH (tried python3, python, py -3). The HITL mutation guard cannot run.\" >&2; exit 2",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "S=\"${CLAUDE_PLUGIN_ROOT}/config/config_init.py\"; if [ ! -f \"$S\" ]; then echo \"Google Ads API Developer Assistant: config_init.py not found under CLAUDE_PLUGIN_ROOT; reinstall the plugin. The HITL mutation guard cannot run.\" >&2; exit 2; fi; if command -v python3 >/dev/null 2>&1; then exec python3 \"$S\" --hook; fi; if command -v python >/dev/null 2>&1; then exec python \"$S\" --hook; fi; if command -v py >/dev/null 2>&1; then exec py -3 \"$S\" --hook; fi; echo \"Google Ads API Developer Assistant: Python 3 was not found on PATH (tried python3, python, py -3). The HITL mutation guard cannot run.\" >&2; exit 2",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

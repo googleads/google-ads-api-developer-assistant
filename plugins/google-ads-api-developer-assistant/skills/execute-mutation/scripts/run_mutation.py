@@ -391,6 +391,7 @@ _TIER_3_GROUPS: Dict[str, Tuple[str, ...]] = {
         "customer_client_link_service",
         "customer_manager_link_service",
         "data_link_service",
+        "multi_party_auth_review_service",
         "product_link_invitation_service",
         "product_link_service",
         "third_party_app_analytics_link_service",
@@ -464,7 +465,10 @@ _ATO_ESCALATION_SERVICES = frozenset({
     "product_link_service",
     "product_link_invitation_service",
     "data_link_service",
+    "multi_party_auth_review_service",
 })
+
+_UNCLASSIFIED_SERVICE_NOTE = "unclassified service, review manually"
 
 _RESOURCE_CID_RE = re.compile(r"\bcustomers/(\d{7,12})(?:/|$)")
 _DOLLAR_AMT_RE = re.compile(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)")
@@ -572,6 +576,7 @@ def classify_mutation(
 ) -> Dict[str, Any]:
     """Classifies a mutation into Policy Tiers 1–3, elevating wrapper inner ops."""
     detected: List[str] = []
+    unclassified: List[str] = []
     wrapper_tiers: List[int] = []
     inner_tiers: List[int] = []
 
@@ -583,6 +588,8 @@ def classify_mutation(
             if svc_snake not in detected:
                 detected.append(svc_snake)
             wrapper_tiers.append(_SERVICE_CATALOG[svc_snake][0])
+        elif svc_snake and svc_snake not in unclassified:
+            unclassified.append(svc_snake)
         for inner_svc in _extract_inner_operation_services(call.get("request_payload")):
             if inner_svc not in detected:
                 detected.append(inner_svc)
@@ -638,6 +645,8 @@ def classify_mutation(
         "template_header": _TEMPLATE_HEADERS[best_tier],
         "detected_services": detected,
         "elevated_from_inner_op": elevated,
+        "unclassified_services": unclassified,
+        "is_unclassified": bool(unclassified) or not matched_any,
     }
 
 
@@ -693,12 +702,25 @@ def extract_payload_bound_facts(
         for m in _DOLLAR_AMT_RE.findall(str(cli_after_state or ""))
     ]
     drift_detected = False
+    drift_fields: List[Dict[str, Any]] = []
     if cli_dollars and micro_amounts:
-        max_payload_dollars = max(
+        abs_cli = [abs(c) for c in cli_dollars]
+        payload_dollars = [
             abs(int(item["micros"])) / 1_000_000.0 for item in micro_amounts
-        )
-        max_cli_dollars = max(cli_dollars)
-        if max_cli_dollars > 0 and max_payload_dollars >= max_cli_dollars * 2.0:
+        ]
+        if _amounts_drift(max(payload_dollars), max(abs_cli)):
+            drift_detected = True
+        for item, p_dollars in zip(micro_amounts, payload_dollars):
+            # Per field: drift when no CLI-stated amount is within 2x of it.
+            if all(_amounts_drift(p_dollars, c) for c in abs_cli):
+                drift_fields.append({
+                    "field": item["field"],
+                    "payload_amount": item["formatted_currency"],
+                    "closest_cli_amount": (
+                        f"${min(abs_cli, key=lambda c: abs(c - p_dollars)):,.2f}"
+                    ),
+                })
+        if drift_fields and len(abs_cli) >= len(micro_amounts):
             drift_detected = True
 
     return {
@@ -706,7 +728,18 @@ def extract_payload_bound_facts(
         "micro_amounts": micro_amounts,
         "customer_id_mismatch": cid_mismatch,
         "micro_unit_drift_detected": drift_detected,
+        "micro_unit_drift_fields": drift_fields,
     }
+
+
+def _amounts_drift(first: float, second: float, ratio: float = 2.0) -> bool:
+    """Returns True when two dollar amounts differ by >= ratio in either direction."""
+    hi, lo = max(first, second), min(first, second)
+    if hi <= 0:
+        return False
+    if lo <= 0:
+        return True
+    return hi / lo >= ratio
 
 
 def extract_ato_escalation_details(
@@ -998,28 +1031,32 @@ def get_audit_log_paths() -> List[str]:
     return deduped
 
 
-def parse_execute_mutates_value(raw_text: str) -> Optional[bool]:
-    """Parses 'execute_mutates = <true, false>' from TOML or key=value text."""
+def _parse_bool_config_key(raw_text: str, key: str) -> Optional[bool]:
+    """Parses a top-level boolean config key from TOML or bare-value text.
+
+    When raw_text is valid TOML, only the top-level `key` is honored (None if
+    absent or not a boolean); stray bare `true` lines never enable a flag. The
+    line-scan fallback only runs when raw_text is not valid TOML (for example an
+    environment variable value such as `true`).
+    """
     try:
         parsed_toml = tomllib.loads(raw_text)
-        if isinstance(parsed_toml, dict) and "execute_mutates" in parsed_toml:
-            em_val = parsed_toml["execute_mutates"]
-            if isinstance(em_val, bool):
-                return em_val
-            if isinstance(em_val, str) and em_val.strip().lower() in (
-                "true",
-                "false",
-            ):
-                return em_val.strip().lower() == "true"
     except (tomllib.TOMLDecodeError, TypeError, ValueError):
-        pass
+        parsed_toml = None
+    if isinstance(parsed_toml, dict):
+        val = parsed_toml.get(key)
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str) and val.strip().lower() in ("true", "false"):
+            return val.strip().lower() == "true"
+        return None
 
     for raw_line in raw_text.splitlines():
         line = raw_line.split("#", 1)[0].strip()
         if not line:
             continue
         match = re.fullmatch(
-            r"execute_mutates\s*[=:]\s*['\"]?(true|false)['\"]?\s*",
+            rf"{re.escape(key)}\s*[=:]\s*['\"]?(true|false)['\"]?\s*",
             line,
             re.IGNORECASE,
         )
@@ -1029,6 +1066,11 @@ def parse_execute_mutates_value(raw_text: str) -> Optional[bool]:
         if bare in ("true", "false"):
             return bare == "true"
     return None
+
+
+def parse_execute_mutates_value(raw_text: str) -> Optional[bool]:
+    """Parses 'execute_mutates = <true, false>' from TOML or key=value text."""
+    return _parse_bool_config_key(raw_text, "execute_mutates")
 
 
 def get_execute_mutates_paths() -> List[str]:
@@ -1090,35 +1132,7 @@ def is_execute_mutates_enabled() -> bool:
 
 def parse_allow_tier1_financial_mutates_value(raw_text: str) -> Optional[bool]:
     """Parses 'allow_tier1_financial_mutates = <true, false>' from TOML or text."""
-    try:
-        parsed_toml = tomllib.loads(raw_text)
-        if (
-            isinstance(parsed_toml, dict)
-            and "allow_tier1_financial_mutates" in parsed_toml
-        ):
-            val = parsed_toml["allow_tier1_financial_mutates"]
-            if isinstance(val, bool):
-                return val
-            if isinstance(val, str) and val.strip().lower() in ("true", "false"):
-                return val.strip().lower() == "true"
-    except (tomllib.TOMLDecodeError, TypeError, ValueError):
-        pass
-
-    for raw_line in raw_text.splitlines():
-        line = raw_line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        match = re.fullmatch(
-            r"allow_tier1_financial_mutates\s*[=:]\s*['\"]?(true|false)['\"]?\s*",
-            line,
-            re.IGNORECASE,
-        )
-        if match:
-            return match.group(1).lower() == "true"
-        bare = line.strip("'\"").lower()
-        if bare in ("true", "false"):
-            return bare == "true"
-    return None
+    return _parse_bool_config_key(raw_text, "allow_tier1_financial_mutates")
 
 
 def is_tier1_financial_mutates_enabled() -> bool:
@@ -2759,17 +2773,52 @@ class FinancialGuardrailInterceptor(_GRPC_UNARY_BASE):
         request: Any,
     ) -> Any:
         """Intercepts direct GAPIC gRPC calls bypassing GoogleAdsClient.get_service."""
-        if getattr(_IN_AUDITED_SERVICE_CALL, "depth", 0) > 0:
+        pre = self._precheck(client_call_details, request)
+        if pre is None:
             return continuation(client_call_details, request)
+        call_rec, t0 = pre
+        try:
+            resp = continuation(client_call_details, request)
+        except Exception as exc:  # pylint: disable=broad-except
+            self._record_result(call_rec, t0, exc)
+            raise
+        self._record_result(call_rec, t0, _grpc_response_error(resp))
+        return resp
+
+    def _record_result(
+        self, call_rec: Dict[str, Any], t0: float, error: Optional[Any]
+    ) -> None:
+        """Appends the call record as SUCCESS, or FAILED with the RPC error."""
+        call_rec.update({
+            "received_at_iso": datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat(),
+            "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+            "status": "FAILED" if error is not None else "SUCCESS",
+            "request_sha256_verified": True,
+            "error": _format_grpc_error(error) if error is not None else None,
+        })
+        self.captured_calls.append(call_rec)
+
+    def _precheck(
+        self, client_call_details: Any, request: Any
+    ) -> Optional[Tuple[Dict[str, Any], float]]:
+        """Runs HITL/Tier 1/limit checks; returns (call_rec, t0) or None to pass through.
+
+        Raises:
+            PermissionError: When the mutate call must be blocked.
+        """
+        if getattr(_IN_AUDITED_SERVICE_CALL, "depth", 0) > 0:
+            return None
 
         parsed = self._parse_method_path(
             getattr(client_call_details, "method", "")
         )
         if parsed is None:
-            return continuation(client_call_details, request)
+            return None
         svc_name, method_snake = parsed
         if not method_snake.startswith(_MUTATION_METHOD_PREFIXES):
-            return continuation(client_call_details, request)
+            return None
 
         sent_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         t0 = time.perf_counter()
@@ -2849,19 +2898,89 @@ class FinancialGuardrailInterceptor(_GRPC_UNARY_BASE):
                     f"LAYER 4 gRPC: Unapproved or drifted direct gRPC call "
                     f"to {svc_name}.{method_snake} (sha256={req_sha}).",
                 )
+        return call_rec, t0
 
-        resp = continuation(client_call_details, request)
-        call_rec.update({
-            "received_at_iso": datetime.datetime.now(
-                datetime.timezone.utc
-            ).isoformat(),
-            "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
-            "status": "SUCCESS",
-            "request_sha256_verified": True,
-            "error": None,
-        })
-        self.captured_calls.append(call_rec)
+
+def _grpc_response_error(resp: Any) -> Optional[Any]:
+    """Returns the error carried by a sync gRPC continuation result, or None.
+
+    Sync interceptor continuations return a grpc.RpcError (also a grpc.Call/
+    Future) instead of raising it, so a failed RPC must be detected here.
+    """
+    if _grpc_mod is not None and isinstance(resp, _grpc_mod.RpcError):
         return resp
+    code_fn = getattr(resp, "code", None)
+    if callable(code_fn):
+        try:
+            code = code_fn()
+        except Exception:  # pylint: disable=broad-except
+            code = None
+        ok_code = getattr(getattr(_grpc_mod, "StatusCode", None), "OK", None)
+        if code is not None and ok_code is not None and code != ok_code:
+            return resp
+    exc_fn = getattr(resp, "exception", None)
+    if callable(exc_fn):
+        try:
+            exc = exc_fn()
+        except Exception:  # pylint: disable=broad-except
+            exc = None
+        if exc is not None:
+            return exc
+    return None
+
+
+def _format_grpc_error(error: Any) -> str:
+    """Formats a gRPC error (RpcError/Call/exception) for audit records."""
+    code_txt = ""
+    details_txt = ""
+    code_fn = getattr(error, "code", None)
+    if callable(code_fn):
+        try:
+            code_txt = str(code_fn())
+        except Exception:  # pylint: disable=broad-except
+            code_txt = ""
+    details_fn = getattr(error, "details", None)
+    if callable(details_fn):
+        try:
+            details_txt = str(details_fn() or "")
+        except Exception:  # pylint: disable=broad-except
+            details_txt = ""
+    if code_txt or details_txt:
+        return f"gRPC {code_txt}: {details_txt}".strip()
+    return f"{type(error).__name__}: {error}"
+
+
+if _grpc_mod is not None and hasattr(_grpc_mod, "aio"):
+    _GRPC_AIO_UNARY_BASE: Any = _grpc_mod.aio.UnaryUnaryClientInterceptor
+else:
+    _GRPC_AIO_UNARY_BASE = object
+
+
+class AioFinancialGuardrailInterceptor(_GRPC_AIO_UNARY_BASE):
+    """Layer 4 grpc.aio interceptor sharing FinancialGuardrailInterceptor checks."""
+
+    def __init__(self, sync_interceptor: FinancialGuardrailInterceptor) -> None:
+        self._sync = sync_interceptor
+
+    async def intercept_unary_unary(
+        self,
+        continuation: Any,
+        client_call_details: Any,
+        request: Any,
+    ) -> Any:
+        """Intercepts grpc.aio unary mutate calls."""
+        pre = self._sync._precheck(client_call_details, request)
+        if pre is None:
+            return await continuation(client_call_details, request)
+        call_rec, t0 = pre
+        try:
+            call = await continuation(client_call_details, request)
+            await call
+        except Exception as exc:  # pylint: disable=broad-except
+            self._sync._record_result(call_rec, t0, exc)
+            raise
+        self._sync._record_result(call_rec, t0, None)
+        return call
 
 
 def _run_target_script_with_interception(
@@ -2949,6 +3068,40 @@ def _run_target_script_with_interception(
     except (ImportError, AttributeError, TypeError):
         grpc_live = None
 
+    aio_mod: Any = None
+    orig_aio_secure = None
+    orig_aio_insecure = None
+    if grpc_live is not None:
+        try:
+            aio_mod = importlib.import_module("grpc.aio")
+            aio_interceptor = AioFinancialGuardrailInterceptor(l4_interceptor)
+            orig_aio_secure = aio_mod.secure_channel
+            orig_aio_insecure = aio_mod.insecure_channel
+
+            def _with_aio_interceptor(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+                existing = list(kwargs.get("interceptors") or [])
+                kwargs["interceptors"] = [aio_interceptor, *existing]
+                return kwargs
+
+            def _hooked_aio_secure(*args: Any, **kwargs: Any) -> Any:
+                if len(args) > 4:
+                    raise TypeError(
+                        "pass grpc.aio.secure_channel interceptors by keyword"
+                    )
+                return orig_aio_secure(*args, **_with_aio_interceptor(kwargs))
+
+            def _hooked_aio_insecure(*args: Any, **kwargs: Any) -> Any:
+                if len(args) > 3:
+                    raise TypeError(
+                        "pass grpc.aio.insecure_channel interceptors by keyword"
+                    )
+                return orig_aio_insecure(*args, **_with_aio_interceptor(kwargs))
+
+            aio_mod.secure_channel = _hooked_aio_secure
+            aio_mod.insecure_channel = _hooked_aio_insecure
+        except (ImportError, AttributeError, TypeError):
+            aio_mod = None
+
     sys.argv = [script_path, *script_args]
     try:
         runpy.run_path(script_path, run_name="__main__")
@@ -2957,6 +3110,10 @@ def _run_target_script_with_interception(
             grpc_live.secure_channel = orig_grpc_secure
         if grpc_live is not None and orig_grpc_insecure is not None:
             grpc_live.insecure_channel = orig_grpc_insecure
+        if aio_mod is not None and orig_aio_secure is not None:
+            aio_mod.secure_channel = orig_aio_secure
+        if aio_mod is not None and orig_aio_insecure is not None:
+            aio_mod.insecure_channel = orig_aio_insecure
         if trace_file:
             try:
                 with open(trace_file, "w", encoding="utf-8") as f:
@@ -3079,8 +3236,18 @@ def append_mutation_audit_log(
     rpc_calls: Optional[List[Dict[str, Any]]] = None,
     receipt: Optional[Dict[str, Any]] = None,
     user_approved_at_iso: Optional[str] = None,
+    approval_decision: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Writes a structured audit entry to saved/logs/mutation_audit.jsonl."""
+    """Writes a structured audit entry to saved/logs/mutation_audit.jsonl.
+
+    A successful live mutation is logged as status="SUCCESS" with
+    approval.decision="HUMAN_APPROVED". The legacy status="HUMAN_APPROVED" is
+    still accepted from older callers and mapped to execution_status="SUCCESS".
+    Email addresses are masked in the stored approval/request/response sections.
+    """
+    if approval_decision is None:
+        if status in ("HUMAN_APPROVED", "HUMAN_REJECTED"):
+            approval_decision = status
     receipt_data = receipt or {}
     calls: List[Dict[str, Any]] = []
     for raw_call in rpc_calls or []:
@@ -3209,6 +3376,7 @@ def append_mutation_audit_log(
         "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING",
         "BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
         "BLOCKED_PROHIBITED_DELETION",
+        "BLOCKED_CUSTOMER_ID_MISMATCH",
     ):
         if rpc_errors:
             error_summary = "; ".join(rpc_errors)
@@ -3224,7 +3392,9 @@ def append_mutation_audit_log(
         "receipt_id": str(receipt_data.get("receipt_id") or uuid.uuid4()),
         "phase": phase,
         "status": status,
-        "execution_status": "SUCCESS" if status == "HUMAN_APPROVED" else status,
+        "execution_status": (
+            "SUCCESS" if status in ("SUCCESS", "HUMAN_APPROVED") else status
+        ),
         "actor": resolve_actor_metadata(
             customer_id=customer_id, receipt=receipt_data
         ),
@@ -3260,6 +3430,7 @@ def append_mutation_audit_log(
             ],
         },
         "approval": {
+            "decision": approval_decision,
             "dry_run_validated_at_iso": receipt_data.get("timestamp_iso"),
             "hook_prompted_at_iso": receipt_data.get("hook_prompted_at_iso"),
             "user_approved_at_iso": user_approved_at_iso,
@@ -3300,6 +3471,8 @@ def append_mutation_audit_log(
         audit_record["approval"]["rejection_reason"] = receipt_data[
             "rejection_reason"
         ]
+    for section in ("approval", "request", "response"):
+        audit_record[section] = _mask_emails_in_obj(audit_record[section])
 
     serialized_line = json.dumps(audit_record, default=str) + "\n"
     for log_path in get_audit_log_paths():
@@ -3412,6 +3585,15 @@ def write_dry_run_receipt(
         cli_customer_id=customer_id,
         cli_after_state=after_state,
     )
+    if payload_facts.get("customer_id_mismatch"):
+        _remove_stale_receipts()
+        raise ValueError(
+            "BLOCKED BY CUSTOMER ID MISMATCH: --customer-id "
+            f"'{str(customer_id).strip()}' does not match the customer ID(s) in "
+            "the dry-run RPC payload "
+            f"({', '.join(payload_facts.get('payload_customer_ids') or [])}). "
+            "Fix --customer-id or the script, then re-run --dry-run."
+        )
     ato_details = extract_ato_escalation_details(
         rpc_calls=normalized_calls,
         script_path=resolved_script if resolved_script else None,
@@ -3464,6 +3646,8 @@ def write_dry_run_receipt(
         "template_header": classification["template_header"],
         "detected_services": classification["detected_services"],
         "elevated_from_inner_op": classification["elevated_from_inner_op"],
+        "unclassified_services": classification.get("unclassified_services", []),
+        "is_unclassified": bool(classification.get("is_unclassified")),
         "payload_bound_facts": payload_facts,
         "ato_escalation": ato_details,
         "before_state": before_state.strip(),
@@ -3480,15 +3664,94 @@ def write_dry_run_receipt(
     }
     if normalized_calls:
         receipt["dry_run_rpc_calls"] = normalized_calls
+    # The returned in-memory receipt keeps full values for the on-screen card;
+    # the stored copy masks emails (ATO details, card, and dry_run_rpc_calls
+    # payloads flagged request_payload_masked with the unmasked request_sha256).
     receipt["rendered_verification_card"] = format_verification_card(receipt)
+    stored_receipt = _mask_receipt_for_storage(receipt)
 
     for target_path in get_receipt_paths():
         try:
-            _write_json_atomic(target_path, receipt)
+            _write_json_atomic(target_path, stored_receipt)
         except OSError:
             continue
 
     return receipt
+
+
+_EMAIL_VALUE_RE = re.compile(
+    r"(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})"
+)
+
+
+def mask_email(value: str) -> str:
+    """Masks every email address in value as 'j***@domain.com'."""
+    return _EMAIL_VALUE_RE.sub(
+        lambda m: f"{m.group(1)[0]}***@{m.group(2)}", str(value)
+    )
+
+
+def _mask_emails_in_obj(obj: Any, depth: int = 0) -> Any:
+    """Returns a copy of obj with email addresses masked in every string value."""
+    if depth > 20:
+        return obj
+    if isinstance(obj, str):
+        return mask_email(obj)
+    if isinstance(obj, dict):
+        return {k: _mask_emails_in_obj(v, depth + 1) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_mask_emails_in_obj(v, depth + 1) for v in obj]
+    return obj
+
+
+def _mask_receipt_for_storage(receipt: Dict[str, Any]) -> Dict[str, Any]:
+    """Returns the on-disk receipt copy with emails masked.
+
+    Masks ato_escalation, rendered_verification_card, and email values inside
+    dry_run_rpc_calls[].request_payload. Each masked call keeps the
+    request_sha256 computed from its unmasked payload and is flagged with
+    request_payload_masked=True so verifiers trust that hash instead of
+    re-hashing the masked payload.
+    """
+    stored = dict(receipt)
+    for key in ("ato_escalation", "rendered_verification_card"):
+        if key in stored:
+            stored[key] = _mask_emails_in_obj(stored[key])
+    calls = stored.get("dry_run_rpc_calls")
+    if isinstance(calls, list):
+        masked_calls: List[Any] = []
+        for call in calls:
+            if not isinstance(call, dict):
+                masked_calls.append(call)
+                continue
+            c_copy = dict(call)
+            payload = c_copy.get("request_payload")
+            masked_payload = _mask_emails_in_obj(payload)
+            if masked_payload != payload:
+                if not c_copy.get("request_sha256"):
+                    c_copy["request_sha256"] = compute_mutate_request_sha256(
+                        str(c_copy.get("service", "")),
+                        str(c_copy.get("method", "")),
+                        payload,
+                    )
+                c_copy["request_payload"] = masked_payload
+                c_copy["request_payload_masked"] = True
+            masked_calls.append(c_copy)
+        stored["dry_run_rpc_calls"] = masked_calls
+    return stored
+
+
+def _receipt_matches_script(
+    data: Dict[str, Any], script_path: Optional[str], script_sha: str
+) -> bool:
+    """Returns True when a receipt targets script_path (by realpath or sha256)."""
+    if not script_path:
+        return True
+    rec_path = str(data.get("script_path") or "")
+    if rec_path and os.path.realpath(rec_path) == os.path.realpath(script_path):
+        return True
+    rec_sha = str(data.get("script_sha256") or "")
+    return bool(script_sha and rec_sha and rec_sha == script_sha)
 
 
 def reject_dry_run_receipt(
@@ -3496,58 +3759,88 @@ def reject_dry_run_receipt(
     reason: str = "Operator rejected mutation at HITL confirmation prompt.",
     hook_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Invalidates active dry-run receipts (REJECTED) and logs HUMAN_REJECTED."""
-    rejected_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    latest_receipt: Dict[str, Any] = {}
-    for target_path in get_receipt_paths():
-        if os.path.isfile(target_path):
-            try:
-                with open(target_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if not isinstance(data, dict):
-                    continue
-                if isinstance(hook_context, dict):
-                    conv_id = hook_context.get(
-                        "conversationId"
-                    ) or hook_context.get("session_id")
-                    if conv_id:
-                        data["cli_conversation_id"] = str(conv_id)
-                data["status"] = "REJECTED"
-                data["rejected_at_iso"] = rejected_iso
-                data["rejection_reason"] = reason
-                _write_json_atomic(target_path, data)
-                if not latest_receipt:
-                    latest_receipt = data
-            except (
-                OSError,
-                UnicodeDecodeError,
-                json.JSONDecodeError,
-                TypeError,
-                ValueError,
-            ):
-                continue
+    """Marks pending dry-run receipts REJECTED and logs HUMAN_REJECTED.
 
-    effective_script = script_path or str(latest_receipt.get("script_path", ""))
-    script_hash = (
-        compute_file_sha256(effective_script)
-        if effective_script and os.path.isfile(effective_script)
-        else str(latest_receipt.get("script_sha256", ""))
+    Only receipts with status DRY_RUN_PASSED are rejected; EXECUTED, REJECTED,
+    or expired receipts are never touched. When script_path is given, a receipt
+    must also match it by realpath or by script_sha256. The audit record uses
+    the first matched receipt. No audit record is written when nothing matched.
+
+    Returns:
+        Dict with "status" ("REJECTED" or "NO_PENDING_RECEIPT"),
+        "rejected_count" (int), "rejected_at_iso", "rejection_reason",
+        "audit_id" and "receipt_id" (None when nothing was rejected).
+    """
+    rejected_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    abs_script = os.path.abspath(script_path) if script_path else None
+    script_sha = (
+        compute_file_sha256(abs_script)
+        if abs_script and os.path.isfile(abs_script)
+        else ""
     )
+    matched_receipt: Dict[str, Any] = {}
+    rejected_count = 0
+    for target_path in get_receipt_paths():
+        if not os.path.isfile(target_path):
+            continue
+        try:
+            with open(target_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                continue
+            if str(data.get("status", "")) != "DRY_RUN_PASSED":
+                continue
+            if not _receipt_matches_script(data, abs_script, script_sha):
+                continue
+            if isinstance(hook_context, dict):
+                conv_id = hook_context.get(
+                    "conversationId"
+                ) or hook_context.get("session_id")
+                if conv_id:
+                    data["cli_conversation_id"] = str(conv_id)
+            data["status"] = "REJECTED"
+            data["rejected_at_iso"] = rejected_iso
+            data["rejection_reason"] = reason
+            _write_json_atomic(target_path, data)
+            rejected_count += 1
+            if not matched_receipt:
+                matched_receipt = data
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+    if not rejected_count:
+        return {
+            "status": "NO_PENDING_RECEIPT",
+            "rejected_count": 0,
+            "rejected_at_iso": rejected_iso,
+            "rejection_reason": reason,
+            "audit_id": None,
+            "receipt_id": None,
+        }
+
+    effective_script = str(matched_receipt.get("script_path") or abs_script or "")
+    script_hash = str(matched_receipt.get("script_sha256") or script_sha)
     audit_entry = append_mutation_audit_log(
         phase="EXECUTE",
         status="HUMAN_REJECTED",
-        customer_id=str(latest_receipt.get("customer_id", "")),
+        customer_id=str(matched_receipt.get("customer_id", "")),
         operation_summary=str(
-            latest_receipt.get("operation_summary", "Operator rejected mutation")
+            matched_receipt.get("operation_summary", "Operator rejected mutation")
         ),
-        before_state=str(latest_receipt.get("before_state", "")),
-        after_state=str(latest_receipt.get("after_state", "")),
+        before_state=str(matched_receipt.get("before_state", "")),
+        after_state=str(matched_receipt.get("after_state", "")),
         consequences=[
             str(c)
-            for c in latest_receipt.get("consequences", [])
+            for c in matched_receipt.get("consequences", [])
             if str(c).strip()
         ],
-        reversibility=str(latest_receipt.get("reversibility", "REVERSIBLE")),
+        reversibility=str(matched_receipt.get("reversibility", "REVERSIBLE")),
         script_path=effective_script or None,
         script_sha256=script_hash,
         validate_only=False,
@@ -3559,15 +3852,17 @@ def reject_dry_run_receipt(
         stderr=reason,
         command=["HITL:REJECT"],
         rpc_calls=[],
-        receipt=latest_receipt if latest_receipt else {"rejection_reason": reason},
+        receipt=matched_receipt,
         user_approved_at_iso=None,
+        approval_decision="HUMAN_REJECTED",
     )
     return {
         "status": "REJECTED",
+        "rejected_count": rejected_count,
         "rejected_at_iso": rejected_iso,
         "rejection_reason": reason,
         "audit_id": audit_entry.get("audit_id"),
-        "receipt_id": latest_receipt.get("receipt_id"),
+        "receipt_id": matched_receipt.get("receipt_id"),
     }
 
 
@@ -3835,12 +4130,27 @@ def load_and_verify_receipt(
                     ),
                     receipt,
                 )
+            call_sha = str(call.get("request_sha256", "")).strip()
+            if call.get("request_payload_masked"):
+                # Stored payload has masked emails; its request_sha256 was
+                # computed from the unmasked payload before storage.
+                if not call_sha:
+                    return (
+                        False,
+                        (
+                            f"Dry-run receipt RPC call #{idx + 1} has a masked "
+                            "payload but no recorded request_sha256. Re-run "
+                            "--dry-run before executing."
+                        ),
+                        receipt,
+                    )
+                recomputed_list.append(call_sha)
+                continue
             recomputed_sha = compute_mutate_request_sha256(
                 str(call.get("service", "")),
                 str(call.get("method", "")),
                 call.get("request_payload"),
             )
-            call_sha = str(call.get("request_sha256", "")).strip()
             if call_sha and call_sha != recomputed_sha:
                 return (
                     False,
@@ -3971,6 +4281,15 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
             operation_summary=str(receipt.get("operation_summary", "")),
         )
     )
+    if any("***@" in str(e) for e in ato_details.get("emails") or []):
+        # Stored receipts mask emails; recompute full values for the card.
+        recomputed = extract_ato_escalation_details(
+            rpc_calls=rpc_list,
+            script_path=str(receipt.get("script_path", "")) or None,
+            operation_summary=str(receipt.get("operation_summary", "")),
+        )
+        if recomputed.get("emails"):
+            ato_details = recomputed
 
     tier_num = int(cls_info["tier_number"])
     elev_tag = (
@@ -3982,11 +4301,37 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
         f"Tier / Class  : {cls_info['classification_tier']} — "
         f"{cls_info['classification_category']}{elev_tag}\n"
     )
-    spend_delta_line = (
-        "Spend Delta   : $0.00 direct spend impact (structural/administrative)\n"
-        if tier_num == 3 and not receipt.get("is_financial_transaction")
-        else ""
-    )
+    if "is_unclassified" in receipt:
+        is_unclassified = bool(receipt.get("is_unclassified"))
+        unclassified_svcs = list(receipt.get("unclassified_services") or [])
+    else:
+        legacy_cls = classify_mutation(
+            operation_summary=str(receipt.get("operation_summary", "")),
+            before_state=str(receipt.get("before_state", "")),
+            after_state=str(receipt.get("after_state", "")),
+            rpc_calls=rpc_list,
+            script_path=str(receipt.get("script_path", "")) or None,
+        )
+        is_unclassified = bool(legacy_cls.get("is_unclassified"))
+        unclassified_svcs = list(legacy_cls.get("unclassified_services") or [])
+    unclassified_line = ""
+    if is_unclassified:
+        svc_txt = f" ({', '.join(unclassified_svcs)})" if unclassified_svcs else ""
+        unclassified_line = (
+            f"Unclassified  : {_UNCLASSIFIED_SERVICE_NOTE}{svc_txt}\n"
+        )
+    if tier_num == 3 and not receipt.get("is_financial_transaction"):
+        if is_unclassified:
+            spend_delta_line = (
+                f"Spend Delta   : UNKNOWN — {_UNCLASSIFIED_SERVICE_NOTE}\n"
+            )
+        else:
+            spend_delta_line = (
+                "Spend Delta   : $0.00 direct spend impact "
+                "(structural/administrative)\n"
+            )
+    else:
+        spend_delta_line = ""
 
     payload_block = ""
     p_cids = payload_facts.get("payload_customer_ids") or []
@@ -4006,6 +4351,14 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
             "micro_unit_drift_detected"
         ):
             drift_warn = " [WARNING: CLI PROSE DIFFERS FROM ACTUAL RPC PAYLOAD]"
+        drift_fields = payload_facts.get("micro_unit_drift_fields") or []
+        if payload_facts.get("micro_unit_drift_detected") and drift_fields:
+            drift_warn += " [AMOUNT DRIFT: " + ", ".join(
+                f"{d.get('field')}={d.get('payload_amount')} vs CLI "
+                f"{d.get('closest_cli_amount')}"
+                for d in drift_fields
+                if isinstance(d, dict)
+            ) + "]"
         payload_block = f"Payload-Bound : {' | '.join(parts)}{drift_warn}\n"
 
     ato_block = ""
@@ -4039,6 +4392,7 @@ def format_verification_card(receipt: Dict[str, Any]) -> str:
         "GOOGLE ADS API MUTATION & CONSEQUENCE VERIFICATION CARD\n"
         f"{sep}\n"
         f"{tier_line}"
+        f"{unclassified_line}"
         f"Customer ID   : {receipt.get('customer_id', 'Unknown')}\n"
         f"Operation     : {receipt.get('operation_summary', 'Unknown')}\n"
         f"{payload_block}"
@@ -4176,6 +4530,18 @@ def main() -> None:
             reason=args.rejection_reason,
         )
         print(json.dumps(rej_res, indent=2))
+        if not rej_res.get("rejected_count"):
+            print(
+                "Error: --reject found no pending DRY_RUN_PASSED receipt"
+                + (
+                    f" matching --script '{args.script}'"
+                    if args.script
+                    else ""
+                )
+                + "; nothing was rejected.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         return
 
     if not args.script:
@@ -4413,6 +4779,8 @@ def main() -> None:
                 audit_status = "BLOCKED_PROHIBITED_DELETION"
             elif "BLOCKED BY FINANCIAL UPPER LIMIT" in exc_text:
                 audit_status = "BLOCKED_FINANCIAL_LIMIT_EXCEEDED"
+            elif "BLOCKED BY CUSTOMER ID MISMATCH" in exc_text:
+                audit_status = "BLOCKED_CUSTOMER_ID_MISMATCH"
             else:
                 audit_status = "BLOCKED_FINANCIAL_CONSEQUENCE_MISSING"
             append_mutation_audit_log(
@@ -4833,6 +5201,7 @@ def main() -> None:
             rpc_calls=captured_calls,
             receipt=receipt,
             user_approved_at_iso=user_approved_at_iso,
+            approval_decision="HUMAN_APPROVED",
         )
         print(
             f"Live mutation {failure_status} "
@@ -4844,7 +5213,7 @@ def main() -> None:
 
     audit_entry = append_mutation_audit_log(
         phase="EXECUTE",
-        status="HUMAN_APPROVED",
+        status="SUCCESS",
         customer_id=cid,
         operation_summary=operation_summary,
         before_state=before_state,
@@ -4864,6 +5233,7 @@ def main() -> None:
         rpc_calls=captured_calls,
         receipt=receipt,
         user_approved_at_iso=user_approved_at_iso,
+        approval_decision="HUMAN_APPROVED",
     )
     mark_receipt_executed(
         user_approved_at_iso=user_approved_at_iso,

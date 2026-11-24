@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import os,runpy,sys; sys.argv=['config_init.py','--hook']; p=next((f for f in [os.path.join(e, 'config/config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'), os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e] + [os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'), os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py'), 'plugins/google-ads-api-developer-assistant/config/config_init.py'] if os.path.isfile(f)), None); runpy.run_path(p, run_name='__main__') if p else None\"",
+            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['config_init.py','--hook']; c=[os.path.join(e,'config','config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py')]; p=next((f for f in c if os.path.isfile(f)),None); d='' if p else sys.stdin.read(); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/config_init.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}) if ('toolCall' in d or 'tool_input' in d) else '{}')\"",
             "timeout": 15
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import os,runpy,sys; sys.argv=['config_init.py','--hook']; p=next((f for f in [os.path.join(e, 'config/config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'), os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e] + [os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'), os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py'), 'plugins/google-ads-api-developer-assistant/config/config_init.py'] if os.path.isfile(f)), None); runpy.run_path(p, run_name='__main__') if p else None\"",
+            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['config_init.py','--hook']; c=[os.path.join(e,'config','config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py')]; p=next((f for f in c if os.path.isfile(f)),None); d='' if p else sys.stdin.read(); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/config_init.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}) if ('toolCall' in d or 'tool_input' in d) else '{}')\"",
             "timeout": 15
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import os,runpy,sys; sys.argv=['config_init.py','--hook']; p=next((f for f in [os.path.join(e, 'config/config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'), os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e] + [os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'), os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py'), 'plugins/google-ads-api-developer-assistant/config/config_init.py'] if os.path.isfile(f)), None); runpy.run_path(p, run_name='__main__') if p else None\"",
+            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['config_init.py','--hook']; c=[os.path.join(e,'config','config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py')]; p=next((f for f in c if os.path.isfile(f)),None); d='' if p else sys.stdin.read(); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/config_init.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}) if ('toolCall' in d or 'tool_input' in d) else '{}')\"",
             "timeout": 15
           }
         ]
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import os,runpy,sys; sys.argv=['config_init.py','--hook']; p=next((f for f in [os.path.join(e, 'config/config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'), os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e] + [os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'), os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py'), 'plugins/google-ads-api-developer-assistant/config/config_init.py'] if os.path.isfile(f)), None); runpy.run_path(p, run_name='__main__') if p else None\"",
+            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['config_init.py','--hook']; c=[os.path.join(e,'config','config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py')]; p=next((f for f in c if os.path.isfile(f)),None); d='' if p else sys.stdin.read(); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/config_init.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}) if ('toolCall' in d or 'tool_input' in d) else '{}')\"",
             "timeout": 15
           }
         ]
@@ -46,14 +46,14 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "python3 -c \"import os,runpy,sys; sys.argv=['config_init.py','--hook']; p=next((f for f in [os.path.join(e, 'config/config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'), os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e] + [os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'), os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py'), 'plugins/google-ads-api-developer-assistant/config/config_init.py'] if os.path.isfile(f)), None); runpy.run_path(p, run_name='__main__') if p else None\"",
+        "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['config_init.py','--hook']; c=[os.path.join(e,'config','config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py')]; p=next((f for f in c if os.path.isfile(f)),None); d='' if p else sys.stdin.read(); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/config_init.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}) if ('toolCall' in d or 'tool_input' in d) else '{}')\"",
         "timeout": 15
       }
     ],
     "PreInvocation": [
       {
         "type": "command",
-        "command": "python3 -c \"import os,runpy,sys; sys.argv=['config_init.py','--hook']; p=next((f for f in [os.path.join(e, 'config/config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'), os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e] + [os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'), os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py'), 'plugins/google-ads-api-developer-assistant/config/config_init.py'] if os.path.isfile(f)), None); runpy.run_path(p, run_name='__main__') if p else None\"",
+        "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['config_init.py','--hook']; c=[os.path.join(e,'config','config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py')]; p=next((f for f in c if os.path.isfile(f)),None); d='' if p else sys.stdin.read(); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/config_init.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}) if ('toolCall' in d or 'tool_input' in d) else '{}')\"",
         "timeout": 15
       }
     ],
@@ -63,7 +63,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import os,runpy,sys; sys.argv=['config_init.py','--hook']; p=next((f for f in [os.path.join(e, 'config/config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'), os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e] + [os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'), os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py'), 'plugins/google-ads-api-developer-assistant/config/config_init.py'] if os.path.isfile(f)), None); runpy.run_path(p, run_name='__main__') if p else None\"",
+            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['config_init.py','--hook']; c=[os.path.join(e,'config','config_init.py') for e in (os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/config_init.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/config_init.py')]; p=next((f for f in c if os.path.isfile(f)),None); d='' if p else sys.stdin.read(); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/config_init.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}) if ('toolCall' in d or 'tool_input' in d) else '{}')\"",
             "timeout": 15
           }
         ]

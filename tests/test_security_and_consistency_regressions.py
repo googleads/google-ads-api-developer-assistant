@@ -955,9 +955,11 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         with pytest.raises(SystemExit):
             cids.main()
 
-        # get_latest_api_version: --no-update CLI and RuntimeError clean exit
+        # get_latest_api_version: --no-update aliases --active (read-only); --installed
+        # detects installed versions and exits 1 cleanly when detection raises.
         monkeypatch.setattr(sys, "argv", ["get_latest_api_version.py", "--no-update"])
         glav.main()
+        monkeypatch.setattr(sys, "argv", ["get_latest_api_version.py", "--installed"])
         monkeypatch.setattr(
             glav,
             "detect_latest_api_version",
@@ -1281,9 +1283,11 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         capsys.readouterr()
         config_init.handle_hook()
         claude_out = json.loads(capsys.readouterr().out)
-        assert claude_out["decision"] == "allow"
-        assert "hookSpecificOutput" in claude_out
-        assert "&& #" not in claude_out["overwrite"]["command"]
+        # Claude Code reads only hookSpecificOutput; rewrites go in updatedInput.
+        hso = claude_out["hookSpecificOutput"]
+        assert hso["hookEventName"] == "PreToolUse"
+        assert hso.get("permissionDecision") in (None, "allow")
+        assert "&& #" not in hso["updatedInput"]["command"]
 
     def test_remaining_coverage_and_edge_cases(self, tmp_path, monkeypatch):
         from types import SimpleNamespace
@@ -2543,7 +2547,6 @@ class TestConsistencyEfficiencyAndResilienceAudit:
     ):
         """Ensures no runtime code, seed config, or installer hardcodes a static v<N> default/fallback."""
         import re
-        import types
 
         static_patterns = (
             re.compile(r"^\s*(?:DEFAULT_API_VERSION|FALLBACK_API_VERSION)\s*=\s*['\"]v\d+['\"]", re.M),
@@ -2585,8 +2588,9 @@ class TestConsistencyEfficiencyAndResilienceAudit:
             "skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py",
             "skills/inspect-object/scripts/inspect_object.py",
         )
-        fake_pkg = tmp_path / "dyn_pkg"
-        (fake_pkg / "v31").mkdir(parents=True)
+        import importlib
+
+        shared_cfg = importlib.import_module("config.config_init")
         for idx, rel in enumerate(skill_script_rels):
             mod = _load_module(rel, f"dyn_ver_skill_{idx}")
             monkeypatch.setenv("GOOGLE_ADS_API_VERSION", "30")
@@ -2595,18 +2599,17 @@ class TestConsistencyEfficiencyAndResilienceAudit:
             resolved = mod._normalize_api_version("")
             assert re.fullmatch(r"v\d+", resolved)
 
-            # Verify fallback to find_spec when config_init returns empty and no assistant_config is set
+            # Every script delegates to the shared config_init resolver: with no env and no
+            # assistant_config value, the installed-version detection decides.
             with patch.object(
-                config_init, "get_configured_api_version", return_value=None
+                shared_cfg, "get_configured_api_version", return_value=None
             ), patch.object(
-                config_init, "detect_latest_api_version", return_value=""
-            ), patch.object(
-                mod.importlib.util,
-                "find_spec",
-                return_value=types.SimpleNamespace(
-                    submodule_search_locations=[str(fake_pkg)]
-                ),
-            ), patch.object(
-                mod.os.path, "isfile", return_value=False
+                shared_cfg, "_detect_installed_api_version", return_value="v31"
             ):
                 assert mod._normalize_api_version(None) == "v31"
+            with patch.object(
+                shared_cfg, "get_configured_api_version", return_value=None
+            ), patch.object(
+                shared_cfg, "_detect_installed_api_version", return_value=""
+            ), pytest.raises(ValueError, match="api_version"):
+                mod._normalize_api_version(None)

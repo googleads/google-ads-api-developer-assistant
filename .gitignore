@@ -22,3 +22,6 @@ plugins/google-ads-api-developer-assistant/config/google-ads.yaml
 **/config/App.config
 **/config/appsettings.json
 saved/data/.a2a_token
+
+# Personal editor workspace files
+*.code-workspace

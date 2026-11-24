@@ -24,8 +24,8 @@ class TestEvalSkillsSuiteOffline:
             "Offline skill eval failures: "
             + "; ".join(f"{r.check_id}: {r.details}" for r in failed)
         )
-        # 4 global checks (EV-SCHEMA-01/02, EV-CLI-01, EV-POLICY-01) + 22 skill routing/rubric cases
-        assert len(results) == 26
+        # Global checks + one routing/rubric self-test per registered EvalCase
+        assert {r.check_id for r in results} == ess.expected_offline_check_ids()
 
     def test_cli_offline_mode_and_json_output(self, tmp_path: Any) -> None:
         json_out = tmp_path / "eval_report.json"
@@ -34,8 +34,9 @@ class TestEvalSkillsSuiteOffline:
         assert json_out.is_file()
         report = json.loads(json_out.read_text(encoding="utf-8"))
         assert report["mode"] == "offline"
-        assert report["total"] == 26
-        assert report["passed"] == 26
+        expected_total = len(ess.expected_offline_check_ids())
+        assert report["total"] == expected_total
+        assert report["passed"] == expected_total
         assert report["failed"] == 0
 
     def test_cli_list_cases_and_skill_filter(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -151,8 +152,41 @@ class TestEvalSkillsRubricAndLiveProviders:
         fake_resp.read.return_value = json.dumps({
             "candidates": [{"content": {"parts": [{"text": "Gemini API reply"}]}}]
         }).encode("utf-8")
-        with patch.object(ess.urllib.request, "urlopen", return_value=fake_resp):
+        with patch.object(ess.urllib.request, "urlopen", return_value=fake_resp) as mock_open:
             out3 = ess.invoke_live_provider(
                 "gemini-api", system_prompt="SYS", user_prompt="USR", model="gemini-2.5-flash"
             )
         assert out3 == "Gemini API reply"
+        sent_req = mock_open.call_args[0][0]
+        # The API key travels in the x-goog-api-key header, never in the URL.
+        assert "fake-key-for-unit-test" not in sent_req.full_url
+        assert "key=" not in sent_req.full_url
+        assert sent_req.get_header("X-goog-api-key") == "fake-key-for-unit-test"
+
+
+class TestEvalSkillsMutatedFixture:
+    """The offline schema/routing checks must reject a SKILL.md with a required section removed."""
+
+    def test_mutated_skill_md_fails_schema_validation(self, tmp_path: Any) -> None:
+        for skill in ess.EXPECTED_SKILLS:
+            real = ess.load_skill_entry(
+                skill, os.path.join(ess.SKILLS_DIR, skill, "SKILL.md")
+            )
+            assert ess.validate_skill_entry(skill, real) == []
+
+            mutated_path = ess.build_mutated_skill_fixture(skill, str(tmp_path))
+            mutated = ess.load_skill_entry(skill, mutated_path)
+            errs = ess.validate_skill_entry(skill, mutated)
+            assert any("missing frontmatter description" in e for e in errs), (skill, errs)
+            assert any("empty markdown body" in e for e in errs), (skill, errs)
+
+    def test_mutated_skill_negative_control_passes_and_detects_router_regressions(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog = ess.load_skill_catalog()
+        assert "rejected by schema" in ess.run_mutated_skill_negative_control(catalog)
+
+        # A broken validator that accepts everything must make the self-test fail.
+        monkeypatch.setattr(ess, "validate_skill_entry", lambda _n, _i: [])
+        with pytest.raises(AssertionError, match="accepted mutated"):
+            ess.run_mutated_skill_negative_control(catalog)

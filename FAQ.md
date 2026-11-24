@@ -100,6 +100,8 @@ Set `customer_id` in `config/assistant_config` (for example, `customer_id = "123
 ### Where is the Google Ads API version configured?
 The `config/assistant_config` file stores the active API version (`api_version = "v<N>"`). When you install, update, or run `get_latest_api_version.py` or `sync_client_libs.py`, the assistant finds the latest stable version dynamically. It updates `api_version` in `config/assistant_config` and keeps your `customer_id` and `execute_mutates` values.
 
+The skill scripts use this order to select the version: the `--api_version` argument, then the `GOOGLE_ADS_API_VERSION` environment variable, then `api_version` in `config/assistant_config`, then the newest version in `client_libs/google-ads-python` or the installed `google-ads` package. Each value must have the form `vNN` (for example, `v24`). An invalid `--api_version` or `GOOGLE_ADS_API_VERSION` value causes an error. The assistant ignores an invalid value in `config/assistant_config` and never writes one.
+
 ### How do I use the assistant with my existing application code?
 Install the plugin globally with `./install.sh agy` or `./install.sh claude`. Then start your Antigravity (`agy`) or Claude Code (`claude`) session inside your application directory, or include your file paths in your prompt. The `PreInvocation` and `PreToolUse` hooks find the global plugin skills and keep your local `./config/assistant_config` settings.
 
@@ -169,6 +171,14 @@ In Claude Code, use these slash commands:
 1. **Python:** Install Python >= 3.11 and add it to your system `PATH`.
 2. **Platform CLI:** Install the Antigravity CLI (`agy` / `antigravity`) or the Claude Code CLI (`claude` with Node.js >= 18).
 3. **Google Ads API Access:** Put your credential file in `$HOME`.
+
+### What happens if Python is not on my PATH (Windows)?
+The plugin hooks need Python to run the HITL mutation guard.
+* **Claude Code:** The hooks try `python3`, then `python`, then `py -3`. If none of them works, the hook exits with code 2 and Claude Code blocks the tool call. It does not run the command without the guard.
+* **Antigravity:** The hooks use `python3`. On Windows, `install.ps1` and `update.ps1` change `python3` to `python` in the installed `hooks.json`, `mcp_config.json`, and `.mcp.json` when only `python` is available. If no Python command works, Antigravity cannot run the guard, so make sure that `python3` or `python` is on your `PATH` before you start `agy`.
+
+### Why did the assistant ask me to confirm a shell command that edits a config file?
+Shell commands that write to `config/assistant_config`, `config/financial_limits`, `config/google-ads.yaml`, or `hooks.json` (for example `sed -i`, `echo ... >>`, `tee`, `cp`, `mv`, or a Python `open(..., "w")`) need your confirmation, because these files control live mutations and spending limits. Shell writes to `saved/data/last_dry_run.json` and `saved/logs/mutation_audit.jsonl` are always blocked. Only `run_mutation.py` writes those files.
 
 ### Why does the assistant sometimes suggest old fields?
 The language model may know older API versions. To prevent errors, the assistant checks your local client library files and uses the active API version from `config/assistant_config`. If an API error occurs, the assistant reads the local client library definitions and fixes the query or code.

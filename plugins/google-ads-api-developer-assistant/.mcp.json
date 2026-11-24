@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "google-ads-api-assistant": {
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/sidecars/google-ads-a2a-service/server.py",
+        "--mcp"
+      ],
+      "env": {
+        "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "${CLAUDE_PLUGIN_ROOT}/config/google-ads.yaml",
+        "GOOGLE_ADS_ASSISTANT_DIR": "${CLAUDE_PLUGIN_ROOT}"
+      }
+    }
+  }
+}

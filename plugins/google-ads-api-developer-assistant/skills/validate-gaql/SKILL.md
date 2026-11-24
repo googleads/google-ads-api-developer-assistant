@@ -5,6 +5,10 @@ description: Validates Google Ads Query Language (GAQL) queries via 4-step stati
 
 # Validate GAQL Skill
 
+> **API version:** `--api_version` is optional. Omit it to use the active version (`GOOGLE_ADS_API_VERSION`, then `api_version` in `config/assistant_config`, then the highest version in local `client_libs` and the installed `google-ads` package). Pass `--api_version vN` only to override it.
+
+> **Plugin directory:** Every command starts with a `GADS_DIR=...` line that finds the installed plugin: `CLAUDE_PLUGIN_ROOT` or `GOOGLE_ADS_ASSISTANT_DIR` when set, otherwise the Claude Code install (`~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant`) when running in Claude Code or when the Antigravity install (`~/.gemini/config/plugins/google-ads-api-developer-assistant`) is missing. Run both lines together in one command.
+
 Before presenting or running any GAQL query, pass this 4-step sequence:
 
 1. **Schema Discovery:** Verify field existence, selectability, and filterability using `search_google_ads_fields`.
@@ -16,7 +20,8 @@ Before presenting or running any GAQL query, pass this 4-step sequence:
    - **Hourly Segment:** Use `segments.hour` (`segments.hour_of_day` is invalid in GAQL and fails with `UNRECOGNIZED_FIELD`).
 4. **Runtime Dry Run:** Execute API dry-run search request against target customer ID:
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/validate-gaql/scripts/validate_gaql.py" --query "<query>" --customer_id "<customer_id>" --api_version "<api_version>"
+   GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+   python3 "$GADS_DIR/skills/validate-gaql/scripts/validate_gaql.py" --query "<query>" --customer_id "<customer_id>"
    ```
 
 ## Local Response Caching

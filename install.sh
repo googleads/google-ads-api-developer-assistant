@@ -580,8 +580,10 @@ detect_and_seed_api_version() {
       if [[ -z "${latest_v}" ]]; then
         local existing_ver=""
         existing_ver=$(grep -E '^[[:space:]]*api_version[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*api_version[[:space:]]*=[[:space:]]*["'\'']?([^"'\''#[:space:]]+)["'\'']?.*$/\1/' || true)
-        if [[ -n "${existing_ver}" ]]; then
-          api_ver="${existing_ver}"
+        if [[ "${existing_ver}" =~ ^v?([0-9]+)$ ]]; then
+          api_ver="v${BASH_REMATCH[1]}"
+        elif [[ -n "${existing_ver}" ]]; then
+          echo "WARNING: Ignoring invalid api_version '${existing_ver}' in ${cfg_file} (expected vNN)." >&2
         fi
       fi
       local existing_cid=""
@@ -624,8 +626,21 @@ execute_mutates = ${exec_mutates}
 enabled = ${plugin_enabled}
 EOF
     chmod 600 "${cfg_file}" 2>/dev/null || true
-    echo "Configured API version ${api_ver} in ${cfg_file}"
+    if [[ -n "${api_ver}" ]]; then
+      echo "Configured API version ${api_ver} in ${cfg_file}"
+    else
+      warn_no_api_version "${cfg_file}"
+    fi
+  else
+    warn_no_api_version "${target_config_dir}/assistant_config"
   fi
+}
+
+# Warn when no Google Ads API version could be detected for config/assistant_config
+warn_no_api_version() {
+  local cfg_path="$1"
+  echo "WARNING: No Google Ads API version was detected (no client_libs/google-ads-python and no installed google-ads package)." >&2
+  echo "WARNING: api_version is not set in ${cfg_path}. Install the google-ads Python package, or set api_version = \"vNN\" in that file, or pass --api_version vNN to the skill scripts." >&2
 }
 
 # --- Plugin Installation ---

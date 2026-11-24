@@ -82,7 +82,7 @@ When a user invokes `/assistant-tutorial` or requests this tutorial:
 
 ### Topic 13: Extension & Dynamic API Version Resolution (`/ext-version`)
 - **Version Scripts:** `get_extension_version.py` reports the assistant plugin version from `plugin.json`; `get_latest_api_version.py` resolves and caches the active Google Ads API version.
-- **4-Tier Dynamic API Version Hierarchy:** Resolves API version dynamically via: (1) explicit caller/env override (`GOOGLE_ADS_API_VERSION`), (2) `config/assistant_config` (`api_version`), (3) local `client_libs/google-ads-python/google/ads/googleads/v*` directory discovery, and (4) installed `google.ads.googleads` package inspection (with no hardcoded version fallback).
+- **Dynamic API Version Resolution (`config_init.resolve_active_api_version`):** Every skill script resolves the API version in this order: (1) the explicit `--api_version` argument, (2) the `GOOGLE_ADS_API_VERSION` environment variable, (3) `api_version` in the active `config/assistant_config`, and (4) the highest version found across local `client_libs/google-ads-python/google/ads/googleads/v*` and the installed `google.ads.googleads` package (step 4 takes the maximum of both sources; neither is preferred). Each value must have the form `vN`; there is no hardcoded fallback version. `--api_version` is optional in every script. `get_latest_api_version.py --active` prints the same value the scripts use.
 
 ### Topic 14: Step-by-Step Workflow Breakdown (`/step-by-step`)
 - **3-Phase Actionable Plans:** Breaks down complex Google Ads implementations into:

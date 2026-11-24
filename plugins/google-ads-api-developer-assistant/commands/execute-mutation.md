@@ -19,7 +19,8 @@ Executes Google Ads API write/mutation operations (`create` and `update` only; d
    - Generate and lint the mutation script in `saved/code/<mutation_name>.py` supporting `--dry-run` (`validate_only=True`) and `--execute` (`validate_only=False` with `ResponseContentType.MUTABLE_RESOURCE`).
    - Run the dry-run via `run_mutation.py` to generate the SHA-256 verification receipt (`saved/data/last_dry_run.json`):
      ```bash
-     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
+     GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+     python3 "$GADS_DIR/skills/execute-mutation/scripts/run_mutation.py" \
        --script saved/code/<mutation_name>.py \
        --dry-run \
        --customer-id "<customer_id>" \
@@ -37,7 +38,8 @@ Executes Google Ads API write/mutation operations (`create` and `update` only; d
    - Ensure `execute_mutates = true` in `config/assistant_config`.
    - Execute the verified mutation:
      ```bash
-     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
+     GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+     python3 "$GADS_DIR/skills/execute-mutation/scripts/run_mutation.py" \
        --script saved/code/<mutation_name>.py \
        --execute
      ```

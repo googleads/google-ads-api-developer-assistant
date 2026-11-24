@@ -127,6 +127,40 @@ def _normalize_api_version(api_version: str) -> str:
     return clean_version
 
 
+def _resolve_active_api_version(explicit: Optional[str] = None) -> str:
+    """Returns the API version from config_init.resolve_active_api_version.
+
+    Order: explicit argument, GOOGLE_ADS_API_VERSION, api_version in the active
+    assistant_config, then the highest version in local client_libs and the
+    installed google-ads package.
+
+    Raises:
+        ValueError: If the version is invalid or cannot be determined.
+    """
+    clean = str(explicit or "").strip().lower()
+    if clean:
+        if not re.fullmatch(r"v?\d+", clean):
+            raise ValueError(
+                f"Invalid Google Ads API version {explicit!r}: expected 'vN' "
+                "(for example v23)."
+            )
+        return f"v{int(clean.lstrip('v'))}"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    try:
+        if plugin_root not in sys.path and os.path.isdir(plugin_root):
+            sys.path.insert(0, plugin_root)
+        resolver = importlib.import_module(
+            "config.config_init"
+        ).resolve_active_api_version
+    except (AttributeError, ImportError, OSError, SyntaxError) as e:
+        raise ValueError(
+            "Could not determine Google Ads API version (config_init is "
+            f"unavailable: {e}); pass --api_version vN"
+        ) from e
+    return str(resolver())
+
+
 def _mask_string_literals(query: str) -> str:
     """Replaces quoted GAQL string literal contents with spaces."""
     return _STRING_LITERAL_RE.sub(
@@ -855,8 +889,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--api_version",
-        required=True,
-        help="API Version (format 'v<N>').",
+        default=None,
+        help="API Version (format 'v<N>'). Omit to use the active version.",
     )
     parser.add_argument(
         "-q",
@@ -899,6 +933,12 @@ def main() -> None:
     if args.clear_cache:
         invalidate_gaql_cache(cache_path=args.cache_path)
 
+    try:
+        api_version = _resolve_active_api_version(args.api_version)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+
     query = args.query
     if query is None:
         if not sys.stdin.isatty():
@@ -915,7 +955,7 @@ def main() -> None:
 
     validate_gaql(
         args.customer_id,
-        args.api_version,
+        api_version,
         query,
         use_cache=not args.no_cache,
         cache_path=args.cache_path,

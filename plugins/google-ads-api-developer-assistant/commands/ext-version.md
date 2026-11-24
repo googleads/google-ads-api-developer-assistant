@@ -11,11 +11,13 @@ Retrieves and prints the current Google Ads API Developer Assistant version and 
 1. **Retrieve Versions**:
    - Run the version retrieval script:
      ```bash
-     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/ext-version/scripts/get_extension_version.py"
+     GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+     python3 "$GADS_DIR/skills/ext-version/scripts/get_extension_version.py"
      ```
-   - Run the latest API version script:
+   - Run the active API version script (read-only; prints the version the skill scripts use):
      ```bash
-     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/ext-version/scripts/get_latest_api_version.py"
+     GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+     python3 "$GADS_DIR/skills/ext-version/scripts/get_latest_api_version.py" --active
      ```
    - Or read `plugin.json` and `config/assistant_config`.
 

@@ -20,7 +20,7 @@ import importlib
 import os
 import re
 import sys
-from typing import Any
+from typing import Any, Optional
 
 
 class _FallbackGoogleAdsError(Exception):
@@ -67,12 +67,43 @@ _SDK_EXCEPTIONS: tuple[type[Exception], ...] = (
 )
 
 
-def _normalize_api_version(api_version: str) -> str:
-    """Normalizes an API version string to lowercase 'v<N>' format."""
-    clean = str(api_version or "").strip().lower()
-    if clean and not clean.startswith("v") and clean.isdigit():
-        clean = f"v{clean}"
-    return clean
+def _resolve_active_api_version(explicit: Optional[str] = None) -> str:
+    """Returns the API version from config_init.resolve_active_api_version.
+
+    Order: explicit argument, GOOGLE_ADS_API_VERSION, api_version in the active
+    assistant_config, then the highest version in local client_libs and the
+    installed google-ads package.
+
+    Raises:
+        ValueError: If the version is invalid or cannot be determined.
+    """
+    clean = str(explicit or "").strip().lower()
+    if clean:
+        if not re.fullmatch(r"v?\d+", clean):
+            raise ValueError(
+                f"Invalid Google Ads API version {explicit!r}: expected 'vN' "
+                "(for example v23)."
+            )
+        return f"v{int(clean.lstrip('v'))}"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+    try:
+        if plugin_root not in sys.path and os.path.isdir(plugin_root):
+            sys.path.insert(0, plugin_root)
+        resolver = importlib.import_module(
+            "config.config_init"
+        ).resolve_active_api_version
+    except (AttributeError, ImportError, OSError, SyntaxError) as e:
+        raise ValueError(
+            "Could not determine Google Ads API version (config_init is "
+            f"unavailable: {e}); pass --api_version vN"
+        ) from e
+    return str(resolver())
+
+
+def _normalize_api_version(api_version: Optional[str] = None) -> str:
+    """Returns api_version as 'vN', defaulting to the active version."""
+    return _resolve_active_api_version(api_version)
 
 
 def _get_config_path() -> str:
@@ -206,8 +237,11 @@ def main() -> None:
     parser.add_argument(
         "-v",
         "--api_version",
-        required=True,
-        help="The Google Ads API version (format 'v<N>').",
+        default=None,
+        help=(
+            "The Google Ads API version (format 'v<N>'). Omit to use the "
+            "active version."
+        ),
     )
     default_date = (
         datetime.datetime.now() - datetime.timedelta(days=1)

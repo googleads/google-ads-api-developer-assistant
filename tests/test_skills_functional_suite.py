@@ -289,6 +289,35 @@ def _make_fake_live_client(*, is_test_account: bool = True) -> Any:
     return _FakeClient()
 
 
+_REAL_TOKEN_SENTINEL = "1//REAL-DEVELOPER-REFRESH-TOKEN-MUST-NOT-BE-READ"
+
+
+def _write_offline_fixtures(tmp_path: Any) -> tuple[Any, Any]:
+    """Writes a tmp credentials yaml (with a sentinel token) and a tmp test-account config."""
+    creds = tmp_path / "offline-google-ads.yaml"
+    creds.write_text(
+        yaml.safe_dump({
+            "client_id": "1234567890-abc.apps.googleusercontent.com",
+            "client_secret": "secret",
+            "refresh_token": _REAL_TOKEN_SENTINEL,
+            "use_proto_plus": True,
+        }),
+        encoding="utf-8",
+    )
+    cfg_path = tmp_path / "offline_test_account_config.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump({
+            "test_account": {
+                "test_customer_id": "REPLACE_WITH_TEST_CUSTOMER_ID",
+                "credentials_yaml_path": str(creds),
+            },
+            "audit_log": {"directory": str(tmp_path / "audit_logs")},
+        }),
+        encoding="utf-8",
+    )
+    return creds, cfg_path
+
+
 class TestSkillsFunctionalSuite:
     """Verifies CLI flags, fail-closed non-test abort, offline mode, and full simulated run."""
 
@@ -302,7 +331,18 @@ class TestSkillsFunctionalSuite:
             assert suite_name in out
 
         audit_log = tmp_path / "offline_skills_audit.jsonl"
-        rc_off = sfs.main(["--offline", "--audit-log", str(audit_log)])
+        # Explicit tmp config + credentials: offline runs never read the developer's
+        # real google-ads.yaml or tests/test_account_config.yaml.
+        creds, cfg_path = _write_offline_fixtures(tmp_path)
+        rc_off = sfs.main([
+            "--offline",
+            "--config",
+            str(cfg_path),
+            "--credentials-yaml",
+            str(creds),
+            "--audit-log",
+            str(audit_log),
+        ])
         assert rc_off == 0
         integrity = hal.verify_audit_log_integrity(str(audit_log))
         assert integrity["error_records"] == 0
@@ -347,7 +387,6 @@ class TestSkillsFunctionalSuite:
         creds = tmp_path / "google-ads.yaml"
         creds.write_text(
             yaml.safe_dump({
-                "developer_token": "TEST_DEV_TOKEN",
                 "client_id": "1234567890-abc.apps.googleusercontent.com",
                 "client_secret": "secret",
                 "refresh_token": "refresh",
@@ -374,7 +413,43 @@ class TestSkillsFunctionalSuite:
             "Skills functional suite failures: "
             + "; ".join(f"{r.test_id}: {r.details}" for r in failed)
         )
-        assert len(results) == 30
+        assert {r.test_id for r in results} == {
+            s.test_id for s in sfs._build_skill_test_specs()
+        }
         integrity = hal.verify_audit_log_integrity(str(audit_log))
         assert integrity["error_records"] == 0
         assert audit.error_count == 0
+
+    def test_offline_sandbox_never_copies_real_credentials(self, tmp_path: Any) -> None:
+        creds, cfg_path = _write_offline_fixtures(tmp_path)
+        cfg = hal.load_test_account_config(str(cfg_path), credentials_yaml_override=str(creds))
+        audit = hal.FunctionalAuditLogger(log_path=str(tmp_path / "ctx_audit.jsonl"))
+        offline_ctx = sfs.SkillsFunctionalContext(cfg, audit, offline_only=True)
+        try:
+            seeded = open(offline_ctx.sandbox_yaml, encoding="utf-8").read()
+        finally:
+            offline_ctx.close()
+        assert _REAL_TOKEN_SENTINEL not in seeded
+        assert "offline-refresh" in seeded
+
+        online_ctx = sfs.SkillsFunctionalContext(cfg, audit, offline_only=False)
+        try:
+            online_seeded = open(online_ctx.sandbox_yaml, encoding="utf-8").read()
+        finally:
+            online_ctx.close()
+        assert _REAL_TOKEN_SENTINEL in online_seeded
+
+    def test_test_id_filter_respects_suite_filter(self, tmp_path: Any) -> None:
+        creds, cfg_path = _write_offline_fixtures(tmp_path)
+        cfg = hal.load_test_account_config(str(cfg_path), credentials_yaml_override=str(creds))
+        results, _ = sfs.run_skills_functional_suite(
+            cfg,
+            audit_log_path=str(tmp_path / "filter_audit.jsonl"),
+            suite_filter="limits",
+            test_id_filter={"SK-LIMITS-03", "SK-GAQL-03"},
+            offline_only=True,
+            print_output=False,
+        )
+        # SK-GAQL-03 is outside --suite limits and must not run.
+        assert [r.test_id for r in results] == ["SK-LIMITS-03"]
+        assert results[0].passed, results[0].details

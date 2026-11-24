@@ -21,7 +21,6 @@ import difflib
 import glob
 import importlib
 import importlib.metadata
-import importlib.util
 import json
 import os
 import re
@@ -102,74 +101,43 @@ _PROTO_FIELD_TYPES: dict[int, str] = {
 }
 
 
-def _normalize_api_version(api_version: Optional[str] = None) -> str:
-    """Sanitizes an API version string into 'v<N>' format."""
-    clean = str(api_version or "").strip().lower()
-    if clean and not clean.startswith("v") and clean.isdigit():
-        clean = f"v{clean}"
-    clean = re.sub(r"[^a-zA-Z0-9_.-]", "", clean).lstrip(".")
+def _resolve_active_api_version(explicit: Optional[str] = None) -> str:
+    """Returns the API version from config_init.resolve_active_api_version.
+
+    Order: explicit argument, GOOGLE_ADS_API_VERSION, api_version in the active
+    assistant_config, then the highest version in local client_libs and the
+    installed google-ads package.
+
+    Raises:
+        ValueError: If the version is invalid or cannot be determined.
+    """
+    clean = str(explicit or "").strip().lower()
     if clean:
-        return clean
-    resolved = _get_default_api_version()
-    if resolved:
-        return resolved
-    raise ValueError(
-        "Google Ads API version could not be automatically determined."
-    )
-
-
-def _get_default_api_version() -> str:
-    """Resolves default API version from env, assistant_config, or SDK."""
-    env_ver = os.environ.get("GOOGLE_ADS_API_VERSION", "").strip().lower()
-    if env_ver:
-        return f"v{env_ver}" if env_ver.isdigit() else env_ver
-
+        if not re.fullmatch(r"v?\d+", clean):
+            raise ValueError(
+                f"Invalid Google Ads API version {explicit!r}: expected 'vN' "
+                "(for example v23)."
+            )
+        return f"v{int(clean.lstrip('v'))}"
     script_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.abspath(os.path.join(script_dir, "../../.."))
-    candidates = (
-        os.path.abspath("config/assistant_config"),
-        os.path.join(plugin_root, "config", "assistant_config"),
-        os.path.expanduser(
-            "~/.gemini/config/plugins/"
-            "google-ads-api-developer-assistant/config/assistant_config"
-        ),
-        os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/"
-            "google-ads-api-developer-assistant/config/assistant_config"
-        ),
-    )
-    for cfg in candidates:
-        if os.path.isfile(cfg):
-            try:
-                with open(cfg, "r", encoding="utf-8") as f:
-                    m = re.search(
-                        r'(?m)^\s*api_version\s*=\s*["\']?(v?\d+)["\']?',
-                        f.read(),
-                    )
-                if m and m.group(1).strip():
-                    val = m.group(1).strip().lower()
-                    return f"v{val}" if val.isdigit() else val
-            except OSError:
-                continue
+    try:
+        if plugin_root not in sys.path and os.path.isdir(plugin_root):
+            sys.path.insert(0, plugin_root)
+        resolver = importlib.import_module(
+            "config.config_init"
+        ).resolve_active_api_version
+    except (AttributeError, ImportError, OSError, SyntaxError) as e:
+        raise ValueError(
+            "Could not determine Google Ads API version (config_init is "
+            f"unavailable: {e}); pass --api_version vN"
+        ) from e
+    return str(resolver())
 
-    sdk_sub = "client_libs/google-ads-python/google/ads/googleads"
-    search_dirs: list[str] = [
-        os.path.abspath(sdk_sub),
-        os.path.join(plugin_root, sdk_sub),
-    ]
-    spec = importlib.util.find_spec("google.ads.googleads")
-    if spec and spec.submodule_search_locations:
-        search_dirs.extend(list(spec.submodule_search_locations))
-    found: list[str] = []
-    for sdir in search_dirs:
-        if os.path.isdir(sdir):
-            found.extend(
-                d for d in os.listdir(sdir) if re.fullmatch(r"v\d+", d)
-            )
-    if found:
-        found.sort(key=lambda d: int(d[1:]))
-        return found[-1]
-    return ""
+
+def _normalize_api_version(api_version: Optional[str] = None) -> str:
+    """Returns api_version as 'vN', defaulting to the active version."""
+    return _resolve_active_api_version(api_version)
 
 
 def _get_config_path() -> str:
@@ -791,7 +759,14 @@ def inspect_protobuf(
     object_name: str, api_version: str, client: Optional[Any] = None
 ) -> None:
     """Inspects any Google Ads API Protobuf resource, message, or enum."""
-    api_version = _normalize_api_version(api_version)
+    try:
+        api_version = _normalize_api_version(api_version)
+    except ValueError as e:
+        msg = str(e)
+        if "--api_version" not in msg:
+            msg += "; pass --api_version vN"
+        print(f"ERROR: {msg}", file=sys.stderr)
+        sys.exit(1)
     check_version_parity()
     available_types = get_available_types(api_version)
     resolved_name, suggestions = resolve_type_name(object_name, available_types)
