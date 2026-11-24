@@ -15,7 +15,9 @@ sys.path.insert(
         / "google-ads-api-developer-assistant"
     ),
 )
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from api_version_utils import CURRENT_API_VERSION
 from config.config_init import evaluate_mutation_guard
 
 
@@ -1119,7 +1121,7 @@ def test_handle_hook_command_rewriting_and_dual_host_payloads(
     raw_cmd = (
         "python3 -c \"from google.ads.googleads.client import GoogleAdsClient; "
         "c1 = GoogleAdsClient.load_from_storage(); "
-        "c2 = GoogleAdsClient.load_from_storage(version='v25'); "
+        f"c2 = GoogleAdsClient.load_from_storage(version='{CURRENT_API_VERSION}'); "
         "p1 = os.path.expanduser('~/google-ads.yaml'); "
         "p2 = '/home/testuser/google-ads.yaml'; "
         "p3 = 'client_libs/google-ads-python/google-ads.yaml'\""
@@ -1141,7 +1143,10 @@ def test_handle_hook_command_rewriting_and_dual_host_payloads(
     escaped_cfg = fake_cfg.replace("\\", "\\\\")
     assert f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{escaped_cfg}" &&' in rewritten
     assert 'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml")' in rewritten
-    assert 'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version=\'v25\')' in rewritten
+    assert (
+        f'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version=\'{CURRENT_API_VERSION}\')'
+        in rewritten
+    )
     assert "/home/testuser/google-ads.yaml" not in rewritten
     assert "client_libs/google-ads-python/google-ads.yaml" not in rewritten
     assert "export GOOGLE_ADS_ASSISTANT_DIR=" in rewritten
@@ -1179,13 +1184,13 @@ def test_handle_hook_command_rewriting_and_dual_host_payloads(
     rc_claude = config_init.handle_hook()
     captured_claude = capsys.readouterr()
     out_claude = json.loads(captured_claude.out)
-    # Claude Code reads only hookSpecificOutput; a deny also exits 2 with the reason on stderr.
+    # Claude Code uses the canonical exit-0 structured JSON contract (hookSpecificOutput).
     hso = out_claude["hookSpecificOutput"]
     assert hso["hookEventName"] == "PreToolUse"
     assert hso["permissionDecision"] == "deny"
     assert "BLOCKED BY HITL MUTATION GUARD" in hso["permissionDecisionReason"]
-    assert rc_claude == 2
-    assert "BLOCKED BY HITL MUTATION GUARD" in captured_claude.err
+    assert rc_claude == 0
+    assert captured_claude.err == ""
 
 
 def test_compute_mutate_request_sha256_canonical_normalization() -> None:
@@ -2799,7 +2804,7 @@ def test_end_to_end_financial_transactions_preflight_and_atomic_sha256_workflows
 def test_real_v26_financial_protobuf_requests_serialization_sha256_and_interception(
     monkeypatch: Any,
 ) -> None:
-    """Verifies real Google Ads API v26 protobuf request messages across financial services:
+    """Verifies real Google Ads API protobuf request messages for the active SDK version across financial services:
     1. Exact descriptor parity for validate_only vs non-validate_only financial RPCs.
     2. Protobuf3 default validate_only=False (omitted by to_dict / MessageToDict) is blocked in dry-run and when execute_mutates=false.
     3. Canonical SHA-256 parity across validate_only=True and validate_only=False on real financial protos, plus monetary field tamper detection.
@@ -2880,7 +2885,7 @@ def test_real_v26_financial_protobuf_requests_serialization_sha256_and_intercept
 
     run_mutation = _load_run_mutation_module()
 
-    # 1. Verify exact v26 protobuf descriptor parity with _NON_VALIDATE_ONLY_MUTATION_METHODS
+    # 1. Verify exact active-SDK protobuf descriptor parity with _NON_VALIDATE_ONLY_MUTATION_METHODS
     proto_method_matrix = (
         ("mutate_billing_setup", billing_setup_service.MutateBillingSetupRequest, False),
         ("book_campaigns", reservation_service.BookCampaignsRequest, False),
@@ -2906,11 +2911,11 @@ def test_real_v26_financial_protobuf_requests_serialization_sha256_and_intercept
     for method_name, proto_cls, expected_has_vo in proto_method_matrix:
         actual_has_vo = "validate_only" in proto_cls.meta.fields
         assert actual_has_vo is expected_has_vo, (
-            f"v26 {proto_cls.__name__} validate_only support changed: expected {expected_has_vo}, got {actual_has_vo}"
+            f"{sdk_ver} {proto_cls.__name__} validate_only support changed: expected {expected_has_vo}, got {actual_has_vo}"
         )
         assert (method_name not in run_mutation._NON_VALIDATE_ONLY_MUTATION_METHODS) is expected_has_vo
 
-    # 2. Construct real v26 financial protobuf requests and verify canonical SHA-256 & monetary tamper detection
+    # 2. Construct real financial protobuf requests and verify canonical SHA-256 & monetary tamper detection
     # 2a. AccountBudgetProposal ($25,000.00 spending limit)
     abp_dry = account_budget_proposal_service.MutateAccountBudgetProposalRequest()
     abp_dry.customer_id = "1234567890"
@@ -4706,8 +4711,8 @@ def _build_payload_for_financial_limit_test(
     return {"operations": [{"create": {api_field: amount}}]}
 
 
-def test_all_financial_limits_have_explicit_test_cases_and_v26_mutability() -> None:
-    """Verifies that every value in config/financial_limits has an explicit test case and is mutable in v26."""
+def test_all_financial_limits_have_explicit_test_cases_and_current_api_mutability() -> None:
+    """Verifies that every value in config/financial_limits has an explicit test case and is mutable in the active API version."""
     import tomllib
 
     repo_root = Path(__file__).resolve().parent.parent
@@ -5190,10 +5195,12 @@ def test_layer4_financial_guardrail_interceptor_all_enforcement_paths(
     monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "true")
     monkeypatch.setenv("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", "true")
 
+    svc_prefix = f"/google.ads.googleads.{CURRENT_API_VERSION}.services"
+
     # 1. Method path parsing
     assert run_mutation.FinancialGuardrailInterceptor._parse_method_path("invalid") is None
     assert run_mutation.FinancialGuardrailInterceptor._parse_method_path(
-        "/google.ads.googleads.v26.services.CampaignBudgetService/MutateCampaignBudgets"
+        f"{svc_prefix}.CampaignBudgetService/MutateCampaignBudgets"
     ) == ("CampaignBudgetService", "mutate_campaign_budgets")
 
     def _details(method: str) -> Any:
@@ -5209,7 +5216,7 @@ def test_layer4_financial_guardrail_interceptor_all_enforcement_paths(
     try:
         assert ic.intercept_unary_unary(
             _cont,
-            _details("/google.ads.googleads.v26.services.CampaignService/MutateCampaigns"),
+            _details(f"{svc_prefix}.CampaignService/MutateCampaigns"),
             {"customer_id": "123"},
         ) == {"ok": "sent"}
         assert captured == []
@@ -5220,7 +5227,7 @@ def test_layer4_financial_guardrail_interceptor_all_enforcement_paths(
     assert ic.intercept_unary_unary(_cont, _details("/custom.Other/Ping"), {}) == {"ok": "sent"}
     assert ic.intercept_unary_unary(
         _cont,
-        _details("/google.ads.googleads.v26.services.GoogleAdsService/SearchStream"),
+        _details(f"{svc_prefix}.GoogleAdsService/SearchStream"),
         {"customer_id": "123"},
     ) == {"ok": "sent"}
     assert captured == []
@@ -5229,7 +5236,7 @@ def test_layer4_financial_guardrail_interceptor_all_enforcement_paths(
     with pytest.raises(PermissionError, match="LAYER 4 gRPC.*DELETION PROHIBITION"):
         ic.intercept_unary_unary(
             _cont,
-            _details("/google.ads.googleads.v26.services.CampaignService/MutateCampaigns"),
+            _details(f"{svc_prefix}.CampaignService/MutateCampaigns"),
             {"customer_id": "123", "operations": [{"remove": "customers/123/campaigns/1"}]},
         )
     assert captured[-1]["status"] == "BLOCKED_PROHIBITED_DELETION"
@@ -5240,7 +5247,7 @@ def test_layer4_financial_guardrail_interceptor_all_enforcement_paths(
     with pytest.raises(PermissionError, match="without validate_only=True"):
         ic_dry.intercept_unary_unary(
             _cont,
-            _details("/google.ads.googleads.v26.services.CampaignService/MutateCampaigns"),
+            _details(f"{svc_prefix}.CampaignService/MutateCampaigns"),
             {"customer_id": "123", "validate_only": False, "operations": [{"update": {"status": "PAUSED"}}]},
         )
     assert cap_dry[-1]["status"] == "BLOCKED_MISSING_VALIDATE_ONLY"
@@ -5251,7 +5258,7 @@ def test_layer4_financial_guardrail_interceptor_all_enforcement_paths(
     with pytest.raises(PermissionError, match="FINANCIAL UPPER LIMIT"):
         ic_fin.intercept_unary_unary(
             _cont,
-            _details("/google.ads.googleads.v26.services.CampaignBudgetService/MutateCampaignBudgets"),
+            _details(f"{svc_prefix}.CampaignBudgetService/MutateCampaignBudgets"),
             {
                 "customer_id": "123",
                 "validate_only": False,
@@ -5267,7 +5274,7 @@ def test_layer4_financial_guardrail_interceptor_all_enforcement_paths(
     with pytest.raises(PermissionError, match="execute_mutates = false"):
         ic_dis.intercept_unary_unary(
             _cont,
-            _details("/google.ads.googleads.v26.services.CampaignService/MutateCampaigns"),
+            _details(f"{svc_prefix}.CampaignService/MutateCampaigns"),
             {"customer_id": "123", "validate_only": False, "operations": [{"update": {"status": "PAUSED"}}]},
         )
     assert cap_dis[-1]["status"] == "BLOCKED_MUTATES_DISABLED"
@@ -5280,7 +5287,7 @@ def test_layer4_financial_guardrail_interceptor_all_enforcement_paths(
     with pytest.raises(PermissionError, match="allow_tier1_financial_mutates = true"):
         ic_t1.intercept_unary_unary(
             _cont,
-            _details("/google.ads.googleads.v26.services.CampaignBudgetService/MutateCampaignBudgets"),
+            _details(f"{svc_prefix}.CampaignBudgetService/MutateCampaignBudgets"),
             {
                 "customer_id": "123",
                 "validate_only": False,
@@ -5306,7 +5313,7 @@ def test_layer4_financial_guardrail_interceptor_all_enforcement_paths(
     with pytest.raises(PermissionError, match="Unapproved or drifted direct gRPC call"):
         ic_bad.intercept_unary_unary(
             _cont,
-            _details("/google.ads.googleads.v26.services.CampaignBudgetService/MutateCampaignBudgets"),
+            _details(f"{svc_prefix}.CampaignBudgetService/MutateCampaignBudgets"),
             valid_req,
         )
     assert cap_sha[-1]["status"] == "BLOCKED_SHA256_MISMATCH"
@@ -5317,7 +5324,7 @@ def test_layer4_financial_guardrail_interceptor_all_enforcement_paths(
     )
     out = ic_ok.intercept_unary_unary(
         _cont,
-        _details("/google.ads.googleads.v26.services.CampaignBudgetService/MutateCampaignBudgets"),
+        _details(f"{svc_prefix}.CampaignBudgetService/MutateCampaignBudgets"),
         valid_req,
     )
     assert out == {"ok": "sent"}
@@ -5339,7 +5346,7 @@ def test_tier1_posture_classification_payload_drift_ato_and_reject_lifecycle(
     cfg_dir = tmp_path / "cfg"
     cfg_dir.mkdir()
     (cfg_dir / "assistant_config").write_text(
-        'api_version = "v26"\nexecute_mutates = true\nallow_tier1_financial_mutates = false\n',
+        f'api_version = "{CURRENT_API_VERSION}"\nexecute_mutates = true\nallow_tier1_financial_mutates = false\n',
         encoding="utf-8",
     )
     receipt_path = tmp_path / "last_dry_run.json"

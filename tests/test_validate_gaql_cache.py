@@ -24,10 +24,17 @@ from unittest.mock import MagicMock, patch
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_ROOT = PROJECT_ROOT / "plugins" / "google-ads-api-developer-assistant"
 VALIDATE_GAQL_DIR = PLUGIN_ROOT / "skills" / "validate-gaql" / "scripts"
+TESTS_DIR = Path(__file__).resolve().parent
 
-if str(VALIDATE_GAQL_DIR) not in sys.path:
-    sys.path.insert(0, str(VALIDATE_GAQL_DIR))
+for _p in (str(VALIDATE_GAQL_DIR), str(TESTS_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
+from api_version_utils import (  # noqa: E402
+    CURRENT_API_NUMBER,
+    CURRENT_API_VERSION,
+    PREVIOUS_API_VERSION,
+)
 import validate_gaql as vg  # noqa: E402
 
 
@@ -37,19 +44,23 @@ class TestValidateGaqlCache:
     def test_compute_gaql_cache_key_deterministic_and_normalized(self):
         """SHA-256 cache key is deterministic and normalizes whitespace and API version prefix."""
         query = "SELECT campaign.id, campaign.name FROM campaign"
-        key1 = vg.compute_gaql_cache_key(query, "v25")
-        key2 = vg.compute_gaql_cache_key(f"  {query}\n  ", "25")
-        key3 = vg.compute_gaql_cache_key(query, "V25")
+        key1 = vg.compute_gaql_cache_key(query, CURRENT_API_VERSION)
+        key2 = vg.compute_gaql_cache_key(f"  {query}\n  ", str(CURRENT_API_NUMBER))
+        key3 = vg.compute_gaql_cache_key(query, CURRENT_API_VERSION.upper())
 
-        expected = hashlib.sha256(f"{query}|v25".encode("utf-8")).hexdigest()
+        expected = hashlib.sha256(
+            f"{query}|{CURRENT_API_VERSION}".encode("utf-8")
+        ).hexdigest()
         assert key1 == expected
         assert key1 == key2
         assert key1 == key3
         assert len(key1) == 64
 
         # Different query or different API version produces a distinct SHA-256 hash
-        key_diff_query = vg.compute_gaql_cache_key("SELECT campaign.id FROM campaign", "v25")
-        key_diff_ver = vg.compute_gaql_cache_key(query, "v24")
+        key_diff_query = vg.compute_gaql_cache_key(
+            "SELECT campaign.id FROM campaign", CURRENT_API_VERSION
+        )
+        key_diff_ver = vg.compute_gaql_cache_key(query, PREVIOUS_API_VERSION)
         assert key1 != key_diff_query
         assert key1 != key_diff_ver
 
@@ -62,10 +73,18 @@ class TestValidateGaqlCache:
         query = "SELECT campaign.id, campaign.name FROM campaign"
 
         # 1. Cache miss: API dry-run should execute and populate the cache
-        assert vg.get_cached_validation(query, "v25", cache_path=cache_file) is None
+        assert (
+            vg.get_cached_validation(
+                query,
+                CURRENT_API_VERSION,
+                customer_id="123-456-7890",
+                cache_path=cache_file,
+            )
+            is None
+        )
         vg.validate_gaql(
             customer_id="123-456-7890",
-            api_version="v25",
+            api_version=CURRENT_API_VERSION,
             query=query,
             client=mock_client,
             use_cache=True,
@@ -76,17 +95,33 @@ class TestValidateGaqlCache:
         assert "SUCCESS: GAQL query is structurally valid." in out1
         assert "(cached)" not in out1
 
-        # Verify cache entry now exists on disk and in memory
-        cached = vg.get_cached_validation(query, "v25", cache_path=cache_file)
+        # Verify cache entry now exists on disk and in memory (customer-scoped)
+        cached = vg.get_cached_validation(
+            query,
+            CURRENT_API_VERSION,
+            customer_id="123-456-7890",
+            cache_path=cache_file,
+        )
         assert cached is not None
         assert cached["valid"] is True
-        assert cached["key"] == vg.compute_gaql_cache_key(query, "v25")
+        assert cached["key"] == vg.compute_gaql_cache_key(
+            query, CURRENT_API_VERSION, customer_id="123-456-7890"
+        )
+        assert (
+            vg.get_cached_validation(
+                query,
+                CURRENT_API_VERSION,
+                customer_id="999-888-7777",
+                cache_path=cache_file,
+            )
+            is None
+        )
         assert os.path.isfile(cache_file)
 
         # 2. Cache hit: second call with same (query, api_version) must NOT invoke ga_service.search
         vg.validate_gaql(
             customer_id="123-456-7890",
-            api_version="v25",
+            api_version=CURRENT_API_VERSION,
             query=query,
             client=mock_client,
             use_cache=True,
@@ -106,34 +141,42 @@ class TestValidateGaqlCache:
         q1 = "SELECT campaign.id FROM campaign"
         q2 = "SELECT campaign.id, campaign.name FROM campaign"
 
-        vg.validate_gaql("1234567890", "v25", q1, client=mock_client, cache_path=cache_file)
+        vg.validate_gaql(
+            "1234567890", CURRENT_API_VERSION, q1, client=mock_client, cache_path=cache_file
+        )
         assert mock_service.search.call_count == 1
 
         # Different query -> cache miss -> calls API (count = 2)
-        vg.validate_gaql("1234567890", "v25", q2, client=mock_client, cache_path=cache_file)
+        vg.validate_gaql(
+            "1234567890", CURRENT_API_VERSION, q2, client=mock_client, cache_path=cache_file
+        )
         assert mock_service.search.call_count == 2
 
-        # Same query q1, but different api_version (v24) -> cache miss -> calls API (count = 3)
-        vg.validate_gaql("1234567890", "v24", q1, client=mock_client, cache_path=cache_file)
+        # Same query q1, but different api_version -> cache miss -> calls API (count = 3)
+        vg.validate_gaql(
+            "1234567890", PREVIOUS_API_VERSION, q1, client=mock_client, cache_path=cache_file
+        )
         assert mock_service.search.call_count == 3
 
-        # Repeat (q1, v24) -> cache hit -> count remains 3
-        vg.validate_gaql("1234567890", "v24", q1, client=mock_client, cache_path=cache_file)
+        # Repeat (q1, PREVIOUS_API_VERSION) -> cache hit -> count remains 3
+        vg.validate_gaql(
+            "1234567890", PREVIOUS_API_VERSION, q1, client=mock_client, cache_path=cache_file
+        )
         assert mock_service.search.call_count == 3
 
     def test_disk_cache_persistence_across_memory_reset(self, tmp_path):
         """Cached results persist on disk and reload when the in-memory cache is cleared."""
         cache_file = str(tmp_path / "gaql_cache.json")
         query = "SELECT customer.id FROM customer"
-        vg.set_cached_validation(query, "v25", valid=True, cache_path=cache_file)
+        vg.set_cached_validation(query, CURRENT_API_VERSION, valid=True, cache_path=cache_file)
 
         # Simulate a fresh process by clearing the in-memory dictionary
         vg._GAQL_MEMORY_CACHE.clear()
 
-        loaded = vg.get_cached_validation(query, "v25", cache_path=cache_file)
+        loaded = vg.get_cached_validation(query, CURRENT_API_VERSION, cache_path=cache_file)
         assert loaded is not None
         assert loaded["query"] == query
-        assert loaded["api_version"] == "v25"
+        assert loaded["api_version"] == CURRENT_API_VERSION
         assert loaded["valid"] is True
 
     def test_cache_invalidation_single_version_and_all(self, tmp_path):
@@ -143,34 +186,43 @@ class TestValidateGaqlCache:
         q2 = "SELECT ad_group.id FROM ad_group"
         q3 = "SELECT customer.id FROM customer"
 
-        vg.set_cached_validation(q1, "v25", cache_path=cache_file)
-        vg.set_cached_validation(q2, "v25", cache_path=cache_file)
-        vg.set_cached_validation(q3, "v24", cache_path=cache_file)
+        vg.set_cached_validation(q1, CURRENT_API_VERSION, cache_path=cache_file)
+        vg.set_cached_validation(q2, CURRENT_API_VERSION, cache_path=cache_file)
+        vg.set_cached_validation(q3, PREVIOUS_API_VERSION, cache_path=cache_file)
 
         # 1. Invalidate a single (query, api_version) entry
-        removed_single = vg.invalidate_gaql_cache(query=q1, api_version="v25", cache_path=cache_file)
+        removed_single = vg.invalidate_gaql_cache(
+            query=q1, api_version=CURRENT_API_VERSION, cache_path=cache_file
+        )
         assert removed_single == 1
-        assert vg.get_cached_validation(q1, "v25", cache_path=cache_file) is None
-        assert vg.get_cached_validation(q2, "v25", cache_path=cache_file) is not None
-        assert vg.get_cached_validation(q3, "v24", cache_path=cache_file) is not None
+        assert vg.get_cached_validation(q1, CURRENT_API_VERSION, cache_path=cache_file) is None
+        assert vg.get_cached_validation(q2, CURRENT_API_VERSION, cache_path=cache_file) is not None
+        assert vg.get_cached_validation(q3, PREVIOUS_API_VERSION, cache_path=cache_file) is not None
 
         # Invalidating a non-existent entry returns 0
-        assert vg.invalidate_gaql_cache(query=q1, api_version="v25", cache_path=cache_file) == 0
+        assert (
+            vg.invalidate_gaql_cache(
+                query=q1, api_version=CURRENT_API_VERSION, cache_path=cache_file
+            )
+            == 0
+        )
 
-        # 2. Invalidate all entries for api_version="v25"
-        vg.set_cached_validation(q1, "v25", cache_path=cache_file)
-        removed_ver = vg.invalidate_gaql_cache(api_version="v25", cache_path=cache_file)
+        # 2. Invalidate all entries for CURRENT_API_VERSION
+        vg.set_cached_validation(q1, CURRENT_API_VERSION, cache_path=cache_file)
+        removed_ver = vg.invalidate_gaql_cache(
+            api_version=CURRENT_API_VERSION, cache_path=cache_file
+        )
         assert removed_ver == 2
-        assert vg.get_cached_validation(q1, "v25", cache_path=cache_file) is None
-        assert vg.get_cached_validation(q2, "v25", cache_path=cache_file) is None
-        assert vg.get_cached_validation(q3, "v24", cache_path=cache_file) is not None
+        assert vg.get_cached_validation(q1, CURRENT_API_VERSION, cache_path=cache_file) is None
+        assert vg.get_cached_validation(q2, CURRENT_API_VERSION, cache_path=cache_file) is None
+        assert vg.get_cached_validation(q3, PREVIOUS_API_VERSION, cache_path=cache_file) is not None
 
         # 3. Full cache clear
-        vg.set_cached_validation(q1, "v25", cache_path=cache_file)
+        vg.set_cached_validation(q1, CURRENT_API_VERSION, cache_path=cache_file)
         removed_all = vg.invalidate_gaql_cache(cache_path=cache_file)
         assert removed_all == 2
-        assert vg.get_cached_validation(q1, "v25", cache_path=cache_file) is None
-        assert vg.get_cached_validation(q3, "v24", cache_path=cache_file) is None
+        assert vg.get_cached_validation(q1, CURRENT_API_VERSION, cache_path=cache_file) is None
+        assert vg.get_cached_validation(q3, PREVIOUS_API_VERSION, cache_path=cache_file) is None
 
         # 4. Regression check: paths containing colons (e.g. Windows drive letters C:\...)
         win_path = r"C:\hostedtoolcache\windows\gaql_cache.json"
@@ -181,8 +233,8 @@ class TestValidateGaqlCache:
             patch.object(vg, "_load_disk_cache", side_effect=lambda _p: orig_load(cache_file)),
             patch.object(vg, "_save_disk_cache", side_effect=lambda _p, d: orig_save(cache_file, d)),
         ):
-            vg.set_cached_validation(q1, "v25", cache_path=win_path)
-            vg.set_cached_validation(q3, "v24", cache_path=win_path)
+            vg.set_cached_validation(q1, CURRENT_API_VERSION, cache_path=win_path)
+            vg.set_cached_validation(q3, PREVIOUS_API_VERSION, cache_path=win_path)
             assert vg.invalidate_gaql_cache(cache_path=win_path) == 2
 
     def test_cache_ttl_expiration_invalidation(self, tmp_path):
@@ -192,18 +244,33 @@ class TestValidateGaqlCache:
         past_timestamp = time.time() - 120.0
         vg.set_cached_validation(
             query,
-            "v25",
+            CURRENT_API_VERSION,
             valid=True,
             cache_path=cache_file,
             timestamp=past_timestamp,
         )
 
         # With TTL=300s, entry is still valid
-        assert vg.get_cached_validation(query, "v25", cache_path=cache_file, ttl_seconds=300.0) is not None
+        assert (
+            vg.get_cached_validation(
+                query, CURRENT_API_VERSION, cache_path=cache_file, ttl_seconds=300.0
+            )
+            is not None
+        )
 
         # With TTL=60s, entry is expired and purged from memory + disk
-        assert vg.get_cached_validation(query, "v25", cache_path=cache_file, ttl_seconds=60.0) is None
-        assert vg.get_cached_validation(query, "v25", cache_path=cache_file, ttl_seconds=300.0) is None
+        assert (
+            vg.get_cached_validation(
+                query, CURRENT_API_VERSION, cache_path=cache_file, ttl_seconds=60.0
+            )
+            is None
+        )
+        assert (
+            vg.get_cached_validation(
+                query, CURRENT_API_VERSION, cache_path=cache_file, ttl_seconds=300.0
+            )
+            is None
+        )
 
     def test_use_cache_false_bypasses_cache(self, tmp_path):
         """Passing use_cache=False always executes validation and does not read from cache."""
@@ -215,7 +282,7 @@ class TestValidateGaqlCache:
 
         vg.validate_gaql(
             "1234567890",
-            "v25",
+            CURRENT_API_VERSION,
             query,
             client=mock_client,
             use_cache=True,
@@ -226,7 +293,7 @@ class TestValidateGaqlCache:
         # With use_cache=False, it must bypass the cached entry and call ga_service.search again
         vg.validate_gaql(
             "1234567890",
-            "v25",
+            CURRENT_API_VERSION,
             query,
             client=mock_client,
             use_cache=False,
@@ -238,8 +305,11 @@ class TestValidateGaqlCache:
         """CLI main() supports --clear-cache, --no-cache, and --cache-path flags."""
         cache_file = str(tmp_path / "cli_gaql_cache.json")
         query = "SELECT campaign.id FROM campaign"
-        vg.set_cached_validation(query, "v25", cache_path=cache_file)
-        assert vg.get_cached_validation(query, "v25", cache_path=cache_file) is not None
+        vg.set_cached_validation(query, CURRENT_API_VERSION, cache_path=cache_file)
+        assert (
+            vg.get_cached_validation(query, CURRENT_API_VERSION, cache_path=cache_file)
+            is not None
+        )
 
         with patch.object(
             sys,
@@ -249,7 +319,7 @@ class TestValidateGaqlCache:
                 "--customer_id",
                 "1234567890",
                 "--api_version",
-                "v25",
+                CURRENT_API_VERSION,
                 "--query",
                 query,
                 "--clear-cache",
@@ -260,10 +330,13 @@ class TestValidateGaqlCache:
         ), patch.object(vg, "validate_gaql") as mock_validate:
             vg.main()
             # --clear-cache should have invalidated the pre-existing entry
-            assert vg.get_cached_validation(query, "v25", cache_path=cache_file) is None
+            assert (
+                vg.get_cached_validation(query, CURRENT_API_VERSION, cache_path=cache_file)
+                is None
+            )
             mock_validate.assert_called_once_with(
                 "1234567890",
-                "v25",
+                CURRENT_API_VERSION,
                 query,
                 use_cache=False,
                 cache_path=cache_file,

@@ -1,10 +1,10 @@
 # Google Ads API Developer Assistant Plugin
 
 [![Plugin Version](https://img.shields.io/badge/version-4.1.0-blue.svg)](plugin.json)
-[![Target Runtimes](https://img.shields.io/badge/runtimes-Antigravity%20%7C%20Claude%20Desktop%20%7C%20Claude%20Code-brightgreen.svg)](plugin.json)
+[![Target Runtimes](https://img.shields.io/badge/runtimes-Antigravity%20CLI%20%7C%20Claude%20Code%20CLI-brightgreen.svg)](plugin.json)
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](rules/AGENTS.md)
 
-This plugin adds **Google Ads API** tools to AI assistants in **Antigravity (`agy`)**, **Claude Desktop**, and **Claude Code CLI**. It includes diagnostic scripts, static analysis tools, Protobuf object inspectors, conversion validators, and a 4-Step Human-in-the-Loop (HITL) mutation guard.
+This plugin adds **Google Ads API** tools to AI assistants in **Antigravity CLI (`agy`)** and **Claude Code CLI (`claude`)**. It includes diagnostic scripts, static analysis tools, Protobuf object inspectors, conversion validators, and a 4-Step Human-in-the-Loop (HITL) mutation guard.
 
 ---
 
@@ -71,12 +71,15 @@ google-ads-api-developer-assistant/
 │   └── config_init.py                       # Session config initializer and deep mutation/command guard engine
 ├── rules/
 │   └── AGENTS.md                            # Concise always-on system directives and safety rules (< 4 KB)
-├── commands/                               # Claude Code slash commands
+├── commands/                               # Claude Code CLI slash commands (agy uses skills/*/SKILL.md)
+│   ├── execute-mutation.md                  # /execute-mutation <task>
 │   ├── validate-gaql.md                     # /validate-gaql [query]
 │   ├── inspect-object.md                    # /inspect-object <name>
 │   ├── troubleshoot-conversions.md          # /troubleshoot-conversions [cid] [csv]
 │   ├── get-cids.md                          # /get-cids <mcc_id>
+│   ├── get-cids-under-mcc.md                # /get-cids-under-mcc <mcc_id>
 │   ├── pmax-filter.md                       # /pmax-filter [cid] [asset_group_id]
+│   ├── pmax-listing-filter.md               # /pmax-listing-filter [cid] [asset_group_id]
 │   ├── explain.md                           # /explain <concept>
 │   ├── assistant-tutorial.md                # /assistant-tutorial
 │   ├── step-by-step.md                      # /step-by-step <task>
@@ -131,15 +134,16 @@ google-ads-api-developer-assistant/
 
 ## ⚡ Claude Code Custom Slash Commands
 
-In Claude Code, use these slash commands to run specific tools:
+In Claude Code CLI, `commands/*.md` exposes these 13 slash commands (in Antigravity `agy`, slash commands are registered directly from `skills/*/SKILL.md` as `/<skill-name>`):
 
 | Slash Command | Description | Example Usage |
 | :--- | :--- | :--- |
+| **`/execute-mutation`** | Runs a Google Ads API `create` or `update` mutation using the 4-Step HITL protocol. | `/execute-mutation Pause campaign 123456789` |
 | **`/validate-gaql`** | Checks GAQL queries with 4-step static analysis and API dry-runs. | `/validate-gaql SELECT campaign.id FROM campaign` |
 | **`/inspect-object`** | Shows Protobuf fields, field types, labels, and Enum values. | `/inspect-object Campaign` or `/inspect-object CampaignStatusEnum` |
 | **`/troubleshoot-conversions`** | Checks conversion upload errors, validates CSV format, and samples GCLIDs. | `/troubleshoot-conversions 1234567890 uploads.csv` |
-| **`/get-cids`** | Lists child accounts under an MCC account. | `/get-cids 1234567890` |
-| **`/pmax-filter`** | Creates Asset Group webpage exclusion filter trees for PMax. | `/pmax-filter 1234567890 987654321` |
+| **`/get-cids`** / **`/get-cids-under-mcc`** | Lists child accounts under an MCC account. | `/get-cids 1234567890` |
+| **`/pmax-filter`** / **`/pmax-listing-filter`** | Creates Asset Group webpage exclusion filter trees for PMax. | `/pmax-filter 1234567890 987654321` |
 | **`/explain`** | Explains a topic in 4 parts (*Big Picture*, *Analogy*, *Interconnectedness*, *Simple Language*). | `/explain click_view` |
 | **`/assistant-tutorial`** | Starts an interactive tutorial. | `/assistant-tutorial` |
 | **`/step-by-step`** | Breaks complex Google Ads API tasks into numbered steps. | `/step-by-step Create an AI Max for Search campaign` |
@@ -218,7 +222,7 @@ Run the installation script from the root directory of the repository:
 ```
 This command installs a standalone copy into `~/.gemini/config/plugins/google-ads-api-developer-assistant`.
 
-#### For Claude Desktop / Claude Code:
+#### For Claude Code CLI:
 ```bash
 ./install.sh claude
 ```
@@ -450,7 +454,7 @@ curl http://127.0.0.1:8900/health
 Keep these points in mind when you run the plugin across different agent environments:
 
 - **Virtual Environments**: Make sure you install `google-ads` and `ruff` in the active Python environment that your host agent uses.
-- **Interactive Prompts**: Antigravity shows interactive questions as UI modal dialogs. Claude Desktop and Claude Code CLI show questions as text in the chat.
+- **Interactive Prompts**: Antigravity CLI (`agy`) and Claude Code CLI show confirmation prompts directly in the terminal session.
 - **Saved File Paths**: Executable code must be saved in the `saved` subdirectory of your current working directory (for example, `./saved/` or `./saved/code/`). The assistant saves generated code, CSV exports, diagnostic reports/receipts, and mutation audit logs in `saved/code/`, `saved/data/`, and `saved/logs/`.
 
 See [migration.md](migration.md) for more details on runtime behavior.

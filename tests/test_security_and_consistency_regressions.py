@@ -18,9 +18,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "google-ads-api-developer-assistant"
 SKILLS_ROOT = PLUGIN_ROOT / "skills"
 
-if str(PLUGIN_ROOT) not in sys.path:
-    sys.path.insert(0, str(PLUGIN_ROOT))
+TESTS_ROOT = Path(__file__).resolve().parent
+for _p in (str(PLUGIN_ROOT), str(TESTS_ROOT)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
+from api_version_utils import (  # noqa: E402
+    CURRENT_API_VERSION,
+    FUTURE_API_VERSION,
+    NEXT_API_VERSION,
+    PREVIOUS_API_VERSION,
+    offset_api_version,
+)
 from config import config_init  # noqa: E402
 
 
@@ -131,7 +140,7 @@ class TestHooksJsonAndGuardrailSecurity:
 
         # 3. Direct curl REST mutation to googleads.googleapis.com is denied
         dec_curl, rsn_curl = config_init.evaluate_mutation_guard(
-            "curl -X POST https://googleads.googleapis.com/v26/customers/123/campaigns:mutate -d '{}'"
+            f"curl -X POST https://googleads.googleapis.com/{CURRENT_API_VERSION}/customers/123/campaigns:mutate -d '{{}}'"
         )
         assert dec_curl == "deny"
         assert rsn_curl is not None and "Direct REST/HTTP" in rsn_curl
@@ -404,7 +413,7 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
                 "--name",
                 "CampaignStatusEnum",
                 "--api_version",
-                "v26",
+                CURRENT_API_VERSION,
             ],
             capture_output=True,
             text=True,
@@ -421,7 +430,7 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
                 "--name",
                 "Campaign.NetworkSettings",
                 "--api_version",
-                "v26",
+                CURRENT_API_VERSION,
             ],
             capture_output=True,
             text=True,
@@ -455,7 +464,7 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
         mock_client.get_type.return_value = _FakeProtoWrapper()
         buf = io.StringIO()
         with patch.object(sys, "stdout", buf):
-            io_mod.inspect_protobuf("Campaign", "v26", client=mock_client)
+            io_mod.inspect_protobuf("Campaign", CURRENT_API_VERSION, client=mock_client)
         assert "STRING" in buf.getvalue()
 
     def test_validate_gaql_date_equality_masked_literals_and_selective_invalidation(
@@ -476,7 +485,7 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
         # 2. String literals containing 'Shop Now' or 'Gold or Silver' pass
         vg.validate_gaql(
             "1234567890",
-            "v26",
+            CURRENT_API_VERSION,
             "SELECT campaign.id, campaign.name FROM campaign WHERE campaign.name = 'Shop Now Gold or Silver'",
             client=mock_client,
             use_cache=False,
@@ -485,7 +494,7 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
         # 3. segments.day_of_week without finite date range passes
         vg.validate_gaql(
             "1234567890",
-            "v26",
+            CURRENT_API_VERSION,
             "SELECT campaign.id, segments.day_of_week FROM campaign",
             client=mock_client,
             use_cache=False,
@@ -495,7 +504,7 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
         with pytest.raises(SystemExit):
             vg.validate_gaql(
                 "1234567890",
-                "v26",
+                CURRENT_API_VERSION,
                 "SELECT campaign.id, segments.date FROM campaign WHERE metrics.clicks BETWEEN 10 AND 100",
                 client=mock_client,
                 use_cache=False,
@@ -503,15 +512,15 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
 
         # 5. invalidate_gaql_cache(query=..., api_version=None) only removes matching query
         cache_file = tmp_path / "gaql_cache.json"
-        vg.set_cached_validation("SELECT campaign.id FROM campaign", "v25", cache_path=str(cache_file))
-        vg.set_cached_validation("SELECT ad_group.id FROM ad_group", "v25", cache_path=str(cache_file))
+        vg.set_cached_validation("SELECT campaign.id FROM campaign", CURRENT_API_VERSION, cache_path=str(cache_file))
+        vg.set_cached_validation("SELECT ad_group.id FROM ad_group", CURRENT_API_VERSION, cache_path=str(cache_file))
         removed = vg.invalidate_gaql_cache(
             query="SELECT campaign.id FROM campaign",
             api_version=None,
             cache_path=str(cache_file),
         )
         assert removed == 1
-        assert vg.get_cached_validation("SELECT ad_group.id FROM ad_group", "v25", cache_path=str(cache_file)) is not None
+        assert vg.get_cached_validation("SELECT ad_group.id FROM ad_group", CURRENT_API_VERSION, cache_path=str(cache_file)) is not None
 
     def test_conversion_csv_bom_timestamp_pii_and_gclid_date_injection(
         self, tmp_path
@@ -531,7 +540,7 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
             b"\xef\xbb\xbfgclid,conversion_time,conversion_value,currency_code\n"
             b"EAIaIQobChMI123,2026-08-19 12:30:00+00:00,49.99,USD\n"
         )
-        vcu.validate_conversion_csv(str(bom_csv), "v26")
+        vcu.validate_conversion_csv(str(bom_csv), CURRENT_API_VERSION)
 
         # Garbage time suffix or raw email in hashed_email fails
         bad_csv = tmp_path / "bad_time.csv"
@@ -541,7 +550,7 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
             encoding="utf-8",
         )
         with pytest.raises(SystemExit):
-            vcu.validate_conversion_csv(str(bad_csv), "v26")
+            vcu.validate_conversion_csv(str(bad_csv), CURRENT_API_VERSION)
 
         # get_recent_gclids blocks date injection
         with pytest.raises(SystemExit):
@@ -668,7 +677,7 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
                 "intent": "GAQL_VALIDATE",
                 "payload": {
                     "query": "SELECT campaign.id FROM campaign",
-                    "api_version": "v26",
+                    "api_version": CURRENT_API_VERSION,
                 },
             },
         )
@@ -688,7 +697,7 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
                         "method": "tools/call",
                         "params": {
                             "name": "inspect_object",
-                            "arguments": {"object_name": "CampaignStatusEnum", "api_version": "v26"},
+                            "arguments": {"object_name": "CampaignStatusEnum", "api_version": CURRENT_API_VERSION},
                         },
                     }
                 ),
@@ -896,7 +905,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
             ("1234567890", "999", "   "),
         ):
             with pytest.raises(SystemExit):
-                pmax.create_pmax_webpage_filter(*bad_args, "v26", client=mock_client)
+                pmax.create_pmax_webpage_filter(*bad_args, CURRENT_API_VERSION, client=mock_client)
 
         pmax_svc = MagicMock()
         pmax_res = MagicMock()
@@ -910,7 +919,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
             "123-456-7890",
             "999",
             "/checkout",
-            "v26",
+            CURRENT_API_VERSION,
             validate_only=True,
             client=mock_client,
             json_output=True,
@@ -928,7 +937,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         fake_stream_batch = MagicMock(results=[fake_row])
         cids_client = MagicMock()
         cids_client.get_service.return_value.search_stream.return_value = [fake_stream_batch]
-        rows = cids.get_cids_under_mcc("123-456-7890", "v26", client=cids_client)
+        rows = cids.get_cids_under_mcc("123-456-7890", CURRENT_API_VERSION, client=cids_client)
         assert rows[0] == ("5556667770", 1, False)
         assert rows[0].descriptive_name == "Acme Leaf Account"
 
@@ -941,7 +950,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
                 "--customer-id",
                 "1234567890",
                 "--api-version",
-                "v26",
+                CURRENT_API_VERSION,
                 "--json",
                 "--save_csv",
             ],
@@ -952,7 +961,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         fake_non_tty = MagicMock()
         fake_non_tty.isatty.return_value = False
         monkeypatch.setattr(sys, "stdin", fake_non_tty)
-        monkeypatch.setattr(sys, "argv", ["get_cids_under_mcc.py", "--api-version", "v26"])
+        monkeypatch.setattr(sys, "argv", ["get_cids_under_mcc.py", "--api-version", CURRENT_API_VERSION])
         with pytest.raises(SystemExit):
             cids.main()
 
@@ -1018,20 +1027,20 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
             side_effect=lambda p: False if "client_libs" in str(p) else orig_isdir(p),
         ):
             io_mod._AVAILABLE_TYPES_CACHE.clear()
-            sp_types = io_mod.get_available_types("v26")
+            sp_types = io_mod.get_available_types(CURRENT_API_VERSION)
             assert "CampaignStatusEnum" in sp_types
             assert "Campaign" in sp_types
 
         bad_client = MagicMock()
         bad_client.get_type.side_effect = ValueError("Unknown type")
         with pytest.raises(SystemExit):
-            io_mod.inspect_protobuf("CompletelyNonExistentXyzType", "v26", client=bad_client)
+            io_mod.inspect_protobuf("CompletelyNonExistentXyzType", CURRENT_API_VERSION, client=bad_client)
 
         # 2. validate_gaql: GoogleAdsFieldService metadata query, change_status LIMIT 0 error, customer_id cache key
         mock_gads_client = MagicMock()
         vg.validate_gaql(
             "1234567890",
-            "v26",
+            CURRENT_API_VERSION,
             "SELECT name, selectable WHERE name LIKE 'campaign.%'",
             client=mock_gads_client,
             use_cache=False,
@@ -1041,15 +1050,15 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         with pytest.raises(SystemExit):
             vg.validate_gaql(
                 "1234567890",
-                "v26",
+                CURRENT_API_VERSION,
                 "SELECT change_status.resource_name FROM change_status "
                 "WHERE change_status.last_change_date_time DURING LAST_7_DAYS LIMIT 0",
                 client=mock_gads_client,
                 use_cache=False,
             )
 
-        k_a = vg.compute_gaql_cache_key("SELECT campaign.id FROM campaign", "v26", "111")
-        k_b = vg.compute_gaql_cache_key("SELECT campaign.id FROM campaign", "v26", "222")
+        k_a = vg.compute_gaql_cache_key("SELECT campaign.id FROM campaign", CURRENT_API_VERSION, "111")
+        k_b = vg.compute_gaql_cache_key("SELECT campaign.id FROM campaign", CURRENT_API_VERSION, "222")
         assert k_a != k_b
 
         corrupt_cache = tmp_path / "corrupt_cache.json"
@@ -1057,8 +1066,8 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
             json.dumps({"bad_entry": "not-a-dict", "bad_ts": {"timestamp": "not-float", "query": "Q"}}),
             encoding="utf-8",
         )
-        assert vg.get_cached_validation("Q", "v26", cache_path=str(corrupt_cache)) is None
-        vg.invalidate_gaql_cache(api_version="v26", cache_path=str(corrupt_cache))
+        assert vg.get_cached_validation("Q", CURRENT_API_VERSION, cache_path=str(corrupt_cache)) is None
+        vg.invalidate_gaql_cache(api_version=CURRENT_API_VERSION, cache_path=str(corrupt_cache))
 
         # 3. validate_conversion_upload: click_time ordering, gbraid, bad sha256, negative value, bad currency
         multi_err_csv = tmp_path / "multi_err.csv"
@@ -1069,7 +1078,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
             encoding="utf-8",
         )
         with pytest.raises(SystemExit):
-            vcu.validate_conversion_csv(str(multi_err_csv), "v26")
+            vcu.validate_conversion_csv(str(multi_err_csv), CURRENT_API_VERSION)
 
         # 4. get_recent_gclids & troubleshoot_conversions: rows, customer scoping, pending exclusion
         gclid_row = MagicMock()
@@ -1222,7 +1231,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
                     "name": "gaql_validate",
                     "arguments": {
                         "query": "SELECT campaign.id FROM campaign WHERE campaign.name = 'A OR B'",
-                        "api_version": "v26",
+                        "api_version": CURRENT_API_VERSION,
                     },
                 },
             },
@@ -1234,7 +1243,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
                     "name": "inspect_object",
                     "arguments": {
                         "resource_name": "Campaign",
-                        "api_version": "v26",
+                        "api_version": CURRENT_API_VERSION,
                     },
                 },
             },
@@ -1351,7 +1360,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
 
         monkeypatch.setattr(pmax, "GoogleAdsClient", None)
         with pytest.raises(SystemExit):
-            pmax.create_pmax_webpage_filter("1234567890", "999", "/clearance", "v26", client=None)
+            pmax.create_pmax_webpage_filter("1234567890", "999", "/clearance", CURRENT_API_VERSION, client=None)
 
         # 3. troubleshoot_conversions: _get_config_path, run_query generic Exception, enum & alert extractors
         assert tc._get_config_path().endswith("google-ads.yaml")
@@ -1406,7 +1415,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         _set_fake_home(monkeypatch, home2)
         monkeypatch.delenv("GOOGLE_ADS_ASSISTANT_CONFIG_DIR", raising=False)
 
-        written_global = config_init.write_assistant_config({"api_version": "v26"})
+        written_global = config_init.write_assistant_config({"api_version": CURRENT_API_VERSION})
         assert str(home2) in written_global
         assert str(home2) in config_init.set_plugin_enabled(
             False, config_dir=None, sync_global=True, target_type="claude"
@@ -1913,7 +1922,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
 
         sh_wrap = tmp_path / "wrap_live.sh"
         sh_wrap.write_text(
-            "curl -X POST https://googleads.googleapis.com/v26/customers/123/campaigns:mutate -d '{}'\n",
+            f"curl -X POST https://googleads.googleapis.com/{CURRENT_API_VERSION}/customers/123/campaigns:mutate -d '{{}}'\n",
             encoding="utf-8",
         )
         dec_sh, _ = config_init.evaluate_mutation_guard(f"bash {sh_wrap}")
@@ -1974,18 +1983,18 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
             "t-eq",
             {
                 "query": "SELECT click_view.gclid, segments.date FROM click_view WHERE segments.date = '2026-08-19' LIMIT 5",
-                "api_version": "v26",
+                "api_version": CURRENT_API_VERSION,
             },
         )
         assert gaql_eq["status"] == "COMPLETED"
         gaql_dow = h.handle_gaql_validate(
             "t-dow",
-            {"query": "SELECT campaign.id, segments.day_of_week FROM campaign", "api_version": "v26"},
+            {"query": "SELECT campaign.id, segments.day_of_week FROM campaign", "api_version": CURRENT_API_VERSION},
         )
         assert gaql_dow["status"] == "COMPLETED"
         codegen = h.handle_generate_code(
             "t-gen",
-            {"user_prompt": "List active campaigns", "customer_id": "1234567890", "api_version": "v26"},
+            {"user_prompt": "List active campaigns", "customer_id": "1234567890", "api_version": CURRENT_API_VERSION},
         )
         assert "PASSED" in codegen["result"]["lint_status"]
 
@@ -1996,7 +2005,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
             encoding="utf-8",
         )
         conv_res = h.handle_troubleshoot_conversions(
-            "t-conv-csv", {"csv_path": str(csv_ok), "api_version": "v26"}
+            "t-conv-csv", {"csv_path": str(csv_ok), "api_version": CURRENT_API_VERSION}
         )
         assert conv_res["status"] == "COMPLETED"
 
@@ -2184,7 +2193,7 @@ class TestConsistencyEfficiencyAndResilienceAudit:
         assert out["customer_info"]["effective_enablement_setting"] == "ON"
         assert out["primary_errors"] == []
 
-        # 2. Unversioned client hitting UNRECOGNIZED_FIELD on legacy query retries cleanly with v26 query
+        # 2. Unversioned client hitting UNRECOGNIZED_FIELD on legacy query retries cleanly with current-API query
         retry_queries: list[str] = []
         mock_retry_client = MagicMock()
         mock_retry_client.version = ""
@@ -2259,24 +2268,24 @@ class TestConsistencyEfficiencyAndResilienceAudit:
         # 3. Extra TOML keys preserved in both sync_client_libs and get_latest_api_version
         cfg_dir = tmp_path / "work" / "config"
         lib_dir = tmp_path / "work" / "client_libs" / "google-ads-python"
-        (lib_dir / "google" / "ads" / "googleads" / "v27").mkdir(parents=True)
+        (lib_dir / "google" / "ads" / "googleads" / NEXT_API_VERSION).mkdir(parents=True)
         cfg_dir.mkdir(parents=True)
         cfg_file = cfg_dir / "assistant_config"
         cfg_file.write_text(
-            'api_version = "v25"\n'
+            f'api_version = "{PREVIOUS_API_VERSION}"\n'
             'customer_id = "5556667770"\n'
             "execute_mutates = false\n"
             "timeout_seconds = 90\n",
             encoding="utf-8",
         )
-        assert scl.update_api_version_cache_if_needed(str(lib_dir)) == "v27"
+        assert scl.update_api_version_cache_if_needed(str(lib_dir)) == NEXT_API_VERSION
         text_after_scl = cfg_file.read_text(encoding="utf-8")
-        assert 'api_version = "v27"' in text_after_scl
+        assert f'api_version = "{NEXT_API_VERSION}"' in text_after_scl
         assert "timeout_seconds = 90" in text_after_scl
 
-        glav.update_assistant_config_api_version("v28", config_dir=str(cfg_dir))
+        glav.update_assistant_config_api_version(FUTURE_API_VERSION, config_dir=str(cfg_dir))
         text_after_glav = cfg_file.read_text(encoding="utf-8")
-        assert 'api_version = "v28"' in text_after_glav
+        assert f'api_version = "{FUTURE_API_VERSION}"' in text_after_glav
         assert "timeout_seconds = 90" in text_after_glav
 
     def test_windows_powershell_python3_rewrite_regex_matches_hooks_json(self):
@@ -2325,7 +2334,7 @@ class TestConsistencyEfficiencyAndResilienceAudit:
             "customers/123/campaigns:enablePMaxBrandGuidelines",
         ):
             dec, _ = config_init.evaluate_mutation_guard(
-                f"curl -X POST https://googleads.googleapis.com/v26/{verb} -d '{{}}'"
+                f"curl -X POST https://googleads.googleapis.com/{CURRENT_API_VERSION}/{verb} -d '{{}}'"
             )
             assert dec == "deny", f"REST verb not blocked: {verb}"
 
@@ -2415,7 +2424,7 @@ class TestConsistencyEfficiencyAndResilienceAudit:
                 "t-cv-today",
                 {
                     "query": "SELECT click_view.gclid FROM click_view WHERE segments.date DURING TODAY",
-                    "api_version": "v26",
+                    "api_version": CURRENT_API_VERSION,
                 },
             )["status"]
             == "COMPLETED"
@@ -2429,7 +2438,7 @@ class TestConsistencyEfficiencyAndResilienceAudit:
                         "WHERE change_status.last_change_date_time >= '2026-08-01' "
                         "AND change_status.last_change_date_time <= '2026-08-15' LIMIT 100"
                     ),
-                    "api_version": "v26",
+                    "api_version": CURRENT_API_VERSION,
                 },
             )["status"]
             == "COMPLETED"
@@ -2442,7 +2451,7 @@ class TestConsistencyEfficiencyAndResilienceAudit:
         vg = _load_module("skills/validate-gaql/scripts/validate_gaql.py", "vg_perm_reg")
         cache_file = tmp_path / "gaql_perm_cache.json"
         vg.set_cached_validation(
-            "SELECT campaign.id FROM campaign", "v26", cache_path=str(cache_file)
+            "SELECT campaign.id FROM campaign", CURRENT_API_VERSION, cache_path=str(cache_file)
         )
         assert cache_file.is_file()
         if os.name != "nt":
@@ -2461,7 +2470,7 @@ class TestConsistencyEfficiencyAndResilienceAudit:
         bad_bin_csv = tmp_path / "binary.csv"
         bad_bin_csv.write_bytes(b"\xff\xfe\x80\x81\x00\xff")
         with pytest.raises(SystemExit) as exc_bin:
-            vcu.validate_conversion_csv(str(bad_bin_csv), "v26")
+            vcu.validate_conversion_csv(str(bad_bin_csv), CURRENT_API_VERSION)
         assert exc_bin.value.code == 1
 
         # 8. Sidecar regex fallback on syntax-broken proto, find_spec discovery, and BrokenPipeError
@@ -2485,8 +2494,9 @@ class TestConsistencyEfficiencyAndResilienceAudit:
         assert [f["label"] for f in fb_fields] == ["OPTIONAL", "REPEATED", "MAP"]
         assert fb_enums == [{"name": "ACTIVE", "number": 2}]
 
+        v_plus3 = offset_api_version(3)
         fake_pkg_dir = tmp_path / "fake_site_gads"
-        (fake_pkg_dir / "v29").mkdir(parents=True)
+        (fake_pkg_dir / v_plus3).mkdir(parents=True)
         fake_init = fake_pkg_dir / "__init__.py"
         fake_init.write_text("", encoding="utf-8")
         orig_srv_isdir = srv.os.path.isdir
@@ -2510,10 +2520,12 @@ class TestConsistencyEfficiencyAndResilienceAudit:
                     ),
                 ),
             ):
-                assert srv.get_effective_api_version({}, allow_interactive=False) == "v29"
+                assert srv.get_effective_api_version({}, allow_interactive=False) == v_plus3
         finally:
             if saved_gads_mod is not None:
                 sys.modules["google.ads.googleads"] = saved_gads_mod
+            else:
+                sys.modules.pop("google.ads.googleads", None)
 
         h.send_response = MagicMock()
         h.send_header = MagicMock()
@@ -2528,7 +2540,7 @@ class TestConsistencyEfficiencyAndResilienceAudit:
         )
         malformed_rendered = glav._render_updated_assistant_config(
             'customer_id = "7778889990"\nexecute_mutates = true\nenabled = false\nbroken = [\n',
-            "v27",
+            NEXT_API_VERSION,
         )
         assert 'customer_id = "7778889990"' in malformed_rendered
         assert "execute_mutates = true" in malformed_rendered
@@ -2536,7 +2548,7 @@ class TestConsistencyEfficiencyAndResilienceAudit:
 
         extra_rendered = glav._render_updated_assistant_config(
             'customer_id = "12345678"\nflag_opt = true\nlabel_opt = "alpha"\nratio_opt = 1.5\n',
-            "v27",
+            NEXT_API_VERSION,
         )
         assert "flag_opt = true" in extra_rendered
         assert 'label_opt = "alpha"' in extra_rendered
@@ -2552,10 +2564,10 @@ class TestConsistencyEfficiencyAndResilienceAudit:
         )
         global_cfg.mkdir(parents=True, exist_ok=True)
         (global_cfg / "customer_id.txt").write_text("4445556660\n", encoding="utf-8")
-        updated_cfgs = glav.update_assistant_config_api_version("28")
+        updated_cfgs = glav.update_assistant_config_api_version(FUTURE_API_VERSION[1:])
         assert str(global_cfg / "assistant_config") in updated_cfgs
         migrated_text = (global_cfg / "assistant_config").read_text(encoding="utf-8")
-        assert 'api_version = "v28"' in migrated_text
+        assert f'api_version = "{FUTURE_API_VERSION}"' in migrated_text
         assert 'customer_id = "4445556660"' in migrated_text
 
         orig_glav_isdir = glav.os.path.isdir
@@ -2576,13 +2588,13 @@ class TestConsistencyEfficiencyAndResilienceAudit:
                         origin=str(fake_init),
                     ),
                 ):
-                    assert glav.detect_latest_api_version(update_config=False) == "v29"
+                    assert glav.detect_latest_api_version(update_config=False) == v_plus3
 
                 fake_mod = types.ModuleType("google.ads.googleads")
                 fake_mod.__path__ = [str(fake_pkg_dir)]
                 fake_mod.__file__ = str(fake_init)
                 sys.modules["google.ads.googleads"] = fake_mod
-                assert glav.detect_latest_api_version(update_config=False) == "v29"
+                assert glav.detect_latest_api_version(update_config=False) == v_plus3
         finally:
             if saved_gads_mod2 is not None:
                 sys.modules["google.ads.googleads"] = saved_gads_mod2
@@ -2640,8 +2652,10 @@ class TestConsistencyEfficiencyAndResilienceAudit:
         shared_cfg = importlib.import_module("config.config_init")
         for idx, rel in enumerate(skill_script_rels):
             mod = _load_module(rel, f"dyn_ver_skill_{idx}")
-            monkeypatch.setenv("GOOGLE_ADS_API_VERSION", "30")
-            assert mod._normalize_api_version(None) == "v30"
+            v_plus4 = offset_api_version(4)
+            v_plus5 = offset_api_version(5)
+            monkeypatch.setenv("GOOGLE_ADS_API_VERSION", v_plus4[1:])
+            assert mod._normalize_api_version(None) == v_plus4
             monkeypatch.delenv("GOOGLE_ADS_API_VERSION", raising=False)
             resolved = mod._normalize_api_version("")
             assert re.fullmatch(r"v\d+", resolved)
@@ -2651,9 +2665,9 @@ class TestConsistencyEfficiencyAndResilienceAudit:
             with patch.object(
                 shared_cfg, "get_configured_api_version", return_value=None
             ), patch.object(
-                shared_cfg, "_detect_installed_api_version", return_value="v31"
+                shared_cfg, "_detect_installed_api_version", return_value=v_plus5
             ):
-                assert mod._normalize_api_version(None) == "v31"
+                assert mod._normalize_api_version(None) == v_plus5
             with patch.object(
                 shared_cfg, "get_configured_api_version", return_value=None
             ), patch.object(

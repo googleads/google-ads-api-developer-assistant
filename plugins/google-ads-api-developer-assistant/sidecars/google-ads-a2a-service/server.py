@@ -179,6 +179,56 @@ def _validate_script_path_arg(
     return None
 
 
+_MAX_TOOL_OUTPUT_CHARS = 16384
+
+
+def _truncate_tool_output(text: str, limit: int = _MAX_TOOL_OUTPUT_CHARS) -> str:
+    """Caps tool stdout/stderr payloads to protect model context windows."""
+    if not text or len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    return (
+        text[:limit]
+        + f"\n... [truncated {omitted} chars; capped at {limit} chars]"
+    )
+
+
+def _sandbox_writable_dir() -> Optional[str]:
+    """Returns the sidecar-writable data directory when running under a sandboxed host."""
+    for env_key in ("ANTIGRAVITY_EXECUTABLE_DATA_DIR", "PLUGIN_DATA"):
+        val = os.environ.get(env_key, "").strip()
+        if val:
+            return os.path.abspath(val)
+    return None
+
+
+def _configure_sandbox_writable_env() -> Optional[str]:
+    """Routes sidecar-written receipts/audit/cache to PLUGIN_DATA when sandboxed."""
+    data_dir = _sandbox_writable_dir()
+    if not data_dir:
+        return None
+    saved_data = os.path.join(data_dir, "saved", "data")
+    saved_logs = os.path.join(data_dir, "saved", "logs")
+    try:
+        os.makedirs(saved_data, mode=0o700, exist_ok=True)
+        os.makedirs(saved_logs, mode=0o700, exist_ok=True)
+    except OSError:
+        return None
+    os.environ.setdefault(
+        "GOOGLE_ADS_MUTATION_RECEIPT_PATH",
+        os.path.join(saved_data, "last_dry_run.json"),
+    )
+    os.environ.setdefault(
+        "GOOGLE_ADS_MUTATION_AUDIT_LOG",
+        os.path.join(saved_logs, "mutation_audit.jsonl"),
+    )
+    os.environ.setdefault(
+        "GOOGLE_ADS_GAQL_CACHE_PATH",
+        os.path.join(saved_data, "gaql_validation_cache.json"),
+    )
+    return data_dir
+
+
 def _resolve_a2a_auth_token() -> str:
     """Resolves the A2A Bearer token via env -> sandbox data dir / 0o600 user token file -> ephemeral."""
     env_tok = os.environ.get("A2A_AUTH_TOKEN", "").strip()
@@ -1243,7 +1293,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "task_id": task_id,
                     "status": "VALIDATION_FAILED",
                     "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
-                    "error": (proc.stdout + "\n" + proc.stderr).strip(),
+                    "error": _truncate_tool_output((proc.stdout + "\n" + proc.stderr).strip()),
                 }
             return {
                 "task_id": task_id,
@@ -1251,7 +1301,9 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
                 "result": {
                     "header": "Created by the Google Ads API Developer Assistant",
-                    "summary": proc.stdout.strip() or "CSV conversion upload validation passed.",
+                    "summary": _truncate_tool_output(
+                        proc.stdout.strip() or "CSV conversion upload validation passed."
+                    ),
                     "api_version": api_version,
                     "checks": ["CSV structural, timestamp, value/currency, and SHA-256 PII checks passed"],
                 },
@@ -1442,7 +1494,9 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "error": "PREPARE_MUTATION dry-run subprocess timed out after 120s.",
                 }
             if proc.returncode != 0:
-                err_out = (proc.stderr or proc.stdout or "Dry-run failed.").strip()
+                err_out = _truncate_tool_output(
+                    (proc.stderr or proc.stdout or "Dry-run failed.").strip()
+                )
                 is_blocked = proc.returncode == 2 or "BLOCKED" in err_out
                 return {
                     "task_id": task_id,
@@ -1467,7 +1521,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "result": {
                     "receipt": receipt,
                     "verification_card": card,
-                    "dry_run_stdout": proc.stdout,
+                    "dry_run_stdout": _truncate_tool_output(proc.stdout),
                     "next_step": "Present verification_card to the user and obtain explicit confirmation before calling EXECUTE_MUTATION.",
                 },
             }
@@ -1802,7 +1856,9 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "task_id": task_id,
                     "status": "HITL_BLOCKED" if proc.returncode == 2 else "FAILED",
                     "destructive_hint": True,
-                    "error": (proc.stderr or proc.stdout or "Script execution failed.").strip(),
+                    "error": _truncate_tool_output(
+                        (proc.stderr or proc.stdout or "Script execution failed.").strip()
+                    ),
                 }
             return {
                 "task_id": task_id,
@@ -1813,7 +1869,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "confirmation_summary": confirmation_summary,
                     "verified_receipt": receipt,
                     "execution_mode": "subprocess_executed",
-                    "stdout": proc.stdout,
+                    "stdout": _truncate_tool_output(proc.stdout),
                     "status_message": "HITL receipt verified and mutation script executed.",
                 },
             }
@@ -1936,6 +1992,29 @@ class A2AHandler(BaseHTTPRequestHandler):
             return mod
         raise RuntimeError(f"Unable to load mutation script '{script_filename}'.")
 
+    @staticmethod
+    def _compute_create_params_sha256(
+        run_mod: Any,
+        operation_summary: str,
+        create_params: dict[str, Any],
+    ) -> str:
+        """Computes a canonical SHA-256 binding all effective parameters of a create_* call."""
+        service, _, method = operation_summary.partition(".")
+        if not method:
+            service, method = "GoogleAdsService", operation_summary or "create"
+        hash_fn = getattr(run_mod, "compute_mutate_request_sha256", None) if run_mod is not None else None
+        if callable(hash_fn) and not isinstance(hash_fn, unittest.mock.MagicMock):
+            return str(hash_fn(service, method, create_params))
+        import hashlib
+
+        canonical = json.dumps(
+            {"service": service, "method": method, "payload": create_params},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     def _check_live_execution_gate(
         self,
         task_id: str,
@@ -1943,8 +2022,9 @@ class A2AHandler(BaseHTTPRequestHandler):
         *,
         financial_rpc_calls: Optional[list[dict[str, Any]]] = None,
         operation_summary: str = "",
+        expected_create_params: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[dict[str, Any]], Optional[Any]]:
-        """Enforces deletion prohibition, HITL confirmation, execute_mutates, and financial limits."""
+        """Enforces deletion prohibition, HITL confirmation, execute_mutates, financial limits, and SHA-256 binding."""
         raw_status = str(payload.get("status", "") or "").strip().upper()
         if raw_status == "REMOVED":
             return (
@@ -2122,6 +2202,27 @@ class A2AHandler(BaseHTTPRequestHandler):
                     },
                     run_mod,
                 )
+            if expected_create_params is not None:
+                expected_sha = self._compute_create_params_sha256(
+                    run_mod, operation_summary, expected_create_params
+                )
+                recorded_create_sha = str(
+                    receipt.get("create_params_sha256") or ""
+                ).strip()
+                if not recorded_create_sha or recorded_create_sha != expected_sha:
+                    return (
+                        {
+                            "task_id": task_id,
+                            "status": "HITL_BLOCKED",
+                            "destructive_hint": True,
+                            "error": (
+                                "Live execution blocked: live request parameters do not match the pending "
+                                "validate_only=True dry-run receipt (parameter SHA-256 mismatch). "
+                                "Re-run validate_only=True with the exact target parameters first."
+                            ),
+                        },
+                        run_mod,
+                    )
 
         return None, run_mod
 
@@ -2133,6 +2234,7 @@ class A2AHandler(BaseHTTPRequestHandler):
         after_state: str,
         consequences: list[str],
         rpc_calls: Optional[list[dict[str, Any]]] = None,
+        create_params: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
         """Records a signed dry-run receipt after a validate_only=True create call succeeds."""
         try:
@@ -2143,6 +2245,13 @@ class A2AHandler(BaseHTTPRequestHandler):
         if not callable(write_fn) or isinstance(write_fn, unittest.mock.MagicMock):
             return None, None
         now_iso = datetime.now(timezone.utc).isoformat()
+        create_sha = (
+            self._compute_create_params_sha256(
+                run_mod, operation_summary, create_params
+            )
+            if create_params is not None
+            else None
+        )
         try:
             receipt = write_fn(
                 customer_id=customer_id,
@@ -2157,6 +2266,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                 response_received_at_iso=now_iso,
                 rpc_calls=rpc_calls,
                 record_only=False,
+                create_params_sha256=create_sha,
             )
             return receipt, None
         except ValueError as exc:
@@ -2219,10 +2329,24 @@ class A2AHandler(BaseHTTPRequestHandler):
         self, task_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Handles CREATE_ACCOUNT intent via create_account.py."""
+        mgr_cid = str(
+            payload.get("manager_customer_id") or payload.get("customer_id", "")
+        )
+        create_params = {
+            "manager_customer_id": re.sub(r"\D", "", mgr_cid),
+            "descriptive_name": payload.get("descriptive_name") or payload.get("name"),
+            "currency_code": str(payload.get("currency_code", "USD")),
+            "time_zone": str(payload.get("time_zone", "America/New_York")),
+            "tracking_url_template": payload.get("tracking_url_template"),
+            "final_url_suffix": payload.get("final_url_suffix"),
+            "email_address": payload.get("email_address"),
+            "access_role": payload.get("access_role"),
+        }
         gate_error, run_mod = self._check_live_execution_gate(
             task_id,
             payload,
             operation_summary="CustomerService.create_customer_client",
+            expected_create_params=create_params,
         )
         if gate_error is not None:
             return gate_error
@@ -2232,35 +2356,36 @@ class A2AHandler(BaseHTTPRequestHandler):
         mod = self._load_mutation_script("create_account.py")
         try:
             result = mod.create_account_under_mcc(
-                manager_customer_id=str(
-                    payload.get("manager_customer_id")
-                    or payload.get("customer_id", "")
-                ),
+                manager_customer_id=mgr_cid,
                 api_version=api_version,
-                descriptive_name=payload.get("descriptive_name")
-                or payload.get("name"),
-                currency_code=str(payload.get("currency_code", "USD")),
-                time_zone=str(payload.get("time_zone", "America/New_York")),
-                tracking_url_template=payload.get("tracking_url_template"),
-                final_url_suffix=payload.get("final_url_suffix"),
-                email_address=payload.get("email_address"),
-                access_role=payload.get("access_role"),
+                descriptive_name=create_params["descriptive_name"],
+                currency_code=create_params["currency_code"],
+                time_zone=create_params["time_zone"],
+                tracking_url_template=create_params["tracking_url_template"],
+                final_url_suffix=create_params["final_url_suffix"],
+                email_address=create_params["email_address"],
+                access_role=create_params["access_role"],
                 validate_only=validate_only,
                 client=payload.get("client"),
                 json_output=False,
             )
             if validate_only:
+                acct_consequences = [
+                    f"Creates a new client account ({result.get('currency_code', 'USD')}) under MCC {result.get('manager_customer_id', '')}"
+                ]
+                if create_params["email_address"]:
+                    acct_consequences.append(
+                        f"Grants {create_params['access_role'] or 'STANDARD'} user access invitation to {create_params['email_address']} (account access security impact)"
+                    )
                 receipt, hitl_notice = self._record_create_dry_run_receipt(
                     customer_id=str(
                         result.get("manager_customer_id")
-                        or payload.get("manager_customer_id")
-                        or payload.get("customer_id", "")
+                        or mgr_cid
                     ),
                     operation_summary="CustomerService.create_customer_client",
                     after_state=str(result.get("resource_name", "NEW_ACCOUNT")),
-                    consequences=[
-                        f"Creates a new client account ({result.get('currency_code', 'USD')}) under MCC {result.get('manager_customer_id', '')}"
-                    ],
+                    consequences=acct_consequences,
+                    create_params=create_params,
                 )
                 if receipt:
                     result["receipt_id"] = receipt.get("receipt_id")
@@ -2318,6 +2443,27 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "error": f"Invalid budget_amount_micros: {exc}",
             }
 
+        create_params = {
+            "customer_id": re.sub(r"\D", "", str(payload.get("customer_id", ""))),
+            "campaign_name": payload.get("campaign_name") or payload.get("name"),
+            "budget_amount_micros": budget_micros,
+            "budget_resource_name": budget_rn,
+            "budget_delivery_method": str(
+                payload.get("budget_delivery_method", "STANDARD")
+            ),
+            "advertising_channel_type": str(
+                payload.get("advertising_channel_type")
+                or payload.get("channel_type", "SEARCH")
+            ),
+            "status": str(payload.get("status", "PAUSED")).upper(),
+            "start_date": payload.get("start_date"),
+            "end_date": payload.get("end_date"),
+            "budget_name": payload.get("budget_name"),
+            "contains_eu_political_advertising": _strict_bool(
+                payload.get("contains_eu_political_advertising", False)
+            ),
+        }
+
         fin_calls: Optional[list[dict[str, Any]]] = None
         if not (budget_rn and str(budget_rn).strip()):
             fin_calls = [
@@ -2336,6 +2482,7 @@ class A2AHandler(BaseHTTPRequestHandler):
             payload,
             financial_rpc_calls=fin_calls,
             operation_summary="CampaignService.mutate_campaigns",
+            expected_create_params=create_params,
         )
         if gate_error is not None:
             return gate_error
@@ -2347,26 +2494,21 @@ class A2AHandler(BaseHTTPRequestHandler):
             result = mod.create_campaign(
                 customer_id=str(payload.get("customer_id", "")),
                 api_version=api_version,
-                campaign_name=payload.get("campaign_name") or payload.get("name"),
+                campaign_name=create_params["campaign_name"],
                 budget_amount_micros=budget_micros,
                 budget_resource_name=budget_rn,
-                budget_delivery_method=str(
-                    payload.get("budget_delivery_method", "STANDARD")
-                ),
-                advertising_channel_type=str(
-                    payload.get("advertising_channel_type")
-                    or payload.get("channel_type", "SEARCH")
-                ),
-                status=str(payload.get("status", "PAUSED")),
-                start_date=payload.get("start_date"),
-                end_date=payload.get("end_date"),
+                budget_delivery_method=create_params["budget_delivery_method"],
+                advertising_channel_type=create_params["advertising_channel_type"],
+                status=create_params["status"],
+                start_date=create_params["start_date"],
+                end_date=create_params["end_date"],
                 validate_only=validate_only,
                 client=payload.get("client"),
                 json_output=False,
-                budget_name=payload.get("budget_name"),
-                contains_eu_political_advertising=_strict_bool(
-                    payload.get("contains_eu_political_advertising", False)
-                ),
+                budget_name=create_params["budget_name"],
+                contains_eu_political_advertising=create_params[
+                    "contains_eu_political_advertising"
+                ],
             )
             if validate_only:
                 receipt, hitl_notice = self._record_create_dry_run_receipt(
@@ -2374,9 +2516,10 @@ class A2AHandler(BaseHTTPRequestHandler):
                     operation_summary="CampaignService.mutate_campaigns",
                     after_state=str(result.get("campaign_resource_name", "NEW_CAMPAIGN")),
                     consequences=[
-                        f"Creates campaign '{result.get('campaign_name', '')}' with daily budget {budget_micros / 1_000_000:.2f} currency units ({budget_micros} micros)"
+                        f"Creates campaign '{result.get('campaign_name', '')}' ({create_params['status']}) with daily budget {budget_micros / 1_000_000:.2f} currency units ({budget_micros} micros)"
                     ],
                     rpc_calls=fin_calls,
+                    create_params=create_params,
                 )
                 if receipt:
                     result["receipt_id"] = receipt.get("receipt_id")
@@ -2436,6 +2579,20 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "error": f"Invalid cpc_bid_micros: {exc}",
                 }
 
+        create_params = {
+            "customer_id": re.sub(r"\D", "", str(payload.get("customer_id", ""))),
+            "campaign_id": (
+                str(payload.get("campaign_id"))
+                if payload.get("campaign_id") is not None
+                else None
+            ),
+            "campaign_resource_name": payload.get("campaign_resource_name"),
+            "ad_group_name": payload.get("ad_group_name") or payload.get("name"),
+            "cpc_bid_micros": cpc_bid_int,
+            "status": str(payload.get("status", "ENABLED")).upper(),
+            "ad_group_type": str(payload.get("ad_group_type", "SEARCH_STANDARD")),
+        }
+
         fin_calls: Optional[list[dict[str, Any]]] = None
         if cpc_bid_int is not None:
             fin_calls = [
@@ -2454,6 +2611,7 @@ class A2AHandler(BaseHTTPRequestHandler):
             payload,
             financial_rpc_calls=fin_calls,
             operation_summary="AdGroupService.mutate_ad_groups",
+            expected_create_params=create_params,
         )
         if gate_error is not None:
             return gate_error
@@ -2467,10 +2625,10 @@ class A2AHandler(BaseHTTPRequestHandler):
                 campaign_id=payload.get("campaign_id"),
                 campaign_resource_name=payload.get("campaign_resource_name"),
                 api_version=api_version,
-                ad_group_name=payload.get("ad_group_name") or payload.get("name"),
+                ad_group_name=create_params["ad_group_name"],
                 cpc_bid_micros=cpc_bid_int,
-                status=str(payload.get("status", "ENABLED")),
-                ad_group_type=str(payload.get("ad_group_type", "SEARCH_STANDARD")),
+                status=create_params["status"],
+                ad_group_type=create_params["ad_group_type"],
                 validate_only=validate_only,
                 client=payload.get("client"),
                 json_output=False,
@@ -2489,6 +2647,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                         f"Creates ad group '{result.get('ad_group_name', '')}' {bid_desc}"
                     ],
                     rpc_calls=fin_calls,
+                    create_params=create_params,
                 )
                 if receipt:
                     result["receipt_id"] = receipt.get("receipt_id")
@@ -2535,10 +2694,43 @@ class A2AHandler(BaseHTTPRequestHandler):
         self, task_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Handles CREATE_AD intent via create_ad.py."""
+        final_urls = payload.get("final_urls")
+        if isinstance(final_urls, str):
+            final_urls = [final_urls]
+        elif final_urls is None and payload.get("final_url"):
+            final_urls = [str(payload.get("final_url"))]
+
+        create_params = {
+            "customer_id": re.sub(r"\D", "", str(payload.get("customer_id", ""))),
+            "ad_group_id": (
+                str(payload.get("ad_group_id"))
+                if payload.get("ad_group_id") is not None
+                else None
+            ),
+            "ad_group_resource_name": payload.get("ad_group_resource_name"),
+            "final_urls": (
+                list(final_urls) if isinstance(final_urls, (list, tuple)) else final_urls
+            ),
+            "headlines": (
+                list(payload["headlines"])
+                if isinstance(payload.get("headlines"), (list, tuple))
+                else payload.get("headlines")
+            ),
+            "descriptions": (
+                list(payload["descriptions"])
+                if isinstance(payload.get("descriptions"), (list, tuple))
+                else payload.get("descriptions")
+            ),
+            "path1": payload.get("path1"),
+            "path2": payload.get("path2"),
+            "status": str(payload.get("status", "PAUSED")).upper(),
+        }
+
         gate_error, run_mod = self._check_live_execution_gate(
             task_id,
             payload,
             operation_summary="AdGroupAdService.mutate_ad_group_ads",
+            expected_create_params=create_params,
         )
         if gate_error is not None:
             return gate_error
@@ -2547,12 +2739,6 @@ class A2AHandler(BaseHTTPRequestHandler):
         api_version = get_effective_api_version(payload, allow_interactive=False)
         mod = self._load_mutation_script("create_ad.py")
         try:
-            final_urls = payload.get("final_urls")
-            if isinstance(final_urls, str):
-                final_urls = [final_urls]
-            elif final_urls is None and payload.get("final_url"):
-                final_urls = [str(payload.get("final_url"))]
-
             result = mod.create_responsive_search_ad(
                 customer_id=str(payload.get("customer_id", "")),
                 ad_group_id=payload.get("ad_group_id"),
@@ -2563,7 +2749,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                 descriptions=payload.get("descriptions"),
                 path1=payload.get("path1"),
                 path2=payload.get("path2"),
-                status=str(payload.get("status", "PAUSED")),
+                status=create_params["status"],
                 validate_only=validate_only,
                 client=payload.get("client"),
                 json_output=False,
@@ -2576,6 +2762,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                     consequences=[
                         f"Creates responsive search ad under {result.get('ad_group_resource_name', '')}"
                     ],
+                    create_params=create_params,
                 )
                 if receipt:
                     result["receipt_id"] = receipt.get("receipt_id")
@@ -3001,9 +3188,10 @@ def run_server() -> None:
     """Starts the loopback-only A2A HTTP server with Bearer authentication."""
     global PORT
     PORT = _resolve_server_port()
+    sandbox_dir = _configure_sandbox_writable_env()
 
     # Sync user-scoped ~/google-ads.yaml into installed user plugin config ONLY
-    # (never mutating git-tracked files inside the repository workspace).
+    # (never mutating git-tracked files or read-only sandboxed PLUGIN_ROOT).
     existing_cfg_env = os.environ.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH", "").strip()
     raw_home_yaml = os.path.abspath(os.path.expanduser("~/google-ads.yaml"))
     has_valid_cfg_env = bool(
@@ -3015,6 +3203,7 @@ def run_server() -> None:
         d
         for d in (
             os.environ.get("GOOGLE_ADS_ASSISTANT_CONFIG_DIR", "").strip(),
+            os.path.join(sandbox_dir, "config") if sandbox_dir else "",
             os.path.join(os.environ.get("PLUGIN_ROOT", "").strip(), "config")
             if os.environ.get("PLUGIN_ROOT", "").strip()
             else "",
@@ -3031,9 +3220,9 @@ def run_server() -> None:
                 "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
             ),
         )
-        if d and os.path.isdir(d)
+        if d and os.path.isdir(d) and os.access(d, os.W_OK)
     ]
-    if not has_valid_cfg_env and candidate_user_cfg_dirs:
+    if not has_valid_cfg_env and candidate_user_cfg_dirs and os.path.isfile(raw_home_yaml):
         user_cfg_dir = candidate_user_cfg_dirs[0]
         try:
             from config.config_init import (

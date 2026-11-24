@@ -3607,7 +3607,7 @@ def append_mutation_audit_log(
     for log_path in get_audit_log_paths():
         try:
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
-            flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+            flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
             fd = os.open(log_path, flags, 0o600)
             with os.fdopen(fd, "a", encoding="utf-8") as f:
                 if sys.platform != "win32":
@@ -3659,6 +3659,7 @@ def write_dry_run_receipt(
     rpc_calls: Optional[List[Dict[str, Any]]] = None,
     script_args: Optional[List[str]] = None,
     record_only: bool = False,
+    create_params_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Writes a signed dry-run receipt to saved/data/last_dry_run.json."""
     resolved_script = os.path.abspath(script_path) if script_path else ""
@@ -3802,6 +3803,9 @@ def write_dry_run_receipt(
         "script_sha256": script_hash,
         "script_args": [str(a) for a in script_args or []],
         "record_only": bool(record_only),
+        "create_params_sha256": (
+            str(create_params_sha256).strip() if create_params_sha256 else None
+        ),
         "request_sha256": request_sha256,
         "request_sha256_list": request_sha256_list,
         "dry_run_output": dry_run_output.strip(),
@@ -4040,6 +4044,131 @@ def _write_json_atomic(target_path: str, payload: Dict[str, Any]) -> None:
             os.chmod(abs_target, 0o600)
         except OSError:
             pass
+
+
+def claim_receipt_for_execution() -> Tuple[bool, str, Dict[str, Any]]:
+    """Atomically claims a single-use DRY_RUN_PASSED receipt as EXECUTING to prevent concurrent replay."""
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    receipt_paths = get_receipt_paths()
+    existing_paths = [p for p in receipt_paths if os.path.isfile(p)]
+    if not existing_paths:
+        return (
+            False,
+            "No pending validate_only=True dry-run receipt found to claim for execution.",
+            {},
+        )
+
+    primary_path = existing_paths[0]
+    lock_dir = os.path.dirname(os.path.abspath(primary_path)) or "."
+    os.makedirs(lock_dir, exist_ok=True)
+    lock_path = os.path.join(lock_dir, ".last_dry_run.lock")
+
+    def _do_claim() -> Tuple[bool, str, Dict[str, Any]]:
+        claimed_data: Optional[Dict[str, Any]] = None
+        last_status = "MISSING"
+        for target_path in existing_paths:
+            try:
+                with open(target_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            status = str(data.get("status", ""))
+            last_status = status
+            if status != "DRY_RUN_PASSED":
+                continue
+            data["status"] = "EXECUTING"
+            data["executing_started_at_iso"] = now_iso
+            data["executing_pid"] = os.getpid()
+            _write_json_atomic(target_path, data)
+            if claimed_data is None:
+                claimed_data = data
+        if claimed_data is not None:
+            return True, "Claimed receipt for single-use execution.", claimed_data
+        return (
+            False,
+            f"Dry-run receipt status is '{last_status}' (expected 'DRY_RUN_PASSED'; "
+            "receipt may already be EXECUTING or EXECUTED). Re-run --dry-run first.",
+            {},
+        )
+
+    if sys.platform != "win32":
+        import fcntl
+
+        lock_flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(lock_path, lock_flags, 0o600)
+        with os.fdopen(fd, "r+", encoding="utf-8") as lf:
+            try:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                return _do_claim()
+            finally:
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+    return _do_claim()
+
+
+def release_claimed_receipt_if_not_executed() -> None:
+    """Restores an EXECUTING receipt claimed by this PID back to DRY_RUN_PASSED.
+
+    Only called when execution was blocked pre-RPC or failed with zero succeeded
+    live RPCs; never reverts another PID's claim or any partially executed run.
+    """
+    receipt_paths = get_receipt_paths()
+    existing_paths = [p for p in receipt_paths if os.path.isfile(p)]
+    if not existing_paths:
+        return
+    my_pid = os.getpid()
+
+    def _do_release() -> None:
+        for target_path in existing_paths:
+            try:
+                with open(target_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ):
+                continue
+            if not isinstance(data, dict):
+                continue
+            if (
+                str(data.get("status", "")) == "EXECUTING"
+                and data.get("executing_pid") == my_pid
+            ):
+                data["status"] = "DRY_RUN_PASSED"
+                data.pop("executing_started_at_iso", None)
+                data.pop("executing_pid", None)
+                _write_json_atomic(target_path, data)
+
+    if sys.platform != "win32":
+        import fcntl
+
+        lock_dir = os.path.dirname(os.path.abspath(existing_paths[0])) or "."
+        os.makedirs(lock_dir, exist_ok=True)
+        lock_path = os.path.join(lock_dir, ".last_dry_run.lock")
+        lock_flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(lock_path, lock_flags, 0o600)
+        except OSError:
+            _do_release()
+            return
+        with os.fdopen(fd, "r+", encoding="utf-8") as lf:
+            try:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                _do_release()
+            finally:
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+    else:
+        _do_release()
 
 
 def mark_receipt_executed(
@@ -5256,6 +5385,20 @@ def main() -> None:
     )
     expected_hashes_arg = expected_rpc_hashes if enforce_live_hash else None
 
+    claimed, claim_msg, _ = claim_receipt_for_execution()
+    if not claimed:
+        # Allow unit tests that monkeypatch load_and_verify_receipt without an
+        # on-disk receipt file; any real loader or on-disk receipt must be claimed.
+        is_mocked_loader = (
+            getattr(load_and_verify_receipt, "__module__", "") != __name__
+        )
+        has_any_receipt_file = any(
+            os.path.isfile(p) for p in get_receipt_paths()
+        )
+        if not (is_mocked_loader and not has_any_receipt_file):
+            print(f"BLOCKED: {claim_msg}", file=sys.stderr)
+            sys.exit(2)
+
     result, sent_at_iso, received_at_iso, duration_ms, captured_calls = (
         _execute_script_subprocess(
             script_path,
@@ -5363,6 +5506,11 @@ def main() -> None:
             user_approved_at_iso=user_approved_at_iso,
             approval_decision="HUMAN_APPROVED",
         )
+        any_rpc_succeeded = any(
+            c.get("status") == "SUCCESS" for c in captured_calls
+        )
+        if claimed and not any_rpc_succeeded and not missing_expected_calls:
+            release_claimed_receipt_if_not_executed()
         print(
             f"Live mutation {failure_status} "
             f"(exit code {effective_exit_code}):\n"

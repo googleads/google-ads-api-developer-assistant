@@ -6,7 +6,7 @@
 
 - [Overview](#overview)
 - [Agentic Design & Approach](#agentic-design--approach)
-  - [1. Unified Context via `AGENTS.md` & `CLAUDE.md`](#1-unified-context-via-agentsmd--claudemd)
+  - [1. Unified Context via `rules/AGENTS.md`](#1-unified-context-via-rulesagentsmd)
   - [2. Domain Skills & Slash Commands](#2-domain-skills--slash-commands)
 - [Key Features](#key-features)
 - [Supported Languages](#supported-languages)
@@ -68,13 +68,13 @@ The Google Ads API Developer Assistant helps developers work with the Google Ads
 *   Generate executable code with the Google Ads client libraries.
 *   Get and show data from the API.
 
-The Google Ads API Developer Assistant (v4.1.0) runs on the **Antigravity** and **Claude Code** agent frameworks. It uses `AGENTS.md` / `CLAUDE.md` files, slash commands, and custom **Skills** to apply safety rules and run validation pipelines.
+The Google Ads API Developer Assistant (v4.1.0) runs on the **Antigravity (`agy`)** and **Claude Code CLI** agent frameworks. It uses `rules/AGENTS.md` (auto-loaded by `agy` and injected on `SessionStart` in Claude Code CLI), slash commands (`commands/` on Claude Code CLI), and custom **Skills** (`skills/*/SKILL.md` on both CLIs) to apply safety rules and run validation pipelines.
 
 ## Agentic Design & Approach
 
 The assistant uses instruction files, slash commands, and domain tools to interact safely with the Google Ads API.
 
-### 1. Unified Context via `AGENTS.md` & `CLAUDE.md`
+### 1. Unified Context via `rules/AGENTS.md`
 The configuration files define the core rules for the assistant:
 *   **Version Cache Protocol**: Finds and saves the latest active API version (`api_version` in `config/assistant_config`).
 *   **Version Parity Check**: Compares the installed `google-ads` Python package with the local `client_libs/google-ads-python` files and warns you if they do not match.
@@ -247,12 +247,12 @@ Run the installation script for your platform:
 ---
 
 ### 4. Configure Credentials
-Put your Google Ads API credentials file in your `$HOME` directory (`~/google-ads.yaml` for Python, `~/google_ads_php.ini` for PHP, `~/google_ads_config.rb` for Ruby, or `~/ads.properties` for Java). At session startup, [`config/config_init.py`](config/config_init.py) copies your credentials to `config/google-ads.yaml` (`0600` permissions) and sets `GOOGLE_ADS_CONFIGURATION_FILE_PATH`.
+Put your Google Ads API credentials file in your `$HOME` directory (`~/google-ads.yaml` for Python, `~/google_ads_php.ini` for PHP, `~/google_ads_config.rb` for Ruby, or `~/ads.properties` for Java). At session startup, [`config/config_init.py`](plugins/google-ads-api-developer-assistant/config/config_init.py) copies your credentials to `config/google-ads.yaml` (`0600` permissions) and sets `GOOGLE_ADS_CONFIGURATION_FILE_PATH`.
 
 ---
 
 ### 5. Configure Assistant Settings (`config/assistant_config`) & Enable/Disable Plugin
-The [`config/assistant_config`](config/assistant_config) file (mirrored in [`plugins/google-ads-api-developer-assistant/config/assistant_config`](plugins/google-ads-api-developer-assistant/config/assistant_config)) stores all assistant settings in TOML format:
+The [`config/assistant_config`](plugins/google-ads-api-developer-assistant/config/assistant_config) file (copied into your installed plugin directory by `install.sh` / `install.ps1`) stores all assistant settings in TOML format:
 
 ```toml
 api_version = "<api_version> (e.g., vXX)"
@@ -387,10 +387,10 @@ When a session starts in Antigravity (`agy`) or Claude Code (`claude`), a `Sessi
 
 The two CLIs load different hook files:
 
-* **Antigravity (`agy`):** The `SessionStart` and `PreToolUse` entries in [`hooks.json`](plugins/google-ads-api-developer-assistant/hooks.json) covering `run_command`, `write_file|edit_file|...`, and `call_mcp_tool|mcp_.*`. The hook resolves `PLUGIN_ROOT` (then `CLAUDE_PLUGIN_ROOT`, `GOOGLE_ADS_ASSISTANT_DIR`, and installed plugin paths — never untrusted CWD). If `config/hook_guard.py` is missing or stdin is malformed, `PreToolUse` fails closed (`decision: "deny"`). Antigravity does not fire `PostToolUseFailure`, and its `PostToolUse` payload has no exit code (`error` is empty even when a command fails), so on Antigravity a failed `run_mutation.py --execute` is recorded by the `FAILED` audit record that `run_mutation.py` writes itself.
-* **Claude Code (`claude`):** [`hooks/hooks.json`](plugins/google-ads-api-developer-assistant/hooks/hooks.json) (`SessionStart`, `PreToolUse` for `Bash`, `Write|Edit|MultiEdit`, and `mcp__google-ads-api-assistant__*` mutation tools, plus `PostToolUseFailure` for `Bash`), [`.mcp.json`](plugins/google-ads-api-developer-assistant/.mcp.json), and [`.claude-plugin/plugin.json`](plugins/google-ads-api-developer-assistant/.claude-plugin/plugin.json). The hooks run `${CLAUDE_PLUGIN_ROOT}/config/hook_guard.py` with `python3`, then `python`, then `py -3`. If Python or the script is missing, the hook exits with code 2, which blocks the tool call. The `SessionStart` hook also writes `GOOGLE_ADS_ASSISTANT_DIR` and `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `CLAUDE_ENV_FILE`, and injects `rules/AGENTS.md` into `additionalContext`.
+* **Antigravity (`agy`):** The `SessionStart` and `PreToolUse` entries in [`hooks.json`](plugins/google-ads-api-developer-assistant/hooks.json) covering `run_command`, `write_file|edit_file|...`, `read_file|view_file`, and `call_mcp_tool|mcp_.*`. The hook resolves `PLUGIN_ROOT` (then `CLAUDE_PLUGIN_ROOT`, `GOOGLE_ADS_ASSISTANT_DIR`, a `plugin.json`+`hooks.json`-verified plugin CWD, and installed plugin paths — never an untrusted workspace CWD). If `config/hook_guard.py` is missing or stdin is malformed, `PreToolUse` fails closed (`decision: "deny"`). Antigravity does not fire `PostToolUseFailure`, and its `PostToolUse` payload has no exit code (`error` is empty even when a command fails), so on Antigravity a failed `run_mutation.py --execute` is recorded by the `FAILED` audit record that `run_mutation.py` writes itself.
+* **Claude Code (`claude`):** [`hooks/hooks.json`](plugins/google-ads-api-developer-assistant/hooks/hooks.json) (`SessionStart`, `PreToolUse` for `Bash`, `Write|Edit|MultiEdit`, `Read`, and `mcp__(?:plugin_google-ads-api-developer-assistant_)?google-ads-api-assistant__*` mutation tools, plus `PostToolUseFailure` for `Bash`), [`.mcp.json`](plugins/google-ads-api-developer-assistant/.mcp.json), and [`.claude-plugin/plugin.json`](plugins/google-ads-api-developer-assistant/.claude-plugin/plugin.json). The hooks run `${CLAUDE_PLUGIN_ROOT}/config/hook_guard.py` with `python3`, then `python`, then `py -3`. If Python or the script is missing, the shell wrapper exits with code 2 and stderr, which blocks the tool call. The `SessionStart` hook also writes `GOOGLE_ADS_ASSISTANT_DIR` and `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `CLAUDE_ENV_FILE`, and injects `rules/AGENTS.md` into `additionalContext`.
 
-The guard returns `deny` or `ask` (`force_ask` in `agy`) in the format of each CLI. In Claude Code, a `deny` also exits with code 2. When the guard has no objection, it does not approve the command for you: your Claude Code permission rules still apply.
+The guard returns `deny` or `ask` (`force_ask` in `agy`) in the canonical JSON format of each CLI (`decision` on `agy`; exit `0` + `hookSpecificOutput.permissionDecision` on Claude Code). When the guard has no objection, it does not approve the command for you: your Claude Code permission rules still apply.
 
 The 5-step version check (local parity at `SessionStart`, and upstream PyPI/GitHub checks on demand via `/sync-client-libs` or `sync_client_libs.py --check_only`):
 
@@ -398,7 +398,7 @@ The 5-step version check (local parity at `SessionStart`, and upstream PyPI/GitH
 | :--- | :--- | :--- | :--- |
 | **Credential Sync & `api_version` Lookup** (`sync_and_set_config_kv` & `detect_latest_api_version`) | **Automatic** (Every session start) | Reads your `$HOME` config (`~/google-ads.yaml`, `~/google_ads_php.ini`, `~/google_ads_config.rb`, `~/ads.properties`, or `.NET` `App.config` / `appsettings.json`), writes `config/google-ads.yaml` (`0600` permissions) with `use_proto_plus: True` and `ads_assistant: <version>`, exports `GOOGLE_ADS_CONFIGURATION_FILE_PATH`, checks `v<N>` directories in `client_libs/google-ads-python` and `google.ads.googleads.__path__`, and updates `api_version` in `config/assistant_config` when a newer version is installed. | `config/google-ads.yaml` and `config/assistant_config` (Never changes your `$HOME` config) |
 | **Step 1 — Check Python Site-Directory Version Against PyPI** (`detect_system_package_version` / `fetch_latest_pypi_python_version`) | **On-Demand** (`/sync-client-libs` or `--check_only`) | Checks `google-ads` in `site.getsitepackages()` (`importlib.metadata.version("google-ads")`) and queries `pypi.org` (`https://pypi.org/pypi/google-ads/json`) for the latest release. | None (Read-only check) |
-| **Step 2 — Check Latest GitHub Release** (`fetch_latest_github_python_version` / `fetch_github_latest_release`) | **On-Demand** (`/sync-client-libs`, 1-hour cache) | Queries the GitHub Releases API (`googleads/google-ads-python/releases/latest`, cached in `$TMPDIR/gads_assistant_github_release.json` for 1 hour) to find the latest client library release. | `$TMPDIR/gads_assistant_github_release.json` |
+| **Step 2 — Check Latest GitHub Release** (`fetch_latest_github_python_version` / `fetch_github_latest_release`) | **On-Demand** (`/sync-client-libs`, 1-hour cache) | Queries the GitHub Releases API (`googleads/google-ads-python/releases/latest`, cached in `$TMPDIR/gads_assistant_github_release_<uid>.json` for 1 hour) to find the latest client library release. | `$TMPDIR/gads_assistant_github_release_<uid>.json` |
 | **Step 3 — Select Active API Version & Show Table** (`determine_api_version` & `format_parity_table_markdown`) | **Automatic** (`SessionStart` local check) | Selects the active Google Ads API version locally and injects the session parity table into context via `systemMessage` (`agy`) or `additionalContext` (`claude`). | None (Session display) |
 | **Step 4 — Ask User If Any Version Is Outdated** (`sync_client_libs.py --check_only`) | **Interactive Prompt** (When any version `<` upstream) | If the version in your Python site directory or `client_libs/` is older than `pypi.org` or GitHub, the assistant asks if you want to update before continuing. | None (Waits for your `yes` or `no` reply) |
 | **Step 5 — Upgrade on Confirmation or Keep Current Versions** (`sync_client_libs.py --upgrade_system` / `--check_only`) | **On Confirmation (`Yes`) or Decline (`No`)** | If **Yes**: installs the latest `google-ads` from `pypi.org`, updates `client_libs/google-ads-python`, and updates `api_version` in `config/assistant_config`. If **No**: keeps the installed versions. | Python `site-packages`, `client_libs/`, and `config/assistant_config` (only if you reply `Yes`) |
@@ -531,7 +531,7 @@ A sidecar daemon gives you three benefits:
 ### How the Sidecar Is Configured in This Repository
 
 The sidecar is the **Google Ads Agent-to-Agent (A2A) & MCP Service** in `plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/`:
-*   **`sidecar.json`**: The sandboxed sidecar manifest read by Antigravity (`command: "python3"`, `args: ["server.py"]`, `restart_policy: "always"`, narrow `sandbox.allowed_http_hosts`).
+*   **`sidecar.json`**: The sandboxed sidecar manifest read by Antigravity (`command: "python3"`, `args: ["server.py"]`, `restart_policy: "always"`, `GOOGLE_ADS_CONFIGURATION_FILE_PATH: "${PLUGIN_ROOT}/config/google-ads.yaml"`, narrow `sandbox.allowed_http_hosts`). Under the Linux sidecar sandbox, `PLUGIN_ROOT` is read-only and `$HOME` / user workspaces are isolated; `server.py` automatically routes writable receipts, audit logs, and GAQL cache files into `ANTIGRAVITY_EXECUTABLE_DATA_DIR` / `PLUGIN_DATA`. Executing workspace-local `saved/code/*.py` scripts requires **stdio MCP mode** (`mcp_config.json` / `.mcp.json`) or running the skill scripts directly from the terminal.
 *   **`mcp_config.json` (`agy`) & `.mcp.json` (`Claude Code`)**: Register the `google-ads-api-assistant` stdio MCP server (`python3 ${PLUGIN_ROOT}/sidecars/google-ads-a2a-service/server.py --mcp` / `${CLAUDE_PLUGIN_ROOT}/... --mcp`).
 *   **`server.py`**: Dual-mode Python server supporting JSON-RPC 2.0 MCP over stdio (`--mcp`) and loopback HTTP A2A tasks (`A2AHandler` / `HTTPServer`).
 
@@ -557,7 +557,7 @@ For each task request, `get_effective_api_version()` selects the target Google A
 2.  The `api_version` value in `config/assistant_config`.
 3.  The highest `v<N>` directory in `client_libs/google-ads-python/google/ads/googleads/`.
 4.  The highest `v<N>` package in the installed `google.ads.googleads` Python module.
-5.  If it cannot find an API version, the server returns `API_VERSION_CONFIRMATION_REQUIRED` and asks the caller to set a version.
+5.  If it cannot find a valid API version, `get_effective_api_version()` raises a `ValueError` and the task returns `"status": "FAILED"` with instructions to pass `api_version` (`vN`) or set it in `config/assistant_config`.
 
 #### 3. HTTP & Agent-to-Agent (A2A) Task Endpoints
 The sidecar exposes two HTTP endpoints on `http://127.0.0.1:8900`:
@@ -565,8 +565,8 @@ The sidecar exposes two HTTP endpoints on `http://127.0.0.1:8900`:
 *   **`GET /` or `GET /health`**: Returns a JSON health status object with the service name, plugin version (`plugin.json`), and port:
     ```json
     {
-      "status": "HEALTHY",
-      "service": "google-ads-a2a-sidecar",
+      "status": "healthy",
+      "service": "Google Ads API Developer Assistant A2A Sidecar",
       "version": "4.1.0",
       "port": 8900
     }
@@ -633,10 +633,12 @@ Use either of these methods:
    ```
 
 **Configuration File Priority:**
-When checking a mutation, the plugin checks these paths in order and uses the **first file that exists**:
-1. `config/assistant_config` (workspace `config/` directory) — **first priority**
-2. `plugins/google-ads-api-developer-assistant/config/assistant_config` (plugin source directory)
-3. `~/.gemini/config/plugins/google-ads-api-developer-assistant/config/assistant_config` (installed global plugin directory)
+When resolving settings (`config_init.get_assistant_config_paths()`), the plugin checks these paths in order and uses the **first file that exists**:
+1. `$GOOGLE_ADS_ASSISTANT_CONFIG_DIR/assistant_config` (explicit config dir override, when set)
+2. `$PLUGIN_ROOT/config/assistant_config`, `$CLAUDE_PLUGIN_ROOT/config/assistant_config`, or `$GOOGLE_ADS_ASSISTANT_DIR/config/assistant_config` (active CLI plugin root)
+3. The running plugin's own `config/assistant_config` (adjacent to `config/config_init.py`)
+4. Workspace-local `config/assistant_config` (current working directory)
+5. Installed global plugin paths (`~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/assistant_config` and `~/.gemini/config/plugins/google-ads-api-developer-assistant/config/assistant_config`, ordered for the active CLI)
 
 *(If `execute_mutates = false` and a command tries to run a live mutation, the `PreToolUse` hook and `run_mutation.py` block it with: `BLOCKED BY HITL MUTATION GUARD: Mutate support is disabled by configuration (execute_mutates = false in config/assistant_config). Set 'execute_mutates = true' in config/assistant_config to enable live Google Ads API mutations.`)*
 
@@ -1257,7 +1259,7 @@ The assistant and its test suites produce **three append-only JSON Lines (`.json
 | **`"SUITE_SUMMARY"`** | `target_customer_id`, `total_tests`, `passed_tests`, `failed_tests`, `error_records_logged`, `duration_ms`, `failed_test_details[]`. |
 
 ```json
-{"record_id": "0b0a420a-df1e-4fec-9b80-3b9186f1da13", "record_type": "REQUEST", "is_error": false, "level": "INFO", "timestamp": "2026-11-10T16:20:01.104Z", "run_id": "619e2bb3-924c-4b4d-a07d-a28560cace8b", "operator": "alice", "test_id": "PF-03", "suite": "PREFLIGHT", "action": "GoogleAdsService.search", "target_customer_id": "1234567890", "login_customer_id": "9876543210", "api_version": "v26", "payload": {"query": "SELECT customer.id, customer.test_account FROM customer LIMIT 1"}, "service": "GoogleAdsService", "method": "search"}
+{"record_id": "0b0a420a-df1e-4fec-9b80-3b9186f1da13", "record_type": "REQUEST", "is_error": false, "level": "INFO", "timestamp": "2026-11-10T16:20:01.104Z", "run_id": "619e2bb3-924c-4b4d-a07d-a28560cace8b", "operator": "alice", "test_id": "PF-03", "suite": "PREFLIGHT", "action": "GoogleAdsService.search", "target_customer_id": "1234567890", "login_customer_id": "9876543210", "api_version": "<api_version>", "payload": {"query": "SELECT customer.id, customer.test_account FROM customer LIMIT 1"}, "service": "GoogleAdsService", "method": "search"}
 {"record_id": "84c91d52-3b18-4a77-8d12-90f312ab4401", "record_type": "RESPONSE", "request_record_id": "0b0a420a-df1e-4fec-9b80-3b9186f1da13", "is_error": false, "level": "INFO", "timestamp": "2026-11-10T16:20:01.289Z", "run_id": "619e2bb3-924c-4b4d-a07d-a28560cace8b", "operator": "alice", "test_id": "PF-03", "suite": "PREFLIGHT", "status": "OK", "duration_ms": 185.2, "google_ads_request_id": "ReqId987654", "payload": {"test_account": true}}
 ```
 
@@ -1292,7 +1294,7 @@ The assistant and its test suites produce **three append-only JSON Lines (`.json
   },
   "request": {
     "method": "mutate_campaign_budgets",
-    "api_version": "v26",
+    "api_version": "<api_version>",
     "gcp_project_number": "123456789012",
     "login_customer_id": "9876543210",
     "payload": {"customer_id": "1234567890", "validate_only": true, "operations": []}

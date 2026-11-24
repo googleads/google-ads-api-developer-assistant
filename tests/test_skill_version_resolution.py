@@ -41,6 +41,18 @@ from unittest import mock
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+TESTS_DIR = pathlib.Path(__file__).resolve().parent
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
+from api_version_utils import (  # noqa: E402
+    CURRENT_API_VERSION,
+    NEXT_API_VERSION,
+    OLDER_API_VERSION,
+    PREVIOUS_API_NUMBER,
+    PREVIOUS_API_VERSION,
+    offset_api_version,
+)
+
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "google-ads-api-developer-assistant"
 SKILLS = PLUGIN_ROOT / "skills"
 
@@ -217,33 +229,36 @@ def test_unresolvable_version_raises_value_error_not_traceback(sandbox, rel):
 
 @pytest.mark.parametrize("rel", sorted(RESOLVER_SCRIPTS))
 def test_highest_local_client_libs_version_used_without_sdk(sandbox, rel):
-    _add_client_libs(sandbox, "v29", "v31", "v30")
-    assert _resolve(sandbox, rel) == {"ok": "v31"}
+    v_a, v_b, v_c = offset_api_version(3), offset_api_version(5), offset_api_version(4)
+    _add_client_libs(sandbox, v_a, v_b, v_c)
+    assert _resolve(sandbox, rel) == {"ok": v_b}
 
 
 @pytest.mark.parametrize("rel", sorted(RESOLVER_SCRIPTS))
 def test_assistant_config_beats_detection(sandbox, rel):
-    _add_client_libs(sandbox, "v31")
+    v_top = offset_api_version(5)
+    _add_client_libs(sandbox, v_top)
     (sandbox.plugin / "config" / "assistant_config").write_text(
-        'api_version = "v25"\n', encoding="utf-8"
+        f'api_version = "{CURRENT_API_VERSION}"\n', encoding="utf-8"
     )
-    assert _resolve(sandbox, rel) == {"ok": "v25"}
+    assert _resolve(sandbox, rel) == {"ok": CURRENT_API_VERSION}
 
 
 @pytest.mark.parametrize("rel", sorted(RESOLVER_SCRIPTS))
 def test_env_beats_assistant_config_and_is_normalized(sandbox, rel):
-    _add_client_libs(sandbox, "v31")
+    v_top = offset_api_version(5)
+    _add_client_libs(sandbox, v_top)
     (sandbox.plugin / "config" / "assistant_config").write_text(
-        'api_version = "v25"\n', encoding="utf-8"
+        f'api_version = "{CURRENT_API_VERSION}"\n', encoding="utf-8"
     )
-    result = _resolve(sandbox, rel, env={"GOOGLE_ADS_API_VERSION": "24"})
-    assert result == {"ok": "v24"}
+    result = _resolve(sandbox, rel, env={"GOOGLE_ADS_API_VERSION": str(PREVIOUS_API_NUMBER)})
+    assert result == {"ok": PREVIOUS_API_VERSION}
 
 
 @pytest.mark.parametrize("rel", sorted(RESOLVER_SCRIPTS))
-@pytest.mark.parametrize("bad", ["latest", "../../x", "v24beta"])
+@pytest.mark.parametrize("bad", ["latest", "../../x", f"{CURRENT_API_VERSION}beta"])
 def test_invalid_env_value_rejected(sandbox, rel, bad):
-    _add_client_libs(sandbox, "v31")
+    _add_client_libs(sandbox, offset_api_version(5))
     result = _resolve(sandbox, rel, env={"GOOGLE_ADS_API_VERSION": bad})
     assert "error" in result, result
 
@@ -255,27 +270,30 @@ _EXPLICIT_RELS = sorted(
 
 @pytest.mark.parametrize("rel", _EXPLICIT_RELS)
 def test_explicit_version_wins_and_is_validated(sandbox, rel):
-    _add_client_libs(sandbox, "v31")
-    env = {"GOOGLE_ADS_API_VERSION": "24"}
-    assert _resolve(sandbox, rel, explicit="23", env=env) == {"ok": "v23"}
-    assert _resolve(sandbox, rel, explicit=" V22 ", env=env) == {"ok": "v22"}
+    v_top = offset_api_version(5)
+    v_older_num = OLDER_API_VERSION[1:]
+    v_oldest = offset_api_version(-3)
+    _add_client_libs(sandbox, v_top)
+    env = {"GOOGLE_ADS_API_VERSION": str(PREVIOUS_API_NUMBER)}
+    assert _resolve(sandbox, rel, explicit=v_older_num, env=env) == {"ok": OLDER_API_VERSION}
+    assert _resolve(sandbox, rel, explicit=f" {v_oldest.upper()} ", env=env) == {"ok": v_oldest}
     assert "error" in _resolve(sandbox, rel, explicit="../../x", env=env)
 
 
 def test_claude_plugin_root_config_used(sandbox):
     """CLAUDE_PLUGIN_ROOT/config/assistant_config is honored (#16)."""
-    _add_client_libs(sandbox, "v31")
+    _add_client_libs(sandbox, offset_api_version(5))
     claude_root = sandbox.root / "claude_root"
     (claude_root / "config").mkdir(parents=True)
     (claude_root / "config" / "assistant_config").write_text(
-        'api_version = "v27"\n', encoding="utf-8"
+        f'api_version = "{NEXT_API_VERSION}"\n', encoding="utf-8"
     )
     result = _resolve(
         sandbox,
         "inspect-object/scripts/inspect_object.py",
         env={"CLAUDE_PLUGIN_ROOT": str(claude_root)},
     )
-    assert result == {"ok": "v27"}
+    assert result == {"ok": NEXT_API_VERSION}
 
 
 def test_skill_scripts_have_no_private_version_detection():
@@ -295,25 +313,26 @@ def test_skill_scripts_have_no_private_version_detection():
 
 def test_ext_version_modes(sandbox):
     rel = "ext-version/scripts/get_latest_api_version.py"
-    _add_client_libs(sandbox, "v31")
+    v_top = offset_api_version(5)
+    _add_client_libs(sandbox, v_top)
     cfg = sandbox.plugin / "config" / "assistant_config"
-    cfg.write_text('api_version = "v25"\n', encoding="utf-8")
-    env = {"GOOGLE_ADS_API_VERSION": "v24"}
+    cfg.write_text(f'api_version = "{CURRENT_API_VERSION}"\n', encoding="utf-8")
+    env = {"GOOGLE_ADS_API_VERSION": PREVIOUS_API_VERSION}
 
     for flag in ("--active", "--no-update"):
         proc = _run_cli(sandbox, rel, flag, env=env)
         assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.strip() == "v24"
+        assert proc.stdout.strip() == PREVIOUS_API_VERSION
 
     proc = _run_cli(sandbox, rel, "--active")
-    assert proc.stdout.strip() == "v25", proc.stderr
+    assert proc.stdout.strip() == CURRENT_API_VERSION, proc.stderr
 
     proc = _run_cli(sandbox, rel, "--installed", env=env)
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "v31"
+    assert proc.stdout.strip() == v_top
 
     # None of the read-only modes wrote config.
-    assert cfg.read_text(encoding="utf-8") == 'api_version = "v25"\n'
+    assert cfg.read_text(encoding="utf-8") == f'api_version = "{CURRENT_API_VERSION}"\n'
 
 
 def test_ext_version_active_without_any_version_exits_cleanly(sandbox):
@@ -588,3 +607,29 @@ def test_commands_and_rules_use_new_path_pattern_and_optional_version():
             assert '--api_version "<api_version>"' not in text, md
     ext = (PLUGIN_ROOT / "commands" / "ext-version.md").read_text(encoding="utf-8")
     assert 'get_latest_api_version.py" --active' in ext
+
+
+def test_no_static_api_versions_in_plugin_or_tests():
+    """Ensures no hardcoded static Google Ads API version is used in plugin code or tests."""
+    static_ver_literal_re = re.compile(
+        r"""(?:["'][vV](?:1[5-9]|2[0-9]|3[0-9])["']"""
+        r"""|googleads\.googleapis\.com/v(?:1[5-9]|2[0-9]|3[0-9])/"""
+        r"""|google\.ads\.googleads\.v(?:1[5-9]|2[0-9]|3[0-9])\.services"""
+        r"""|api_version\s*=\s*["']v?(?:1[5-9]|2[0-9]|3[0-9])["'])"""
+    )
+    skip_dirs = {"client_libs", "saved", "__pycache__"}
+    offenders: list[str] = []
+    for base in (PLUGIN_ROOT, REPO_ROOT / "tests"):
+        for path in sorted(base.rglob("*")):
+            if any(part in skip_dirs for part in path.parts) or not path.is_file():
+                continue
+            if path.suffix not in {".py", ".sh", ".ps1", ".json", ".md", ".yaml", ".yml", ""}:
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for idx, line in enumerate(content.splitlines(), 1):
+                if static_ver_literal_re.search(line):
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{idx}: {line.strip()}")
+    assert not offenders, "Static Google Ads API version literals found:\n" + "\n".join(offenders)

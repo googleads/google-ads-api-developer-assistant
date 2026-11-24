@@ -37,6 +37,15 @@ from typing import Any
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+TESTS_DIR = Path(__file__).resolve().parent
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
+from api_version_utils import (  # noqa: E402
+    CURRENT_API_VERSION,
+    PREVIOUS_API_NUMBER,
+    PREVIOUS_API_VERSION,
+)
+
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "google-ads-api-developer-assistant"
 SCRIPTS_DIR = PLUGIN_ROOT / "skills" / "execute-mutation" / "scripts"
 RUN_MUTATION_PATH = SCRIPTS_DIR / "run_mutation.py"
@@ -126,7 +135,7 @@ class _Details:
         self.method = method
 
 
-_LABEL_METHOD = "/google.ads.googleads.v24.services.LabelService/MutateLabels"
+_LABEL_METHOD = f"/google.ads.googleads.{CURRENT_API_VERSION}.services.LabelService/MutateLabels"
 
 
 def test_layer4_records_failed_rpc_returned_by_continuation(rm: Any) -> None:
@@ -284,7 +293,7 @@ def test_layer4_patches_grpc_aio_channels(rm: Any, tmp_path: Path) -> None:
 def test_bare_true_line_does_not_enable_flags(rm: Any, fn_name: str, key: str) -> None:
     fn = getattr(rm, fn_name)
     # Valid TOML where the bare `true` is only a string value elsewhere.
-    assert fn('api_version = "v24"\nnote = """\ntrue\n"""\n') is None
+    assert fn(f'api_version = "{CURRENT_API_VERSION}"\nnote = """\ntrue\n"""\n') is None
     assert fn(f"{key} = false\nnote = '''\ntrue\n'''\n") is False
     assert fn(f"{key} = true\n") is True
     assert fn(f"[section]\n{key} = true\n") is None  # not top-level
@@ -690,9 +699,9 @@ def test_create_scripts_use_shared_resolver(script: str, monkeypatch: pytest.Mon
     assert not hasattr(mod, "_resolve_default_api_version")
     cfg = mod._load_config_init()
     assert hasattr(cfg, "resolve_active_api_version")
-    monkeypatch.setenv("GOOGLE_ADS_API_VERSION", "24")
-    assert mod._normalize_api_version(None) == "v24"
-    assert mod._normalize_api_version("v25") == "v25"
+    monkeypatch.setenv("GOOGLE_ADS_API_VERSION", str(PREVIOUS_API_NUMBER))
+    assert mod._normalize_api_version(None) == PREVIOUS_API_VERSION
+    assert mod._normalize_api_version(CURRENT_API_VERSION) == CURRENT_API_VERSION
     monkeypatch.setenv("GOOGLE_ADS_API_VERSION", "../../x")
     with pytest.raises(ValueError):
         mod._normalize_api_version(None)

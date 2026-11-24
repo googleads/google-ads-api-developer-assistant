@@ -25,6 +25,7 @@ import pytest
 PLUGIN_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../plugins/google-ads-api-developer-assistant")
 )
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PLUGIN_ROOT)
 sys.path.insert(0, os.path.join(PLUGIN_ROOT, "skills/inspect-object/scripts"))
 sys.path.insert(0, os.path.join(PLUGIN_ROOT, "skills/validate-gaql/scripts"))
@@ -45,6 +46,16 @@ import server  # noqa: E402
 import sync_client_libs  # noqa: E402
 import troubleshoot_conversions  # noqa: E402
 import validate_conversion_upload  # noqa: E402
+from api_version_utils import (  # noqa: E402
+    CURRENT_API_NUMBER,
+    CURRENT_API_VERSION,
+    FUTURE_API_VERSION,
+    NEXT_API_VERSION,
+    OLDER_API_VERSION,
+    PREVIOUS_API_NUMBER,
+    PREVIOUS_API_VERSION,
+    offset_api_version,
+)
 import validate_gaql  # noqa: E402
 
 
@@ -55,7 +66,7 @@ class TestValidateGAQL:
         with pytest.raises(SystemExit) as exc_info:
             validate_gaql.validate_gaql(
                 customer_id="1234567890",
-                api_version="v25",
+                api_version=CURRENT_API_VERSION,
                 query="",
             )
         assert exc_info.value.code == 1
@@ -66,7 +77,7 @@ class TestValidateGAQL:
         with pytest.raises(SystemExit) as exc_info:
             validate_gaql.validate_gaql(
                 customer_id="1234567890",
-                api_version="v25",
+                api_version=CURRENT_API_VERSION,
                 query="SELECT campaign.id FROM campaign WHERE campaign.id = 1 OR campaign.id = 2",
             )
         assert exc_info.value.code == 1
@@ -77,7 +88,7 @@ class TestValidateGAQL:
         with pytest.raises(SystemExit) as exc_info:
             validate_gaql.validate_gaql(
                 customer_id="1234567890",
-                api_version="v25",
+                api_version=CURRENT_API_VERSION,
                 query="SELECT COUNT(campaign.id) FROM campaign",
             )
         assert exc_info.value.code == 1
@@ -88,7 +99,7 @@ class TestValidateGAQL:
         with pytest.raises(SystemExit) as exc_info:
             validate_gaql.validate_gaql(
                 customer_id="1234567890",
-                api_version="v25",
+                api_version=CURRENT_API_VERSION,
                 query="SELECT campaign.id FROM campaign WHERE segments.date = CURRENT_DATE()",
             )
         assert exc_info.value.code == 1
@@ -99,7 +110,7 @@ class TestValidateGAQL:
         with pytest.raises(SystemExit) as exc_info:
             validate_gaql.validate_gaql(
                 customer_id="1234567890",
-                api_version="v25",
+                api_version=CURRENT_API_VERSION,
                 query="SELECT campaign.id, segments.date FROM campaign WHERE campaign.status = 'ENABLED'",
             )
         assert exc_info.value.code == 1
@@ -110,7 +121,7 @@ class TestValidateGAQL:
         with pytest.raises(SystemExit) as exc_info:
             validate_gaql.validate_gaql(
                 customer_id="1234567890",
-                api_version="v25",
+                api_version=CURRENT_API_VERSION,
                 query="SELECT click_view.gclid FROM click_view WHERE segments.date DURING LAST_30_DAYS",
             )
         assert exc_info.value.code == 1
@@ -121,7 +132,7 @@ class TestValidateGAQL:
         with pytest.raises(SystemExit) as exc_info:
             validate_gaql.validate_gaql(
                 customer_id="1234567890",
-                api_version="v25",
+                api_version=CURRENT_API_VERSION,
                 query="SELECT change_status.resource_name FROM change_status",
             )
         assert exc_info.value.code == 1
@@ -132,7 +143,7 @@ class TestValidateGAQL:
         with pytest.raises(SystemExit) as exc_info:
             validate_gaql.validate_gaql(
                 customer_id="1234567890",
-                api_version="v25",
+                api_version=CURRENT_API_VERSION,
                 query="SELECT name FROM google_ads_field",
             )
         assert exc_info.value.code == 1
@@ -143,7 +154,7 @@ class TestValidateGAQL:
         with pytest.raises(SystemExit) as exc_info:
             validate_gaql.validate_gaql(
                 customer_id="1234567890",
-                api_version="v25",
+                api_version=CURRENT_API_VERSION,
                 query="SELECT campaign.id, segments.hour_of_day FROM campaign WHERE segments.date DURING LAST_30_DAYS",
             )
         assert exc_info.value.code == 1
@@ -154,7 +165,7 @@ class TestValidateGAQL:
         mock_client.get_service.return_value.search.return_value = []
         validate_gaql.validate_gaql(
             customer_id="1234567890",
-            api_version="v26",
+            api_version=CURRENT_API_VERSION,
             query="SELECT campaign.id, segments.hour FROM campaign WHERE segments.date DURING LAST_30_DAYS",
             client=mock_client,
             use_cache=False,
@@ -169,7 +180,7 @@ class TestValidateGAQL:
 
         validate_gaql.validate_gaql(
             customer_id="1234567890",
-            api_version="v25",
+            api_version=CURRENT_API_VERSION,
             query="SELECT campaign.id, campaign.name FROM campaign WHERE segments.date DURING LAST_30_DAYS",
             client=mock_client,
         )
@@ -183,7 +194,7 @@ class TestInspectObject:
 
     @pytest.fixture(autouse=True)
     def setup_types(self, tmp_path):
-        self.types = inspect_object.get_available_types("v25")
+        self.types = inspect_object.get_available_types(CURRENT_API_VERSION)
         if not self.types:
             # Hermetic fallback for clean test environments without cloned client_libs
             sample_file = tmp_path / "campaign_types.py"
@@ -255,7 +266,7 @@ class TestInspectObject:
         mock_obj.DESCRIPTOR = mock_descriptor
         mock_client.get_type.return_value = mock_obj
 
-        inspect_object.inspect_protobuf("Campaign", "v25", client=mock_client)
+        inspect_object.inspect_protobuf("Campaign", CURRENT_API_VERSION, client=mock_client)
         captured = capsys.readouterr()
         assert "=== Message: Campaign ===" in captured.out
         assert "test_field" in captured.out
@@ -317,7 +328,7 @@ class TestGetCidsUnderMCC:
     def test_invalid_customer_id(self, capsys):
         mock_client = MagicMock()
         with pytest.raises(SystemExit) as exc_info:
-            get_cids_under_mcc.get_cids_under_mcc("invalid_id", "v25", client=mock_client)
+            get_cids_under_mcc.get_cids_under_mcc("invalid_id", CURRENT_API_VERSION, client=mock_client)
         assert exc_info.value.code == 1
 
     def test_mock_search_stream_results(self):
@@ -341,7 +352,7 @@ class TestGetCidsUnderMCC:
         mock_service.search_stream.return_value = [batch]
 
         results = get_cids_under_mcc.get_cids_under_mcc(
-            customer_id="1234567890", api_version="v25", client=mock_client
+            customer_id="1234567890", api_version=CURRENT_API_VERSION, client=mock_client
         )
         assert len(results) == 2
         assert results[0] == ("1111111111", 1, True)
@@ -445,7 +456,7 @@ class TestCreatePMaxWebpageFilter:
             customer_id="1234567890",
             asset_group_id="999",
             url_exclusion="example.com/checkout",
-            api_version="v25",
+            api_version=CURRENT_API_VERSION,
             client=mock_client,
             validate_only=True,
         )
@@ -464,7 +475,7 @@ class TestValidateConversionUpload:
     def test_nonexistent_file(self, capsys):
         with pytest.raises(SystemExit) as exc_info:
             validate_conversion_upload.validate_conversion_csv(
-                "/nonexistent/path/conversions.csv", "v25"
+                "/nonexistent/path/conversions.csv", CURRENT_API_VERSION
             )
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
@@ -475,7 +486,7 @@ class TestValidateConversionUpload:
         csv_file.write_text("gclid,conversion_time\nabcdef12345,2026-08-19 12:00:00-04:00\n", encoding="utf-8")
 
         with pytest.raises(SystemExit) as exc_info:
-            validate_conversion_upload.validate_conversion_csv(str(csv_file), "v25")
+            validate_conversion_upload.validate_conversion_csv(str(csv_file), CURRENT_API_VERSION)
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Missing required CSV headers" in captured.err
@@ -489,7 +500,7 @@ class TestValidateConversionUpload:
         )
         csv_file.write_text(csv_content, encoding="utf-8")
 
-        validate_conversion_upload.validate_conversion_csv(str(csv_file), "v25")
+        validate_conversion_upload.validate_conversion_csv(str(csv_file), CURRENT_API_VERSION)
         captured = capsys.readouterr()
         assert "SUCCESS: Conversion Upload CSV parsed cleanly" in captured.out
 
@@ -502,7 +513,7 @@ class TestValidateConversionUpload:
         csv_file.write_text(csv_content, encoding="utf-8")
 
         with pytest.raises(SystemExit) as exc_info:
-            validate_conversion_upload.validate_conversion_csv(str(csv_file), "v25")
+            validate_conversion_upload.validate_conversion_csv(str(csv_file), CURRENT_API_VERSION)
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Invalid conversion_time format" in captured.out or "GCLID is too short" in captured.out
@@ -575,12 +586,12 @@ class TestExtVersion:
 
     def test_detect_latest_api_version_from_dir(self, tmp_path):
         dummy_dir = tmp_path / "googleads"
-        (dummy_dir / "v23").mkdir(parents=True)
-        (dummy_dir / "v24").mkdir(parents=True)
-        (dummy_dir / "v26").mkdir(parents=True)
+        (dummy_dir / OLDER_API_VERSION).mkdir(parents=True)
+        (dummy_dir / PREVIOUS_API_VERSION).mkdir(parents=True)
+        (dummy_dir / CURRENT_API_VERSION).mkdir(parents=True)
         with patch("os.path.abspath", side_effect=lambda p: str(dummy_dir) if "googleads" in p else p):
             ver = get_latest_api_version.detect_latest_api_version()
-            assert ver == "v26"
+            assert ver == CURRENT_API_VERSION
 
     def test_detect_latest_api_version_updates_assistant_config_automatically(
         self, tmp_path, monkeypatch
@@ -591,35 +602,36 @@ class TestExtVersion:
         cfg_dir = work_dir / "config"
         cfg_dir.mkdir(parents=True)
         cfg_file = cfg_dir / "assistant_config"
+        v_plus3 = offset_api_version(3)
         cfg_file.write_text(
-            'api_version = "v23"\ncustomer_id = "9998887776"\nexecute_mutates = true\n',
+            f'api_version = "{OLDER_API_VERSION}"\ncustomer_id = "9998887776"\nexecute_mutates = true\n',
             encoding="utf-8",
         )
 
         googleads_dir = (
             work_dir / "client_libs" / "google-ads-python" / "google" / "ads" / "googleads"
         )
-        for v in ("v23", "v25", "v28"):
+        for v in (OLDER_API_VERSION, CURRENT_API_VERSION, FUTURE_API_VERSION):
             (googleads_dir / v).mkdir(parents=True)
 
         monkeypatch.chdir(work_dir)
         ver = get_latest_api_version.detect_latest_api_version(
             update_config=True, config_dir=str(cfg_dir)
         )
-        assert ver == "v28"
+        assert ver == FUTURE_API_VERSION
         parsed = config_init.parse_assistant_config(cfg_file.read_text(encoding="utf-8"))
-        assert parsed["api_version"] == "v28"
+        assert parsed["api_version"] == FUTURE_API_VERSION
         assert parsed["customer_id"] == "9998887776"
         assert parsed["execute_mutates"] is True
 
         # Also verify config_init.sync_api_version automatically updates config/assistant_config
-        (googleads_dir / "v29").mkdir(parents=True)
+        (googleads_dir / v_plus3).mkdir(parents=True)
         synced_ver = config_init.sync_api_version(config_dir=str(cfg_dir))
-        assert synced_ver == "v29"
+        assert synced_ver == v_plus3
         parsed_after = config_init.parse_assistant_config(
             cfg_file.read_text(encoding="utf-8")
         )
-        assert parsed_after["api_version"] == "v29"
+        assert parsed_after["api_version"] == v_plus3
         assert parsed_after["customer_id"] == "9998887776"
         assert parsed_after["execute_mutates"] is True
 
@@ -638,12 +650,12 @@ class TestExtVersion:
         from config import config_init
 
         stale_libs = tmp_path / "stale_libs" / "google" / "ads" / "googleads"
-        (stale_libs / "v24").mkdir(parents=True)
-        (stale_libs / "v25").mkdir(parents=True)
+        (stale_libs / OLDER_API_VERSION).mkdir(parents=True)
+        (stale_libs / PREVIOUS_API_VERSION).mkdir(parents=True)
 
         newer_pkg = tmp_path / "site_pkg" / "google" / "ads" / "googleads"
-        (newer_pkg / "v25").mkdir(parents=True)
-        (newer_pkg / "v27").mkdir(parents=True)
+        (newer_pkg / PREVIOUS_API_VERSION).mkdir(parents=True)
+        (newer_pkg / NEXT_API_VERSION).mkdir(parents=True)
 
         fake_mod = MagicMock()
         fake_mod.__path__ = [str(newer_pkg)]
@@ -652,8 +664,8 @@ class TestExtVersion:
         with patch("os.path.abspath", return_value=str(stale_libs)), \
              patch("os.path.expanduser", return_value=str(stale_libs)), \
              patch.dict("sys.modules", {"google.ads.googleads": fake_mod}):
-            assert config_init.detect_latest_api_version() == "v27"
-            assert get_latest_api_version.detect_latest_api_version() == "v27"
+            assert config_init.detect_latest_api_version() == NEXT_API_VERSION
+            assert get_latest_api_version.detect_latest_api_version() == NEXT_API_VERSION
 
     def test_sync_and_set_config_kv_auto_advances_stale_api_version_in_assistant_config(
         self, tmp_path, monkeypatch
@@ -666,17 +678,17 @@ class TestExtVersion:
         cfg_dir.mkdir(parents=True)
         cfg_file = cfg_dir / "assistant_config"
         cfg_file.write_text(
-            'api_version = "v24"\ncustomer_id = "1112223334"\nexecute_mutates = true\n',
+            f'api_version = "{OLDER_API_VERSION}"\ncustomer_id = "1112223334"\nexecute_mutates = true\n',
             encoding="utf-8",
         )
 
-        monkeypatch.setattr(config_init, "detect_latest_api_version", lambda: "v26")
+        monkeypatch.setattr(config_init, "detect_latest_api_version", lambda: CURRENT_API_VERSION)
         config_init.sync_and_set_config_kv(
             source_yaml=str(src_yaml),
             config_dir=str(cfg_dir),
         )
         parsed = config_init.parse_assistant_config(cfg_file.read_text(encoding="utf-8"))
-        assert parsed["api_version"] == "v26"
+        assert parsed["api_version"] == CURRENT_API_VERSION
         assert parsed["customer_id"] == "1112223334"
         assert parsed["execute_mutates"] is True
 
@@ -774,9 +786,9 @@ class TestExtVersion:
 
         # If configured in assistant_config, that takes precedence
         cfg_file = tmp_path / "assistant_config"
-        cfg_file.write_text('api_version = "v26"\n', encoding="utf-8")
+        cfg_file.write_text(f'api_version = "{CURRENT_API_VERSION}"\n', encoding="utf-8")
         v = config_init.determine_api_version(config_dir=str(tmp_path))
-        assert v == "v26"
+        assert v == CURRENT_API_VERSION
 
     def test_check_python_client_lib_parity_pypi_and_table(self, tmp_path, monkeypatch):
         from config import config_init
@@ -889,8 +901,8 @@ class TestSidecarA2A:
     """Unit tests for A2A sidecar task handlers."""
 
     def test_get_effective_api_version(self):
-        ver = server.get_effective_api_version({"api_version": "v25"})
-        assert ver == "v25"
+        ver = server.get_effective_api_version({"api_version": CURRENT_API_VERSION})
+        assert ver == CURRENT_API_VERSION
 
     def test_gaql_validate_success(self):
         handler = server.A2AHandler.__new__(server.A2AHandler)
@@ -898,7 +910,7 @@ class TestSidecarA2A:
             "task-1",
             {
                 "query": "SELECT campaign.id, campaign.name FROM campaign WHERE segments.date DURING LAST_30_DAYS",
-                "api_version": "v25",
+                "api_version": CURRENT_API_VERSION,
             },
         )
         assert res["status"] == "COMPLETED"
@@ -910,7 +922,7 @@ class TestSidecarA2A:
             "task-2",
             {
                 "query": "SELECT campaign.id FROM campaign WHERE campaign.id = 1 OR campaign.id = 2",
-                "api_version": "v25",
+                "api_version": CURRENT_API_VERSION,
             },
         )
         assert res["status"] == "VALIDATION_FAILED"
@@ -922,7 +934,7 @@ class TestSidecarA2A:
             "task-3",
             {
                 "query": "SELECT campaign.id, segments.hour_of_day FROM campaign WHERE segments.date DURING LAST_30_DAYS",
-                "api_version": "v25",
+                "api_version": CURRENT_API_VERSION,
             },
         )
         assert res["status"] == "VALIDATION_FAILED"
@@ -932,7 +944,7 @@ class TestSidecarA2A:
             "task-3b",
             {
                 "query": "SELECT campaign.id, segments.hour FROM campaign WHERE segments.date DURING LAST_30_DAYS",
-                "api_version": "v26",
+                "api_version": CURRENT_API_VERSION,
             },
         )
         assert res_ok["status"] == "COMPLETED"
@@ -940,7 +952,7 @@ class TestSidecarA2A:
     def test_inspect_object_task(self):
         handler = server.A2AHandler.__new__(server.A2AHandler)
         res = handler.handle_inspect_object(
-            "task-4", {"resource_name": "Campaign", "api_version": "v25"}
+            "task-4", {"resource_name": "Campaign", "api_version": CURRENT_API_VERSION}
         )
         assert res["status"] == "COMPLETED"
         assert res["result"]["resource"] == "Campaign"
@@ -952,7 +964,7 @@ class TestSidecarA2A:
             {
                 "user_prompt": "Fetch campaign metrics",
                 "customer_id": "1234567890",
-                "api_version": "v25",
+                "api_version": CURRENT_API_VERSION,
             },
         )
         assert res["status"] == "COMPLETED"
@@ -963,19 +975,19 @@ class TestSidecarA2A:
         handler = server.A2AHandler.__new__(server.A2AHandler)
         mock_client = MagicMock()
         mock_client.get_service.return_value.search_stream.return_value = []
-        with patch("server.get_effective_api_version", return_value="v25"):
+        with patch("server.get_effective_api_version", return_value=CURRENT_API_VERSION):
             res = handler.handle_troubleshoot_conversions(
                 "task-6",
                 {
                     "customer_id": "1234567890",
-                    "api_version": "v25",
+                    "api_version": CURRENT_API_VERSION,
                     "client": mock_client,
                     "output_dir": str(tmp_path),
                 },
             )
         assert res["status"] == "COMPLETED"
         assert "diagnostics" in res["result"]
-        assert res["result"]["api_version"] == "v25"
+        assert res["result"]["api_version"] == CURRENT_API_VERSION
 
     def test_sidecar_health_check(self):
         handler = server.A2AHandler.__new__(server.A2AHandler)
@@ -1365,7 +1377,7 @@ class TestSidecarA2A:
         cfg_dir = work_dir / "config"
         cfg_dir.mkdir(parents=True)
         (cfg_dir / "assistant_config").write_text(
-            'api_version = "v25"\ncustomer_id = "7778889990"\nexecute_mutates = false\n',
+            f'api_version = "{CURRENT_API_VERSION}"\ncustomer_id = "7778889990"\nexecute_mutates = false\n',
             encoding="utf-8",
         )
 
@@ -1405,25 +1417,25 @@ class TestSidecarA2A:
 
         # Simulate v4.0.0 legacy files (customer_id and api_version.txt)
         (cfg_dir / "customer_id").write_text("9998887776\n", encoding="utf-8")
-        (cfg_dir / "api_version.txt").write_text("v24\n", encoding="utf-8")
+        (cfg_dir / "api_version.txt").write_text(f"{PREVIOUS_API_VERSION}\n", encoding="utf-8")
 
         # 1. Before assistant_config exists, getters should resolve from v4.0.0 files
         assert cfg_init.get_configured_customer_id(config_dir=str(cfg_dir)) == "9998887776"
-        assert cfg_init.get_configured_api_version(config_dir=str(cfg_dir)) == "v24"
+        assert cfg_init.get_configured_api_version(config_dir=str(cfg_dir)) == PREVIOUS_API_VERSION
 
         # 2. Even if assistant_config is seeded with the default 12345678 placeholder,
         # legacy customer_id != 12345678 must not be shadowed
         (cfg_dir / "assistant_config").write_text(
-            'api_version = "v25"\ncustomer_id = "12345678"\nexecute_mutates = false\n',
+            f'api_version = "{CURRENT_API_VERSION}"\ncustomer_id = "12345678"\nexecute_mutates = false\n',
             encoding="utf-8",
         )
         assert cfg_init.get_configured_customer_id(config_dir=str(cfg_dir)) == "9998887776"
 
         # 3. Calling write_assistant_config migrates the legacy customer_id into assistant_config
-        cfg_init.write_assistant_config({"api_version": "v25"}, config_dir=str(cfg_dir))
+        cfg_init.write_assistant_config({"api_version": CURRENT_API_VERSION}, config_dir=str(cfg_dir))
         parsed = cfg_init.read_assistant_config(config_dir=str(cfg_dir))
         assert parsed["customer_id"] == "9998887776"
-        assert parsed["api_version"] == "v25"
+        assert parsed["api_version"] == CURRENT_API_VERSION
 
 
 class TestAdditionalSkillCoverage:
@@ -1438,7 +1450,7 @@ class TestAdditionalSkillCoverage:
         with pytest.raises(SystemExit) as exc_info:
             validate_gaql.validate_gaql(
                 customer_id="1234567890",
-                api_version="v25",
+                api_version=CURRENT_API_VERSION,
                 query="SELECT campaign.id FROM campaign",
                 client=mock_client,
             )
@@ -1514,14 +1526,14 @@ class TestAdditionalSkillCoverage:
         cfg_dir.mkdir(parents=True)
 
         lib_dir = work_dir / "client_libs" / "google-ads-python"
-        for ver in ("v23", "v25", "v27"):
+        for ver in (OLDER_API_VERSION, CURRENT_API_VERSION, NEXT_API_VERSION):
             (lib_dir / "google" / "ads" / "googleads" / ver).mkdir(parents=True)
 
         monkeypatch.chdir(work_dir)
         latest = sync_client_libs.update_api_version_cache_if_needed(str(lib_dir))
-        assert latest == "v27"
+        assert latest == NEXT_API_VERSION
         cfg_content = (cfg_dir / "assistant_config").read_text(encoding="utf-8")
-        assert 'api_version = "v27"' in cfg_content
+        assert f'api_version = "{NEXT_API_VERSION}"' in cfg_content
         assert 'customer_id = "12345678"' in cfg_content
         assert "execute_mutates = false" in cfg_content
 
@@ -2532,25 +2544,25 @@ class TestSyncClientLibsExtended:
         cfg_dir.mkdir(parents=True)
         cfg_file = cfg_dir / "assistant_config"
         cfg_file.write_text(
-            'api_version = "v24"\ncustomer_id = "1122334455"\nexecute_mutates = true\nenabled = true\n',
+            f'api_version = "{OLDER_API_VERSION}"\ncustomer_id = "1122334455"\nexecute_mutates = true\nenabled = true\n',
             encoding="utf-8",
         )
         legacy_txt = cfg_dir / "api_version.txt"
-        legacy_txt.write_text("v24\n", encoding="utf-8")
+        legacy_txt.write_text(f"{OLDER_API_VERSION}\n", encoding="utf-8")
 
         lib_dir = work_dir / "client_libs" / "google-ads-python"
-        (lib_dir / "google" / "ads" / "googleads" / "v26").mkdir(parents=True)
-        (lib_dir / "google" / "ads" / "googleads" / "v28").mkdir(parents=True)
+        (lib_dir / "google" / "ads" / "googleads" / CURRENT_API_VERSION).mkdir(parents=True)
+        (lib_dir / "google" / "ads" / "googleads" / FUTURE_API_VERSION).mkdir(parents=True)
 
         monkeypatch.chdir(work_dir)
         updated_v = sync_client_libs.update_api_version_cache_if_needed(str(lib_dir))
-        assert updated_v == "v28"
+        assert updated_v == FUTURE_API_VERSION
         new_cfg = cfg_file.read_text(encoding="utf-8")
-        assert 'api_version = "v28"' in new_cfg
+        assert f'api_version = "{FUTURE_API_VERSION}"' in new_cfg
         assert 'customer_id = "1122334455"' in new_cfg
         assert "execute_mutates = true" in new_cfg
         assert "enabled = true" in new_cfg
-        assert legacy_txt.read_text(encoding="utf-8").strip() == "v28"
+        assert legacy_txt.read_text(encoding="utf-8").strip() == FUTURE_API_VERSION
 
         # Test fetch_latest_pypi_python_version cache hit and force refresh
         monkeypatch.setattr(sync_client_libs.tempfile, "gettempdir", lambda: str(tmp_path))
@@ -2635,7 +2647,7 @@ class TestSyncClientLibsExtended:
         monkeypatch.setattr(
             sync_client_libs,
             "update_api_version_cache_if_needed",
-            lambda path: "v26",
+            lambda path: CURRENT_API_VERSION,
         )
 
         # Create a fake client_libs dir with an outdated google-ads-python and google-ads-php
@@ -2696,7 +2708,7 @@ class TestSyncClientLibsExtended:
             / "Ads"
             / "GoogleAds"
             / "Lib"
-            / "V26"
+            / CURRENT_API_VERSION.upper()
             / "GapicClientTrait.php"
         )
         trait_file.parent.mkdir(parents=True)
@@ -2861,26 +2873,27 @@ class TestSyncClientLibsExtended:
         work_root = tmp_path / "toml_fb_work"
         cfg_dir = work_root / "config"
         lib_py = work_root / "client_libs" / "google-ads-python"
-        (lib_py / "google" / "ads" / "googleads" / "v29").mkdir(parents=True)
+        v_plus3 = offset_api_version(3)
+        (lib_py / "google" / "ads" / "googleads" / v_plus3).mkdir(parents=True)
         cfg_dir.mkdir(parents=True)
         cfg_path = cfg_dir / "assistant_config"
         cfg_path.write_text(
             'customer_id = "9988776655"\nexecute_mutates = true\nenabled = false\nbroken = [\n',
             encoding="utf-8",
         )
-        assert scl.update_api_version_cache_if_needed(str(lib_py)) == "v29"
+        assert scl.update_api_version_cache_if_needed(str(lib_py)) == v_plus3
         repaired_cfg = cfg_path.read_text(encoding="utf-8")
-        assert 'api_version = "v29"' in repaired_cfg
+        assert f'api_version = "{v_plus3}"' in repaired_cfg
         assert 'customer_id = "9988776655"' in repaired_cfg
         assert "execute_mutates = true" in repaired_cfg
         assert "enabled = false" in repaired_cfg
 
         cfg_path.write_text(
-            'api_version = "v25"\ncustomer_id = "9988776655"\n'
+            f'api_version = "{PREVIOUS_API_VERSION}"\ncustomer_id = "9988776655"\n'
             'execute_mutates = false\ncustom_flag = true\ncustom_env = "staging"\n',
             encoding="utf-8",
         )
-        assert scl.update_api_version_cache_if_needed(str(lib_py)) == "v29"
+        assert scl.update_api_version_cache_if_needed(str(lib_py)) == v_plus3
         typed_cfg = cfg_path.read_text(encoding="utf-8")
         assert "custom_flag = true" in typed_cfg
         assert 'custom_env = "staging"' in typed_cfg
@@ -3059,7 +3072,7 @@ class TestGetCidsUnderMCCExtended:
         mock_service.search_stream.side_effect = fake_ex
 
         with pytest.raises(SystemExit) as exc_info:
-            get_cids_under_mcc.get_cids_under_mcc("1234567890", "v26", client=mock_client)
+            get_cids_under_mcc.get_cids_under_mcc("1234567890", CURRENT_API_VERSION, client=mock_client)
         assert exc_info.value.code == 1
         err_out = capsys.readouterr().err
         assert "req-999" in err_out
@@ -3082,7 +3095,7 @@ class TestGetCidsUnderMCCExtended:
         monkeypatch.setattr(
             sys,
             "argv",
-            ["get_cids_under_mcc.py", "--customer_id", "123-456-7890", "--api_version", "v26", "--json"],
+            ["get_cids_under_mcc.py", "--customer_id", "123-456-7890", "--api_version", CURRENT_API_VERSION, "--json"],
         )
         get_cids_under_mcc.main()
         json_out = json.loads(capsys.readouterr().out)
@@ -3098,7 +3111,7 @@ class TestGetCidsUnderMCCExtended:
                 "--customer_id",
                 "123-456-7890",
                 "--api_version",
-                "v26",
+                CURRENT_API_VERSION,
                 "--save_csv",
                 "--print_cids",
             ],
@@ -3111,7 +3124,7 @@ class TestGetCidsUnderMCCExtended:
 
         # 3. Interactive prompt when --customer_id is omitted
         monkeypatch.setattr("builtins.input", lambda prompt: "9998887776")
-        monkeypatch.setattr(sys, "argv", ["get_cids_under_mcc.py", "--api_version", "v26"])
+        monkeypatch.setattr(sys, "argv", ["get_cids_under_mcc.py", "--api_version", CURRENT_API_VERSION])
         get_cids_under_mcc.main()
         out_summary = capsys.readouterr().out
         assert "Found 2 child accounts under MCC 9998887776." in out_summary
@@ -3143,7 +3156,7 @@ class TestCreatePMaxAndRecentGclidsExtended:
 
         with pytest.raises(SystemExit) as exc_info:
             create_pmax_webpage_filter.create_pmax_webpage_filter(
-                "1234567890", "999", "/blog", "v26", client=mock_client
+                "1234567890", "999", "/blog", CURRENT_API_VERSION, client=mock_client
             )
         assert exc_info.value.code == 1
         assert "Duplicate listing filter" in capsys.readouterr().out
@@ -3168,7 +3181,7 @@ class TestCreatePMaxAndRecentGclidsExtended:
                 "--url_exclusion",
                 "/promo",
                 "--api_version",
-                "v26",
+                CURRENT_API_VERSION,
                 "--execute",
             ],
         )
@@ -3217,7 +3230,7 @@ class TestCreatePMaxAndRecentGclidsExtended:
         monkeypatch.setattr(
             sys,
             "argv",
-            ["get_recent_gclids.py", "-c", "1234567890", "-v", "v26", "-d", "2026-09-01"],
+            ["get_recent_gclids.py", "-c", "1234567890", "-v", CURRENT_API_VERSION, "-d", "2026-09-01"],
         )
         get_recent_gclids.main()
         assert called == {"cid": "1234567890", "date": "2026-09-01"}
@@ -3347,7 +3360,7 @@ class TestTroubleshootConversionsExtended:
         monkeypatch.setattr(
             sys,
             "argv",
-            ["troubleshoot_conversions.py", "-c", "1234567890", "-v", "v26", "--json"],
+            ["troubleshoot_conversions.py", "-c", "1234567890", "-v", CURRENT_API_VERSION, "--json"],
         )
         troubleshoot_conversions.main()
         assert called_main == {"cid": "1234567890", "json": True}
@@ -3377,7 +3390,7 @@ class TestSitecustomizeAndSidecarExtended:
         yaml_file = tmp_path / "google-ads.yaml"
         yaml_file.write_text("client_id: test\n", encoding="utf-8")
         acfg_file = tmp_path / "assistant_config"
-        acfg_file.write_text('api_version = "v26"\n', encoding="utf-8")
+        acfg_file.write_text(f'api_version = "{CURRENT_API_VERSION}"\n', encoding="utf-8")
         fl_file = tmp_path / "financial_limits"
         fl_file.write_text("[Global]\n", encoding="utf-8")
 
@@ -3404,12 +3417,12 @@ class TestSitecustomizeAndSidecarExtended:
         assert sc_mod._resolve_assistant_config_file("config/financial_limits", "r") == str(custom_fl)
 
     def test_sidecar_version_hierarchy_and_http_error_routes(self, tmp_path, monkeypatch):
-        # 1. Numeric payload normalization ("26" -> "v26")
-        assert server.get_effective_api_version({"api_version": "26"}) == "v26"
+        # 1. Numeric payload normalization ("N" -> "vN")
+        assert server.get_effective_api_version({"api_version": str(CURRENT_API_NUMBER)}) == CURRENT_API_VERSION
 
-        # 2. Environment variable GOOGLE_ADS_API_VERSION ("25" -> "v25")
-        monkeypatch.setenv("GOOGLE_ADS_API_VERSION", "25")
-        assert server.get_effective_api_version({}) == "v25"
+        # 2. Environment variable GOOGLE_ADS_API_VERSION ("N" -> "vN")
+        monkeypatch.setenv("GOOGLE_ADS_API_VERSION", str(PREVIOUS_API_NUMBER))
+        assert server.get_effective_api_version({}) == PREVIOUS_API_VERSION
         monkeypatch.delenv("GOOGLE_ADS_API_VERSION", raising=False)
 
         # 3. GET 404 Not Found
@@ -4036,14 +4049,14 @@ class TestRemainingModulesAbove80Coverage:
         cfg_dir = tmp_path / "cfg_glav"
         cfg_dir.mkdir()
         (cfg_dir / "assistant_config").write_text(
-            'api_version = "v24"\ncustomer_id = "12345678"\nexecute_mutates = true\nenabled = true\n',
+            f'api_version = "{OLDER_API_VERSION}"\ncustomer_id = "12345678"\nexecute_mutates = true\nenabled = true\n',
             encoding="utf-8",
         )
         (cfg_dir / "customer_id.txt").write_text("5556667777\n", encoding="utf-8")
-        updated = get_latest_api_version.update_assistant_config_api_version("26", config_dir=str(cfg_dir))
+        updated = get_latest_api_version.update_assistant_config_api_version(str(CURRENT_API_NUMBER), config_dir=str(cfg_dir))
         assert len(updated) == 1
         written_cfg = (cfg_dir / "assistant_config").read_text(encoding="utf-8")
-        assert 'api_version = "v26"' in written_cfg
+        assert f'api_version = "{CURRENT_API_VERSION}"' in written_cfg
         assert 'customer_id = "5556667777"' in written_cfg
         assert "enabled = true" in written_cfg
         assert get_latest_api_version._extract_version_dirs("") == []
@@ -4060,14 +4073,14 @@ class TestRemainingModulesAbove80Coverage:
             MagicMock(load_from_storage=MagicMock(side_effect=RuntimeError("no yaml"))),
         )
         with pytest.raises(SystemExit):
-            get_cids_under_mcc.get_cids_under_mcc("1234567890", "v26", client=None)
+            get_cids_under_mcc.get_cids_under_mcc("1234567890", CURRENT_API_VERSION, client=None)
 
         bad_client = MagicMock()
         bad_client.get_service.return_value.search_stream.side_effect = RuntimeError("stream crash")
         with pytest.raises(SystemExit):
-            get_cids_under_mcc.get_cids_under_mcc("1234567890", "v26", client=bad_client)
+            get_cids_under_mcc.get_cids_under_mcc("1234567890", CURRENT_API_VERSION, client=bad_client)
 
-        monkeypatch.setattr(sys, "argv", ["get_cids_under_mcc.py", "--api_version", "v26"])
+        monkeypatch.setattr(sys, "argv", ["get_cids_under_mcc.py", "--api_version", CURRENT_API_VERSION])
         monkeypatch.setattr("builtins.input", MagicMock(side_effect=EOFError()))
         with pytest.raises(SystemExit):
             get_cids_under_mcc.main()
@@ -4079,7 +4092,7 @@ class TestRemainingModulesAbove80Coverage:
         monkeypatch.setattr(
             sys,
             "argv",
-            ["get_cids_under_mcc.py", "--customer_id", "1234567890", "--api_version", "v26", "--print_cids"],
+            ["get_cids_under_mcc.py", "--customer_id", "1234567890", "--api_version", CURRENT_API_VERSION, "--print_cids"],
         )
         monkeypatch.setattr(get_cids_under_mcc, "get_cids_under_mcc", lambda cid, ver: [])
         get_cids_under_mcc.main()
@@ -4098,7 +4111,7 @@ class TestRemainingModulesAbove80Coverage:
         )
         with pytest.raises(SystemExit):
             create_pmax_webpage_filter.create_pmax_webpage_filter(
-                "1234567890", "111", "blog", "v26", client=None
+                "1234567890", "111", "blog", CURRENT_API_VERSION, client=None
             )
 
         # 4. get_recent_gclids.py
@@ -4115,7 +4128,7 @@ class TestRemainingModulesAbove80Coverage:
         monkeypatch.setattr(
             sys,
             "argv",
-            ["get_recent_gclids.py", "-c", "1234567890", "-v", "v26"],
+            ["get_recent_gclids.py", "-c", "1234567890", "-v", CURRENT_API_VERSION],
         )
         with pytest.raises(SystemExit):
             get_recent_gclids.main()
@@ -4161,7 +4174,7 @@ class TestRemainingModulesAbove80Coverage:
         monkeypatch.setattr(
             inspect_object, "get_available_types", lambda ver: {"CampaignStatusEnum": str(enum_py)}
         )
-        inspect_object.inspect_protobuf("campaign_status", "v26", client=enum_client)
+        inspect_object.inspect_protobuf("campaign_status", CURRENT_API_VERSION, client=enum_client)
         out_io = capsys.readouterr().out
         assert "Note: Resolved 'campaign_status' -> 'CampaignStatusEnum'" in out_io
         assert "=== Enum: CampaignStatusEnum ===" in out_io
@@ -4175,7 +4188,7 @@ class TestRemainingModulesAbove80Coverage:
         failing_client = MagicMock()
         failing_client.get_type.side_effect = RuntimeError("no type")
         with pytest.raises(SystemExit):
-            inspect_object.inspect_protobuf("EmptyType", "v26", client=failing_client)
+            inspect_object.inspect_protobuf("EmptyType", CURRENT_API_VERSION, client=failing_client)
 
         # --- validate_gaql.py ---
         monkeypatch.setenv("GOOGLE_ADS_CONFIGURATION_FILE_PATH", str(fake_yaml))
@@ -4204,13 +4217,13 @@ class TestRemainingModulesAbove80Coverage:
             "SELECT google_ads_field.name WHERE name = 'campaign.id'",
         ]:
             with pytest.raises(SystemExit):
-                validate_gaql.validate_gaql("1234567890", "v26", bad_q, use_cache=False)
+                validate_gaql.validate_gaql("1234567890", CURRENT_API_VERSION, bad_q, use_cache=False)
 
         # Cached invalid entry branch
         cache_file = tmp_path / "gaql_cache.json"
         validate_gaql.set_cached_validation(
             query="SELECT campaign.id FROM campaign",
-            api_version="v26",
+            api_version=CURRENT_API_VERSION,
             valid=False,
             message="FAILURE: Cached failure",
             cache_path=str(cache_file),
@@ -4218,7 +4231,7 @@ class TestRemainingModulesAbove80Coverage:
         with pytest.raises(SystemExit):
             validate_gaql.validate_gaql(
                 "1234567890",
-                "v26",
+                CURRENT_API_VERSION,
                 "SELECT campaign.id FROM campaign",
                 use_cache=True,
                 cache_path=str(cache_file),
@@ -4231,7 +4244,7 @@ class TestRemainingModulesAbove80Coverage:
         monkeypatch.setattr(
             sys,
             "argv",
-            ["validate_gaql.py", "--customer_id", "1234567890", "--api_version", "v26"],
+            ["validate_gaql.py", "--customer_id", "1234567890", "--api_version", CURRENT_API_VERSION],
         )
         with pytest.raises(SystemExit):
             validate_gaql.main()
@@ -4307,7 +4320,7 @@ class TestRemainingModulesAbove80Coverage:
         )
 
         class _FakeGadsModule(types.ModuleType):
-            versions = ["v25", "v26"]
+            versions = [PREVIOUS_API_VERSION, CURRENT_API_VERSION]
 
             def __dir__(self):
                 return list(self.versions)
@@ -4323,15 +4336,15 @@ class TestRemainingModulesAbove80Coverage:
 
         # Installed google.ads.googleads attribute inspection
         ver = server.get_effective_api_version({})
-        assert ver == "v26"
+        assert ver == CURRENT_API_VERSION
 
         # Interactive tty input and ValueError when google.ads.googleads has no v<N> attrs
         fake_gads_pkg.versions = []
         fake_stdin = MagicMock()
         fake_stdin.isatty.return_value = True
         monkeypatch.setattr(sys, "stdin", fake_stdin)
-        monkeypatch.setattr("builtins.input", lambda _: "25")
-        assert server.get_effective_api_version({}) == "v25"
+        monkeypatch.setattr("builtins.input", lambda _: str(PREVIOUS_API_NUMBER))
+        assert server.get_effective_api_version({}) == PREVIOUS_API_VERSION
 
         fake_stdin.isatty.return_value = False
         with pytest.raises(ValueError):
@@ -4467,17 +4480,17 @@ class TestRemainingModulesAbove80Coverage:
 
         # 2. update_api_version_cache_if_needed with existing assistant_config and api_version.txt
         lib_dir = tmp_path / "a" / "b" / "client_libs" / "google-ads-python"
-        (lib_dir / "google" / "ads" / "googleads" / "v27").mkdir(parents=True)
+        (lib_dir / "google" / "ads" / "googleads" / NEXT_API_VERSION).mkdir(parents=True)
         cfg_dir = tmp_path / "a" / "b" / "config"
         cfg_dir.mkdir(parents=True)
         (cfg_dir / "assistant_config").write_text(
-            'api_version = "v25"\ncustomer_id = "9998887777"\nexecute_mutates = true\nenabled = true\n',
+            f'api_version = "{PREVIOUS_API_VERSION}"\ncustomer_id = "9998887777"\nexecute_mutates = true\nenabled = true\n',
             encoding="utf-8",
         )
-        (cfg_dir / "api_version.txt").write_text("v25\n", encoding="utf-8")
-        assert sync_client_libs.update_api_version_cache_if_needed(str(lib_dir)) == "v27"
-        assert 'api_version = "v27"' in (cfg_dir / "assistant_config").read_text(encoding="utf-8")
-        assert (cfg_dir / "api_version.txt").read_text(encoding="utf-8").strip() == "v27"
+        (cfg_dir / "api_version.txt").write_text(f"{PREVIOUS_API_VERSION}\n", encoding="utf-8")
+        assert sync_client_libs.update_api_version_cache_if_needed(str(lib_dir)) == NEXT_API_VERSION
+        assert f'api_version = "{NEXT_API_VERSION}"' in (cfg_dir / "assistant_config").read_text(encoding="utf-8")
+        assert (cfg_dir / "api_version.txt").read_text(encoding="utf-8").strip() == NEXT_API_VERSION
 
         # 3. fetch_latest_pypi_python_version, check_system_package_parity, upgrade_system_package fallback
         import tempfile
@@ -4618,7 +4631,7 @@ class TestRemainingModulesAbove80Coverage:
         )
         config_init.sync_and_set_config_kv(
             key="api_version",
-            value="v26",
+            value=CURRENT_API_VERSION,
             source_yaml=str(ini_src),
             config_dir=str(sync_dir),
         )
@@ -4684,13 +4697,13 @@ class TestRemainingModulesAbove80Coverage:
         # 5. parse_assistant_config loose fallback & plugin enable/disable manifest toggling
         loose_cfg = config_init.parse_assistant_config(
             "invalid = [toml\n"
-            "api_version: 26\n"
+            f"api_version: {CURRENT_API_NUMBER}\n"
             'customer_id: "7778889999"\n'
             "execute_mutates: true\n"
             "enabled: yes\n"
             "plugin_enabled: off\n"
         )
-        assert loose_cfg["api_version"] == "v26"
+        assert loose_cfg["api_version"] == CURRENT_API_VERSION
         assert loose_cfg["execute_mutates"] is True
         assert loose_cfg["enabled"] is True
         assert loose_cfg["plugin_enabled"] is False
@@ -4761,7 +4774,7 @@ class TestRemainingModulesAbove80Coverage:
         fake_stdin.read.return_value = json.dumps(
             {
                 "tool_input": {
-                    "command": "python3 -c \"GoogleAdsClient.load_from_storage(); GoogleAdsClient.load_from_storage(version='v26')\" ~/google-ads.yaml skills/validate-gaql/scripts/validate_gaql.py"
+                    "command": f"python3 -c \"GoogleAdsClient.load_from_storage(); GoogleAdsClient.load_from_storage(version='{CURRENT_API_VERSION}')\" ~/google-ads.yaml skills/validate-gaql/scripts/validate_gaql.py"
                 }
             }
         )

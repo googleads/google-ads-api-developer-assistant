@@ -26,7 +26,7 @@ Launches an interactive, conversational guide explaining the principles, workflo
    10. Obtaining Descriptions of API Concepts, Protobuf Inspection & Version Parity (`/explain` & `/inspect-object`)
    11. Creating Listing Filters for Performance Max (`/pmax-filter`)
    12. Synchronizing Client Libraries & Assistant Releases (`/sync-client-libs`)
-   13. Extension & Dynamic 5-Tier API Version Resolution (`/ext-version`)
+   13. Extension & Dynamic 4-Step API Version Resolution (`/ext-version`)
    14. Step-by-Step Workflow Breakdown (`/step-by-step`)
    15. Lifecycle Hooks & Deterministic Guardrails (`hooks.json` & `config_init.py`)
    16. Agent-to-Agent (A2A) Sidecar Service & Cross-Workspace Execution

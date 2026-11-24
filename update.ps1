@@ -729,7 +729,7 @@ try {
             } catch {}
         }
         if (-not $HasWorkingPython3 -and (Get-Command "python" -ErrorAction SilentlyContinue)) {
-            foreach ($RelJson in @("hooks.json", "hooks\hooks.json", "mcp_config.json", ".mcp.json", "sidecars\google-ads-a2a-service\sidecar.json")) {
+            foreach ($RelJson in @("hooks.json", "mcp_config.json", ".mcp.json", "sidecars\google-ads-a2a-service\sidecar.json")) {
                 $ManifestPath = Join-Path $TargetPluginDir $RelJson
                 if (Test-Path -LiteralPath $ManifestPath) {
                     $RawJson = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8
@@ -754,6 +754,13 @@ try {
 
     if ($Type -eq "agy") {
         Sync-InstalledPluginDir -TargetPluginDir $AgyPluginTargetDir
+        # Strip Claude-Code-only files from the installed agy copy so `jetski plugin validate` emits 0 warnings
+        foreach ($ClaudeOnly in @(".claude-plugin", ".mcp.json", "hooks", "commands")) {
+            $ClaudeOnlyPath = Join-Path $AgyPluginTargetDir $ClaudeOnly
+            if (Test-Path -LiteralPath $ClaudeOnlyPath) {
+                Remove-Item -Recurse -Force -LiteralPath $ClaudeOnlyPath -ErrorAction SilentlyContinue
+            }
+        }
     }
     elseif ($Type -eq "claude") {
         $ClaudeMarketplaceDir = Join-Path $UserHome ".claude\plugins\google-ads-assistant-local"

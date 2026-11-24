@@ -37,7 +37,16 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = REPO_ROOT / "plugins" / "google-ads-api-developer-assistant"
 sys.path.insert(0, str(PLUGIN_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from api_version_utils import (  # noqa: E402
+    CURRENT_API_NUMBER,
+    CURRENT_API_VERSION,
+    OLDER_API_VERSION,
+    PREVIOUS_API_NUMBER,
+    PREVIOUS_API_VERSION,
+    offset_api_version,
+)
 from config import config_init  # noqa: E402
 
 RM = "python3 skills/execute-mutation/scripts/run_mutation.py"
@@ -68,7 +77,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     cfg_dir = tmp_path / "cfg"
     cfg_dir.mkdir()
     (cfg_dir / "assistant_config").write_text(
-        'api_version = "v24"\ncustomer_id = "12345678"\nexecute_mutates = false\nenabled = true\n',
+        f'api_version = "{OLDER_API_VERSION}"\ncustomer_id = "12345678"\nexecute_mutates = false\nenabled = true\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -309,7 +318,7 @@ def test_hook_denies_bypass_with_cli_specific_shape(
         hso = out["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
         assert "BLOCKED BY HITL MUTATION GUARD" in hso["permissionDecisionReason"]
-        assert rc == 2 and "BLOCKED BY HITL MUTATION GUARD" in err
+        assert rc == 0 and err == ""
 
 
 @pytest.mark.parametrize("cli", ["agy", "claude"])
@@ -356,7 +365,7 @@ def test_claude_allow_without_rewrite_emits_empty_object(
     assert out == {} and rc == 0
 
 
-def test_main_exits_2_on_claude_deny(workspace: Path) -> None:
+def test_main_emits_structured_json_deny_on_claude(workspace: Path) -> None:
     env = dict(os.environ)
     env["PYTHONPATH"] = ""
     proc = subprocess.run(
@@ -369,9 +378,10 @@ def test_main_exits_2_on_claude_deny(workspace: Path) -> None:
         timeout=60,
         check=False,
     )
-    assert proc.returncode == 2, proc.stderr
-    assert json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "BLOCKED BY HITL MUTATION GUARD" in proc.stderr
+    assert proc.returncode == 0, proc.stderr
+    hso = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "BLOCKED BY HITL MUTATION GUARD" in hso["permissionDecisionReason"]
 
 
 @pytest.mark.parametrize(
@@ -400,7 +410,7 @@ def test_file_write_tools_to_receipt_are_denied(
     else:
         _assert_claude_shape(out)
         assert out["hookSpecificOutput"]["permissionDecision"] == expected_claude
-        assert rc == 2
+        assert rc == 0
 
 
 @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
@@ -427,7 +437,7 @@ def test_malformed_payload_denied_for_both_clis(
     out, rc, _ = _run_hook(monkeypatch, capsys, '["toolCall"]')
     assert out["decision"] == "deny" and rc == 0
     out, rc, _ = _run_hook(monkeypatch, capsys, '["tool_input"]')
-    assert out["hookSpecificOutput"]["permissionDecision"] == "deny" and rc == 2
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny" and rc == 0
 
 
 # --- Finding 5: shell writes to protected files -------------------------------------------
@@ -548,7 +558,8 @@ def test_claude_hooks_json_layout() -> None:
     assert matchers == {
         "Bash",
         "Write|Edit|MultiEdit",
-        "mcp__google-ads-api-assistant__(prepare_mutation|execute_mutation|create_account|create_campaign|create_ad_group|create_ad)",
+        "Read",
+        "mcp__(?:plugin_google-ads-api-developer-assistant_)?google-ads-api-assistant__(prepare_mutation|execute_mutation|create_account|create_campaign|create_ad_group|create_ad)",
     }
     assert hooks["PostToolUseFailure"][0]["matcher"] == "Bash"
     for event_entries in hooks.values():
@@ -671,7 +682,11 @@ def test_claude_session_start_sets_context_and_env_file(
 ) -> None:
     env_file = workspace / "claude_env.sh"
     monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
-    monkeypatch.setattr(config_init, "check_python_client_lib_parity", lambda **kw: {"api_version": "v24"})
+    monkeypatch.setattr(
+        config_init,
+        "check_python_client_lib_parity",
+        lambda **kw: {"api_version": CURRENT_API_VERSION},
+    )
     payload = {"session_id": "claude-s1", "hook_event_name": "SessionStart", "source": "startup"}
     out, rc, _ = _run_hook(monkeypatch, capsys, payload)
     assert rc == 0
@@ -685,7 +700,11 @@ def test_claude_session_start_sets_context_and_env_file(
 def test_agy_pre_invocation_keeps_inject_steps(
     workspace: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(config_init, "check_python_client_lib_parity", lambda **kw: {"api_version": "v24"})
+    monkeypatch.setattr(
+        config_init,
+        "check_python_client_lib_parity",
+        lambda **kw: {"api_version": CURRENT_API_VERSION},
+    )
     out, rc, _ = _run_hook(monkeypatch, capsys, {"conversationId": "agy-conv", "invocationNum": 1})
     assert rc == 0 and "systemMessage" in out["injectSteps"][0]
 
@@ -740,23 +759,42 @@ def test_gads_dir_command_passes_through_rewrite(
 # --- Findings 10/16/24: API version validation, resolution, and config lookup order --------
 
 
-@pytest.mark.parametrize("value,expected", [("v24", "v24"), (" 23 ", "v23"), ("v024", "v24")])
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (CURRENT_API_VERSION, CURRENT_API_VERSION),
+        (f" {PREVIOUS_API_NUMBER} ", PREVIOUS_API_VERSION),
+        (f"v0{CURRENT_API_NUMBER}", CURRENT_API_VERSION),
+    ],
+)
 def test_validate_api_version_accepts(value: str, expected: str) -> None:
     assert config_init.validate_api_version(value) == expected
 
 
-@pytest.mark.parametrize("value", ["latest", "../../x", "v24beta", "", "v", "24.1", "v24/../x"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "latest",
+        "../../x",
+        f"{CURRENT_API_VERSION}beta",
+        "",
+        "v",
+        f"{CURRENT_API_NUMBER}.1",
+        f"{CURRENT_API_VERSION}/../x",
+    ],
+)
 def test_validate_api_version_rejects(value: str) -> None:
     with pytest.raises(ValueError):
         config_init.validate_api_version(value)
 
 
 def test_resolve_active_api_version_order(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config_init, "_detect_installed_api_version", lambda: "v26")
-    assert config_init.resolve_active_api_version("25") == "v25"
-    assert config_init.resolve_active_api_version() == "v24"  # from assistant_config
-    monkeypatch.setenv("GOOGLE_ADS_API_VERSION", "22")
-    assert config_init.resolve_active_api_version() == "v22"
+    env_override_ver = offset_api_version(-3)
+    monkeypatch.setattr(config_init, "_detect_installed_api_version", lambda: CURRENT_API_VERSION)
+    assert config_init.resolve_active_api_version(str(PREVIOUS_API_NUMBER)) == PREVIOUS_API_VERSION
+    assert config_init.resolve_active_api_version() == OLDER_API_VERSION  # from assistant_config
+    monkeypatch.setenv("GOOGLE_ADS_API_VERSION", env_override_ver[1:])
+    assert config_init.resolve_active_api_version() == env_override_ver
     monkeypatch.setenv("GOOGLE_ADS_API_VERSION", "latest")
     with pytest.raises(ValueError):
         config_init.resolve_active_api_version()
@@ -769,8 +807,8 @@ def test_resolve_skips_invalid_config_and_raises_when_nothing_found(
 ) -> None:
     (workspace / "cfg" / "assistant_config").write_text('api_version = "latest"\n', encoding="utf-8")
     monkeypatch.setattr(config_init, "get_assistant_config_paths", lambda **kw: [str(workspace / "cfg" / "assistant_config")])
-    monkeypatch.setattr(config_init, "_detect_installed_api_version", lambda: "v26")
-    assert config_init.resolve_active_api_version() == "v26"
+    monkeypatch.setattr(config_init, "_detect_installed_api_version", lambda: CURRENT_API_VERSION)
+    assert config_init.resolve_active_api_version() == CURRENT_API_VERSION
     monkeypatch.setattr(config_init, "_detect_installed_api_version", lambda: "")
     with pytest.raises(ValueError, match="pass --api_version vN"):
         config_init.resolve_active_api_version()
@@ -780,15 +818,15 @@ def test_detect_latest_ignores_invalid_env(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(config_init, "_detect_installed_api_version", lambda: "")
     monkeypatch.setenv("GOOGLE_ADS_API_VERSION", "../../x")
     assert config_init.detect_latest_api_version() == ""
-    monkeypatch.setenv("GOOGLE_ADS_API_VERSION", "25")
-    assert config_init.detect_latest_api_version() == "v25"
+    monkeypatch.setenv("GOOGLE_ADS_API_VERSION", str(PREVIOUS_API_NUMBER))
+    assert config_init.detect_latest_api_version() == PREVIOUS_API_VERSION
 
 
 def test_invalid_api_version_never_persisted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config_init, "detect_latest_api_version", lambda: "v26")
+    monkeypatch.setattr(config_init, "detect_latest_api_version", lambda: CURRENT_API_VERSION)
     assert config_init.parse_assistant_config('api_version = "../../x"\n').get("api_version") is None
     text = config_init.format_assistant_config({"api_version": "latest"})
-    assert 'api_version = "v26"' in text
+    assert f'api_version = "{CURRENT_API_VERSION}"' in text
     cfg_dir = tmp_path / "cfg"
     config_init.write_assistant_config({"api_version": "../evil"}, config_dir=str(cfg_dir))
     assert "evil" not in (cfg_dir / "assistant_config").read_text(encoding="utf-8")

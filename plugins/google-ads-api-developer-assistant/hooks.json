@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['hook_guard.py','--cli','agy','--event','PreToolUse']; c=[os.path.join(e,'config','hook_guard.py') for e in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/hook_guard.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/hook_guard.py')]; p=next((f for f in c if os.path.isfile(f)),None); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/hook_guard.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}))\"",
+            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['hook_guard.py','--cli','agy','--event','PreToolUse']; c=[os.path.join(e,'config','hook_guard.py') for e in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+([os.path.join(os.getcwd(),'config','hook_guard.py')] if os.path.isfile('plugin.json') and os.path.isfile('hooks.json') else [])+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/hook_guard.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/hook_guard.py')]; p=next((f for f in c if os.path.isfile(f)),None); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/hook_guard.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}))\"",
             "timeout": 15
           }
         ]
@@ -17,7 +17,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['hook_guard.py','--cli','agy','--event','PreToolUse']; c=[os.path.join(e,'config','hook_guard.py') for e in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/hook_guard.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/hook_guard.py')]; p=next((f for f in c if os.path.isfile(f)),None); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/hook_guard.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}))\"",
+            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['hook_guard.py','--cli','agy','--event','PreToolUse']; c=[os.path.join(e,'config','hook_guard.py') for e in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+([os.path.join(os.getcwd(),'config','hook_guard.py')] if os.path.isfile('plugin.json') and os.path.isfile('hooks.json') else [])+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/hook_guard.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/hook_guard.py')]; p=next((f for f in c if os.path.isfile(f)),None); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/hook_guard.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}))\"",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "read_file|view_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['hook_guard.py','--cli','agy','--event','PreToolUse']; c=[os.path.join(e,'config','hook_guard.py') for e in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+([os.path.join(os.getcwd(),'config','hook_guard.py')] if os.path.isfile('plugin.json') and os.path.isfile('hooks.json') else [])+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/hook_guard.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/hook_guard.py')]; p=next((f for f in c if os.path.isfile(f)),None); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/hook_guard.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}))\"",
             "timeout": 15
           }
         ]
@@ -27,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['hook_guard.py','--cli','agy','--event','PreToolUse']; c=[os.path.join(e,'config','hook_guard.py') for e in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/hook_guard.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/hook_guard.py')]; p=next((f for f in c if os.path.isfile(f)),None); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/hook_guard.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}))\"",
+            "command": "python3 -c \"import json,os,runpy,sys; sys.argv=['hook_guard.py','--cli','agy','--event','PreToolUse']; c=[os.path.join(e,'config','hook_guard.py') for e in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+([os.path.join(os.getcwd(),'config','hook_guard.py')] if os.path.isfile('plugin.json') and os.path.isfile('hooks.json') else [])+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/hook_guard.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/hook_guard.py')]; p=next((f for f in c if os.path.isfile(f)),None); runpy.run_path(p,run_name='__main__') if p else print(json.dumps({'decision':'deny','reason':'BLOCKED BY HITL MUTATION GUARD: config/hook_guard.py was not found in the installed plugin. Reinstall the Google Ads API Developer Assistant.'}))\"",
             "timeout": 15
           }
         ]
@@ -36,7 +46,7 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "python3 -c \"import os,runpy,sys; sys.argv=['hook_guard.py','--cli','agy','--event','SessionStart']; c=[os.path.join(e,'config','hook_guard.py') for e in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/hook_guard.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/hook_guard.py')]; p=next((f for f in c if os.path.isfile(f)),None); runpy.run_path(p,run_name='__main__') if p else print('{}')\"",
+        "command": "python3 -c \"import os,runpy,sys; sys.argv=['hook_guard.py','--cli','agy','--event','SessionStart']; c=[os.path.join(e,'config','hook_guard.py') for e in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT'),os.environ.get('GOOGLE_ADS_ASSISTANT_DIR')) if e]+([os.path.join(os.getcwd(),'config','hook_guard.py')] if os.path.isfile('plugin.json') and os.path.isfile('hooks.json') else [])+[os.path.expanduser('~/.gemini/config/plugins/google-ads-api-developer-assistant/config/hook_guard.py'),os.path.expanduser('~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/hook_guard.py')]; p=next((f for f in c if os.path.isfile(f)),None); runpy.run_path(p,run_name='__main__') if p else print('{}')\"",
         "timeout": 15
       }
     ]

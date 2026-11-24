@@ -1,7 +1,7 @@
 # Google Ads API Developer Assistant Plugin for Claude & agy
 
 ## Overview
-This plugin puts the skills, slash commands, lifecycle hooks, rules, diagnostic scripts, and sidecars of the **Google Ads API Developer Assistant** (v4.1.0) into one package. You can install this package in **Claude Desktop**, **Claude Code CLI**, or **Antigravity / agy**.
+This plugin puts the skills, slash commands, lifecycle hooks, rules, diagnostic scripts, and sidecars of the **Google Ads API Developer Assistant** (v4.1.0) into one package. You can install this package in **Claude Code CLI** or **Antigravity CLI (`agy`)**.
 
 ---
 
@@ -20,14 +20,16 @@ google-ads-api-developer-assistant/
 │   ├── financial_limits                     <-- Per-service financial upper limits (Service.field)
 │   ├── set_financial_limits.py              <-- CLI wrapper to list, set, or reset financial limits
 │   └── sitecustomize.py                     <-- Runtime config path resolution shim
-├── commands/                                <-- Slash commands for Claude Code & agy
+├── commands/                                <-- Slash commands for Claude Code CLI only (agy uses skills/*/SKILL.md)
 │   ├── assistant-tutorial.md
 │   ├── execute-mutation.md
 │   ├── explain.md
 │   ├── ext-version.md
 │   ├── get-cids.md
+│   ├── get-cids-under-mcc.md
 │   ├── inspect-object.md
 │   ├── pmax-filter.md
+│   ├── pmax-listing-filter.md
 │   ├── step-by-step.md
 │   ├── sync-client-libs.md
 │   ├── troubleshoot-conversions.md
@@ -119,13 +121,13 @@ google-ads-api-developer-assistant/
 ## Runtime Behavior across Platforms
 
 ### 1. Host Hook Support (`hooks.json` vs `hooks/hooks.json`)
-- **Antigravity (`agy`)**: Loads root `hooks.json` (`SessionStart` and `PreToolUse` for `run_command`, `write_file|edit_file|...`, and `call_mcp_tool|mcp_.*`) via `PLUGIN_ROOT`.
-- **Claude Code CLI (`claude`)**: Loads `hooks/hooks.json` (`SessionStart`, `PreToolUse` for `Bash`, `Write|Edit|MultiEdit`, and `mcp__google-ads-api-assistant__*` mutation tools, plus `PostToolUseFailure` for `Bash`) via `${CLAUDE_PLUGIN_ROOT}`.
+- **Antigravity (`agy`)**: Loads root `hooks.json` (`SessionStart` and `PreToolUse` for `run_command`, `write_file|edit_file|...`, `read_file|view_file`, and `call_mcp_tool|mcp_.*`) via `PLUGIN_ROOT` (with `plugin.json`+`hooks.json`-verified CWD fallback).
+- **Claude Code CLI (`claude`)**: Loads `hooks/hooks.json` (`SessionStart`, `PreToolUse` for `Bash`, `Write|Edit|MultiEdit`, `Read`, and `mcp__(?:plugin_google-ads-api-developer-assistant_)?google-ads-api-assistant__*` mutation tools, plus `PostToolUseFailure` for `Bash`) via `${CLAUDE_PLUGIN_ROOT}`.
 - **Fallback Behavior**: If host hooks are off, the skill scripts still read credentials from `config/google-ads.yaml` through `_get_config_path()`. In addition, `run_mutation.py` and `server.py` enforce `execute_mutates`, Tier 1 financial posture, financial limits, SHA-256 receipts, single-use execution tokens, deletion prohibition, and audit logs.
 
 ### 2. Interactive User Prompts (`ask_question` tool vs. CLI prompts)
-- **Antigravity (`agy`)**: Shows interactive UI modal dialogs and `PreToolUse` `"decision": "force_ask"` confirmation cards.
-- **Claude Code (`claude`)**: Uses text prompts in chat and `PreToolUse` `"permissionDecision": "ask"` CLI prompts.
+- **Antigravity CLI (`agy`)**: Shows interactive CLI prompts and `PreToolUse` `"decision": "force_ask"` confirmation cards.
+- **Claude Code CLI (`claude`)**: Uses text prompts in chat and `PreToolUse` `"permissionDecision": "ask"` CLI prompts.
 
 ---
 

@@ -30,6 +30,11 @@ import sys
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+TESTS_DIR = Path(__file__).resolve().parent
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
+from api_version_utils import CURRENT_API_VERSION  # noqa: E402
+
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "google-ads-api-developer-assistant"
 SKILLS_DIR = PLUGIN_ROOT / "skills"
 
@@ -71,7 +76,7 @@ class TestPython315Runtime:
 
         raw_toml = (
             '# Assistant configuration\n'
-            'api_version = "v25"\n'
+            f'api_version = "{CURRENT_API_VERSION}"\n'
             'customer_id = "9876543210"\n'
             'execute_mutates = false\n'
             'timeout_seconds = 120\n'
@@ -80,7 +85,7 @@ class TestPython315Runtime:
         parsed_native = tomllib.loads(raw_toml)
         parsed_custom = cfg_init.parse_assistant_config(raw_toml)
 
-        assert parsed_custom["api_version"] == "v25"
+        assert parsed_custom["api_version"] == CURRENT_API_VERSION
         assert parsed_custom["customer_id"] == "9876543210"
         assert parsed_custom["execute_mutates"] is False
         assert parsed_custom["timeout_seconds"] == 120
@@ -220,5 +225,5 @@ class TestPython315A2AService:
         assert len(plugin_version) > 0
 
         # Effective API version resolution
-        ver = server.get_effective_api_version({"api_version": "v25"})
-        assert ver == "v25"
+        ver = server.get_effective_api_version({"api_version": CURRENT_API_VERSION})
+        assert ver == CURRENT_API_VERSION

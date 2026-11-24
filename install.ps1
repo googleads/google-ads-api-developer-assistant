@@ -651,7 +651,7 @@ function Install-PluginCopy {
             } catch {}
         }
         if (-not $HasWorkingPython3 -and (Get-Command "python" -ErrorAction SilentlyContinue)) {
-            foreach ($RelJson in @("hooks.json", "hooks\hooks.json", "mcp_config.json", ".mcp.json", "sidecars\google-ads-a2a-service\sidecar.json")) {
+            foreach ($RelJson in @("hooks.json", "mcp_config.json", ".mcp.json", "sidecars\google-ads-a2a-service\sidecar.json")) {
                 $ManifestPath = Join-Path $TargetPluginDir $RelJson
                 if (Test-Path -LiteralPath $ManifestPath) {
                     $RawJson = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8
@@ -774,6 +774,13 @@ $TargetPluginDir = Join-Path $UserHome ".gemini\config\plugins\google-ads-api-de
 
 Write-Host "Installing plugin for agy into: $TargetPluginDir"
 Install-PluginCopy -TargetPluginDir $TargetPluginDir
+# Strip Claude-Code-only files from the installed agy copy so `jetski plugin validate` emits 0 warnings
+foreach ($ClaudeOnly in @(".claude-plugin", ".mcp.json", "hooks", "commands")) {
+    $ClaudeOnlyPath = Join-Path $TargetPluginDir $ClaudeOnly
+    if (Test-Path -LiteralPath $ClaudeOnlyPath) {
+        Remove-Item -Recurse -Force -LiteralPath $ClaudeOnlyPath -ErrorAction SilentlyContinue
+    }
+}
 
 Write-Host "Plugin installation for agy complete."
 Write-Host ""

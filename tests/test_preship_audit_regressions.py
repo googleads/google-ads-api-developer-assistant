@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -30,6 +31,11 @@ from unittest.mock import MagicMock
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+TESTS_DIR = Path(__file__).resolve().parent
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
+from api_version_utils import CURRENT_API_VERSION, offset_api_version  # noqa: E402
+
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "google-ads-api-developer-assistant"
 CONFIG_DIR = PLUGIN_ROOT / "config"
 HOOK_GUARD_PATH = CONFIG_DIR / "hook_guard.py"
@@ -84,7 +90,7 @@ def fixture_isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     cfg = tmp_path / "config"
     cfg.mkdir()
     (cfg / "assistant_config").write_text(
-        'api_version = "v24"\ncustomer_id = "1234567890"\nexecute_mutates = false\n'
+        f'api_version = "{CURRENT_API_VERSION}"\ncustomer_id = "1234567890"\nexecute_mutates = false\n'
         "allow_tier1_financial_mutates = false\nenabled = true\n",
         encoding="utf-8",
     )
@@ -172,7 +178,7 @@ class TestHookGuardUnitAndContracts:
         assert json.loads(capsys.readouterr().out)["decision"] == "deny"
 
         rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin="")
-        assert rc == 2
+        assert rc == 0
         assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
         # Malformed JSON on PreToolUse -> deny
@@ -185,15 +191,13 @@ class TestHookGuardUnitAndContracts:
 
         # Non-dict JSON on PreToolUse -> deny; on SessionStart -> {}
         rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin="[]")
-        assert rc == 2 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert rc == 0 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
         rc = hg.handle_fast_hook(explicit_event="SessionStart", explicit_cli="agy", raw_stdin="[]")
         assert rc == 0 and capsys.readouterr().out.strip() == "{}"
 
         # main() catches internal exceptions and fails closed on PreToolUse
         monkeypatch.setattr(hg, "handle_fast_hook", MagicMock(side_effect=RuntimeError("boom")))
-        with pytest.raises(SystemExit) as exc:
-            hg.main(["--event=PreToolUse", "--cli=claude"])
-        assert exc.value.code == 2
+        hg.main(["--event=PreToolUse", "--cli=claude"])
         assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
         hg.main(["--event", "SessionStart", "--cli", "agy", "--ignored"])
@@ -256,7 +260,7 @@ class TestHookGuardUnitAndContracts:
             "tool_input": {"script_path": "/tmp/evil.py", "operation_summary": "Update"},
         }
         rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin=json.dumps(bad_prep))
-        assert rc == 2 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert rc == 0 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
         # prepare_mutation with deletion text -> deny
         del_prep = {
@@ -264,7 +268,7 @@ class TestHookGuardUnitAndContracts:
             "tool_input": {"script_path": str(isolated_env / "saved" / "code" / "x.py"), "operation_summary": "Remove campaign 1"},
         }
         rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin=json.dumps(del_prep))
-        assert rc == 2 and "DELETION PROHIBITION" in json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecisionReason"]
+        assert rc == 0 and "DELETION PROHIBITION" in json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecisionReason"]
 
         # prepare_mutation benign in saved/code -> allow ({} for claude)
         ok_prep = {
@@ -300,12 +304,12 @@ class TestHookGuardUnitAndContracts:
             "tool_input": {"customer_id": "123", "execute": True, "user_confirmed": True},
         }
         rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin=json.dumps(live_camp))
-        assert rc == 2 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert rc == 0 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
         # create_campaign live with execute_mutates=true but Tier 1 disabled -> deny
         monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "true")
         rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin=json.dumps(live_camp))
-        assert rc == 2 and "TIER 1" in json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecisionReason"]
+        assert rc == 0 and "TIER 1" in json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecisionReason"]
 
         # create_campaign live with Tier 1 enabled -> ask (claude) / force_ask (agy)
         monkeypatch.setenv("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", "true")
@@ -315,18 +319,18 @@ class TestHookGuardUnitAndContracts:
         # execute_mutation outside saved/code -> deny; disabled -> deny; missing receipt -> deny
         bad_exec = {"tool_name": "mcp__google-ads-api-assistant__execute_mutation", "tool_input": {"script_path": "/tmp/a.py"}}
         rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin=json.dumps(bad_exec))
-        assert rc == 2 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert rc == 0 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
         monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "false")
         ok_sp = str(isolated_env / "saved" / "code" / "a.py")
         (isolated_env / "saved" / "code" / "a.py").write_text("pass\n", encoding="utf-8")
         exec_call = {"tool_name": "mcp__google-ads-api-assistant__execute_mutation", "tool_input": {"script_path": ok_sp}}
         rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin=json.dumps(exec_call))
-        assert rc == 2 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert rc == 0 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
         monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "true")
         rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin=json.dumps(exec_call))
-        assert rc == 2 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert rc == 0 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_fast_shell_allow_disabled_passthrough_and_delegation(
         self, hg: Any, isolated_env: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
@@ -476,7 +480,7 @@ class TestP0BypassAndSecurityRegressions:
         assert dec_var_cfg == "force_ask"
 
         dec_var_rest, _ = ci.evaluate_mutation_guard(
-            "U=https://googleads.googleapis.com/v24/customers/123/campaigns:mutate; curl -X POST \"$U\"",
+            f"U=https://googleads.googleapis.com/{CURRENT_API_VERSION}/customers/123/campaigns:mutate; curl -X POST \"$U\"",
             workspace_cwd=str(isolated_env),
         )
         assert dec_var_rest == "deny"
@@ -501,8 +505,9 @@ class TestP0BypassAndSecurityRegressions:
         (custom_root / "skills" / "validate-gaql" / "scripts" / "validate_gaql.py").write_text(
             "print('ok')\n", encoding="utf-8"
         )
+        custom_ver = offset_api_version(3)
         (custom_root / "config" / "assistant_config").write_text(
-            'api_version = "v29"\ncustomer_id = "1234567890"\nenabled = true\n', encoding="utf-8"
+            f'api_version = "{custom_ver}"\ncustomer_id = "1234567890"\nenabled = true\n', encoding="utf-8"
         )
         monkeypatch.setenv("PLUGIN_ROOT", str(custom_root))
         monkeypatch.setenv("GOOGLE_ADS_ASSISTANT_ENABLED", "true")
@@ -687,7 +692,10 @@ class TestP0BypassAndSecurityRegressions:
 
         # 6. troubleshoot_conversions fails cleanly when credentials missing (no stub!) and confines csv_path
         monkeypatch.setenv("GOOGLE_ADS_CONFIGURATION_FILE_PATH", str(isolated_env / "nonexistent-google-ads.yaml"))
-        tc_fail = h.handle_troubleshoot_conversions("t-tc-fail", {"customer_id": "1234567890", "api_version": "v24"})
+        tc_fail = h.handle_troubleshoot_conversions(
+            "t-tc-fail",
+            {"customer_id": "1234567890", "api_version": CURRENT_API_VERSION},
+        )
         assert tc_fail["status"] == "FAILED"
         tc_outside = h.handle_troubleshoot_conversions("t-tc-out", {"csv_path": "/etc/passwd"})
         assert tc_outside["status"] == "VALIDATION_FAILED"
@@ -788,3 +796,484 @@ class TestP0BypassAndSecurityRegressions:
         assert proc.returncode == 0
         assert json.loads(proc.stdout)["decision"] == "allow"
         assert elapsed_ms < 150.0, f"Fast PreToolUse hook took {elapsed_ms:.1f}ms (> 150ms budget)"
+
+
+class TestAudit2SecurityParityAndResilienceRegressions:
+    """Verifies every P0/P1/P2/P3 finding from Pre-Ship Audit #2 across agy and Claude Code."""
+
+    def test_p0_1_p0_2_mcp_plugin_namespacing_on_claude_and_agy_eager(
+        self, hg: Any, isolated_env: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import re
+
+        # P0-1: Claude hooks/hooks.json matcher matches bundled plugin MCP tool names for all 6 tools
+        claude_hooks = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        mcp_matcher = next(
+            e["matcher"] for e in claude_hooks["hooks"]["PreToolUse"] if "mcp__" in e["matcher"]
+        )
+        for tool in (
+            "prepare_mutation",
+            "execute_mutation",
+            "create_account",
+            "create_campaign",
+            "create_ad_group",
+            "create_ad",
+        ):
+            bundled = f"mcp__plugin_google-ads-api-developer-assistant_google-ads-api-assistant__{tool}"
+            direct = f"mcp__google-ads-api-assistant__{tool}"
+            assert re.search(mcp_matcher, bundled), bundled
+            assert re.search(mcp_matcher, direct), direct
+            extracted = hg._extract_mcp_call(bundled, {"x": 1})
+            assert extracted is not None and extracted[0] == tool
+
+        # P0-2: agy eager plugin MCP tool naming mcp_<plugin_id>_<server>_<tool> is intercepted
+        eager_exec = {
+            "toolCall": {
+                "name": "mcp_google-ads-api-developer-assistant_google-ads-api-assistant_execute_mutation",
+                "args": {"script_path": "/tmp/outside.py", "user_confirmed": True},
+            }
+        }
+        rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="agy", raw_stdin=json.dumps(eager_exec))
+        assert rc == 0 and json.loads(capsys.readouterr().out)["decision"] == "deny"
+
+        eager_removed = {
+            "toolCall": {
+                "name": "mcp_google-ads-api-developer-assistant_google-ads-api-assistant_create_campaign",
+                "args": {"customer_id": "1234567890", "execute": True, "status": "REMOVED"},
+            }
+        }
+        rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="agy", raw_stdin=json.dumps(eager_removed))
+        assert rc == 0 and json.loads(capsys.readouterr().out)["decision"] == "deny"
+
+        # P1-6: create_ad_group with cpc_bid_micros is Tier 2 (NOT blocked by Tier 1 posture)
+        monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "true")
+        monkeypatch.setenv("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", "false")
+        ag_live = {
+            "tool_name": "mcp__plugin_google-ads-api-developer-assistant_google-ads-api-assistant__create_ad_group",
+            "tool_input": {"customer_id": "1234567890", "cpc_bid_micros": 1_000_000, "execute": True},
+        }
+        rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin=json.dumps(ag_live))
+        assert rc == 0
+        assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+    def test_p0_3_sidecar_create_parameter_sha256_binding_blocks_bait_and_switch(
+        self, srv: Any, isolated_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        h = srv.A2AHandler.__new__(srv.A2AHandler)
+        monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "true")
+        monkeypatch.setenv("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", "true")
+
+        # 1. Campaign bait-and-switch: $1 PAUSED dry-run -> $50 ENABLED live MUST be HITL_BLOCKED
+        mock_camp_client = MagicMock()
+        mock_camp_client.get_service.return_value.mutate.return_value = SimpleNamespace(
+            mutate_operation_responses=[
+                SimpleNamespace(
+                    campaign_budget_result=SimpleNamespace(resource_name="customers/1234567890/campaignBudgets/1"),
+                    campaign_result=SimpleNamespace(resource_name=""),
+                ),
+                SimpleNamespace(
+                    campaign_budget_result=SimpleNamespace(resource_name=""),
+                    campaign_result=SimpleNamespace(resource_name="customers/1234567890/campaigns/2"),
+                ),
+            ]
+        )
+        dry_camp = h.handle_create_campaign(
+            "t-dry-c",
+            {
+                "customer_id": "1234567890",
+                "campaign_name": "SafeDry",
+                "budget_amount_micros": 1_000_000,
+                "status": "PAUSED",
+                "validate_only": True,
+                "client": mock_camp_client,
+            },
+        )
+        assert dry_camp["status"] == "COMPLETED"
+
+        tampered_live = h.handle_create_campaign(
+            "t-live-c-bad",
+            {
+                "customer_id": "1234567890",
+                "campaign_name": "TamperedLive",
+                "budget_amount_micros": 50_000_000,
+                "status": "ENABLED",
+                "execute": True,
+                "user_confirmed": True,
+                "client": mock_camp_client,
+            },
+        )
+        assert tampered_live["status"] == "HITL_BLOCKED"
+        assert "SHA-256 mismatch" in tampered_live["error"]
+
+        # 2. Account creation ATO bait-and-switch: benign dry-run -> ADMIN email live MUST be HITL_BLOCKED
+        mock_acct_client = MagicMock()
+        mock_acct_client.get_service.return_value.create_customer_client.return_value = SimpleNamespace(
+            resource_name="customers/9999999999",
+            invitation_link="",
+        )
+        dry_acct = h.handle_create_account(
+            "t-dry-a",
+            {
+                "manager_customer_id": "1234567890",
+                "descriptive_name": "Benign",
+                "validate_only": True,
+                "client": mock_acct_client,
+            },
+        )
+        assert dry_acct["status"] == "COMPLETED"
+
+        ato_live = h.handle_create_account(
+            "t-live-a-bad",
+            {
+                "manager_customer_id": "1234567890",
+                "descriptive_name": "Benign",
+                "email_address": "attacker@example.com",
+                "access_role": "ADMIN",
+                "execute": True,
+                "user_confirmed": True,
+                "client": mock_acct_client,
+            },
+        )
+        assert ato_live["status"] == "HITL_BLOCKED"
+        assert "SHA-256 mismatch" in ato_live["error"]
+
+    def test_p0_4_p2_2_protected_sitecustomize_cwd_symlink_and_credential_reads(
+        self, hg: Any, ci: Any, isolated_env: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Newly protected files require confirmation on both CLIs
+        for fname in (
+            "config/sitecustomize.py",
+            "rules/AGENTS.md",
+            "skills/execute-mutation/scripts/set_financial_limits.py",
+            "skills/execute-mutation/scripts/create_campaign.py",
+        ):
+            payload = {"toolCall": {"name": "write_file", "args": {"Path": fname}}}
+            rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="agy", raw_stdin=json.dumps(payload))
+            assert rc == 0 and json.loads(capsys.readouterr().out)["decision"] == "force_ask", fname
+
+        # Workspace-relative symlink resolved against workspace_cwd even when hook process CWD is plugin root
+        real_receipt = isolated_env / "saved" / "data" / "last_dry_run.json"
+        real_receipt.write_text("{}", encoding="utf-8")
+        ws_link = isolated_env / "innocent_link.txt"
+        ws_link.symlink_to(real_receipt)
+
+        outside_py = isolated_env / "outside_evil.py"
+        outside_py.write_text("svc.mutate_campaigns()\n", encoding="utf-8")
+        sym_outside = isolated_env / "saved" / "code" / "sym_outside.py"
+        sym_outside.symlink_to(outside_py)
+
+        monkeypatch.chdir(PLUGIN_ROOT)
+        rel_write_payload = {
+            "cwd": str(isolated_env),
+            "toolCall": {"name": "write_file", "args": {"Path": "innocent_link.txt"}},
+        }
+        rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="agy", raw_stdin=json.dumps(rel_write_payload))
+        assert rc == 0 and json.loads(capsys.readouterr().out)["decision"] == "deny"
+
+        # config_init.handle_hook also follows realpath against workspace_cwd
+        rc_ci = ci.handle_hook(explicit_event="PreToolUse", explicit_cli="agy", raw_stdin=json.dumps(rel_write_payload))
+        assert rc_ci == 0 and json.loads(capsys.readouterr().out)["decision"] == "deny"
+
+        # MCP prepare_mutation with workspace-relative symlink escaping saved/code -> deny
+        rel_mcp_payload = {
+            "cwd": str(isolated_env),
+            "tool_name": "mcp__plugin_google-ads-api-developer-assistant_google-ads-api-assistant__prepare_mutation",
+            "tool_input": {"script_path": "saved/code/sym_outside.py", "operation_summary": "Update"},
+        }
+        rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin=json.dumps(rel_mcp_payload))
+        assert rc == 0 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+        # P2-2: Credential reads via read_file / view_file / Read are denied (including via symlink)
+        cred_yaml = isolated_env / "config" / "google-ads.yaml"
+        cred_yaml.write_text("client_id: x\n", encoding="utf-8")
+        cred_sym = isolated_env / "readme_alias.txt"
+        cred_sym.symlink_to(cred_yaml)
+
+        for cli, payload in (
+            ("agy", {"cwd": str(isolated_env), "toolCall": {"name": "read_file", "args": {"Path": "config/google-ads.yaml"}}}),
+            ("agy", {"cwd": str(isolated_env), "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(cred_sym)}}}),
+            ("claude", {"cwd": str(isolated_env), "tool_name": "Read", "tool_input": {"file_path": ".a2a_token"}}),
+        ):
+            rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli=cli, raw_stdin=json.dumps(payload))
+            out = json.loads(capsys.readouterr().out)
+            if cli == "agy":
+                assert rc == 0 and out["decision"] == "deny"
+            else:
+                assert rc == 0 and out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+        # Normal file read is allowed
+        ok_read = {"cwd": str(isolated_env), "tool_name": "Read", "tool_input": {"file_path": "README.md"}}
+        rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin=json.dumps(ok_read))
+        assert rc == 0 and capsys.readouterr().out.strip() == "{}"
+
+    def test_p0_5_p0_6_p1_1_all_audit2_shell_and_ast_bypasses_blocked(
+        self, hg: Any, ci: Any, isolated_env: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Prepare adversarial scripts in saved/code/
+        live_body = (
+            "from google.ads.googleads.client import GoogleAdsClient\n"
+            "svc = client.get_service('CampaignService')\n"
+            "svc.mutate_campaigns(customer_id='1234567890', operations=[op])\n"
+        )
+        (isolated_env / "saved" / "code" / "live.py").write_text(live_body, encoding="utf-8")
+        (isolated_env / "saved" / "code" / "live_noext").write_text(live_body, encoding="utf-8")
+        (isolated_env / "saved" / "code" / "validate_gaql.py").write_text(live_body, encoding="utf-8")
+        (isolated_env / "saved" / "code" / "test_live.py").write_text(live_body, encoding="utf-8")
+        (isolated_env / "saved" / "code" / "install.sh").write_text("python3 saved/code/live.py\n", encoding="utf-8")
+        (isolated_env / "saved" / "code" / "mut.php").write_text("$svc->mutateCampaigns($req);\n", encoding="utf-8")
+        (isolated_env / "saved" / "code" / "mut.rb").write_text("svc.mutate_campaigns(customer_id: '1', operations: [])\n", encoding="utf-8")
+        (isolated_env / "saved" / "code" / "b6a_not_exec.py").write_text(
+            "class C:\n    execute = True\nsvc.mutate_campaigns(request=req, validate_only=not C.execute)\n",
+            encoding="utf-8",
+        )
+        (isolated_env / "saved" / "code" / "b6b_reassign.py").write_text(
+            "req = FakeReq()\nreq.validate_only = True\nreq = LiveReq()\nsvc.mutate_campaigns(request=req)\n",
+            encoding="utf-8",
+        )
+        (isolated_env / "saved" / "code" / "b6c_scope.py").write_text(
+            "def dummy():\n    req.validate_only = True\ndef main():\n    svc.mutate_campaigns(request=req)\n",
+            encoding="utf-8",
+        )
+        (isolated_env / "saved" / "code" / "b6d_getattr.py").write_text(
+            "from google.ads.googleads.client import GoogleAdsClient\n"
+            "svc = client.get_service('CampaignService')\n"
+            "getattr(svc, 'mut' + 'ate_campaigns')(customer_id='123', operations=[])\n",
+            encoding="utf-8",
+        )
+
+        # Must be denied or force_ask through full hook_guard.py -> config_init.py pipeline!
+        must_block_cmds = [
+            # [B1a..B1f] quote/env splitting, gawk, node, http/xh, php/ruby
+            ("cd saved/code && py''thon3 live_noext", "deny"),
+            ("P=py; Q=thon3; cd saved/code && $P$Q live_noext", "deny"),
+            ("echo 'execute_mutates = true' | t''ee -a config/assistant_conf''ig", "force_ask"),
+            (f"node -e \"fetch('https://googleads.googleapis.com/{CURRENT_API_VERSION}/customers/123/campaigns:mutate',{{method:'POST'}})\"", "deny"),
+            (f"H=google; http POST \"https://${{H}}ads.googleapis.com/{CURRENT_API_VERSION}/customers/123:createCustomerClient\"", "deny"),
+            ("gawk -i inplace '{print}' config/assistant_conf''ig", "force_ask"),
+            ("php saved/code/mut.php", "deny"),
+            ("cd saved/code && ruby mut.rb", "deny"),
+            # [B2a..B2b] Python API self-elevation (P0-5)
+            ("python3 -c \"from config import config_init; config_init.set_execute_mutates(True)\"", "force_ask"),
+            ("python3 -c \"import importlib.util; s=importlib.util.spec_from_file_location('m','skills/execute-mutation/scripts/set_financial_limits.py'); m.write_financial_limits({})\"", "force_ask"),
+            # [B3], [B4] Basename spoofing
+            ("python3 saved/code/validate_gaql.py", "deny"),
+            ("bash saved/code/install.sh", "deny"),
+            # [B5a..B5c] pytest/ruff short-circuit & subshell execution
+            ("pytest saved/code/test_live.py", "deny"),
+            ("pytest \"$(python3 saved/code/live.py)\"", "deny"),
+            ("ruff check \"$(python3 saved/code/live.py)\"", "deny"),
+            # [B6a..B6d] AST validate_only=True & getattr flaws
+            ("python3 saved/code/b6a_not_exec.py", "deny"),
+            ("python3 saved/code/b6b_reassign.py", "deny"),
+            ("python3 saved/code/b6c_scope.py", "deny"),
+            ("python3 saved/code/b6d_getattr.py", "deny"),
+            # P1-1: Inline guard env overrides
+            ("GOOGLE_ADS_FINANCIAL_LIMITS_FILE=/tmp/unlimited python3 skills/execute-mutation/scripts/create_campaign.py --dry-run", "deny"),
+            ("GOOGLE_ADS_MUTATION_AUDIT_LOG=/dev/null python3 skills/execute-mutation/scripts/create_campaign.py --dry-run", "deny"),
+        ]
+        for cmd, expected in must_block_cmds:
+            payload = {
+                "cwd": str(isolated_env),
+                "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}},
+            }
+            rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="agy", raw_stdin=json.dumps(payload))
+            out = json.loads(capsys.readouterr().out)
+            assert rc == 0 and out["decision"] == expected, (cmd, expected, out)
+
+    def test_p1_2_p1_3_p1_4_p1_5_sidecar_sandbox_receipt_only_cwd_fallback_and_hooks_toggle(
+        self, hg: Any, ci: Any, rm: Any, srv: Any, isolated_env: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # P1-2: sidecar.json uses ${PLUGIN_ROOT} and server._configure_sandbox_writable_env routes to PLUGIN_DATA
+        sjson = json.loads(
+            (PLUGIN_ROOT / "sidecars" / "google-ads-a2a-service" / "sidecar.json").read_text(encoding="utf-8")
+        )
+        assert sjson["env"]["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] == "${PLUGIN_ROOT}/config/google-ads.yaml"
+        sbox_dir = isolated_env / "sbox_data"
+        monkeypatch.setenv("PLUGIN_DATA", str(sbox_dir))
+        monkeypatch.delenv("ANTIGRAVITY_EXECUTABLE_DATA_DIR", raising=False)
+        monkeypatch.delenv("GOOGLE_ADS_MUTATION_RECEIPT_PATH", raising=False)
+        monkeypatch.delenv("GOOGLE_ADS_MUTATION_AUDIT_LOG", raising=False)
+        monkeypatch.delenv("GOOGLE_ADS_GAQL_CACHE_PATH", raising=False)
+        assert srv._configure_sandbox_writable_env() == str(sbox_dir)
+        assert os.environ["GOOGLE_ADS_MUTATION_RECEIPT_PATH"].startswith(str(sbox_dir))
+        assert os.environ["GOOGLE_ADS_MUTATION_AUDIT_LOG"].startswith(str(sbox_dir))
+        assert os.environ["GOOGLE_ADS_GAQL_CACHE_PATH"].startswith(str(sbox_dir))
+
+        # Restore isolated receipt path for P1-3 test
+        monkeypatch.setenv("GOOGLE_ADS_MUTATION_RECEIPT_PATH", str(isolated_env / "saved" / "data" / "last_dry_run.json"))
+        monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "true")
+        script = isolated_env / "saved" / "code" / "ok.py"
+        script.write_text("pass\n", encoding="utf-8")
+        rm.write_dry_run_receipt(
+            customer_id="1234567890",
+            operation_summary="CampaignLabelService.mutate_campaign_labels",
+            before_state="None",
+            after_state="Attached",
+            consequences=["Zero spend impact."],
+            reversibility="REVERSIBLE",
+            script_path=str(script),
+        )
+        # P1-3: MCP execute_mutation omitting script_path with run_script=False succeeds with force_ask/ask
+        exec_no_sp = {
+            "cwd": str(isolated_env),
+            "tool_name": "mcp__plugin_google-ads-api-developer-assistant_google-ads-api-assistant__execute_mutation",
+            "tool_input": {"user_confirmed": True, "confirmation_summary": "Approved", "run_script": False},
+        }
+        rc = hg.handle_fast_hook(explicit_event="PreToolUse", explicit_cli="claude", raw_stdin=json.dumps(exec_no_sp))
+        assert rc == 0 and json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+        # P1-4: agy hooks.json works from custom install dir when PLUGIN_ROOT is unset (gated on plugin.json + hooks.json)
+        custom_dir = isolated_env / "custom_agy_plugin"
+        (custom_dir / "config").mkdir(parents=True)
+        (custom_dir / "plugin.json").write_text('{"name":"google-ads-api-developer-assistant"}', encoding="utf-8")
+        (custom_dir / "hooks.json").write_text((PLUGIN_ROOT / "hooks.json").read_text(encoding="utf-8"), encoding="utf-8")
+        (custom_dir / "config" / "hook_guard.py").write_text("import sys; print('{\"decision\":\"allow\"}')\n", encoding="utf-8")
+        hooks_data = json.loads((PLUGIN_ROOT / "hooks.json").read_text(encoding="utf-8"))
+        cmd = hooks_data["config-init"]["PreToolUse"][0]["hooks"][0]["command"]
+        clean_env = {"PATH": os.environ.get("PATH", ""), "HOME": str(isolated_env / "empty_home")}
+        proc = subprocess.run(
+            ["bash", "-c", cmd],
+            input=json.dumps({"toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}}),
+            capture_output=True,
+            text=True,
+            env=clean_env,
+            cwd=str(custom_dir),
+            timeout=30,
+            check=False,
+        )
+        assert proc.returncode == 0 and json.loads(proc.stdout)["decision"] == "allow"
+
+        # P1-5: _set_hooks_json_enabled recognizes hook_guard.py on non-Claude manifests and refuses to inject 'enabled' into Claude hooks/hooks.json
+        claude_h_dir = isolated_env / "claude_copy" / "hooks"
+        claude_h_dir.mkdir(parents=True)
+        claude_h = claude_h_dir / "hooks.json"
+        claude_h.write_text((PLUGIN_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"), encoding="utf-8")
+        assert ci._set_hooks_json_enabled(str(claude_h), False) is False
+        assert '"enabled"' not in claude_h.read_text(encoding="utf-8")
+
+        generic_h = isolated_env / "generic_hooks.json"
+        generic_h.write_text(
+            json.dumps({"PreToolUse": [{"hooks": [{"command": "python3 config/hook_guard.py --event PreToolUse"}]}]}),
+            encoding="utf-8",
+        )
+        assert ci._set_hooks_json_enabled(str(generic_h), False) is True
+        assert ci._is_hooks_json_disabled(str(generic_h)) is True
+        assert ci._set_hooks_json_enabled(str(generic_h), True) is True
+        assert ci._is_hooks_json_disabled(str(generic_h)) is False
+
+    def test_p2_1_p2_3_p2_5_p3_1_p3_3_resilience_atomicity_bounds_and_hygiene(
+        self, rm: Any, srv: Any, isolated_env: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # P2-1: Atomic claim_receipt_for_execution prevents concurrent replay
+        script = isolated_env / "saved" / "code" / "claim.py"
+        script.write_text("pass\n", encoding="utf-8")
+        rm.write_dry_run_receipt(
+            customer_id="1234567890",
+            operation_summary="CampaignLabelService.mutate_campaign_labels",
+            before_state="None",
+            after_state="Attached",
+            consequences=["Zero spend impact."],
+            reversibility="REVERSIBLE",
+            script_path=str(script),
+        )
+        ok1, _, data1 = rm.claim_receipt_for_execution()
+        assert ok1 is True and data1["status"] == "EXECUTING"
+        ok2, msg2, _ = rm.claim_receipt_for_execution()
+        assert ok2 is False and "EXECUTING" in msg2
+
+        # P2-1 & P2-5: sync_directories preserves saved/ & client_libs/; TOML fallback preserves allow_tier1_financial_mutates
+        scl = _load_isolated(SYNC_LIBS_PATH, "scl_audit2_test")
+        src_d = isolated_env / "sync_src"
+        dst_d = isolated_env / "sync_dst"
+        (src_d / "skills").mkdir(parents=True)
+        (src_d / "skills" / "demo.py").write_text("pass\n", encoding="utf-8")
+        (dst_d / "saved" / "logs").mkdir(parents=True)
+        (dst_d / "saved" / "logs" / "mutation_audit.jsonl").write_text("{}\n", encoding="utf-8")
+        (dst_d / "client_libs" / "google-ads-python").mkdir(parents=True)
+        (dst_d / "client_libs" / "google-ads-python" / "marker.txt").write_text("keep\n", encoding="utf-8")
+        assert scl.sync_directories(str(src_d), str(dst_d)) is True
+        assert (dst_d / "saved" / "logs" / "mutation_audit.jsonl").is_file()
+        assert (dst_d / "client_libs" / "google-ads-python" / "marker.txt").is_file()
+
+        lib_root = isolated_env / "pkg_sync" / "client_libs" / "google-ads-python"
+        (lib_root / "google" / "ads" / "googleads" / CURRENT_API_VERSION).mkdir(parents=True)
+        cfg_file = isolated_env / "pkg_sync" / "config" / "assistant_config"
+        cfg_file.parent.mkdir(parents=True, exist_ok=True)
+        cfg_file.write_text(
+            'customer_id = "1112223334"\nexecute_mutates = true\n'
+            "allow_tier1_financial_mutates = true\ncustom_note = keepme\nbroken = [\n",
+            encoding="utf-8",
+        )
+        scl.update_api_version_cache_if_needed(str(lib_root))
+        updated_cfg = cfg_file.read_text(encoding="utf-8")
+        assert "allow_tier1_financial_mutates = true" in updated_cfg
+        assert f'api_version = "{CURRENT_API_VERSION}"' in updated_cfg
+
+        # P2-3: _truncate_tool_output caps large outputs & validate_conversion_upload --max-errors caps stdout
+        big = "A" * 20000
+        truncated = srv._truncate_tool_output(big)
+        assert len(truncated) < 17000 and "truncated" in truncated
+
+        vcu = _load_isolated(
+            PLUGIN_ROOT / "skills" / "troubleshoot-conversions" / "scripts" / "validate_conversion_upload.py",
+            "vcu_audit2_test",
+        )
+        bad_csv = isolated_env / "bad_conv.csv"
+        rows = ["gclid,conversion_time,conversion_value"] + ["short,bad_time,-5" for _ in range(30)]
+        bad_csv.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        with pytest.raises(SystemExit):
+            vcu.validate_conversion_csv(str(bad_csv), max_errors=5)
+        vcu_out = capsys.readouterr().out
+        assert "additional error(s) suppressed" in vcu_out
+
+        # P2-3: troubleshoot_conversions writes 0600 unique report files
+        tc = _load_isolated(
+            PLUGIN_ROOT / "skills" / "troubleshoot-conversions" / "scripts" / "troubleshoot_conversions.py",
+            "tc_audit2_test",
+        )
+        mock_tc_client = MagicMock()
+        mock_tc_client.get_service.return_value.search_stream.return_value = []
+        rep_dir = isolated_env / "tc_reports"
+        tc.troubleshoot_conversions(mock_tc_client, "1234567890", json_output=True, output_dir=str(rep_dir))
+        tc.troubleshoot_conversions(mock_tc_client, "1234567890", json_output=True, output_dir=str(rep_dir))
+        capsys.readouterr()
+        reports = sorted(rep_dir.glob("conversion_troubleshooting_report_*.txt"))
+        assert len(reports) == 2
+        if sys.platform != "win32":
+            assert (reports[0].stat().st_mode & 0o777) == 0o600
+
+        # P3-1: No internal Google Cloudtop path literal in config_init.py
+        ci_text = CONFIG_INIT_PATH.read_text(encoding="utf-8")
+        assert "/usr/local/" + "google/home" not in ci_text
+
+        # P3-3: validate_gaql passes customer_id into cache key (no cross-customer cache bleed)
+        vg = _load_isolated(
+            PLUGIN_ROOT / "skills" / "validate-gaql" / "scripts" / "validate_gaql.py",
+            "vg_audit2_test",
+        )
+        cache_file = isolated_env / "gaql_cache.json"
+        vg.set_cached_validation(
+            query="SELECT campaign.id FROM campaign",
+            api_version=CURRENT_API_VERSION,
+            valid=True,
+            cache_path=str(cache_file),
+            customer_id="1111111111",
+        )
+        assert (
+            vg.get_cached_validation(
+                query="SELECT campaign.id FROM campaign",
+                api_version=CURRENT_API_VERSION,
+                cache_path=str(cache_file),
+                customer_id="1111111111",
+            )
+            is not None
+        )
+        assert (
+            vg.get_cached_validation(
+                query="SELECT campaign.id FROM campaign",
+                api_version=CURRENT_API_VERSION,
+                cache_path=str(cache_file),
+                customer_id="2222222222",
+            )
+            is None
+        )

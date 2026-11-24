@@ -87,8 +87,7 @@ def _resolve_active_api_version(explicit: Optional[str] = None) -> str:
     if clean:
         if not re.fullmatch(r"v?\d+", clean):
             raise ValueError(
-                f"Invalid Google Ads API version {explicit!r}: expected 'vN' "
-                "(for example v23)."
+                f"Invalid Google Ads API version {explicit!r}: expected 'vN'."
             )
         return f"v{int(clean.lstrip('v'))}"
     script_dir = os.path.dirname(os.path.abspath(__file__))

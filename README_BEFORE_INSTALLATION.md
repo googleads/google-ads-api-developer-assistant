@@ -33,7 +33,7 @@ You can upgrade from `v4.0.0` to `v4.1.0` in place. The update script keeps your
    customer_id = "1234567890"
    execute_mutates = false
    ```
-   If the script finds no API version, it shows a warning and writes `api_version = ""`. The assistant then finds the version at session start. To set it yourself, edit `api_version = "vNN"` in the file. The value must have the form `vNN` (for example, `v24`).
+   If the script finds no API version, it shows a warning and writes `api_version = ""`. The assistant then finds the version at session start. To set it yourself, edit `api_version = "vNN"` in the file (the value must have the form `vNN`).
    *(Optional)* After the script creates `config/assistant_config`, you can delete the old `config/customer_id`, `config/customer_id.txt`, and `config/api_version.txt` files.
 
 3. **Restart Your Host Session:**
@@ -115,5 +115,5 @@ customer_id = "12345678"
 execute_mutates = false
 ```
 * **Default Customer ID (`customer_id`):** Set your default customer ID (for example, `customer_id = "1234567890"`).
-* **API Version (`api_version`):** The install and update scripts write the newest API version that they find in `client_libs/google-ads-python` or in the installed `google-ads` Python package. If they find no version, they show a warning and write `api_version = ""`, and the assistant finds the version at session start. Edit this value if you want to use a specific API version. The value must have the form `vNN` (for example, `v24`). The assistant ignores other values, such as `latest`. The `GOOGLE_ADS_API_VERSION` environment variable overrides this value.
+* **API Version (`api_version`):** The install and update scripts write the newest API version that they find in `client_libs/google-ads-python` or in the installed `google-ads` Python package. If they find no version, they show a warning and write `api_version = ""`, and the assistant finds the version at session start. Edit this value if you want to use a specific API version (the value must have the form `vNN`). The assistant ignores other values, such as `latest`. The `GOOGLE_ADS_API_VERSION` environment variable overrides this value.
 * **Live Mutations (`execute_mutates`):** Set `execute_mutates = true` or `false` (the default is `false`). This setting controls if the 4-Step HITL verification flow allows live Google Ads API `create` and `update` mutations. Delete (`remove`) operations are always blocked.

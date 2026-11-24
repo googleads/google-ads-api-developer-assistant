@@ -141,8 +141,7 @@ def _resolve_active_api_version(explicit: Optional[str] = None) -> str:
     if clean:
         if not re.fullmatch(r"v?\d+", clean):
             raise ValueError(
-                f"Invalid Google Ads API version {explicit!r}: expected 'vN' "
-                "(for example v23)."
+                f"Invalid Google Ads API version {explicit!r}: expected 'vN'."
             )
         return f"v{int(clean.lstrip('v'))}"
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -190,7 +189,10 @@ def _get_cache_file_path(cache_path: Optional[str] = None) -> str:
     if cache_path:
         return os.path.abspath(cache_path)
 
-    env_path = os.environ.get("GAQL_CACHE_PATH", "").strip()
+    env_path = (
+        os.environ.get("GAQL_CACHE_PATH", "").strip()
+        or os.environ.get("GOOGLE_ADS_GAQL_CACHE_PATH", "").strip()
+    )
     if env_path:
         return os.path.abspath(env_path)
 
@@ -520,6 +522,7 @@ def validate_gaql(
             api_version=api_version,
             cache_path=cache_path,
             ttl_seconds=cache_ttl,
+            customer_id=clean_customer_id,
         )
         if cached is not None:
             if cached.get("valid", True):
@@ -872,6 +875,7 @@ def validate_gaql(
                 valid=True,
                 message="SUCCESS: GAQL query is structurally valid.",
                 cache_path=cache_path,
+                customer_id=clean_customer_id,
             )
     except GoogleAdsException as ex:
         handle_googleads_exception(ex)

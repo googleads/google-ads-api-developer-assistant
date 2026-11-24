@@ -32,6 +32,7 @@ if _THIS_DIR not in sys.path:
 from google.ads.googleads.client import GoogleAdsClient  # noqa: E402
 from google.auth.credentials import AnonymousCredentials  # noqa: E402
 
+from api_version_utils import CURRENT_API_VERSION  # noqa: E402
 import hitl_audit_logger as hal  # noqa: E402
 import hitl_policy_functional_suite as hpfs  # noqa: E402
 
@@ -591,14 +592,14 @@ class TestAccountConfigAndAuditLogger:
 
         parser = hpfs.build_arg_parser()
         parsed_upper = parser.parse_args(
-            ["--suite", "TC-HOOK", "--dry-run-only", "--api-version", "v26"]
+            ["--suite", "TC-HOOK", "--dry-run-only", "--api-version", CURRENT_API_VERSION]
         )
         assert parsed_upper.suite == "tc-hook"
         assert parsed_upper.validate_only is True
-        assert parsed_upper.api_version == "v26"
+        assert parsed_upper.api_version == CURRENT_API_VERSION
 
-        cfg = hal.load_test_account_config(api_version_override="v26")
-        assert cfg.api_version == "v26"
+        cfg = hal.load_test_account_config(api_version_override=CURRENT_API_VERSION)
+        assert cfg.api_version == CURRENT_API_VERSION
 
 
 class TestSimulatedTestAccountSuiteExecution:
@@ -881,7 +882,7 @@ def test_redaction_masks_secret_values_inside_strings(
         log_path=str(log_file),
         target_customer_id="4863089361",
         login_customer_id="8601651289",
-        api_version="v26",
+        api_version=CURRENT_API_VERSION,
     )
     req_id = logger.log_request(
         test_id="T",

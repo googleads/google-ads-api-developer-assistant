@@ -247,29 +247,43 @@ if effective_cfg_dir:
     # Point GOOGLE_ADS_ASSISTANT_ENABLED to the effective state of effective_cfg_dir for isolated hook testing
     env["GOOGLE_ADS_ASSISTANT_ENABLED"] = "true" if enabled else "false"
 
-# 1. Test PreInvocation hook (invocationNum = 2 to avoid network parity checks)
-pre_inv_proc = subprocess.run(
-    [sys.executable, config_init_path, "--hook"],
-    input=json.dumps({"invocationNum": 2}),
+hook_guard_path = os.path.join(os.path.dirname(os.path.abspath(config_init_path)), "hook_guard.py")
+cli_mode = "claude" if target_type == "claude" else "agy"
+if cli_mode == "claude":
+    session_payload = {"hook_event_name": "SessionStart", "invocationNum": 2}
+    pretool_payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "python3 -c \"print('ok')\""},
+    }
+else:
+    session_payload = {"hookEventName": "SessionStart", "invocationNum": 2}
+    pretool_payload = {
+        "hookEventName": "PreToolUse",
+        "toolCall": {
+            "name": "run_command",
+            "args": {"CommandLine": "python3 -c \"print('ok')\""},
+        },
+    }
+
+# 1. Test SessionStart hook via live config/hook_guard.py entrypoint
+session_proc = subprocess.run(
+    [sys.executable, hook_guard_path, "--cli", cli_mode, "--event", "SessionStart"],
+    input=json.dumps(session_payload),
     text=True,
     capture_output=True,
     env=env,
     check=False,
 )
 try:
-    pre_inv_out = json.loads(pre_inv_proc.stdout.strip() or "{}")
+    session_out = json.loads(session_proc.stdout.strip() or "{}")
 except Exception:
-    pre_inv_out = {"raw": pre_inv_proc.stdout.strip()}
+    session_out = {"raw": session_proc.stdout.strip()}
 
-# 2. Test PreToolUse hook
+# 2. Test PreToolUse hook via live config/hook_guard.py entrypoint
 pre_tool_proc = subprocess.run(
-    [sys.executable, config_init_path, "--hook"],
-    input=json.dumps({
-        "toolCall": {
-            "name": "run_command",
-            "args": {"CommandLine": "python3 -c \"print('ok')\""},
-        }
-    }),
+    [sys.executable, hook_guard_path, "--cli", cli_mode, "--event", "PreToolUse"],
+    input=json.dumps(pretool_payload),
     text=True,
     capture_output=True,
     env=env,
@@ -280,19 +294,37 @@ try:
 except Exception:
     pre_tool_out = {"raw": pre_tool_proc.stdout.strip()}
 
-if enabled:
-    pre_inv_ok = "injectSteps" in pre_inv_out
-    pre_tool_ok = pre_tool_out.get("decision") == "allow" and "overwrite" in pre_tool_out
+if cli_mode == "claude":
+    session_active = (session_out.get("hookSpecificOutput") or {}).get("hookEventName") == "SessionStart"
+    pre_tool_active = "updatedInput" in (pre_tool_out.get("hookSpecificOutput") or {})
+    if enabled:
+        session_ok = session_proc.returncode == 0 and session_active
+        pre_tool_ok = pre_tool_proc.returncode == 0 and pre_tool_active
+    else:
+        session_ok = session_proc.returncode == 0 and session_out == {}
+        pre_tool_ok = pre_tool_proc.returncode == 0 and pre_tool_out == {}
 else:
-    pre_inv_ok = pre_inv_out == {}
-    pre_tool_ok = pre_tool_out == {"decision": "allow"} and "overwrite" not in pre_tool_out
+    session_active = "injectSteps" in session_out
+    pre_tool_active = pre_tool_out.get("decision") == "allow" and "overwrite" in pre_tool_out
+    if enabled:
+        session_ok = session_proc.returncode == 0 and session_active
+        pre_tool_ok = pre_tool_proc.returncode == 0 and pre_tool_active
+    else:
+        session_ok = session_proc.returncode == 0 and session_out == {}
+        pre_tool_ok = (
+            pre_tool_proc.returncode == 0
+            and pre_tool_out == {"decision": "allow"}
+            and "overwrite" not in pre_tool_out
+        )
 
 hook_test = {
-    "passed": bool(pre_inv_ok and pre_tool_ok),
-    "pre_invocation_hook": "active (injects context)" if "injectSteps" in pre_inv_out else "inactive (no-op {})",
+    "passed": bool(os.path.isfile(hook_guard_path) and session_ok and pre_tool_ok),
+    "hook_entrypoint": "config/hook_guard.py",
+    "cli": cli_mode,
+    "session_start_hook": "active (injects context)" if session_active else "inactive (no-op {})",
     "pre_tool_use_hook": (
         "active (rewrites/guards commands)"
-        if "overwrite" in pre_tool_out
+        if pre_tool_active
         else "inactive (passthrough allow)"
     ),
 }
@@ -314,8 +346,8 @@ else:
             ln for ln in text_out.splitlines() if not ln.strip().startswith("Jetski / Antigravity (~/.gemini):")
         )
     print(text_out)
-    print(f"  Live Hook Test    : {'PASS' if hook_test['passed'] else 'FAIL'}")
-    print(f"    PreInvocation   : {hook_test['pre_invocation_hook']}")
+    print(f"  Live Hook Test    : {'PASS' if hook_test['passed'] else 'FAIL'} ({hook_test['hook_entrypoint']}, cli={hook_test['cli']})")
+    print(f"    SessionStart    : {hook_test['session_start_hook']}")
     print(f"    PreToolUse      : {hook_test['pre_tool_use_hook']}")
     if enabled:
         print("\nPlugin is ENABLED and will be active when you invoke jetski/agy.")

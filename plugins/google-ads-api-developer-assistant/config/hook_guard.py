@@ -12,8 +12,18 @@ import json
 import os
 import re
 import sys
-from typing import Any, Optional
 
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from typing import Any, Optional
+
+_FILE_READ_TOOLS = frozenset(
+    {
+        "read_file",
+        "view_file",
+        "Read",
+    }
+)
 _FILE_WRITE_TOOLS = frozenset(
     {
         "write_file",
@@ -26,6 +36,15 @@ _FILE_WRITE_TOOLS = frozenset(
         "MultiEdit",
     }
 )
+_PROTECTED_CREDENTIAL_FILES = frozenset(
+    {
+        "google-ads.yaml",
+        "google_ads_php.ini",
+        "google_ads_config.rb",
+        "ads.properties",
+        ".a2a_token",
+    }
+)
 _PROTECTED_DENY_FILES = frozenset({"last_dry_run.json", "mutation_audit.jsonl"})
 _PROTECTED_ASK_FILES = frozenset(
     {
@@ -35,7 +54,15 @@ _PROTECTED_ASK_FILES = frozenset(
         "hooks.json",
         "config_init.py",
         "hook_guard.py",
+        "sitecustomize.py",
+        "AGENTS.md",
         "run_mutation.py",
+        "set_financial_limits.py",
+        "create_account.py",
+        "create_campaign.py",
+        "create_ad_group.py",
+        "create_ad.py",
+        "create_pmax_webpage_filter.py",
         "server.py",
         "mcp_config.json",
         ".mcp.json",
@@ -65,14 +92,18 @@ _DELETION_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 # Any shell command containing none of these tokens cannot write protected files,
-# execute Python/shell scripts, invoke Google Ads APIs, or need Ads env rewrites.
+# spoof env vars, invoke obfuscated/piped/quoted commands, run Ads scripts, or need rewrites.
 _SHELL_INSPECT_RE = re.compile(
-    r"(?:python|pytest|googleads|GoogleAdsClient|google-ads|skills/|\.py\b|"
-    r"\.sh\b|\.bash\b|run_mutation|config_init|hook_guard|set_financial_limits|"
+    r"(?:python|pytest|googleads|GoogleAdsClient|google-ads|GOOGLE_ADS_|skills/|"
+    r"\.(?:py|sh|bash|php|rb|js|mjs|cjs|ts)\b|"
+    r"run_mutation|config_init|hook_guard|sitecustomize|AGENTS\.md|set_financial_limits|"
+    r"create_(?:account|campaign|ad_group|ad|pmax_webpage_filter)|"
     r"assistant_config|financial_limits|last_dry_run|mutation_audit|hooks\.json|"
-    r"mcp_config|\.mcp\.json|sidecar\.json|plugin\.json|server\.py|"
-    r"\b(?:curl|wget|sed|perl|tee|cp|mv|install|ln|rm|truncate|dd|rsync|eval|exec)\b|"
-    r":mutate|saved/|>{1,2}|\./)",
+    r"mcp_config|\.mcp\.json|sidecar\.json|plugin\.json|server\.py|\.a2a_token|"
+    r"\b(?:curl|wget|http|httpie|xh|sed|perl|awk|gawk|mawk|nawk|patch|"
+    r"tee|cp|mv|install|ln|rm|truncate|dd|rsync|eval|exec|env|xargs|source|"
+    r"php|ruby|node|nodejs|deno|bun|bash|sh|zsh|dash|ksh)\b|"
+    r":mutate|saved/|>{1,2}|\./|''|\"\"|\$|`|\||\\)",
     re.IGNORECASE,
 )
 _ENABLED_LINE_RE = re.compile(
@@ -135,7 +166,13 @@ def _fast_is_plugin_enabled() -> bool:
 
 
 def _emit_pretooluse(decision: str, reason: Optional[str], is_claude: bool) -> int:
-    """Prints a PreToolUse decision in the active CLI's exact contract."""
+    """Prints a PreToolUse decision in the active CLI's exact contract.
+
+    Claude Code uses the canonical exit-0 structured JSON contract
+    (`hookSpecificOutput.permissionDecision` allow|deny|ask); the shell wrapper
+    in hooks/hooks.json still uses exit 2 + stderr when Python or hook_guard.py
+    is missing.
+    """
     if is_claude:
         c_dec = _CLAUDE_DECISIONS.get(decision, "deny")
         if c_dec == "allow":
@@ -149,9 +186,6 @@ def _emit_pretooluse(decision: str, reason: Optional[str], is_claude: bool) -> i
             }
         }
         print(json.dumps(payload))
-        if c_dec == "deny":
-            print(reason or "Blocked by the HITL mutation guard.", file=sys.stderr)
-            return 2
         return 0
     out: dict[str, Any] = {"decision": decision}
     if reason and decision != "allow":
@@ -170,9 +204,69 @@ def _load_config_init() -> Any:
     return config_init
 
 
-def _is_path_in_saved_code(script_path: str) -> bool:
+def _extract_workspace_cwd(parsed: Optional[dict[str, Any]]) -> Optional[str]:
+    """Extracts the user's active workspace directory from an agy or Claude hook payload."""
+    if not isinstance(parsed, dict):
+        return None
+    tool_call = parsed.get("toolCall")
+    if isinstance(tool_call, dict) and isinstance(tool_call.get("args"), dict):
+        tc_cwd = tool_call["args"].get("Cwd") or tool_call["args"].get("cwd")
+        if isinstance(tc_cwd, str) and tc_cwd.strip():
+            return os.path.abspath(os.path.expanduser(tc_cwd.strip()))
+    tool_input = parsed.get("tool_input")
+    if isinstance(tool_input, dict):
+        ti_cwd = tool_input.get("cwd")
+        if isinstance(ti_cwd, str) and ti_cwd.strip():
+            return os.path.abspath(os.path.expanduser(ti_cwd.strip()))
+    for key in (
+        "cwd",
+        "workingDirectory",
+        "working_directory",
+        "workspaceRoot",
+        "workspace_root",
+        "projectDir",
+        "project_dir",
+    ):
+        val = parsed.get(key)
+        if isinstance(val, str) and val.strip():
+            return os.path.abspath(os.path.expanduser(val.strip()))
+    for list_key in ("workspacePaths", "workspace_paths", "workspaces"):
+        ws_list = parsed.get(list_key)
+        if isinstance(ws_list, list) and ws_list:
+            first = ws_list[0]
+            if isinstance(first, str) and first.strip():
+                return os.path.abspath(os.path.expanduser(first.strip()))
+            if isinstance(first, dict):
+                cand = first.get("path") or first.get("uri")
+                if isinstance(cand, str) and cand.strip():
+                    if cand.startswith("file://"):
+                        cand = cand[len("file://") :]
+                    return os.path.abspath(os.path.expanduser(cand.strip()))
+    return None
+
+
+def _resolve_path_for_guard(path: str, workspace_cwd: Optional[str] = None) -> str:
+    """Resolves a relative or absolute path against workspace_cwd, following symlinks."""
+    expanded = os.path.expanduser(path.strip().rstrip("/\\"))
+    if workspace_cwd and not os.path.isabs(expanded):
+        expanded = os.path.join(workspace_cwd, expanded)
+    return os.path.realpath(expanded)
+
+
+def _candidate_basenames(path: str, workspace_cwd: Optional[str] = None) -> set[str]:
+    """Returns raw, workspace-resolved realpath, and CWD-resolved realpath basenames."""
+    clean = path.strip().rstrip("/\\")
+    raw_base = os.path.basename(clean)
+    ws_real_base = os.path.basename(_resolve_path_for_guard(clean, workspace_cwd))
+    cwd_real_base = os.path.basename(os.path.realpath(os.path.expanduser(clean)))
+    return {b for b in (raw_base, ws_real_base, cwd_real_base) if b}
+
+
+def _is_path_in_saved_code(
+    script_path: str, workspace_cwd: Optional[str] = None
+) -> bool:
     """True when script_path resolves to a .py file under a saved/code/ directory."""
-    real_path = os.path.realpath(os.path.expanduser(script_path.strip()))
+    real_path = _resolve_path_for_guard(script_path, workspace_cwd)
     if not real_path.endswith(".py"):
         return False
     parts = real_path.replace("\\", "/").split("/")
@@ -212,9 +306,12 @@ def _extract_mcp_call(
     if tool_name.startswith("mcp_"):
         lowered = tool_name.lower()
         for tok in _ADS_MCP_SERVER_TOKENS:
-            prefix = f"mcp_{tok}_"
-            if lowered.startswith(prefix):
-                return tool_name[len(prefix) :], args
+            marker = f"_{tok}_"
+            idx = lowered.find(marker)
+            if idx >= 3:
+                extracted = tool_name[idx + len(marker) :]
+                if extracted:
+                    return extracted, args
     return None
 
 
@@ -227,10 +324,12 @@ def _evaluate_mcp_guard(
     if mcp_tool not in _ADS_MCP_MUTATION_TOOLS:
         return "allow", None
 
+    ws_cwd = _extract_workspace_cwd(input_data)
+
     if mcp_tool == "prepare_mutation":
         sp = mcp_args.get("script_path")
         if sp is not None and str(sp).strip():
-            if not isinstance(sp, str) or not _is_path_in_saved_code(sp):
+            if not isinstance(sp, str) or not _is_path_in_saved_code(sp, ws_cwd):
                 return (
                     "deny",
                     "BLOCKED BY HITL MUTATION GUARD: MCP prepare_mutation 'script_path' "
@@ -251,7 +350,7 @@ def _evaluate_mcp_guard(
     if mcp_tool == "execute_mutation":
         sp = mcp_args.get("script_path")
         if sp is not None and str(sp).strip():
-            if not isinstance(sp, str) or not _is_path_in_saved_code(sp):
+            if not isinstance(sp, str) or not _is_path_in_saved_code(sp, ws_cwd):
                 return (
                     "deny",
                     "BLOCKED BY HITL MUTATION GUARD: MCP execute_mutation 'script_path' "
@@ -264,16 +363,18 @@ def _evaluate_mcp_guard(
                 "BLOCKED BY HITL MUTATION GUARD: Live MCP mutations are disabled "
                 "(execute_mutates = false in config/assistant_config).",
             )
-        ws_cwd = ci._extract_workspace_cwd(input_data)
+        effective_ws = ws_cwd or ci._extract_workspace_cwd(input_data)
         resolved_sp = (
-            ci._resolve_candidate_script_path(str(sp), ws_cwd)
+            ci._resolve_candidate_script_path(str(sp), effective_ws)
             if isinstance(sp, str) and sp.strip()
             else None
         )
+        allow_receipt_only = not _strict_bool(mcp_args.get("run_script", False))
         ok, msg, _ = ci._verify_dry_run_receipt_for_hook(
             script_path=resolved_sp,
             hook_context=input_data,
-            workspace_cwd=ws_cwd,
+            workspace_cwd=effective_ws,
+            allow_receipt_only=allow_receipt_only,
         )
         return ("force_ask", msg) if ok else ("deny", msg)
 
@@ -302,12 +403,11 @@ def _evaluate_mcp_guard(
             "(execute_mutates = false in config/assistant_config).",
         )
 
+    # Only CampaignBudgetService (create_campaign without existing budget_resource_name) is Tier 1;
+    # AdGroupService (create_ad_group) is Tier 2 and governed by config/financial_limits + force_ask.
     is_tier1_mcp = (
         mcp_tool == "create_campaign"
         and not str(mcp_args.get("budget_resource_name") or "").strip()
-    ) or (
-        mcp_tool == "create_ad_group"
-        and mcp_args.get("cpc_bid_micros") is not None
     )
     if is_tier1_mcp:
         rm_mod = ci._load_run_mutation_for_hook()
@@ -449,10 +549,12 @@ def handle_fast_hook(
         decision, reason = _evaluate_mcp_guard(mcp_tool, mcp_args, parsed)
         return _emit_pretooluse(decision, reason, is_claude)
 
-    # 2. File-write tool interception (agy write_file/edit_file + legacy + Claude Write/Edit)
+    # 2. File-read / file-write tool interception (agy + legacy + Claude Read/Write/Edit)
+    ws_cwd = _extract_workspace_cwd(parsed)
     target_file = (
         args.get("Path")
         or args.get("TargetFile")
+        or args.get("AbsolutePath")
         or args.get("file_path")
         or args.get("path")
         or ""
@@ -461,13 +563,23 @@ def handle_fast_hook(
     if not isinstance(cmd, str):
         cmd = ""
 
+    if tool_name in _FILE_READ_TOOLS:
+        if isinstance(target_file, str) and target_file.strip():
+            bases = _candidate_basenames(target_file, ws_cwd)
+            cred_hit = next((b for b in bases if b in _PROTECTED_CREDENTIAL_FILES), None)
+            if cred_hit:
+                return _emit_pretooluse(
+                    "deny",
+                    f"BLOCKED BY CREDENTIAL ISOLATION GUARD: Direct file reads of '{cred_hit}' "
+                    "are prohibited to prevent leaking OAuth secrets or sidecar tokens into model context.",
+                    is_claude,
+                )
+        return _emit_pretooluse("allow", None, is_claude)
+
     if (tool_name in _FILE_WRITE_TOOLS or (target_file and not cmd)) and isinstance(
         target_file, str
     ):
-        clean_target = target_file.strip().rstrip("/\\")
-        raw_base = os.path.basename(clean_target)
-        real_base = os.path.basename(os.path.realpath(os.path.expanduser(clean_target)))
-        bases = {b for b in (raw_base, real_base) if b}
+        bases = _candidate_basenames(target_file, ws_cwd)
         deny_hit = next((b for b in bases if b in _PROTECTED_DENY_FILES), None)
         if deny_hit:
             return _emit_pretooluse(

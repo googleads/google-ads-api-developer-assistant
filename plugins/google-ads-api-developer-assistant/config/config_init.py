@@ -1,16 +1,27 @@
 """Initializes config/google-ads.yaml from ~/google-ads.yaml and manages key-value pairs."""
 
-import html
-import importlib.util
+from __future__ import annotations
+
 import json
 import math
 import os
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
-from typing import Any, Dict, Optional, Tuple
+
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from typing import Any, Dict, Optional, Tuple
+
+_LAZY_STDLIB_MODULES = frozenset({"html", "importlib", "shutil", "subprocess", "tempfile"})
+
+
+def __getattr__(name: str) -> Any:
+    """Lazily loads heavy stdlib modules so PreToolUse hook startup stays fast (<100ms)."""
+    if name in _LAZY_STDLIB_MODULES:
+        mod = __import__(name)
+        globals()[name] = mod
+        return mod
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 _CACHED_VERSION: Optional[str] = None
@@ -42,6 +53,8 @@ def get_version(ext_version_script: Optional[str] = None) -> str:
         script_path = os.path.normpath(ext_version_script)
         if os.path.isfile(script_path):
             try:
+                import subprocess
+
                 result = subprocess.run(
                     [sys.executable, script_path],
                     capture_output=True,
@@ -114,6 +127,8 @@ def get_version(ext_version_script: Optional[str] = None) -> str:
         script_path = os.path.normpath(script)
         if os.path.isfile(script_path):
             try:
+                import subprocess
+
                 result = subprocess.run(
                     [sys.executable, script_path],
                     capture_output=True,
@@ -447,6 +462,8 @@ def parse_dotnet_config(path: str) -> Dict[str, str]:
             r"|<add\b[^>]*?\bvalue\s*=\s*(['\"])(.*?)\5[^>]*?\bkey\s*=\s*(['\"])(.*?)\7",
             re.IGNORECASE | re.DOTALL,
         )
+        import html
+
         for match in add_tag_pattern.finditer(xml_uncommented):
             if match.group(2) is not None:
                 raw_k, raw_v = match.group(2), match.group(4)
@@ -834,6 +851,8 @@ def sync_and_set_config_kv(
                 and os.path.abspath(candidate_cfg) != os.path.abspath(target_assistant_cfg)
             ):
                 try:
+                    import shutil
+
                     shutil.copy2(candidate_cfg, target_assistant_cfg)
                     seeded = True
                     break
@@ -880,6 +899,8 @@ def sync_and_set_config_kv(
                 and os.path.abspath(cand_fin) != os.path.abspath(target_fin_limits)
             ):
                 try:
+                    import shutil
+
                     shutil.copy2(cand_fin, target_fin_limits)
                     if sys.platform != "win32" and os.path.isfile(target_fin_limits):
                         try:
@@ -956,14 +977,14 @@ def validate_api_version(value: str) -> str:
     """Validates a Google Ads API version string and returns it normalized as 'vN'.
 
     Accepts 'vN' or 'N' (surrounding whitespace is stripped). Raises ValueError for
-    anything else (e.g. 'latest', '../../x', 'v24beta') so unvalidated values never
+    anything else (e.g. 'latest', '../../x', 'vNbeta') so unvalidated values never
     reach path joins or get persisted to assistant_config.
     """
     if not isinstance(value, str):
-        raise ValueError(f"Invalid Google Ads API version {value!r}: expected 'vN' (e.g. v24).")
+        raise ValueError(f"Invalid Google Ads API version {value!r}: expected 'vN'.")
     m = _API_VERSION_VALUE_RE.fullmatch(value.strip())
     if not m:
-        raise ValueError(f"Invalid Google Ads API version {value!r}: expected 'vN' (e.g. v24).")
+        raise ValueError(f"Invalid Google Ads API version {value!r}: expected 'vN'.")
     return f"v{int(m.group(1))}"
 
 
@@ -1079,6 +1100,8 @@ def _detect_installed_api_version() -> str:
                 if pkg_file:
                     pkg_paths.append(os.path.dirname(pkg_file))
         else:
+            import importlib.util
+
             spec = importlib.util.find_spec("google.ads.googleads")
             if spec is not None:
                 cache_token = "spec"
@@ -1637,6 +1660,8 @@ def ensure_client_libs_synced(
     except OSError:
         pass
 
+    import subprocess
+
     cmd = [sys.executable, script_path, "--json"]
     if async_in_background:
         try:
@@ -2179,6 +2204,12 @@ _HOOK_LIFECYCLE_EVENTS = (
 )
 
 
+def _is_assistant_hook_command(cmd_val: Any) -> bool:
+    """True when a hook command invokes either hook_guard.py or config_init.py."""
+    cmd_str = str(cmd_val or "")
+    return "hook_guard.py" in cmd_str or "config_init.py" in cmd_str
+
+
 def _collect_hook_array_enabled_flags(container: Dict[str, Any]) -> list[bool]:
     """Collects explicit 'enabled' booleans from lifecycle hook arrays inside container."""
     flags: list[bool] = []
@@ -2191,7 +2222,7 @@ def _collect_hook_array_enabled_flags(container: Dict[str, Any]) -> list[bool]:
             if not isinstance(entry, dict):
                 continue
             if "enabled" in entry and (
-                "config_init.py" in str(entry.get("command", ""))
+                _is_assistant_hook_command(entry.get("command", ""))
                 or isinstance(entry.get("hooks"), list)
             ):
                 flags.append(bool(entry["enabled"]))
@@ -2199,7 +2230,7 @@ def _collect_hook_array_enabled_flags(container: Dict[str, Any]) -> list[bool]:
                 for h in entry["hooks"]:
                     if (
                         isinstance(h, dict)
-                        and "config_init.py" in str(h.get("command", ""))
+                        and _is_assistant_hook_command(h.get("command", ""))
                         and "enabled" in h
                     ):
                         flags.append(bool(h["enabled"]))
@@ -2261,7 +2292,7 @@ def _toggle_hook_event_arrays(
             if not isinstance(entry, dict):
                 continue
             if "enabled" in entry or (
-                force_command_flag and "config_init.py" in str(entry.get("command", ""))
+                force_command_flag and _is_assistant_hook_command(entry.get("command", ""))
             ):
                 if entry.get("enabled") != bool(enabled):
                     changed = True
@@ -2271,21 +2302,38 @@ def _toggle_hook_event_arrays(
                 for h in entry["hooks"]:
                     if not isinstance(h, dict):
                         continue
-                    is_cfg_cmd = "config_init.py" in str(h.get("command", ""))
+                    is_cfg_cmd = _is_assistant_hook_command(h.get("command", ""))
                     if "enabled" in h or (force_command_flag and is_cfg_cmd):
                         h["enabled"] = bool(enabled)
                         changed = True
     return changed
 
 
+def _is_claude_strict_hooks_manifest(hooks_path: str, data: Dict[str, Any]) -> bool:
+    """True for Claude Code's hooks/hooks.json schema, which forbids per-hook 'enabled' keys."""
+    if "config-init" in data:
+        return False
+    hooks_section = data.get("hooks")
+    if not isinstance(hooks_section, dict) or "config-init" in hooks_section:
+        return False
+    parent_dir = os.path.basename(os.path.dirname(os.path.abspath(hooks_path)))
+    return parent_dir == "hooks" and "CLAUDE_PLUGIN_ROOT" in json.dumps(hooks_section)
+
+
 def _set_hooks_json_enabled(hooks_path: str, enabled: bool) -> bool:
-    """Updates 'enabled' flag on hooks in a hooks.json file (supporting both top-level and nested schemas)."""
+    """Updates 'enabled' flag on hooks in a hooks.json file (supporting both top-level and nested schemas).
+
+    Never injects unsupported 'enabled' keys into Claude Code's strict hooks/hooks.json;
+    Claude Code enable/disable is governed by assistant_config and .claude-plugin/plugin.json.
+    """
     if not os.path.isfile(hooks_path):
         return False
     try:
         with open(hooks_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
+            return False
+        if _is_claude_strict_hooks_manifest(hooks_path, data):
             return False
 
         changed = False
@@ -2341,6 +2389,8 @@ def _write_json_file_atomic(
     trailing_newline: bool = False,
 ) -> None:
     """Atomically writes JSON to target_path via a sibling temp file + os.replace."""
+    import tempfile
+
     abs_target = os.path.abspath(target_path)
     parent_dir = os.path.dirname(abs_target)
     if parent_dir:
@@ -3231,6 +3281,7 @@ def _verify_dry_run_receipt_for_hook(
     max_age_seconds: int = 1800,
     hook_context: Optional[Dict[str, Any]] = None,
     workspace_cwd: Optional[str] = None,
+    allow_receipt_only: bool = False,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Checks saved/data/last_dry_run.json for a valid, recent dry-run receipt."""
     from datetime import datetime, timezone
@@ -3388,27 +3439,33 @@ def _verify_dry_run_receipt_for_hook(
         )
 
     if not resolved_script_arg:
-        return (
-            False,
-            "BLOCKED BY HITL MUTATION GUARD: Direct inline 'python -c' live mutations are prohibited. "
-            "Save the mutation script under saved/code/ and run it via skills/execute-mutation/scripts/run_mutation.py.",
-            receipt,
-        )
-
-    resolved_script = os.path.abspath(resolved_script_arg)
-    expected_hash = str(receipt.get("script_sha256", ""))
-    if expected_hash and os.path.isfile(resolved_script):
-        hasher = hashlib.sha256()
-        with open(resolved_script, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                hasher.update(chunk)
-        if hasher.hexdigest() != expected_hash:
+        if allow_receipt_only:
+            rec_script = str(receipt.get("script_path") or "").strip()
+            if rec_script:
+                resolved_script_arg = _resolve_candidate_script_path(rec_script, effective_ws)
+        if not resolved_script_arg and not allow_receipt_only:
             return (
                 False,
-                f"BLOCKED BY HITL MUTATION GUARD: Mutation script '{script_path}' was modified after "
-                "the validate_only=True dry-run (SHA-256 mismatch). Re-run --dry-run first.",
+                "BLOCKED BY HITL MUTATION GUARD: Direct inline 'python -c' live mutations are prohibited. "
+                "Save the mutation script under saved/code/ and run it via skills/execute-mutation/scripts/run_mutation.py.",
                 receipt,
             )
+
+    if resolved_script_arg:
+        resolved_script = os.path.abspath(resolved_script_arg)
+        expected_hash = str(receipt.get("script_sha256", ""))
+        if expected_hash and os.path.isfile(resolved_script):
+            hasher = hashlib.sha256()
+            with open(resolved_script, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    hasher.update(chunk)
+            if hasher.hexdigest() != expected_hash:
+                return (
+                    False,
+                    f"BLOCKED BY HITL MUTATION GUARD: Mutation script '{script_path or resolved_script_arg}' was modified after "
+                    "the validate_only=True dry-run (SHA-256 mismatch). Re-run --dry-run first.",
+                    receipt,
+                )
 
     # Verify canonical mutate request SHA-256 integrity on the receipt before allowing live execution
     recorded_req_sha = str(receipt.get("request_sha256", "")).strip()
@@ -3720,11 +3777,23 @@ _LOAD_FROM_STORAGE_VER_RE = re.compile(
 _EXPANDUSER_YAML_RE = re.compile(
     r"os\.path\.expanduser\(\s*['\"][^'\"]*google-ads\.yaml['\"]\s*\)"
 )
+_HOME_PARENT_DIRS = sorted(
+    {
+        p
+        for p in (
+            "/home",
+            "/Users",
+            os.path.dirname(os.path.expanduser("~")).replace("\\", "/"),
+        )
+        if p and p != "/" and p.startswith("/")
+    }
+)
+_HOME_PARENT_ALT = "|".join(re.escape(p) for p in _HOME_PARENT_DIRS)
 _QUOTED_HOME_YAML_RE = re.compile(
-    r"(['\"])(?:~|/(?:home|Users)/[^/'\"]+|/usr/local/google/home/[^/'\"]+|client_libs/[^/'\"]+)/google-ads\.yaml\1"
+    rf"(['\"])(?:~|(?:{_HOME_PARENT_ALT})/[^/'\"]+|client_libs/[^/'\"]+)/google-ads\.yaml\1"
 )
 _BARE_HOME_YAML_RE = re.compile(
-    r"(?:~/google-ads\.yaml|/(?:home|Users)/[^/\s'\"]+/google-ads\.yaml|/usr/local/google/home/[^/\s'\"]+/google-ads\.yaml|client_libs/[^/\s'\"]+/google-ads\.yaml)"
+    rf"(?:~/google-ads\.yaml|(?:{_HOME_PARENT_ALT})/[^/\s'\"]+/google-ads\.yaml|client_libs/[^/\s'\"]+/google-ads\.yaml)"
 )
 # Only bare relative paths are rewritten; already-rooted paths such as
 # "$GADS_DIR/skills/..." or "${CLAUDE_PLUGIN_ROOT}/skills/..." or "/abs/skills/..." pass through.
@@ -3733,6 +3802,13 @@ _SKILL_REL_PATH_RE = re.compile(
 )
 _LEADING_SHELL_COMMENTS_RE = re.compile(r"\A(?:\s*#[^\n]*\n)+")
 
+_PROTECTED_CREDENTIAL_FILES = frozenset({
+    "google-ads.yaml",
+    "google_ads_php.ini",
+    "google_ads_config.rb",
+    "ads.properties",
+    ".a2a_token",
+})
 _PROTECTED_DENY_FILES = frozenset({"last_dry_run.json", "mutation_audit.jsonl"})
 _PROTECTED_ASK_FILES = frozenset({
     "assistant_config",
@@ -3741,12 +3817,25 @@ _PROTECTED_ASK_FILES = frozenset({
     "hooks.json",
     "config_init.py",
     "hook_guard.py",
+    "sitecustomize.py",
+    "AGENTS.md",
     "run_mutation.py",
+    "set_financial_limits.py",
+    "create_account.py",
+    "create_campaign.py",
+    "create_ad_group.py",
+    "create_ad.py",
+    "create_pmax_webpage_filter.py",
     "server.py",
     "mcp_config.json",
     ".mcp.json",
     "sidecar.json",
     "plugin.json",
+})
+_FILE_READ_TOOLS = frozenset({
+    "read_file",
+    "view_file",
+    "Read",
 })
 _FILE_WRITE_TOOLS = frozenset({
     "write_file",
@@ -3757,6 +3846,57 @@ _FILE_WRITE_TOOLS = frozenset({
     "Write",
     "Edit",
     "MultiEdit",
+})
+
+_GUARD_OVERRIDE_ENV_RE = re.compile(
+    r"(?:^|[;&|\n(\s])(?:export\s+|env\s+(?:-[^\s]+\s+)*)?"
+    r"(GOOGLE_ADS_(?:FINANCIAL_LIMITS_FILE|MUTATION_AUDIT_LOG|MUTATION_RECEIPT_PATH|"
+    r"ASSISTANT_CONFIG_DIR|EXECUTE_MUTATES|ALLOW_TIER1_FINANCIAL_MUTATES|ASSISTANT_ENABLED))\s*="
+)
+_PYTHON_SELF_ELEVATION_RE = re.compile(
+    r"\b(?:set_execute_mutates|set_allow_tier1_financial_mutates|set_plugin_enabled|"
+    r"write_assistant_config|write_financial_limits|_set_hooks_json_enabled)\s*\("
+    r"|\b(?:from\s+config\s+import\s+config_init|import\s+config_init)\b"
+    r"|(?:spec_from_file_location|run_path)\s*\([^)]*(?:config_init|set_financial_limits)"
+)
+_ADS_SDK_OR_SERVICE_RE = re.compile(
+    r"(?:google\.ads\.googleads|GoogleAdsClient|googleads\.googleapis\.com|"
+    r"\.get_service\s*\(|CampaignService|CampaignBudgetService|AdGroupService|"
+    r"GoogleAdsService|CustomerService|BillingSetupService|ConversionUploadService)"
+)
+_DYNAMIC_DISPATCH_RE = re.compile(
+    r"\b(?:getattr|setattr|exec|eval|__import__)\s*\("
+)
+_NON_PY_SCRIPT_ARG_RE = re.compile(
+    r"(?:'([^']+\.(?:php|rb))'|\"([^\"]+\.(?:php|rb))\"|([^\s'\"]+\.(?:php|rb)))"
+)
+_PHP_RUBY_MUTATE_RE = re.compile(
+    r"(?:->|\.)\s*(?:mutate(?:[A-Z][A-Za-z0-9]*|_[a-z0-9_]+)?|"
+    r"createCustomerClient|create_customer_client|"
+    r"applyRecommendation|apply_recommendation|dismissRecommendation|dismiss_recommendation|"
+    r"uploadClickConversions|upload_click_conversions|uploadCallConversions|upload_call_conversions|"
+    r"uploadConversionAdjustments|upload_conversion_adjustments|uploadUserData|upload_user_data|"
+    r"bookCampaigns|book_campaigns|applyIncentive|apply_incentive|"
+    r"createAccountLink|create_account_link|createProductLink|create_product_link|"
+    r"setRemove\s*\(|remove\s*=(?!=))"
+)
+_NODE_CMD_RE = re.compile(r"\b(?:node|nodejs|deno|bun)\b", re.IGNORECASE)
+_CD_TARGET_RE = re.compile(
+    r"(?:^|[;&|\n(])\s*cd\s+(?:'([^']+)'|\"([^\"]+)\"|([^\s;|&<>()'\"]+))"
+)
+_PY_EXEC_ARG_RE = re.compile(
+    r"\b(?:[\w./-]+/)?python(?:3(?:\.\d+)?)?(?:\.exe)?\s+(?:-[A-Za-z0-9]+\s+)*"
+    r"(?:'([^']+)'|\"([^\"]+)\"|([^\s;|&<>()'\"]+))",
+    re.IGNORECASE,
+)
+_SIMPLE_SHELL_VAR_RE = re.compile(
+    r"(?:^|[;&|\n(])\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(?:'([^'\n]*)'|\"([^\"$\n`]*)\"|([^\s;|&<>()'\"$`]+))"
+)
+_TRUSTED_LIFECYCLE_SH_NAMES = frozenset({
+    "install.sh",
+    "update.sh",
+    "plugin.sh",
+    "test_plugin_scripts.sh",
 })
 
 _RUN_MUTATION_REL_SUFFIX = "skills/execute-mutation/scripts/run_mutation.py"
@@ -3802,6 +3942,12 @@ _TRUSTED_ROOT_VAR_PREFIXES = {
 }
 
 _PROTECTED_CONFIG_BASENAMES = _PROTECTED_DENY_FILES | _PROTECTED_ASK_FILES
+_ANY_PROTECTED_BASENAME_RE = re.compile(
+    "|".join(
+        re.escape(b)
+        for b in sorted(_PROTECTED_CONFIG_BASENAMES, key=len, reverse=True)
+    )
+)
 _SHELL_REDIRECT_TARGET_RE = re.compile(
     r"(?<![<>&0-9])[0-9&]?>{1,2}\|?\s*(?!&)(?:'([^']*)'|\"([^\"]*)\"|([^\s;|&<>()]+))"
 )
@@ -3809,7 +3955,9 @@ _SHELL_VAR_ASSIGN_RE = re.compile(
     r"(?:^|[;&|\n\s])(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(?:'([^']*)'|\"([^\"]*)\"|([^\s;|&<>]+))"
 )
 _INPLACE_EDIT_RE = re.compile(
-    r"\b(?:sed|perl)\b[^;|&\n]*?\s(?:-[A-Za-z]*i[A-Za-z]*\b|--in-place\b)"
+    r"\b(?:sed|perl|ruby)\b[^;|&\n]*?\s(?:-[A-Za-z]*i[A-Za-z]*\b|--in-place\b)"
+    r"|\b(?:gawk|awk|mawk|nawk)\b[^;|&\n]*?\s-i\s+inplace\b"
+    r"|\bpatch\b"
 )
 _SHELL_WRITER_CMD_RE = re.compile(
     r"(?:^|[;&|\n(]|\bsudo\s+|\bthen\s+|\bdo\s+)\s*(tee|cp|mv|install|ln|rm|truncate|dd|rsync)\b"
@@ -4047,7 +4195,106 @@ def _reduce_run_mutation_shortcuts(
     return " ; ".join(kept), dropped
 
 
-def _protected_shell_write_decision(cmd: str) -> Optional[Tuple[str, str]]:
+_TRUSTED_ROOTS_CACHE: Optional[Tuple[Tuple[str, str, str], Tuple[str, ...]]] = None
+
+
+def _trusted_plugin_and_repo_roots() -> Tuple[str, ...]:
+    """Returns cached realpaths of trusted plugin and repository roots."""
+    global _TRUSTED_ROOTS_CACHE
+    env_key = (
+        os.environ.get("PLUGIN_ROOT", "").strip(),
+        os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip(),
+        os.environ.get("GOOGLE_ADS_ASSISTANT_DIR", "").strip(),
+    )
+    if _TRUSTED_ROOTS_CACHE is not None and _TRUSTED_ROOTS_CACHE[0] == env_key:
+        return _TRUSTED_ROOTS_CACHE[1]
+
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.realpath(os.path.abspath(os.path.join(this_dir, "..")))
+    raw_roots = [
+        plugin_root,
+        *env_key,
+        os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant"),
+        os.path.expanduser(
+            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"
+        ),
+    ]
+    if os.path.basename(os.path.dirname(plugin_root)) == "plugins":
+        raw_roots.append(os.path.realpath(os.path.abspath(os.path.join(plugin_root, "../.."))))
+    roots: list[str] = []
+    seen: set[str] = set()
+    for r in raw_roots:
+        if r:
+            rp = os.path.realpath(os.path.expanduser(r))
+            if rp not in seen:
+                seen.add(rp)
+                roots.append(rp)
+    res = tuple(roots)
+    _TRUSTED_ROOTS_CACHE = (env_key, res)
+    return res
+
+
+def _is_trusted_plugin_script(resolved_path: str) -> bool:
+    """True only when resolved_path resolves inside a verified plugin/repo root (never saved/)."""
+    real_target = os.path.realpath(os.path.expanduser(resolved_path))
+    parts = real_target.replace("\\", "/").split("/")
+    if any(parts[i] == "saved" for i in range(len(parts) - 1)):
+        return False
+    for root in _trusted_plugin_and_repo_roots():
+        try:
+            if os.path.commonpath([real_target, root]) == root:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _normalize_shell_obfuscation(cmd: str) -> str:
+    """De-obfuscates simple shell quote-splitting, backslash escapes, and inline var concats."""
+    if not cmd or ("''" not in cmd and '""' not in cmd and "$" not in cmd and "\\" not in cmd):
+        return cmd
+    norm = cmd.replace("''", "").replace('""', "")
+    # Collapse single-char backslash escapes of alphanumerics/dots/slashes (e.g. t\ee, \python3)
+    norm = re.sub(r"\\([A-Za-z0-9_./:-])", r"\1", norm)
+    if "$" not in norm:
+        return norm
+    var_map: Dict[str, str] = {}
+    for vm in _SIMPLE_SHELL_VAR_RE.finditer(norm):
+        vname = vm.group(1)
+        vval = (
+            vm.group(2)
+            if vm.group(2) is not None
+            else (vm.group(3) if vm.group(3) is not None else vm.group(4) or "")
+        )
+        if vname and vname not in ("GADS_DIR", "PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "HOME", "PATH"):
+            var_map[vname] = vval
+    if var_map:
+        for vname, vval in sorted(var_map.items(), key=lambda kv: -len(kv[0])):
+            norm = norm.replace(f"${{{vname}}}", vval)
+            norm = re.sub(rf"\${re.escape(vname)}(?![A-Za-z0-9_])", lambda _: vval, norm)
+    return norm
+
+
+def _extract_cd_dirs(cmd: str, workspace_cwd: Optional[str]) -> list[str]:
+    """Returns candidate working directories reached via `cd <dir>` within cmd."""
+    dirs: list[str] = []
+    if "cd " not in cmd and "cd\t" not in cmd:
+        return dirs
+    base_dir = workspace_cwd or os.getcwd()
+    for grp in _CD_TARGET_RE.findall(cmd):
+        raw = (grp[0] or grp[1] or grp[2] or "").strip()
+        if not raw or "$" in raw:
+            continue
+        expanded = os.path.expanduser(raw)
+        cand = expanded if os.path.isabs(expanded) else os.path.join(base_dir, expanded)
+        if os.path.isdir(cand) and cand not in dirs:
+            dirs.append(cand)
+    return dirs
+
+
+def _protected_shell_write_decision(
+    cmd: str, _normalized: bool = False
+) -> Optional[Tuple[str, str]]:
     """Detects shell/python writes to protected config, receipt, or audit files.
 
     Returns ("deny", reason) for receipt/audit files, ("force_ask", reason) for config
@@ -4055,8 +4302,10 @@ def _protected_shell_write_decision(cmd: str) -> Optional[Tuple[str, str]]:
     """
     if not cmd:
         return None
-    lowered = cmd
-    named = sorted(b for b in _PROTECTED_CONFIG_BASENAMES if b in lowered)
+    norm_cmd = cmd if _normalized else _normalize_shell_obfuscation(cmd)
+    if not _ANY_PROTECTED_BASENAME_RE.search(norm_cmd):
+        return None
+    named = sorted(b for b in _PROTECTED_CONFIG_BASENAMES if b in norm_cmd)
     if not named:
         return None
 
@@ -4071,7 +4320,7 @@ def _protected_shell_write_decision(cmd: str) -> Optional[Tuple[str, str]]:
 
     # Map shell variables assigned to protected basenames (e.g. F=assistant_config; echo > config/$F)
     var_to_protected: dict[str, set[str]] = {}
-    for vm in _SHELL_VAR_ASSIGN_RE.finditer(cmd):
+    for vm in _SHELL_VAR_ASSIGN_RE.finditer(norm_cmd):
         vname = vm.group(1)
         vval = vm.group(2) if vm.group(2) is not None else (vm.group(3) if vm.group(3) is not None else vm.group(4) or "")
         vhits = _basename_hits(vval)
@@ -4086,7 +4335,7 @@ def _protected_shell_write_decision(cmd: str) -> Optional[Tuple[str, str]]:
         return found
 
     # 1. Redirections (> file, >> file, >| file)
-    for m in _SHELL_REDIRECT_TARGET_RE.finditer(cmd):
+    for m in _SHELL_REDIRECT_TARGET_RE.finditer(norm_cmd):
         target = m.group(1) or m.group(2) or m.group(3) or ""
         base = os.path.basename(target.strip().rstrip("/"))
         if base in named:
@@ -4094,12 +4343,12 @@ def _protected_shell_write_decision(cmd: str) -> Optional[Tuple[str, str]]:
         else:
             hits |= _expand_var_hits(target)
 
-    segments = _split_shell_segments(cmd) or [cmd]
+    segments = _split_shell_segments(norm_cmd) or [norm_cmd]
     for seg in segments:
         seg_hits = _expand_var_hits(seg)
         if not seg_hits:
             continue
-        # 2. In-place editors (sed -i, perl -pi)
+        # 2. In-place editors (sed -i, perl -pi, gawk -i inplace, ruby -pi, patch)
         if _INPLACE_EDIT_RE.search(seg):
             hits |= seg_hits
             continue
@@ -4109,8 +4358,8 @@ def _protected_shell_write_decision(cmd: str) -> Optional[Tuple[str, str]]:
             continue
 
     # 4. Interpreter snippets (python -c / heredocs) that open protected files for writing
-    if _PY_WRITE_RE.search(cmd):
-        hits |= _expand_var_hits(cmd)
+    if _PY_WRITE_RE.search(norm_cmd):
+        hits |= _expand_var_hits(norm_cmd)
 
     if not hits:
         return None
@@ -4128,55 +4377,252 @@ def _protected_shell_write_decision(cmd: str) -> Optional[Tuple[str, str]]:
     )
 
 
-_EXTLESS_TOK_RE = re.compile(r"(?:'([^']+)'|\"([^\"]+)\"|([^\s;|&<>()'\"]+))")
+_EXTLESS_TOK_RE = re.compile(
+    r"(?:'([^']*[/\\][^']*)'|\"([^\"]*[/\\][^\"]*)\"|([^\s;|&<>()'\"]*[/\\][^\s;|&<>()'\"]*))"
+)
 
 
-def _is_direct_rest_mutate_cmd(cmd: str) -> bool:
+def _is_direct_rest_mutate_cmd(cmd: str, _normalized: bool = False) -> bool:
     """True when cmd performs a direct REST/HTTP Google Ads mutation (including $VAR URL indirection)."""
     if not cmd:
         return False
-    if "googleads.googleapis.com" in cmd:
-        return bool(
-            _DIRECT_REST_MUTATE_RE.search(cmd) or _DIRECT_REST_ACTION_RE.search(cmd)
-        )
-    if (
-        "curl" not in cmd
-        and "wget" not in cmd
-        and "http" not in cmd
-        and "CURL" not in cmd
-        and "WGET" not in cmd
-    ):
+    norm = cmd if _normalized else _normalize_shell_obfuscation(cmd)
+    lowered = norm.lower()
+    if "googleads.googleapis.com" in lowered:
+        if _DIRECT_REST_MUTATE_RE.search(norm) or _DIRECT_REST_ACTION_RE.search(norm):
+            return True
+        if _NODE_CMD_RE.search(norm) and any(
+            tok in lowered for tok in ("post", "mutate", "fetch", "https.request", "axios")
+        ):
+            return True
+    if not any(tok in lowered for tok in ("curl", "wget", "http", "xh")):
         return False
-    if _HTTP_CLIENT_RE.search(cmd) and _DIRECT_REST_ACTION_RE.search(cmd):
-        if "googleads" in cmd.lower() or "$" in cmd:
+    if _HTTP_CLIENT_RE.search(norm) and _DIRECT_REST_ACTION_RE.search(norm):
+        if "googleads" in lowered or "$" in cmd:
             return True
     return False
 
 
 def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
-    """Verifies via Python AST that every Google Ads mutation call receives validate_only=True.
+    """Verifies via per-scope sequential Python AST analysis that every Google Ads mutation call
+    receives an untainted validate_only=True.
 
-    Defeats decoy `validate_only = True` lines that are not wired into the actual mutate call.
-    Returns False (fail closed) on parse errors, any validate_only=False, or any mutation call
-    missing an explicit validate_only=True binding.
+    Defeats decoy `validate_only = True` lines, `not C.execute` tricks, `req` reassignments,
+    cross-function scope collisions, and dynamic `getattr`/`setattr`/`exec`/`eval` dispatch.
+    Returns False (fail closed) on parse errors or any unverifiable mutation call.
     """
     import ast as _ast
 
-    def _is_true_expr(node: _ast.AST, safe_vars: set[str]) -> bool:
+    _UNSAFE_DYNAMIC_CALLS = frozenset({"getattr", "setattr", "delattr", "exec", "eval", "__import__"})
+
+    def _is_true_expr(node: _ast.AST, safe_bools: set[str]) -> bool:
         if isinstance(node, _ast.Constant) and node.value is True:
             return True
-        if isinstance(node, _ast.Name) and node.id in safe_vars:
-            return True
-        if (
-            isinstance(node, _ast.UnaryOp)
-            and isinstance(node.op, _ast.Not)
-            and isinstance(node.operand, _ast.Attribute)
-            and node.operand.attr == "execute"
-        ):
+        if isinstance(node, _ast.Name) and node.id in safe_bools:
             return True
         return False
 
+    def _is_safe_dict_req(node: _ast.AST, safe_bools: set[str]) -> bool:
+        if not isinstance(node, _ast.Dict):
+            return False
+        for k, v in zip(node.keys, node.values):
+            if isinstance(k, _ast.Constant) and k.value == "validate_only":
+                return _is_true_expr(v, safe_bools)
+        return False
+
+    def _iter_expr_calls(node: _ast.AST) -> list[_ast.Call]:
+        """Collects Call nodes in an expression without descending into nested defs/lambdas."""
+        calls: list[_ast.Call] = []
+        stack: list[_ast.AST] = [node]
+        while stack:
+            cur = stack.pop()
+            if isinstance(cur, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef, _ast.Lambda)):
+                continue
+            if isinstance(cur, _ast.Call):
+                calls.append(cur)
+            stack.extend(_ast.iter_child_nodes(cur))
+        return calls
+
+    def _collect_assigned_names(stmts: list[_ast.stmt]) -> set[str]:
+        names: set[str] = set()
+        for s in stmts:
+            for sub in _ast.walk(s):
+                if isinstance(sub, _ast.Name) and isinstance(sub.ctx, (_ast.Store, _ast.Del)):
+                    names.add(sub.id)
+                elif isinstance(sub, _ast.Attribute) and sub.attr == "validate_only" and isinstance(sub.ctx, (_ast.Store, _ast.Del)):
+                    if isinstance(sub.value, _ast.Name):
+                        names.add(sub.value.id)
+        return names
+
     total_mut_calls = 0
+
+    def _check_calls_in_expr(
+        expr: Optional[_ast.AST], safe_bools: set[str], safe_reqs: set[str]
+    ) -> bool:
+        nonlocal total_mut_calls
+        if expr is None:
+            return True
+        for call in _iter_expr_calls(expr):
+            call_name = ""
+            if isinstance(call.func, _ast.Attribute):
+                call_name = call.func.attr
+            elif isinstance(call.func, _ast.Name):
+                call_name = call.func.id
+            if call_name in _UNSAFE_DYNAMIC_CALLS:
+                return False
+            if not call_name or not MUTATION_CALL_PATTERN.search(f".{call_name}("):
+                continue
+            total_mut_calls += 1
+            kw_map = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+            if "validate_only" in kw_map:
+                if not _is_true_expr(kw_map["validate_only"], safe_bools):
+                    return False
+                continue
+            req_node = kw_map.get("request") or (call.args[0] if call.args else None)
+            if isinstance(req_node, _ast.Name) and req_node.id in safe_reqs:
+                continue
+            if req_node is not None and _is_safe_dict_req(req_node, safe_bools):
+                continue
+            return False
+        return True
+
+    def _walk_block(
+        stmts: list[_ast.stmt], safe_bools: set[str], safe_reqs: set[str]
+    ) -> bool:
+        for stmt in stmts:
+            if isinstance(stmt, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                # Each function/method has its own isolated scope so a decoy function
+                # setting req.validate_only = True cannot pollute another function.
+                if not _walk_block(stmt.body, set(), set()):
+                    return False
+                continue
+            if isinstance(stmt, _ast.ClassDef):
+                if not _walk_block(stmt.body, set(), set()):
+                    return False
+                continue
+            if isinstance(stmt, _ast.Assign):
+                if not _check_calls_in_expr(stmt.value, safe_bools, safe_reqs):
+                    return False
+                for tgt in stmt.targets:
+                    if isinstance(tgt, _ast.Name):
+                        if _is_true_expr(stmt.value, safe_bools):
+                            safe_bools.add(tgt.id)
+                            safe_reqs.discard(tgt.id)
+                        elif _is_safe_dict_req(stmt.value, safe_bools):
+                            safe_reqs.add(tgt.id)
+                            safe_bools.discard(tgt.id)
+                        else:
+                            safe_bools.discard(tgt.id)
+                            safe_reqs.discard(tgt.id)
+                    elif isinstance(tgt, _ast.Attribute) and tgt.attr == "validate_only":
+                        if isinstance(tgt.value, _ast.Name):
+                            if _is_true_expr(stmt.value, safe_bools):
+                                safe_reqs.add(tgt.value.id)
+                            else:
+                                safe_reqs.discard(tgt.value.id)
+                        elif not _is_true_expr(stmt.value, safe_bools):
+                            return False
+                    elif isinstance(tgt, _ast.Subscript) and isinstance(tgt.value, _ast.Name):
+                        if (
+                            isinstance(tgt.slice, _ast.Constant)
+                            and tgt.slice.value == "validate_only"
+                            and _is_true_expr(stmt.value, safe_bools)
+                        ):
+                            safe_reqs.add(tgt.value.id)
+                        else:
+                            safe_reqs.discard(tgt.value.id)
+                continue
+            if isinstance(stmt, _ast.AnnAssign):
+                if not _check_calls_in_expr(stmt.value, safe_bools, safe_reqs):
+                    return False
+                tgt = stmt.target
+                if isinstance(tgt, _ast.Name):
+                    if stmt.value is not None and _is_true_expr(stmt.value, safe_bools):
+                        safe_bools.add(tgt.id)
+                        safe_reqs.discard(tgt.id)
+                    elif stmt.value is not None and _is_safe_dict_req(stmt.value, safe_bools):
+                        safe_reqs.add(tgt.id)
+                        safe_bools.discard(tgt.id)
+                    else:
+                        safe_bools.discard(tgt.id)
+                        safe_reqs.discard(tgt.id)
+                continue
+            if isinstance(stmt, _ast.Delete):
+                for tgt in stmt.targets:
+                    if isinstance(tgt, _ast.Name):
+                        safe_bools.discard(tgt.id)
+                        safe_reqs.discard(tgt.id)
+                    elif isinstance(tgt, (_ast.Attribute, _ast.Subscript)) and isinstance(
+                        tgt.value, _ast.Name
+                    ):
+                        safe_reqs.discard(tgt.value.id)
+                continue
+            if isinstance(stmt, _ast.If):
+                if not _check_calls_in_expr(stmt.test, safe_bools, safe_reqs):
+                    return False
+                b_bools, b_reqs = set(safe_bools), set(safe_reqs)
+                if not _walk_block(stmt.body, b_bools, b_reqs):
+                    return False
+                if stmt.orelse:
+                    e_bools, e_reqs = set(safe_bools), set(safe_reqs)
+                    if not _walk_block(stmt.orelse, e_bools, e_reqs):
+                        return False
+                    safe_bools.intersection_update(b_bools & e_bools)
+                    safe_bools.update(b_bools & e_bools)
+                    safe_reqs.intersection_update(b_reqs & e_reqs)
+                    safe_reqs.update(b_reqs & e_reqs)
+                else:
+                    modified = _collect_assigned_names(stmt.body)
+                    safe_bools.difference_update(modified)
+                    safe_reqs.difference_update(modified)
+                continue
+            if isinstance(stmt, (_ast.For, _ast.AsyncFor, _ast.While)):
+                if isinstance(stmt, _ast.While):
+                    if not _check_calls_in_expr(stmt.test, safe_bools, safe_reqs):
+                        return False
+                else:
+                    if not _check_calls_in_expr(stmt.iter, safe_bools, safe_reqs):
+                        return False
+                modified = _collect_assigned_names(stmt.body + stmt.orelse)
+                safe_bools.difference_update(modified)
+                safe_reqs.difference_update(modified)
+                if not _walk_block(stmt.body, set(safe_bools), set(safe_reqs)):
+                    return False
+                if stmt.orelse and not _walk_block(stmt.orelse, set(safe_bools), set(safe_reqs)):
+                    return False
+                continue
+            if isinstance(stmt, (_ast.With, _ast.AsyncWith)):
+                for item in stmt.items:
+                    if not _check_calls_in_expr(item.context_expr, safe_bools, safe_reqs):
+                        return False
+                    if isinstance(item.optional_vars, _ast.Name):
+                        safe_bools.discard(item.optional_vars.id)
+                        safe_reqs.discard(item.optional_vars.id)
+                if not _walk_block(stmt.body, safe_bools, safe_reqs):
+                    return False
+                continue
+            if isinstance(stmt, _ast.Try):
+                pre_bools, pre_reqs = set(safe_bools), set(safe_reqs)
+                if not _walk_block(stmt.body, set(pre_bools), set(pre_reqs)):
+                    return False
+                for handler in stmt.handlers:
+                    if not _walk_block(handler.body, set(pre_bools), set(pre_reqs)):
+                        return False
+                if stmt.orelse and not _walk_block(stmt.orelse, set(pre_bools), set(pre_reqs)):
+                    return False
+                if stmt.finalbody and not _walk_block(stmt.finalbody, set(pre_bools), set(pre_reqs)):
+                    return False
+                modified = _collect_assigned_names(
+                    stmt.body + [s for h in stmt.handlers for s in h.body] + stmt.orelse + stmt.finalbody
+                )
+                safe_bools.difference_update(modified)
+                safe_reqs.difference_update(modified)
+                continue
+            # All other statements (Expr, Return, Assert, Raise, AugAssign, etc.)
+            if not _check_calls_in_expr(stmt, safe_bools, safe_reqs):
+                return False
+        return True
+
     for blob in source_blobs:
         if not blob or not MUTATION_CALL_PATTERN.search(_COMMENT_LINE_RE.sub("", blob)):
             continue
@@ -4184,93 +4630,137 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
             tree = _ast.parse(blob)
         except SyntaxError:
             return False
-
-        safe_bool_vars: set[str] = set()
-        tainted_bool_vars: set[str] = set()
-        safe_request_objs: set[str] = set()
-        tainted_request_objs: set[str] = set()
-
-        for node in _ast.walk(tree):
-            if isinstance(node, _ast.Assign):
-                for tgt in node.targets:
-                    if isinstance(tgt, _ast.Name):
-                        if _is_true_expr(node.value, safe_bool_vars):
-                            safe_bool_vars.add(tgt.id)
-                        else:
-                            tainted_bool_vars.add(tgt.id)
-                    elif isinstance(tgt, _ast.Attribute) and tgt.attr == "validate_only":
-                        if isinstance(tgt.value, _ast.Name):
-                            if _is_true_expr(node.value, safe_bool_vars):
-                                safe_request_objs.add(tgt.value.id)
-                            else:
-                                tainted_request_objs.add(tgt.value.id)
-                        elif not (isinstance(node.value, _ast.Constant) and node.value.value is True):
-                            return False
-            elif isinstance(node, _ast.AnnAssign) and node.value is not None:
-                tgt = node.target
-                if isinstance(tgt, _ast.Name):
-                    if _is_true_expr(node.value, safe_bool_vars):
-                        safe_bool_vars.add(tgt.id)
-                    else:
-                        tainted_bool_vars.add(tgt.id)
-
-        safe_bool_vars -= tainted_bool_vars
-        safe_request_objs -= tainted_request_objs
-
-        for node in _ast.walk(tree):
-            if not isinstance(node, _ast.Call):
-                continue
-            call_name = ""
-            if isinstance(node.func, _ast.Attribute):
-                call_name = node.func.attr
-            elif isinstance(node.func, _ast.Name):
-                call_name = node.func.id
-            if not call_name or not MUTATION_CALL_PATTERN.search(f".{call_name}("):
-                continue
-            total_mut_calls += 1
-            kw_map = {kw.arg: kw.value for kw in node.keywords if kw.arg}
-            if "validate_only" in kw_map:
-                if not _is_true_expr(kw_map["validate_only"], safe_bool_vars):
-                    return False
-                continue
-            req_node = kw_map.get("request") or (node.args[0] if node.args else None)
-            if isinstance(req_node, _ast.Name) and req_node.id in safe_request_objs:
-                continue
+        if not _walk_block(tree.body, set(), set()):
             return False
 
     return total_mut_calls > 0
 
 
 def _collect_extensionless_python_scripts(
-    cmd: str, workspace_cwd: Optional[str]
+    cmd: str, workspace_cwd: Optional[str], cd_dirs: Optional[list[str]] = None
 ) -> list[str]:
-    """Finds directly invoked extensionless executable Python scripts (e.g., ./saved/code/live)."""
-    if "/" not in cmd and "\\" not in cmd:
-        return []
+    """Finds directly invoked extensionless executable Python scripts (e.g., ./saved/code/live or cd saved/code && python3 live)."""
+    search_dirs: list[Optional[str]] = [workspace_cwd]
+    for d in cd_dirs or ():
+        if d not in search_dirs:
+            search_dirs.append(d)
+
+    candidate_tokens: list[str] = []
+    if "/" in cmd or "\\" in cmd:
+        for raw_tok in _EXTLESS_TOK_RE.findall(cmd):
+            tok = (raw_tok[0] or raw_tok[1] or raw_tok[2] or "").strip()
+            if tok and not tok.startswith("-") and not tok.endswith((".py", ".sh", ".bash")):
+                if ("/" in tok or "\\" in tok) and not tok.startswith(("http://", "https://")):
+                    candidate_tokens.append(tok)
+    # Also inspect extensionless script args passed directly to python/python3 (e.g. `cd saved/code && python3 live_noext`)
+    for py_grp in _PY_EXEC_ARG_RE.findall(cmd):
+        tok = (py_grp[0] or py_grp[1] or py_grp[2] or "").strip()
+        if (
+            tok
+            and not tok.startswith("-")
+            and not tok.endswith((".py", ".sh", ".bash"))
+            and tok not in candidate_tokens
+        ):
+            candidate_tokens.append(tok)
+
     found: list[str] = []
-    for raw_tok in _EXTLESS_TOK_RE.findall(cmd):
-        tok = (raw_tok[0] or raw_tok[1] or raw_tok[2] or "").strip()
-        if not tok or tok.startswith("-") or tok.endswith((".py", ".sh", ".bash")):
-            continue
-        if "/" not in tok and "\\" not in tok:
-            continue
-        if tok.startswith(("http://", "https://")):
-            continue
-        resolved = _resolve_candidate_script_path(tok, workspace_cwd)
-        if not resolved or not os.path.isfile(resolved):
-            continue
-        try:
-            with open(resolved, "rb") as f:
-                head = f.read(4096)
-            if b"\x00" in head:
+    for tok in candidate_tokens:
+        for sdir in search_dirs:
+            resolved = _resolve_candidate_script_path(tok, sdir)
+            if not resolved or not os.path.isfile(resolved):
                 continue
-            text_head = head.decode("utf-8", errors="ignore")
-            first_line = text_head.splitlines()[0] if text_head.splitlines() else ""
-            if ("python" in first_line and first_line.startswith("#!")) or MUTATION_CALL_PATTERN.search(text_head):
-                found.append(resolved)
-        except OSError:
-            continue
+            if resolved in found:
+                break
+            try:
+                with open(resolved, "rb") as f:
+                    head = f.read(4096)
+                if b"\x00" in head:
+                    break
+                text_head = head.decode("utf-8", errors="ignore")
+                first_line = text_head.splitlines()[0] if text_head.splitlines() else ""
+                if (
+                    ("python" in first_line and first_line.startswith("#!"))
+                    or MUTATION_CALL_PATTERN.search(text_head)
+                    or _ADS_SDK_OR_SERVICE_RE.search(text_head)
+                ):
+                    found.append(resolved)
+                break
+            except OSError:
+                continue
     return found
+
+
+def _is_safe_test_or_linter_segment(seg: str, effective_ws: Optional[str]) -> bool:
+    """Returns True only for benign linter or tests/-scoped pytest commands without subshells."""
+    if not _TEST_OR_LINTER_CMD_RE.search(seg):
+        return False
+    if any(tok in seg for tok in ("$(", "`", "<(", ">(")):
+        return False
+    import shlex
+
+    try:
+        argv = shlex.split(seg)
+    except ValueError:
+        return False
+    idx = 0
+    while idx < len(argv) and "=" in argv[idx] and not argv[idx].startswith("-"):
+        idx += 1
+    if idx >= len(argv):
+        return False
+    exe = os.path.basename(argv[idx]).lower()
+    rest = argv[idx + 1 :]
+    if exe.startswith("python") and len(rest) >= 2 and rest[0] == "-m":
+        exe = rest[1].lower()
+        rest = rest[2:]
+    if exe in ("ruff", "mypy", "flake8"):
+        return True
+    if exe != "pytest":
+        return False
+
+    # Pytest executes arbitrary Python during collection: never allow -o/-c/--confcutdir/--rootdir
+    # or targets outside tests/.
+    _PYTEST_FORBIDDEN_OPTS = ("-o", "--override-ini", "-c", "--config-file", "--confcutdir", "--rootdir")
+    _PYTEST_VALUE_OPTS = {
+        "-k", "-m", "-n", "-W", "--maxfail", "--tb", "--junitxml", "--cache-dir",
+        "--basetemp", "--log-level", "--timeout", "--cov", "--cov-report", "--ignore",
+        "-p", "--durations", "--verbosity",
+    }
+    positional: list[str] = []
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if any(tok == opt or tok.startswith(opt + "=") for opt in _PYTEST_FORBIDDEN_OPTS):
+            return False
+        if tok in _PYTEST_VALUE_OPTS:
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        positional.append(tok)
+        i += 1
+
+    if positional:
+        for target in positional:
+            file_part = target.split("::", 1)[0].replace("\\", "/")
+            if not (file_part == "tests" or file_part.startswith("tests/")):
+                return False
+            if ".." in file_part.split("/"):
+                return False
+        return True
+
+    # Bare `pytest` with no positional targets: only safe if tests/ exists and saved/ has no test files
+    base_dir = effective_ws or os.getcwd()
+    if not os.path.isdir(os.path.join(base_dir, "tests")):
+        return False
+    saved_code = os.path.join(base_dir, "saved", "code")
+    if os.path.isdir(saved_code):
+        try:
+            if any(f.startswith("test_") or f.endswith("_test.py") for f in os.listdir(saved_code)):
+                return False
+        except OSError:
+            return False
+    return True
 
 
 def evaluate_mutation_guard(
@@ -4282,7 +4772,9 @@ def evaluate_mutation_guard(
     if not cmd:
         return "allow", None
 
-    if _is_direct_rest_mutate_cmd(cmd):
+    norm_cmd = _normalize_shell_obfuscation(cmd)
+
+    if _is_direct_rest_mutate_cmd(norm_cmd, _normalized=True):
         return (
             "deny",
             "BLOCKED BY HITL MUTATION GUARD: Direct REST/HTTP Google Ads API mutations via shell tools "
@@ -4290,7 +4782,7 @@ def evaluate_mutation_guard(
             "4-Step HITL protocol.",
         )
 
-    if _EXEC_TARGET_FLAG_RE.search(cmd):
+    if "_exec" in norm_cmd and _EXEC_TARGET_FLAG_RE.search(norm_cmd):
         return (
             "deny",
             "BLOCKED BY HITL MUTATION GUARD: Direct invocation of internal '--_exec-target' mode is prohibited. "
@@ -4299,27 +4791,46 @@ def evaluate_mutation_guard(
 
     effective_ws = workspace_cwd or _extract_workspace_cwd(hook_context)
 
+    # Block inline shell env overrides of guard paths/posture (financial limits, audit log, receipt, config dir)
+    if "GOOGLE_ADS_" in norm_cmd:
+        env_m = _GUARD_OVERRIDE_ENV_RE.search(norm_cmd)
+        if env_m:
+            return (
+                "deny",
+                f"BLOCKED BY HITL MUTATION GUARD: Inline shell override of '{env_m.group(1)}' is prohibited. "
+                "Configure persistent settings in config/assistant_config or config/financial_limits instead.",
+            )
+
     # Gate shell/interpreter writes to protected config, receipt, and audit files
-    protected_write = _protected_shell_write_decision(cmd)
+    protected_write = _protected_shell_write_decision(norm_cmd, _normalized=True)
     if protected_write is not None and protected_write[0] == "deny":
         return protected_write
 
-    # Gate CLI self-modification via config_init.py (mutating flags require confirmation)
-    if "config_init.py" in cmd and _SET_EXEC_MUTATES_TRUE_RE.search(cmd):
+    # Gate CLI self-modification via config_init.py or programmatic Python API self-elevation
+    if "config_init.py" in norm_cmd and _SET_EXEC_MUTATES_TRUE_RE.search(norm_cmd):
         return (
             "force_ask",
             "⚠️ PROTECTED CONFIGURATION CHANGE: Confirm modifying Google Ads Assistant configuration via config_init.py?",
         )
+    if "(" in norm_cmd or "config_init" in norm_cmd:
+        if _PYTHON_SELF_ELEVATION_RE.search(norm_cmd):
+            seg_check = [seg.strip() for seg in _CHAIN_SPLIT_RE.split(norm_cmd) if seg.strip()]
+            if not (seg_check and all(_is_safe_test_or_linter_segment(s, effective_ws) for s in seg_check)):
+                return (
+                    "force_ask",
+                    "⚠️ PROTECTED CONFIGURATION CHANGE: Confirm programmatic modification of Google Ads Assistant "
+                    "guard configuration or financial limits?",
+                )
     if protected_write is not None:
         return protected_write
 
     # Safe run_mutation.py --reject / --dry-run segments are removed; the rest of the
     # command (if any) is evaluated by the full guard below.
-    if "run_mutation.py" in cmd:
-        reduced_cmd, dropped_shortcuts = _reduce_run_mutation_shortcuts(cmd, effective_ws)
+    if "run_mutation.py" in norm_cmd:
+        reduced_cmd, dropped_shortcuts = _reduce_run_mutation_shortcuts(norm_cmd, effective_ws)
         if dropped_shortcuts:
             # Dry runs still go through the deletion prohibition (remove ops / REMOVED status).
-            gads_root_sc = _trusted_gads_dir_root(cmd)
+            gads_root_sc = _trusted_gads_dir_root(norm_cmd)
             for flag, seg in dropped_shortcuts:
                 if flag != "--dry-run":
                     continue
@@ -4342,17 +4853,27 @@ def evaluate_mutation_guard(
                 reduced_cmd, hook_context=hook_context, workspace_cwd=effective_ws
             )
 
-    # Inspect referenced .sh / .bash wrapper scripts (excluding official lifecycle scripts)
+    cd_dirs = _extract_cd_dirs(norm_cmd, effective_ws)
+
+    # Inspect referenced .sh / .bash wrapper scripts (only exempt realpath-verified plugin/repo lifecycle scripts)
     sh_blobs: list[str] = []
-    for sh_grp in _SH_FILE_ARG_RE.findall(cmd):
-        sh_cand = sh_grp[0] or sh_grp[1] or sh_grp[2]
-        if sh_cand and os.path.basename(sh_cand) not in (
-            "install.sh",
-            "update.sh",
-            "plugin.sh",
-            "test_plugin_scripts.sh",
-        ):
-            resolved_sh = _resolve_candidate_script_path(sh_cand, effective_ws)
+    if ".sh" in norm_cmd or ".bash" in norm_cmd:
+        for sh_grp in _SH_FILE_ARG_RE.findall(norm_cmd):
+            sh_cand = sh_grp[0] or sh_grp[1] or sh_grp[2]
+            if not sh_cand:
+                continue
+            resolved_sh: Optional[str] = None
+            for sdir in (effective_ws, *cd_dirs):
+                cand_res = _resolve_candidate_script_path(sh_cand, sdir)
+                if cand_res and os.path.isfile(cand_res):
+                    resolved_sh = cand_res
+                    break
+            if (
+                resolved_sh
+                and os.path.basename(resolved_sh) in _TRUSTED_LIFECYCLE_SH_NAMES
+                and _is_trusted_plugin_script(resolved_sh)
+            ):
+                continue
             if resolved_sh and os.path.isfile(resolved_sh):
                 try:
                     with open(resolved_sh, "r", encoding="utf-8") as sf:
@@ -4367,8 +4888,32 @@ def evaluate_mutation_guard(
                 except OSError:
                     pass
 
-    effective_cmd = cmd + ("\n" + "\n".join(sh_blobs) if sh_blobs else "")
-    extensionless_py = _collect_extensionless_python_scripts(effective_cmd, effective_ws)
+    effective_cmd = norm_cmd + ("\n" + "\n".join(sh_blobs) if sh_blobs else "")
+
+    # Inspect PHP / Ruby scripts for direct Google Ads API mutations (documented runnable languages)
+    if ".php" in effective_cmd or ".rb" in effective_cmd:
+        for non_py_grp in _NON_PY_SCRIPT_ARG_RE.findall(effective_cmd):
+            np_cand = non_py_grp[0] or non_py_grp[1] or non_py_grp[2]
+            if not np_cand:
+                continue
+            for sdir in (effective_ws, *cd_dirs):
+                resolved_np = _resolve_candidate_script_path(np_cand, sdir)
+                if resolved_np and os.path.isfile(resolved_np):
+                    try:
+                        with open(resolved_np, "r", encoding="utf-8") as npf:
+                            np_src = npf.read()
+                        if _PHP_RUBY_MUTATE_RE.search(np_src):
+                            return (
+                                "deny",
+                                f"BLOCKED BY HITL MUTATION GUARD: Direct live Google Ads API mutation detected in "
+                                f"'{np_cand}'. Non-Python live mutations cannot bypass the 4-Step HITL protocol; "
+                                "use Python via skills/execute-mutation/scripts/run_mutation.py.",
+                            )
+                    except OSError:
+                        pass
+                    break
+
+    extensionless_py = _collect_extensionless_python_scripts(effective_cmd, effective_ws, cd_dirs=cd_dirs)
 
     if not extensionless_py and not any(
         tok in effective_cmd
@@ -4376,10 +4921,12 @@ def evaluate_mutation_guard(
     ):
         return "allow", None
 
-    # Only short-circuit test suites and linters when EVERY chained segment is a test/linter invocation
-    segments = [seg.strip() for seg in _CHAIN_SPLIT_RE.split(effective_cmd) if seg.strip()]
-    if segments and all(_TEST_OR_LINTER_CMD_RE.search(seg) for seg in segments):
-        return "allow", None
+    # Only short-circuit safe test suites and linters when EVERY chained segment is verified safe
+    effective_lower = effective_cmd.lower()
+    if any(t in effective_lower for t in ("pytest", "ruff", "mypy", "flake8")):
+        segments = [seg.strip() for seg in _CHAIN_SPLIT_RE.split(effective_cmd) if seg.strip()]
+        if segments and all(_is_safe_test_or_linter_segment(seg, effective_ws) for seg in segments):
+            return "allow", None
 
     # 1. Explicit invocation of skills/execute-mutation/scripts/run_mutation.py
     #    (safe single-segment --reject / --dry-run calls were already removed above)
@@ -4434,35 +4981,72 @@ def evaluate_mutation_guard(
             return ("force_ask", message) if ok else ("deny", message)
 
     # 2. Direct execution of a .py script, extensionless Python script, python -m module, or python -c snippet
-    script_candidates = _PY_FILE_ARG_RE.findall(effective_cmd)
+    script_candidates = _PY_FILE_ARG_RE.findall(effective_cmd) if ".py" in effective_cmd else []
+    gads_root = _trusted_gads_dir_root(norm_cmd) if "GADS_DIR" in norm_cmd else None
     py_files: list[str] = []
     for grp in script_candidates:
         candidate = grp[0] or grp[1] or grp[2]
-        if candidate and os.path.basename(candidate) not in _READONLY_SKILL_SCRIPTS_SET:
-            py_files.append(candidate)
+        if not candidate:
+            continue
+        if os.path.basename(candidate) in _READONLY_SKILL_SCRIPTS_SET:
+            expanded_ro = (
+                _expand_trusted_path_vars(candidate, gads_root)
+                if "$" in candidate or candidate.startswith("~")
+                else candidate
+            )
+            resolved_ro: Optional[str] = None
+            for sdir in (effective_ws, *cd_dirs):
+                cand_res = _resolve_candidate_script_path(expanded_ro, sdir)
+                if cand_res and os.path.isfile(cand_res):
+                    resolved_ro = cand_res
+                    break
+            if resolved_ro is not None:
+                if _is_trusted_plugin_script(resolved_ro):
+                    continue
+            else:
+                norm_cand = expanded_ro.replace("\\", "/")
+                if (
+                    (
+                        (
+                            norm_cand.startswith("skills/")
+                            or norm_cand.startswith("config/")
+                            or norm_cand == "set_financial_limits.py"
+                        )
+                        and ".." not in norm_cand.split("/")
+                        and "saved/" not in norm_cand
+                    )
+                    or ("$" not in expanded_ro and _is_trusted_plugin_script(expanded_ro))
+                ):
+                    continue
+        py_files.append(candidate)
 
     for ext_py in extensionless_py:
         if ext_py not in py_files:
             py_files.append(ext_py)
 
-    for mod_name in _PY_MODULE_ARG_RE.findall(effective_cmd):
-        if mod_name not in ("pytest", "ruff", "mypy", "flake8", "pip", "venv", "json.tool"):
-            rel_mod = mod_name.replace(".", os.sep)
-            for mod_cand in (f"{rel_mod}.py", os.path.join(rel_mod, "__main__.py")):
-                resolved_mod = _resolve_candidate_script_path(mod_cand, effective_ws)
-                if resolved_mod and os.path.isfile(resolved_mod):
-                    py_files.append(resolved_mod)
-                    break
+    if "-m" in effective_cmd:
+        for mod_name in _PY_MODULE_ARG_RE.findall(effective_cmd):
+            if mod_name not in ("pytest", "ruff", "mypy", "flake8", "pip", "venv", "json.tool"):
+                rel_mod = mod_name.replace(".", os.sep)
+                for mod_cand in (f"{rel_mod}.py", os.path.join(rel_mod, "__main__.py")):
+                    resolved_mod = _resolve_candidate_script_path(mod_cand, effective_ws)
+                    if resolved_mod and os.path.isfile(resolved_mod):
+                        py_files.append(resolved_mod)
+                        break
 
     code_blobs: list[str] = [effective_cmd]
     file_code_blobs: list[str] = []
     resolved_scripts: list[str] = []
     resolved_target_script: Optional[str] = None
-    gads_root = _trusted_gads_dir_root(cmd)
     unverifiable: list[str] = []
     for py_file in py_files:
         expanded_py = _expand_trusted_path_vars(py_file, gads_root) if "$" in py_file or py_file.startswith("~") else py_file
-        resolved_py = _resolve_candidate_script_path(expanded_py, effective_ws)
+        resolved_py: Optional[str] = None
+        for sdir in (effective_ws, *cd_dirs):
+            cand_res = _resolve_candidate_script_path(expanded_py, sdir)
+            if cand_res and os.path.isfile(cand_res):
+                resolved_py = cand_res
+                break
         if resolved_py and os.path.isfile(resolved_py):
             resolved_target_script = resolved_py
             if resolved_py not in resolved_scripts:
@@ -4485,10 +5069,22 @@ def evaluate_mutation_guard(
             "Confirm running this command?",
         )
 
-    combined_code = "\n".join(code_blobs)
-    uncommented_code = _COMMENT_LINE_RE.sub("", combined_code)
+    combined_code = code_blobs[0] if len(code_blobs) == 1 else "\n".join(code_blobs)
+    uncommented_code = _COMMENT_LINE_RE.sub("", combined_code) if "#" in combined_code else combined_code
 
     if not MUTATION_CALL_PATTERN.search(uncommented_code):
+        # Catch dynamic dispatch (getattr/setattr/exec/eval/__import__) combined with Google Ads SDK usage
+        if (
+            "(" in uncommented_code
+            and _DYNAMIC_DISPATCH_RE.search(uncommented_code)
+            and _ADS_SDK_OR_SERVICE_RE.search(uncommented_code)
+        ):
+            return (
+                "deny",
+                "BLOCKED BY HITL MUTATION GUARD: Dynamic dispatch (getattr/setattr/exec/eval) with "
+                "Google Ads API client objects cannot be statically verified as read-only or validate_only=True. "
+                "Call service methods directly and execute mutations via skills/execute-mutation/scripts/run_mutation.py.",
+            )
         return "allow", None
 
     # Block multi-script chaining when any script executes a Google Ads mutation (prevents receipt shadowing)
@@ -4544,7 +5140,7 @@ def evaluate_mutation_guard(
         and os.path.basename(resolved_target_script) in _builtin_dry_run_names
         and "--dry-run" in cmd
         and not explicit_execute_flag
-        and len(segments) <= 1
+        and len([s for s in _CHAIN_SPLIT_RE.split(effective_cmd) if s.strip()]) <= 1
     ):
         real_target = os.path.realpath(resolved_target_script)
         plugin_roots = [
@@ -4646,10 +5242,10 @@ def _format_pretooluse_response(
 ) -> Tuple[Dict[str, Any], int]:
     """Builds the PreToolUse hook response for the active CLI and returns (payload, exit_code).
 
-    Claude Code reads only hookSpecificOutput (permissionDecision allow|deny|ask). A deny also
-    exits with code 2 so Claude Code blocks the call even if the JSON is ignored. When the
-    guard has no objection, no permissionDecision is sent so Claude Code's own permission
-    rules still apply; a rewritten command is passed as updatedInput.
+    Claude Code uses the canonical exit-0 structured JSON contract
+    (`hookSpecificOutput.permissionDecision` allow|deny|ask). When the guard has no objection,
+    no permissionDecision is sent so Claude Code's own permission rules still apply; a rewritten
+    command is passed as updatedInput.
     Antigravity keeps its {"decision": ..., "reason": ..., "overwrite": ...} format.
     """
     if is_claude:
@@ -4661,7 +5257,7 @@ def _format_pretooluse_response(
         if overwrite and claude_decision != "deny":
             hso["updatedInput"] = {**(original_args or {}), **overwrite}
         payload: Dict[str, Any] = {"hookSpecificOutput": hso} if len(hso) > 1 else {}
-        return payload, (2 if claude_decision == "deny" else 0)
+        return payload, 0
     payload = {"decision": decision}
     if reason and decision != "allow":
         payload["reason"] = reason
@@ -4677,13 +5273,11 @@ def _emit_pretooluse_response(
     overwrite: Optional[Dict[str, Any]] = None,
     original_args: Optional[Dict[str, Any]] = None,
 ) -> int:
-    """Prints the PreToolUse response (and the deny reason to stderr) and returns the exit code."""
+    """Prints the PreToolUse response and returns the exit code."""
     payload, exit_code = _format_pretooluse_response(
         decision, reason, is_claude, overwrite=overwrite, original_args=original_args
     )
     print(json.dumps(payload))
-    if exit_code == 2:
-        print(reason or "Blocked by the HITL mutation guard.", file=sys.stderr)
     return exit_code
 
 
@@ -4701,6 +5295,7 @@ def _session_marker_path(input_data: Dict[str, Any], tag: str) -> Optional[str]:
     if not conv_id:
         return None
     import hashlib
+    import tempfile
 
     uid_tag = str(os.getuid()) if hasattr(os, "getuid") else "user"
     conv_hash = hashlib.sha256(f"{tag}:{conv_id}".encode("utf-8")).hexdigest()[:24]
@@ -4937,10 +5532,12 @@ def handle_hook(
 
         is_claude = is_claude_payload
 
-        # Check file-write tool calls before touching filesystem credential sync
+        # Check file-read / file-write tool calls before touching filesystem credential sync
+        workspace_cwd = _extract_workspace_cwd(input_data)
         target_file = (
             args.get("Path")
             or args.get("TargetFile")
+            or args.get("AbsolutePath")
             or args.get("file_path")
             or args.get("path")
             or ""
@@ -5029,18 +5626,50 @@ def handle_hook(
             print(json.dumps({}))
             return 0
 
+        def _target_basenames(raw_path: str) -> set[str]:
+            clean = raw_path.strip().rstrip("/\\")
+            raw_b = os.path.basename(clean)
+            exp = os.path.expanduser(clean)
+            ws_exp = os.path.join(workspace_cwd, exp) if (workspace_cwd and not os.path.isabs(exp)) else exp
+            return {
+                b
+                for b in (
+                    raw_b,
+                    os.path.basename(os.path.realpath(ws_exp)),
+                    os.path.basename(os.path.realpath(exp)),
+                )
+                if b
+            }
+
+        if tool_name in _FILE_READ_TOOLS:
+            if isinstance(target_file, str) and target_file.strip():
+                cred_hit = next(
+                    (b for b in _target_basenames(target_file) if b in _PROTECTED_CREDENTIAL_FILES),
+                    None,
+                )
+                if cred_hit:
+                    return _emit_pretooluse_response(
+                        "deny",
+                        f"BLOCKED BY CREDENTIAL ISOLATION GUARD: Direct file reads of '{cred_hit}' "
+                        "are prohibited to prevent leaking OAuth secrets or sidecar tokens into model context.",
+                        is_claude,
+                    )
+            return _emit_pretooluse_response("allow", None, is_claude)
+
         if (tool_name in _FILE_WRITE_TOOLS or (target_file and not cmd)) and isinstance(
             target_file, str
         ):
-            base = os.path.basename(target_file.strip())
-            if base in _PROTECTED_DENY_FILES:
+            bases = _target_basenames(target_file)
+            deny_hit = next((b for b in bases if b in _PROTECTED_DENY_FILES), None)
+            if deny_hit:
                 return _emit_pretooluse_response(
                     "deny",
-                    f"BLOCKED BY HITL MUTATION GUARD: Direct file writes to '{base}' are prohibited. "
+                    f"BLOCKED BY HITL MUTATION GUARD: Direct file writes to '{deny_hit}' are prohibited. "
                     "Receipts and audit logs may only be written by run_mutation.py.",
                     is_claude,
                 )
-            if base in _PROTECTED_ASK_FILES:
+            ask_hit = next((b for b in bases if b in _PROTECTED_ASK_FILES), None)
+            if ask_hit:
                 return _emit_pretooluse_response(
                     "force_ask",
                     f"⚠️ PROTECTED CONFIGURATION EDIT: Confirm modification of '{target_file}'?",
@@ -5048,7 +5677,6 @@ def handle_hook(
                 )
             return _emit_pretooluse_response("allow", None, is_claude)
 
-        workspace_cwd = _extract_workspace_cwd(input_data)
         decision, reason = evaluate_mutation_guard(
             cmd,
             hook_context=input_data,
@@ -5224,6 +5852,12 @@ def handle_hook(
 
     mutates_enabled = is_execute_mutates_enabled()
     mutates_state_str = "execute_mutates = true" if mutates_enabled else "execute_mutates = false"
+    tier1_enabled = is_tier1_financial_mutates_enabled()
+    tier1_state_str = (
+        "allow_tier1_financial_mutates = true"
+        if tier1_enabled
+        else "allow_tier1_financial_mutates = false"
+    )
 
     if is_first_prompt:
         # Never perform blocking PyPI/GitHub HTTPS calls on the synchronous hook path;
@@ -5243,48 +5877,34 @@ def handle_hook(
             parity_info, active_api_version
         )
 
+        # Keep dynamic runtime facts concise; static invariants live in rules/AGENTS.md.
         msg = (
-            f"CRITICAL GOOGLE ADS CONFIGURATION & HITL MUTATION NOTICE:\n"
-            f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml), with active api_version = \"{active_api_version}\".\n"
-            f"   All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
-            f"2. HITL MUTATION VERIFICATION & AUDIT MANDATE ({mutates_state_str} in config/assistant_config): "
-            f"Live mutations are currently {'ENABLED' if mutates_enabled else 'DISABLED (set execute_mutates = true in config/assistant_config to enable)'}. "
-            f"Only 'create' and 'update' mutations are allowed; deletion ('remove') operations are strictly prohibited. "
-            f"Before executing ANY live Google Ads mutation, you MUST:\n"
-            f"   (a) Ensure execute_mutates = true is configured in config/assistant_config,\n"
-            f"   (b) Query current resource state via GAQL,\n"
-            f"   (c) Execute a validate_only=True dry-run via skills/execute-mutation/scripts/run_mutation.py --dry-run to generate saved/data/last_dry_run.json,\n"
-            f"   (d) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute (which appends to saved/logs/mutation_audit.jsonl).\n"
-            f"3. RUNNABLE CODE STORAGE MANDATE: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called 'saved' (e.g., ./saved/ or ./saved/code/).\n"
-            f"4. STARTUP CLIENT LIBRARY & SITE-DIRECTORY PARITY VERIFICATION (FIRST PROMPT ENTRY):\n"
-            f"   - (1) google-ads in site directory vs pypi.org: Installed = {parity_info.get('system_version') or 'NOT INSTALLED'}, Latest PyPI = {parity_info.get('pypi_version') or 'LOCAL_CHECK_ONLY'}\n"
-            f"   - (2) client_libs/google-ads-python vs GitHub: Local = {parity_info.get('local_version') or 'NOT INSTALLED'}, Latest GitHub = {parity_info.get('github_version') or 'LOCAL_CHECK_ONLY'}\n"
-            f"   - (3) Determined Google Ads API Version to use: {active_api_version}\n\n"
-            f"   Parity Table:\n{table_markdown}\n\n"
-            f"   MANDATORY FIRST-PROMPT DIRECTIVE:\n"
-            f"   Because the user has entered their first prompt in this session, you MUST present this version verification table to the user at the very beginning of your response.\n"
+            f"GOOGLE ADS RUNTIME STATE & HITL MUTATION VERIFICATION & AUDIT MANDATE:\n"
+            f"- Config YAML: {config_path} | Active api_version: \"{active_api_version}\"\n"
+            f"- Mutation posture: {mutates_state_str} ({'ENABLED' if mutates_enabled else 'DISABLED'}), {tier1_state_str}\n"
+            f"- Parity: site-packages={parity_info.get('system_version') or 'NOT INSTALLED'}, "
+            f"client_libs={parity_info.get('local_version') or 'NOT INSTALLED'}\n\n"
+            f"Parity Table:\n{table_markdown}\n\n"
+            f"MANDATORY FIRST-PROMPT DIRECTIVE:\n"
+            f"Present this version verification table at the start of your first response.\n"
         )
         if parity_info.get("upgrade_prompt_required"):
             msg += (
-                "   Because one or more components are not the latest version, you MUST ask the user if they want to update them before proceeding:\n"
-                "   - If the user replies YES: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system` to install the latest version of google-ads from pypi.org into the site directory, update client_libs/google-ads-python in the Assistant directory structure, update api_version in config/assistant_config to the latest version, and print the results to the screen.\n"
-                "   - If the user replies NO: proceed using the currently active versions."
+                "One or more components are behind latest: ask the user whether to run "
+                "`python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system` or proceed with active versions."
             )
         else:
             msg += (
-                "   Local Google Ads components match. State this, confirm active API version, and proceed directly to answer the user's prompt (run sync-client-libs to query live upstream releases)."
+                "Local Google Ads components match. State this, confirm the active API version, and proceed directly "
+                "(use /sync-client-libs to check live upstream releases)."
             )
     else:
         active_api_version = get_configured_api_version() or detect_latest_api_version()
         msg = (
-            f"CRITICAL GOOGLE ADS CONFIGURATION & HITL MUTATION NOTICE:\n"
-            f"1. The active Google Ads API configuration file is at: {config_path} (or config/google-ads.yaml), with active api_version = \"{active_api_version}\".\n"
-            f"   All Python client initializations MUST explicitly pass path='config/google-ads.yaml' to GoogleAdsClient.load_from_storage(path='config/google-ads.yaml').\n"
-            f"2. HITL MUTATION VERIFICATION & AUDIT MANDATE ({mutates_state_str} in config/assistant_config): "
-            f"Live mutations are currently {'ENABLED' if mutates_enabled else 'DISABLED (set execute_mutates = true in config/assistant_config to enable)'}. "
-            f"Only 'create' and 'update' mutations are allowed; deletion ('remove') operations are strictly prohibited.\n"
-            f"3. RUNNABLE CODE STORAGE MANDATE: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called 'saved' (e.g., ./saved/ or ./saved/code/).\n"
-            f"4. ACTIVE API CONFIGURATION: Active Google Ads API version: \"{active_api_version}\". Parity verification was completed on the first prompt."
+            f"GOOGLE ADS RUNTIME STATE & HITL MUTATION VERIFICATION & AUDIT MANDATE:\n"
+            f"- Config YAML: {config_path} | Active api_version: \"{active_api_version}\" "
+            f"| {mutates_state_str}, {tier1_state_str}\n"
+            f"- ACTIVE API CONFIGURATION: \"{active_api_version}\". Parity verification was completed on the first prompt."
         )
 
     if is_claude_payload and hook_event == "SessionStart":

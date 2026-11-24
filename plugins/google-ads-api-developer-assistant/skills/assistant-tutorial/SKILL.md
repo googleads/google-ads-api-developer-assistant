@@ -61,7 +61,7 @@ When a user invokes `/assistant-tutorial` or requests this tutorial:
 ### Topic 8: Writing Prompts to Produce Reports & GAQL Validation Caching (`/validate-gaql`)
 - **Prompting Best Practices:** Define main resource, specify metrics, request date/device segments.
 - **GAQL Validation Protocol (`validate_gaql.py`):** Programmatic 4-step sequence (Schema Discovery via `GoogleAdsFieldService` without `FROM` or `google_ads_field.` prefixes, Compatibility Check via `selectable_with`, Static Analysis blocking `OR` / SQL aggregates / invalid `segments.hour_of_day` in favor of `segments.hour`, and Runtime Dry Run).
-- **Two-Tier GAQL Validation Caching:** `validate_gaql.py` caches validated queries in memory and on disk (`saved/data/gaql_validation_cache.json`) keyed by `SHA-256(query + api_version)`, with `--cache-ttl`, `--no-cache`, and `--clear-cache` flags.
+- **Two-Tier GAQL Validation Caching:** `validate_gaql.py` caches validated queries in memory and on disk (`saved/data/gaql_validation_cache.json`) keyed by `SHA-256(query + api_version + customer_id)`, with `--cache-ttl`, `--no-cache`, and `--clear-cache` flags.
 
 ### Topic 9: Troubleshooting Conversion Problems (`/troubleshoot-conversions`)
 - **Diagnostic Protocol (`troubleshoot_conversions.py`):** Investigates conversion upload issues with bounded history merging and `--json` output, generating structured diagnostic reports in `saved/data/`.
@@ -77,7 +77,7 @@ When a user invokes `/assistant-tutorial` or requests this tutorial:
 - **Webpage Listing Filter:** Configure root-level `UNIT_EXCLUDED` `AssetGroupListingGroupFilter` webpage exclusion nodes (`listing_source = WEBPAGE`) on PMax Asset Groups using `create_pmax_webpage_filter.py` via `run_mutation.py` (noting that Shopping `SUBDIVISION` parent nodes require an explicit `"Everything else"` sibling child node).
 
 ### Topic 12: Synchronizing Client Libraries & Assistant Releases (`/sync-client-libs`)
-- **Protocol 1.0 Startup Check:** Runs `sync_client_libs.py --check_only --json` at session startup to check installed `google-ads` packages, the assistant repository, and cloned `client_libs/` (`google-ads-python`, `google-ads-php`, `google-ads-ruby`, `google-ads-java`, `google-ads-dotnet`) against upstream GitHub releases in parallel (`ThreadPoolExecutor`).
+- **Local Startup Parity & On-Demand Upstream Sync:** At `SessionStart`, `config_init.py` compares the installed `google-ads` package against local `client_libs/google-ads-python` without making blocking network calls. Running `/sync-client-libs` (or `sync_client_libs.py --check_only --json`) checks installed `google-ads` packages, the assistant repository, and cloned `client_libs/` (`google-ads-python`, `google-ads-php`, `google-ads-ruby`, `google-ads-java`, `google-ads-dotnet`) against upstream PyPI and GitHub releases in parallel (`ThreadPoolExecutor`).
 - **Interactive Upgrade & Version Sync:** Prompts the user before upgrading outdated libraries and automatically refreshes `api_version` in `config/assistant_config`.
 
 ### Topic 13: Extension & Dynamic API Version Resolution (`/ext-version`)

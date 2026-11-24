@@ -762,6 +762,12 @@ sync_installed_plugin_dir() {
 
 if [[ "${TYPE}" == "agy" ]]; then
   sync_installed_plugin_dir "${AGY_PLUGIN_TARGET_DIR}" "agy"
+  # Strip Claude-Code-only files from the installed agy copy so `jetski plugin validate` emits 0 warnings
+  rm -rf \
+    "${AGY_PLUGIN_TARGET_DIR}/.claude-plugin" \
+    "${AGY_PLUGIN_TARGET_DIR}/.mcp.json" \
+    "${AGY_PLUGIN_TARGET_DIR}/hooks" \
+    "${AGY_PLUGIN_TARGET_DIR}/commands"
 elif [[ "${TYPE}" == "claude" ]]; then
   mkdir -p "${CLAUDE_MARKETPLACE_DIR}/.claude-plugin"
   cp "${PROJECT_DIR_ABS}/.claude-plugin/marketplace.json" "${CLAUDE_MARKETPLACE_DIR}/.claude-plugin/marketplace.json"

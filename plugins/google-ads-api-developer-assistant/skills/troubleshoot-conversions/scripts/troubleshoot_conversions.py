@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from typing import Any, Optional
 
 
@@ -134,8 +135,7 @@ def _resolve_active_api_version(explicit: Optional[str] = None) -> str:
     if clean:
         if not re.fullmatch(r"v?\d+", clean):
             raise ValueError(
-                f"Invalid Google Ads API version {explicit!r}: expected 'vN' "
-                "(for example v23)."
+                f"Invalid Google Ads API version {explicit!r}: expected 'vN'."
             )
         return f"v{int(clean.lstrip('v'))}"
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -397,7 +397,9 @@ def troubleshoot_conversions(
         print(f"ERROR: Invalid customer ID '{customer_id}'.", file=sys.stderr)
         sys.exit(1)
 
-    epoch = int(time.time())
+    epoch_ms = int(time.time() * 1000)
+    epoch = epoch_ms // 1000
+    unique_tag = uuid.uuid4().hex[:8]
     if not output_dir:
         output_dir = os.environ.get(
             "CONVERSION_OUTPUT_DIR",
@@ -405,7 +407,8 @@ def troubleshoot_conversions(
         )
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(
-        output_dir, f"conversion_troubleshooting_report_{epoch}.txt"
+        output_dir,
+        f"conversion_troubleshooting_report_{epoch_ms}_{unique_tag}.txt",
     )
 
     summary: list[str] = []
@@ -831,7 +834,11 @@ def troubleshoot_conversions(
 
     intro_body = summary or [f"Diagnostic Report for Customer ID: {clean_cid}"]
     err_body = errors or ["No blocking errors detected."]
-    with open(output_path, "w", encoding="utf-8") as f:
+    report_flags = (
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    )
+    report_fd = os.open(output_path, report_flags, 0o600)
+    with os.fdopen(report_fd, "w", encoding="utf-8") as f:
         f.write("Created by the Google Ads API Developer Assistant\n\n")
         f.write("1. Introductory Analysis\n")
         f.write("\n".join(intro_body) + "\n\n")
@@ -845,6 +852,11 @@ def troubleshoot_conversions(
 
         f.write("3. General Health & Technical Findings\n")
         f.write("\n".join(details) + "\n\n")
+    if sys.platform != "win32" and os.path.isfile(output_path):
+        try:
+            os.chmod(output_path, 0o600)
+        except OSError:
+            pass
 
     if json_output:
         print(json.dumps(structured_data, indent=2, default=str))

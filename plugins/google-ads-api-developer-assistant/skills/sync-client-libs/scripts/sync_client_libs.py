@@ -1043,9 +1043,15 @@ def sync_directories(source_dir: str, target_dir: str) -> bool:
                     except OSError:
                         pass
 
-        # Remove existing contents except .git and user custom yaml/config
+        # Remove existing contents except .git, user yaml/config, and runtime saved/client_libs dirs
         for item in os.listdir(target_dir):
-            if item in [".git", "google-ads.yaml", "config.yaml"]:
+            if item in [
+                ".git",
+                "google-ads.yaml",
+                "config.yaml",
+                "saved",
+                "client_libs",
+            ]:
                 continue
             item_path = os.path.join(target_dir, item)
             if os.path.islink(item_path) or os.path.isfile(item_path):
@@ -1219,6 +1225,10 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
                         en_pat = (
                             r'(?m)^\s*enabled\s*=\s*["\']?(true|false)["\']?'
                         )
+                        t1_pat = (
+                            r"(?m)^\s*allow_tier1_financial_mutates\s*=\s*"
+                            r'["\']?(true|false)["\']?'
+                        )
                         m_cid = re.search(cid_pat, existing_text)
                         if m_cid:
                             cid = m_cid.group(1).strip()
@@ -1228,6 +1238,32 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
                         m_en = re.search(en_pat, existing_text, re.IGNORECASE)
                         if m_en:
                             enabled_str = m_en.group(1).lower()
+                        m_t1 = re.search(t1_pat, existing_text, re.IGNORECASE)
+                        if m_t1:
+                            extra_toml["allow_tier1_financial_mutates"] = (
+                                m_t1.group(1).lower() == "true"
+                            )
+                        for raw_line in existing_text.splitlines():
+                            m_kv = re.match(
+                                r"^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*(?:#.*)?$",
+                                raw_line,
+                            )
+                            if not m_kv:
+                                continue
+                            k_name, raw_val = m_kv.group(1), m_kv.group(2).strip()
+                            if k_name in (
+                                "api_version",
+                                "customer_id",
+                                "execute_mutates",
+                                "enabled",
+                                "allow_tier1_financial_mutates",
+                            ) or k_name in extra_toml:
+                                continue
+                            low_v = raw_val.strip("\"'").lower()
+                            if low_v in ("true", "false"):
+                                extra_toml[k_name] = low_v == "true"
+                            else:
+                                extra_toml[k_name] = raw_val.strip("\"'")
                 except OSError:
                     pass
             content_out = (
@@ -1247,11 +1283,27 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
                         fmt_v = json.dumps(str(v))
                     content_out += f"{k} = {fmt_v}\n"
             if content_out != existing_text or not os.path.isfile(cfg_path):
-                fd = os.open(
-                    cfg_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+                if os.path.islink(cfg_path):
+                    continue
+                tmp_fd, tmp_path = tempfile.mkstemp(
+                    prefix=".assistant_config_", suffix=".tmp", dir=cfg_dir
                 )
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(content_out)
+                try:
+                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                        f.write(content_out)
+                    if sys.platform != "win32":
+                        try:
+                            os.chmod(tmp_path, 0o600)
+                        except OSError:
+                            pass
+                    os.replace(tmp_path, cfg_path)
+                except OSError:
+                    if os.path.exists(tmp_path):
+                        try:
+                            os.remove(tmp_path)
+                        except OSError:
+                            pass
+                    raise
             if sys.platform != "win32" and os.path.isfile(cfg_path):
                 try:
                     os.chmod(cfg_path, 0o600)

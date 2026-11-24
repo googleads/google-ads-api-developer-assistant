@@ -6,7 +6,7 @@
   "restart_policy": "always",
   "env": {
     "A2A_PORT": "8900",
-    "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "../../config/google-ads.yaml"
+    "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "${PLUGIN_ROOT}/config/google-ads.yaml"
   },
   "sandbox": {
     "allowed_http_hosts": [

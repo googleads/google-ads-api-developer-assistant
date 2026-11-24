@@ -834,6 +834,12 @@ fi
 # Antigravity installation
 echo "Installing plugin for agy into: ${PLUGIN_TARGET_DIR}"
 install_plugin_copy "${PLUGIN_TARGET_DIR}"
+# Strip Claude-Code-only files from the installed agy copy so `jetski plugin validate` emits 0 warnings
+rm -rf \
+  "${PLUGIN_TARGET_DIR}/.claude-plugin" \
+  "${PLUGIN_TARGET_DIR}/.mcp.json" \
+  "${PLUGIN_TARGET_DIR}/hooks" \
+  "${PLUGIN_TARGET_DIR}/commands"
 
 echo "Plugin installation for agy complete."
 echo "Active plugin location: ${PLUGIN_TARGET_DIR}"
