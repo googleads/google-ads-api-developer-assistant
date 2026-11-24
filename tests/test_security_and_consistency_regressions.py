@@ -60,12 +60,13 @@ class TestHooksJsonAndGuardrailSecurity:
                     args_joined = " ".join(hook.get("args", []))
                     assert "next((f for f in ['config/config_init.py'" not in args_joined
 
-        # File-write tools must be hooked in PreToolUse
+        # File-write and MCP tools must be hooked in PreToolUse for agy
         matchers = [
             entry.get("matcher", "")
             for entry in parsed["config-init"].get("PreToolUse", [])
         ]
-        assert any("write_to_file" in m and "Edit" in m for m in matchers)
+        assert any("write_file" in m and "edit_file" in m and "write_to_file" in m for m in matchers)
+        assert any("call_mcp_tool" in m for m in matchers)
 
         # Toggling real hooks.json works on top-level "config-init"
         copied_hooks = tmp_path / "hooks.json"
@@ -726,7 +727,7 @@ class TestDiagnosticMutationSidecarAndSyncRegressions:
         for rel in (
             "skills/pmax-listing-filter/SKILL.md",
             "commands/pmax-filter.md",
-            "rules/google_ads_rules.md",
+            "rules/AGENTS.md",
             "README.md",
         ):
             text = (PLUGIN_ROOT / rel).read_text(encoding="utf-8")
@@ -1230,10 +1231,9 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
                 "id": 13,
                 "method": "tools/call",
                 "params": {
-                    "name": "generate_code",
+                    "name": "inspect_object",
                     "arguments": {
-                        "user_prompt": 'Fetch clicks """ injection test',
-                        "customer_id": "123-456-7890",
+                        "resource_name": "Campaign",
                         "api_version": "v26",
                     },
                 },
@@ -1242,7 +1242,7 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
                 "jsonrpc": "2.0",
                 "id": 14,
                 "method": "tools/call",
-                "params": {"name": "nonexistent_tool", "arguments": {}},
+                "params": {"name": "generate_code", "arguments": {}},
             },
         ]
         mcp_out = io.StringIO()
@@ -1510,6 +1510,8 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
                 )
                 assert lim_exec["status"] == "HITL_BLOCKED"
 
+        monkeypatch.setenv("GOOGLE_ADS_MUTATION_RECEIPT_PATH", str(tmp_path / "srv_rem_receipt.json"))
+        monkeypatch.setenv("GOOGLE_ADS_ALLOW_TIER1_FINANCIAL_MUTATES", "true")
         mock_live_client = MagicMock()
         mock_live_client.get_service.return_value.create_customer_client.return_value = SimpleNamespace(
             resource_name="customers/9998887770"
@@ -1519,6 +1521,18 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         )
         mock_live_client.get_service.return_value.mutate_ad_group_ads.return_value = SimpleNamespace(
             results=[SimpleNamespace(resource_name="customers/1234567890/adGroupAds/333~444")]
+        )
+        # Dry-run writes signed receipt before live create_account
+        assert (
+            h.handle_create_account(
+                "t-ca-dry",
+                {
+                    "manager_customer_id": "1234567890",
+                    "validate_only": True,
+                    "client": mock_live_client,
+                },
+            )["status"]
+            == "COMPLETED"
         )
         assert (
             h.handle_create_account(
@@ -1541,6 +1555,19 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         )
         assert (
             h.handle_create_ad_group(
+                "t-cag-dry",
+                {
+                    "customer_id": "1234567890",
+                    "campaign_id": "111",
+                    "cpc_bid_micros": 250_000,
+                    "validate_only": True,
+                    "client": mock_live_client,
+                },
+            )["status"]
+            == "COMPLETED"
+        )
+        assert (
+            h.handle_create_ad_group(
                 "t-cag-live",
                 {
                     "customer_id": "1234567890",
@@ -1548,6 +1575,21 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
                     "cpc_bid_micros": 250_000,
                     "execute": True,
                     "user_confirmed": True,
+                    "client": mock_live_client,
+                },
+            )["status"]
+            == "COMPLETED"
+        )
+        assert (
+            h.handle_create_ad(
+                "t-cad-dry",
+                {
+                    "customer_id": "1234567890",
+                    "ad_group_id": "333",
+                    "final_urls": "https://example.com",
+                    "headlines": ["Headline One", "Headline Two", "Headline Three"],
+                    "descriptions": ["Description One.", "Description Two."],
+                    "validate_only": True,
                     "client": mock_live_client,
                 },
             )["status"]
@@ -1823,14 +1865,19 @@ class TestComprehensiveBranchCoverageAndEdgeCases:
         assert (lib_dir / ".sync_version").read_text(encoding="utf-8").strip() == "37.2.0"
 
     def test_additional_audit_remediations(self, tmp_path, monkeypatch):
-        # 1. Every skill has a matching command file in commands/<skill>.md
+        # 1. Every skill has a matching command file (directly or via canonical alias)
         skill_names = {
             p.parent.name for p in (PLUGIN_ROOT / "skills").glob("*/SKILL.md")
         }
         command_stems = {
             p.stem for p in (PLUGIN_ROOT / "commands").glob("*.md")
         }
-        assert skill_names.issubset(command_stems)
+        alias_map = {
+            "google-ads-explain": "explain",
+            "google-ads-step-by-step": "step-by-step",
+        }
+        for sname in skill_names:
+            assert sname in command_stems or alias_map.get(sname) in command_stems, sname
 
         # 2. sitecustomize intercepts io.open, Path.open, and os.path.isfile in read mode
         sc = _load_module("config/sitecustomize.py", "sc_audit_reg")

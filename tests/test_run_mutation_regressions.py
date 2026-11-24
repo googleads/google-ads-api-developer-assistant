@@ -46,8 +46,15 @@ def _load(path: Path, name: str) -> Any:
     spec = importlib.util.spec_from_file_location(name, str(path))
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
+    prev = sys.modules.get(name)
     sys.modules[name] = mod
-    spec.loader.exec_module(mod)
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        if prev is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = prev
     return mod
 
 

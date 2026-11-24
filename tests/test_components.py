@@ -818,9 +818,10 @@ class TestExtVersion:
         captured = capsys.readouterr()
         data = json.loads(captured.out)
         assert "injectSteps" in data
-        assert "ephemeralMessage" in data["injectSteps"][0]
-        assert "Parity Table:" in data["injectSteps"][0]["ephemeralMessage"]
-        assert "MANDATORY FIRST-PROMPT DIRECTIVE:" in data["injectSteps"][0]["ephemeralMessage"]
+        assert "systemMessage" in data["injectSteps"][0]
+        sys_msg_1 = data["injectSteps"][0]["systemMessage"]["systemMessage"]
+        assert "Parity Table:" in sys_msg_1
+        assert "MANDATORY FIRST-PROMPT DIRECTIVE:" in sys_msg_1
 
         # 2. Test PreInvocation first prompt (invocationNum == 1)
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"invocationNum": 1})))
@@ -828,9 +829,10 @@ class TestExtVersion:
         captured2 = capsys.readouterr()
         data2 = json.loads(captured2.out)
         assert "injectSteps" in data2
-        assert "ephemeralMessage" in data2["injectSteps"][0]
-        assert "Parity Table:" in data2["injectSteps"][0]["ephemeralMessage"]
-        assert "MANDATORY FIRST-PROMPT DIRECTIVE:" in data2["injectSteps"][0]["ephemeralMessage"]
+        assert "systemMessage" in data2["injectSteps"][0]
+        sys_msg_2 = data2["injectSteps"][0]["systemMessage"]["systemMessage"]
+        assert "Parity Table:" in sys_msg_2
+        assert "MANDATORY FIRST-PROMPT DIRECTIVE:" in sys_msg_2
 
         # 3. Test PreInvocation subsequent turn (invocationNum == 2) -> omits table and mandatory display directive
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"invocationNum": 2})))
@@ -838,9 +840,10 @@ class TestExtVersion:
         captured3 = capsys.readouterr()
         data3 = json.loads(captured3.out)
         assert "injectSteps" in data3
-        assert "ephemeralMessage" in data3["injectSteps"][0]
-        assert "Parity Table:" not in data3["injectSteps"][0]["ephemeralMessage"]
-        assert "ACTIVE API CONFIGURATION:" in data3["injectSteps"][0]["ephemeralMessage"]
+        assert "systemMessage" in data3["injectSteps"][0]
+        sys_msg_3 = data3["injectSteps"][0]["systemMessage"]["systemMessage"]
+        assert "Parity Table:" not in sys_msg_3
+        assert "ACTIVE API CONFIGURATION:" in sys_msg_3
 
         # 4. When plugin is disabled, PreInvocation returns {} and PreToolUse returns {"decision": "allow"} without overwrite
         monkeypatch.setenv("GOOGLE_ADS_ASSISTANT_ENABLED", "false")
@@ -956,15 +959,23 @@ class TestSidecarA2A:
         assert "GoogleAdsClient" in res["result"]["generated_code"]
         assert 'load_from_storage(path="config/google-ads.yaml"' in res["result"]["generated_code"]
 
-    def test_troubleshoot_conversions_task(self):
+    def test_troubleshoot_conversions_task(self, tmp_path):
         handler = server.A2AHandler.__new__(server.A2AHandler)
+        mock_client = MagicMock()
+        mock_client.get_service.return_value.search_stream.return_value = []
         with patch("server.get_effective_api_version", return_value="v25"):
             res = handler.handle_troubleshoot_conversions(
                 "task-6",
-                {"customer_id": "1234567890", "api_version": "v25"},
+                {
+                    "customer_id": "1234567890",
+                    "api_version": "v25",
+                    "client": mock_client,
+                    "output_dir": str(tmp_path),
+                },
             )
         assert res["status"] == "COMPLETED"
-        assert res["result"]["summary"] == "Verified offline conversion upload summary."
+        assert "diagnostics" in res["result"]
+        assert res["result"]["api_version"] == "v25"
 
     def test_sidecar_health_check(self):
         handler = server.A2AHandler.__new__(server.A2AHandler)
@@ -1621,7 +1632,7 @@ class TestPluginIntegrity:
             os.path.join(repo_root, "ChangeLog.md"),
             os.path.join(repo_root, "FAQ.md"),
             os.path.join(plugin_dir, "README.md"),
-            os.path.join(plugin_dir, "rules", "google_ads_rules.md"),
+            os.path.join(plugin_dir, "rules", "AGENTS.md"),
             os.path.join(
                 plugin_dir,
                 "sidecars",
@@ -2510,7 +2521,7 @@ class TestSyncClientLibsExtended:
             str(target_lib),
             "googleads/google-ads-python",
             "v34.1.0",
-            "https://example.com/release.tar.gz",
+            "https://codeload.github.com/googleads/google-ads-python/tar.gz/refs/tags/v34.1.0",
         )
         assert ok is True
         assert (target_lib / "pyproject.toml").read_text(encoding="utf-8") == 'version = "34.1.0"\n'
@@ -2571,7 +2582,11 @@ class TestSyncClientLibsExtended:
 
         # Test upgrade_system_package fallback to local lib_path when pypi install fails
         lib_dir = tmp_path / "google-ads-python"
-        lib_dir.mkdir()
+        (lib_dir / ".git").mkdir(parents=True)
+        (lib_dir / ".git" / "config").write_text(
+            '[remote "origin"]\n\turl = https://github.com/googleads/google-ads-python.git\n',
+            encoding="utf-8",
+        )
         (lib_dir / "pyproject.toml").write_text('version = "34.0.0"\n', encoding="utf-8")
 
         calls = []
@@ -4479,6 +4494,11 @@ class TestRemainingModulesAbove80Coverage:
         assert "matches" in parity
 
         # upgrade_system_package fallback to local lib_path when pypi install returns non-zero
+        (lib_dir / ".git").mkdir(parents=True, exist_ok=True)
+        (lib_dir / ".git" / "config").write_text(
+            '[remote "origin"]\n\turl = https://github.com/googleads/google-ads-python.git\n',
+            encoding="utf-8",
+        )
         (lib_dir / "pyproject.toml").write_text('[project]\nversion = "30.1.0"\n', encoding="utf-8")
         call_count = {"n": 0}
 
@@ -4761,7 +4781,7 @@ class TestRemainingModulesAbove80Coverage:
         fake_stdin.read.return_value = json.dumps({"invocationNum": 2})
         config_init.handle_hook()
         second_out = json.loads(capsys.readouterr().out)
-        assert "Parity verification was completed on the first prompt" in second_out["injectSteps"][0]["ephemeralMessage"]
+        assert "Parity verification was completed on the first prompt" in second_out["injectSteps"][0]["systemMessage"]["systemMessage"]
 
         # 7. CLI main() flags (--status, --status --json, and standard initialization)
         monkeypatch.setattr(sys, "argv", ["config_init.py", "--status", "--config-dir", str(sync_dir)])

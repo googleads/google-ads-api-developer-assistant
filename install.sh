@@ -575,7 +575,9 @@ detect_and_seed_api_version() {
     fi
     local cid="12345678"
     local exec_mutates="false"
+    local tier1_mutates="false"
     local plugin_enabled="true"
+    local extra_lines=""
     if [[ -f "${cfg_file}" ]]; then
       if [[ -z "${latest_v}" ]]; then
         local existing_ver=""
@@ -596,11 +598,17 @@ detect_and_seed_api_version() {
       if [[ "${existing_em}" == "true" || "${existing_em}" == "false" ]]; then
         exec_mutates="${existing_em}"
       fi
+      local existing_t1=""
+      existing_t1=$(grep -E '^[[:space:]]*allow_tier1_financial_mutates[[:space:]]*=' "${cfg_file}" 2>/dev/null | tail -n 1 | sed -E 's/^[[:space:]]*allow_tier1_financial_mutates[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\1/' | tr '[:upper:]' '[:lower:]' || true)
+      if [[ "${existing_t1}" == "true" || "${existing_t1}" == "false" ]]; then
+        tier1_mutates="${existing_t1}"
+      fi
       local existing_en=""
       existing_en=$(grep -E '^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\2/' | tr '[:upper:]' '[:lower:]' || true)
       if [[ "${existing_en}" == "true" || "${existing_en}" == "false" ]]; then
         plugin_enabled="${existing_en}"
       fi
+      extra_lines=$(grep -Ev '^[[:space:]]*(api_version|customer_id|execute_mutates|allow_tier1_financial_mutates|enabled|plugin_enabled)[[:space:]]*=' "${cfg_file}" 2>/dev/null || true)
     fi
     if [[ -n "${PLUGIN_ENABLED_OPT}" ]]; then
       plugin_enabled="${PLUGIN_ENABLED_OPT}"
@@ -619,12 +627,16 @@ detect_and_seed_api_version() {
         fi
       done
     fi
-    cat <<EOF > "${cfg_file}"
-api_version = "${api_ver}"
-customer_id = "${cid}"
-execute_mutates = ${exec_mutates}
-enabled = ${plugin_enabled}
-EOF
+    {
+      printf 'api_version = "%s"\n' "${api_ver}"
+      printf 'customer_id = "%s"\n' "${cid}"
+      printf 'execute_mutates = %s\n' "${exec_mutates}"
+      printf 'allow_tier1_financial_mutates = %s\n' "${tier1_mutates}"
+      printf 'enabled = %s\n' "${plugin_enabled}"
+      if [[ -n "${extra_lines}" ]]; then
+        printf '%s\n' "${extra_lines}"
+      fi
+    } > "${cfg_file}"
     chmod 600 "${cfg_file}" 2>/dev/null || true
     if [[ -n "${api_ver}" ]]; then
       echo "Configured API version ${api_ver} in ${cfg_file}"

@@ -857,7 +857,8 @@ def troubleshoot_conversions(
 def main() -> None:
     """Parses command line arguments and runs conversion troubleshooting."""
     parser = argparse.ArgumentParser(
-        description="Conversion troubleshooting diagnostic collector."
+        allow_abbrev=False,
+        description="Conversion troubleshooting diagnostic collector.",
     )
     parser.add_argument(
         "-c", "--customer_id", required=True, help="The Google Ads customer ID."

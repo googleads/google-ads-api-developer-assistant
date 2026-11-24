@@ -1,22 +1,14 @@
 {
-  "_comment": [
-    "Architectural Purpose: Plugin-scoped Model Context Protocol (MCP) stdio manifest.",
-    "Discovered automatically by MCP-capable agent hosts (Antigravity / Jetski and Claude Code)",
-    "when the google-ads-api-developer-assistant plugin is loaded.",
-    "Launches server.py in JSON-RPC 2.0 stdio mode (--mcp) so it never collides with",
-    "the HTTP A2A sidecar (sidecar.json on 127.0.0.1:8900), exposing tools for GAQL validation,",
-    "Protobuf inspection, AST-verified code generation, conversion diagnostics, and HITL-verified",
-    "Google Ads API mutations."
-  ],
   "mcpServers": {
     "google-ads-api-assistant": {
       "command": "python3",
       "args": [
-        "sidecars/google-ads-a2a-service/server.py",
+        "${PLUGIN_ROOT}/sidecars/google-ads-a2a-service/server.py",
         "--mcp"
       ],
       "env": {
-        "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "config/google-ads.yaml"
+        "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "${PLUGIN_ROOT}/config/google-ads.yaml",
+        "GOOGLE_ADS_ASSISTANT_DIR": "${PLUGIN_ROOT}"
       }
     }
   }

@@ -10,11 +10,13 @@ This plugin puts the skills, slash commands, lifecycle hooks, rules, diagnostic 
 ```
 google-ads-api-developer-assistant/
 ├── plugin.json                              <-- Manifest for rules, 11 skills, commands, hooks, sidecars, and MCP servers
-├── hooks.json                               <-- PreInvocation & PreToolUse lifecycle hooks (config sync & HITL mutation guard)
+├── hooks.json                               <-- Antigravity (agy) SessionStart & PreToolUse lifecycle hooks
+├── hooks/hooks.json                         <-- Claude Code CLI SessionStart, PreToolUse & PostToolUseFailure hooks
 ├── README.md                                <-- Installation Guide & Usage Reference
 ├── config/
-│   ├── assistant_config                     <-- Unified TOML config (api_version, customer_id, execute_mutates)
-│   ├── config_init.py                       <-- Credential sync, TOML config manager, and PreToolUse guard
+│   ├── assistant_config                     <-- Unified TOML config (api_version, customer_id, execute_mutates, allow_tier1_financial_mutates, enabled)
+│   ├── hook_guard.py                        <-- Fast stdlib SessionStart/PreToolUse/PostToolUseFailure guard entrypoint
+│   ├── config_init.py                       <-- Credential sync, TOML config manager, and deep PreToolUse guard
 │   ├── financial_limits                     <-- Per-service financial upper limits (Service.field)
 │   ├── set_financial_limits.py              <-- CLI wrapper to list, set, or reset financial limits
 │   └── sitecustomize.py                     <-- Runtime config path resolution shim
@@ -31,7 +33,7 @@ google-ads-api-developer-assistant/
 │   ├── troubleshoot-conversions.md
 │   └── validate-gaql.md
 ├── rules/
-│   └── google_ads_rules.md                  <-- System directives, safety rules, and 4-Step HITL mutation protocol
+│   └── AGENTS.md                            <-- Concise system directives, safety rules, and 4-Step HITL mutation protocol
 ├── skills/                                  <-- Skill packages and helper scripts
 │   ├── assistant-tutorial/                  <-- Interactive user tutorial
 │   │   └── SKILL.md
@@ -44,7 +46,7 @@ google-ads-api-developer-assistant/
 │   │       ├── create_campaign.py
 │   │       ├── run_mutation.py
 │   │       └── set_financial_limits.py
-│   ├── explain/                             <-- 4-part explanations with analogies
+│   ├── google-ads-explain/                  <-- 4-part explanations with analogies
 │   │   └── SKILL.md
 │   ├── ext-version/                         <-- Extension and latest API version lookup
 │   │   ├── SKILL.md
@@ -60,7 +62,7 @@ google-ads-api-developer-assistant/
 │   ├── pmax-listing-filter/                 <-- Asset Group webpage exclusion filters
 │   │   ├── SKILL.md
 │   │   └── scripts/create_pmax_webpage_filter.py
-│   ├── step-by-step/                        <-- Task step list workflow
+│   ├── google-ads-step-by-step/             <-- Task step list workflow
 │   │   └── SKILL.md
 │   ├── sync-client-libs/                    <-- Client library lookup and GitHub release sync
 │   │   ├── SKILL.md
@@ -87,9 +89,9 @@ google-ads-api-developer-assistant/
 
 ## Summary of Migrated Features
 
-1. **System Rules (`rules/google_ads_rules.md`)**:
+1. **System Rules (`rules/AGENTS.md`)**:
    - **Validate Before Act**: Reads the cached `api_version` from `config/assistant_config` or checks the release notes.
-   - **4-Step HITL Mutation & Consequence Verification Protocol**: Allows only `create` and `update` operations, and blocks all delete (`remove`) operations. Uses `execute_mutates` in `config/assistant_config`, saves generated code in `saved/code/`, writes dry-run receipts to `saved/data/last_dry_run.json`, and writes audit records to `saved/logs/mutation_audit.jsonl`.
+   - **4-Step HITL Mutation & Consequence Verification Protocol**: Allows only `create` and `update` operations, and blocks all delete (`remove`) operations. Uses `execute_mutates` and `allow_tier1_financial_mutates` in `config/assistant_config`, saves generated code in `saved/code/`, writes dry-run receipts to `saved/data/last_dry_run.json`, and writes audit records to `saved/logs/mutation_audit.jsonl`.
    - **GAQL Validation Rules**: Blocks the `OR` operator, blocks `FROM` in metadata queries, and requires bare field names for metadata queries.
    - **Code Generation Pipeline**: Runs `ruff` to check generated Python code and uses `GoogleAdsException` to format error messages.
    - **Source of Truth**: Uses local `client_libs/` files as the primary reference for API definitions.
@@ -102,22 +104,24 @@ google-ads-api-developer-assistant/
    - `get-cids-under-mcc` (`/get-cids`): Lists child customer IDs under a Manager Account (MCC).
    - `sync-client-libs` (`/sync-client-libs`): Checks local client library versions and updates them from GitHub releases.
    - `ext-version` (`/ext-version`): Checks the plugin version and the active API version.
-   - `explain` (`/explain`): Gives 4-part explanations (Big Picture, Analogy, Interconnectedness, Simple Language).
+   - `google-ads-explain` (`/explain`): Gives 4-part explanations (Big Picture, Analogy, Interconnectedness, Simple Language).
    - `assistant-tutorial` (`/assistant-tutorial`): Starts an interactive tutorial.
-   - `step-by-step` (`/step-by-step`): Breaks tasks into numbered steps.
-3. **Lifecycle Hooks (`hooks.json` & `config/config_init.py`)**:
-   - `PreInvocation` hook: Copies `~/google-ads.yaml` to `config/google-ads.yaml` (with `0600` permissions) and adds configuration and mutation notices to the session context.
-   - `PreToolUse` hook: Resolves relative skill script paths to the global plugin directory, points credential paths to `config/google-ads.yaml`, and enforces the 4-Step HITL Mutation Guard (`allow`, `deny`, or `force_ask`).
-4. **Daemon Services (`sidecars/`) & MCP Configuration (`mcp_config.json`)**:
-   - Agent-to-Agent (A2A) HTTP service for external tools (`GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION`, and `EXECUTE_MUTATION`).
+   - `google-ads-step-by-step` (`/step-by-step`): Breaks tasks into numbered steps.
+3. **Lifecycle Hooks (`hooks.json`, `hooks/hooks.json`, `config/hook_guard.py`, & `config/config_init.py`)**:
+   - `SessionStart` hook: Copies `~/google-ads.yaml` to `config/google-ads.yaml` (`0600` permissions), resolves the local active API version without network calls, and injects session context (`systemMessage` in `agy`, `additionalContext` + `CLAUDE_ENV_FILE` in Claude Code).
+   - `PreToolUse` hook: Resolves relative skill script paths to the plugin directory, points credential paths to `config/google-ads.yaml`, protects config/receipt/audit/guard files from silent tampering, and enforces the 4-Step HITL Mutation Guard across shell commands, file writes, and MCP mutation tools (`allow`, `deny`, or `force_ask`/`ask`).
+   - `PostToolUseFailure` hook (Claude Code): Audits failed `run_mutation.py --execute` calls.
+4. **Daemon Services (`sidecars/`) & MCP Configuration (`mcp_config.json` / `.mcp.json`)**:
+   - Sandboxed Agent-to-Agent (A2A) HTTP service (`sidecar.json`) and stdio MCP server (`server.py --mcp`) supporting 11 A2A intents / 10 MCP tools (`GAQL_VALIDATE`, `INSPECT_OBJECT`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION`, `EXECUTE_MUTATION`, `REJECT_MUTATION`, `CREATE_ACCOUNT`, `CREATE_CAMPAIGN`, `CREATE_AD_GROUP`, `CREATE_AD`, plus A2A-only `GENERATE_CODE`).
 
 ---
 
 ## Runtime Behavior across Platforms
 
-### 1. Host Hook Support (`hooks.json` & `config/config_init.py`)
-- **Standard Behavior**: **Antigravity (`agy`)** and **Claude Code CLI (`claude`)** run the `PreInvocation` and `PreToolUse` hooks from `hooks.json`.
-- **Fallback Behavior**: If host hooks are off, the skill scripts still read credentials from `config/google-ads.yaml` through `_get_config_path()`. In addition, `run_mutation.py` checks `execute_mutates`, verifies SHA-256 receipts, blocks delete operations, and writes audit logs.
+### 1. Host Hook Support (`hooks.json` vs `hooks/hooks.json`)
+- **Antigravity (`agy`)**: Loads root `hooks.json` (`SessionStart` and `PreToolUse` for `run_command`, `write_file|edit_file|...`, and `call_mcp_tool|mcp_.*`) via `PLUGIN_ROOT`.
+- **Claude Code CLI (`claude`)**: Loads `hooks/hooks.json` (`SessionStart`, `PreToolUse` for `Bash`, `Write|Edit|MultiEdit`, and `mcp__google-ads-api-assistant__*` mutation tools, plus `PostToolUseFailure` for `Bash`) via `${CLAUDE_PLUGIN_ROOT}`.
+- **Fallback Behavior**: If host hooks are off, the skill scripts still read credentials from `config/google-ads.yaml` through `_get_config_path()`. In addition, `run_mutation.py` and `server.py` enforce `execute_mutates`, Tier 1 financial posture, financial limits, SHA-256 receipts, single-use execution tokens, deletion prohibition, and audit logs.
 
 ### 2. Interactive User Prompts (`ask_question` tool vs. CLI prompts)
 - **Antigravity (`agy`)**: Shows interactive UI modal dialogs and `PreToolUse` `"decision": "force_ask"` confirmation cards.

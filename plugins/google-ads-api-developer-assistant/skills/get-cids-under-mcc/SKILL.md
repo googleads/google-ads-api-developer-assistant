@@ -1,6 +1,6 @@
 ---
 name: get-cids-under-mcc
-description: Retrieves a list of all child customer account IDs (CIDs) under a given Manager Account (MCC).
+description: Retrieves child customer account IDs (CIDs) and hierarchy levels under a Google Ads Manager Account (MCC). Use when mapping MCC hierarchies, listing sub-accounts, or exporting child CIDs to CSV. Don't use for querying campaign metrics (use validate-gaql) or creating new child accounts (use execute-mutation).
 ---
 
 # Get CIDs Under MCC

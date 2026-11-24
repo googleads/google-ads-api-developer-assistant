@@ -444,6 +444,7 @@ create_ad = create_responsive_search_ad
 def main() -> None:
     """CLI entrypoint for creating a Google Ads Responsive Search Ad."""
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         description=(
             "Creates a Google Ads Responsive Search Ad under an ad group via "
             "AdGroupAdService."

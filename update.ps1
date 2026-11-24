@@ -70,7 +70,8 @@ param(
     [switch]$Enable,
     [Alias("Disabled")]
     [switch]$Disable,
-    [switch]$Status
+    [switch]$Status,
+    [switch]$NoGitPull
 )
 
 $ErrorActionPreference = "Stop"
@@ -294,7 +295,9 @@ function Set-LatestApiVersion {
         $ApiVer = if ($Latest) { $Latest } else { "" }
         $Cid = "12345678"
         $ExecMutates = "false"
+        $Tier1Mutates = "false"
         $PluginEnabled = "true"
+        $ExtraLines = @()
         if (Test-Path -LiteralPath $CfgFile) {
             $Existing = Get-Content -LiteralPath $CfgFile -Raw
             if (-not $Latest -and ($Existing -match '(?m)^\s*api_version\s*=\s*["'']?([^"''\s#]+)["'']?')) {
@@ -312,8 +315,17 @@ function Set-LatestApiVersion {
             if ($Existing -match '(?mi)^\s*execute_mutates\s*=\s*["'']?(true|false)["'']?') {
                 $ExecMutates = $Matches[1].ToLower()
             }
+            if ($Existing -match '(?mi)^\s*allow_tier1_financial_mutates\s*=\s*["'']?(true|false)["'']?') {
+                $Tier1Mutates = $Matches[1].ToLower()
+            }
             if ($Existing -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?(true|false)["'']?') {
                 $PluginEnabled = $Matches[1].ToLower()
+            }
+            foreach ($RawLine in ($Existing -split "`r?`n")) {
+                if ([string]::IsNullOrWhiteSpace($RawLine)) { continue }
+                if ($RawLine -notmatch '^\s*(?:api_version|customer_id|execute_mutates|allow_tier1_financial_mutates|enabled|plugin_enabled)\s*=') {
+                    $ExtraLines += $RawLine
+                }
             }
         }
         if ($Disable) { $PluginEnabled = "false" }
@@ -347,7 +359,10 @@ function Set-LatestApiVersion {
                 }
             }
         }
-        $TomlContent = "api_version = `"$ApiVer`"`ncustomer_id = `"$Cid`"`nexecute_mutates = $ExecMutates`nenabled = $PluginEnabled`n"
+        $TomlContent = "api_version = `"$ApiVer`"`ncustomer_id = `"$Cid`"`nexecute_mutates = $ExecMutates`nallow_tier1_financial_mutates = $Tier1Mutates`nenabled = $PluginEnabled`n"
+        if ($ExtraLines.Count -gt 0) {
+            $TomlContent += ($ExtraLines -join "`n") + "`n"
+        }
         Set-Content -Path $CfgFile -Value $TomlContent -NoNewline
         if ($ApiVer) {
             Write-Host "Configured API version $ApiVer in $CfgFile"
@@ -455,11 +470,15 @@ try {
         }
     }
 
-    git -C $ProjectDirAbs -c core.longpaths=true -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to update google-ads-api-developer-assistant repository."
+    if ($NoGitPull) {
+        Write-Host "Skipping git pull (-NoGitPull)."
+    } else {
+        git -C $ProjectDirAbs -c core.longpaths=true -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to update google-ads-api-developer-assistant repository."
+        }
+        Write-Host "Successfully updated repository."
     }
-    Write-Host "Successfully updated repository."
 
     $SpecifiedLangs = @()
     if ($All) {
@@ -504,7 +523,7 @@ try {
     # Locate and update all client libraries in repository
     Write-Host "Locating client libraries to update..."
     $IncludeDirs = @()
-    if (Test-Path -LiteralPath $PluginSourceClientLibs) {
+    if (-not $NoGitPull -and (Test-Path -LiteralPath $PluginSourceClientLibs)) {
         foreach ($Dir in Get-ChildItem -LiteralPath $PluginSourceClientLibs -Directory) {
             if (Test-Path -LiteralPath (Join-Path $Dir.FullName ".git")) {
                 $IncludeDirs += $Dir.FullName
@@ -682,7 +701,7 @@ try {
             }
         }
 
-        if (Test-Path -LiteralPath $TargetClientLibs) {
+        if (-not $NoGitPull -and (Test-Path -LiteralPath $TargetClientLibs)) {
             foreach ($Dir in Get-ChildItem -LiteralPath $TargetClientLibs -Directory) {
                 if (Test-Path -LiteralPath (Join-Path $Dir.FullName ".git")) {
                     Write-Host "Updating repository at: $($Dir.FullName)..."
@@ -710,7 +729,7 @@ try {
             } catch {}
         }
         if (-not $HasWorkingPython3 -and (Get-Command "python" -ErrorAction SilentlyContinue)) {
-            foreach ($RelJson in @("hooks.json", "mcp_config.json", ".mcp.json", "sidecars\google-ads-a2a-service\sidecar.json")) {
+            foreach ($RelJson in @("hooks.json", "hooks\hooks.json", "mcp_config.json", ".mcp.json", "sidecars\google-ads-a2a-service\sidecar.json")) {
                 $ManifestPath = Join-Path $TargetPluginDir $RelJson
                 if (Test-Path -LiteralPath $ManifestPath) {
                     $RawJson = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8

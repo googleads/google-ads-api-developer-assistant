@@ -41,6 +41,7 @@ ANY_SELECTED=false
 CUSTOMER_ID=""
 PLUGIN_ENABLED_OPT=""
 STATUS_ONLY=false
+NO_GIT_PULL=false
 
 # --- Help Function ---
 usage() {
@@ -60,6 +61,7 @@ usage() {
   echo "    --enable                   Enable the plugin after updating"
   echo "    --disable, --disabled      Disable the plugin after updating"
   echo "    --status                   Show the current enabled/disabled status of the plugin and exit"
+  echo "    --no-git-pull              Skip git pull on the repository and client libraries (offline sync)"
   echo "    --all                      Ensure all client libraries are present and updated in plugin"
   echo "    --python                   Ensure google-ads-python is present and updated in plugin"
   echo "    --php                      Ensure google-ads-php is present and updated in plugin"
@@ -139,6 +141,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --status)
       STATUS_ONLY=true
+      shift
+      ;;
+    --no-git-pull)
+      NO_GIT_PULL=true
       shift
       ;;
     --all)
@@ -383,7 +389,9 @@ detect_and_seed_api_version() {
     fi
     local cid="12345678"
     local exec_mutates="false"
+    local tier1_mutates="false"
     local plugin_enabled="true"
+    local extra_lines=""
     if [[ -f "${cfg_file}" ]]; then
       if [[ -z "${latest_v}" ]]; then
         local existing_ver=""
@@ -404,11 +412,17 @@ detect_and_seed_api_version() {
       if [[ "${existing_em}" == "true" || "${existing_em}" == "false" ]]; then
         exec_mutates="${existing_em}"
       fi
+      local existing_t1=""
+      existing_t1=$(grep -E '^[[:space:]]*allow_tier1_financial_mutates[[:space:]]*=' "${cfg_file}" 2>/dev/null | tail -n 1 | sed -E 's/^[[:space:]]*allow_tier1_financial_mutates[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\1/' | tr '[:upper:]' '[:lower:]' || true)
+      if [[ "${existing_t1}" == "true" || "${existing_t1}" == "false" ]]; then
+        tier1_mutates="${existing_t1}"
+      fi
       local existing_en=""
       existing_en=$(grep -E '^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=' "${cfg_file}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*(enabled|plugin_enabled)[[:space:]]*=[[:space:]]*["'\'']?(true|false|TRUE|FALSE)["'\'']?.*$/\2/' | tr '[:upper:]' '[:lower:]' || true)
       if [[ "${existing_en}" == "true" || "${existing_en}" == "false" ]]; then
         plugin_enabled="${existing_en}"
       fi
+      extra_lines=$(grep -Ev '^[[:space:]]*(api_version|customer_id|execute_mutates|allow_tier1_financial_mutates|enabled|plugin_enabled)[[:space:]]*=' "${cfg_file}" 2>/dev/null || true)
     fi
     if [[ -n "${PLUGIN_ENABLED_OPT}" ]]; then
       plugin_enabled="${PLUGIN_ENABLED_OPT}"
@@ -433,12 +447,16 @@ detect_and_seed_api_version() {
         fi
       done
     fi
-    cat <<EOF > "${cfg_file}"
-api_version = "${api_ver}"
-customer_id = "${cid}"
-execute_mutates = ${exec_mutates}
-enabled = ${plugin_enabled}
-EOF
+    {
+      printf 'api_version = "%s"\n' "${api_ver}"
+      printf 'customer_id = "%s"\n' "${cid}"
+      printf 'execute_mutates = %s\n' "${exec_mutates}"
+      printf 'allow_tier1_financial_mutates = %s\n' "${tier1_mutates}"
+      printf 'enabled = %s\n' "${plugin_enabled}"
+      if [[ -n "${extra_lines}" ]]; then
+        printf '%s\n' "${extra_lines}"
+      fi
+    } > "${cfg_file}"
     chmod 600 "${cfg_file}" 2>/dev/null || true
     if [[ -n "${api_ver}" ]]; then
       echo "Configured API version ${api_ver} in ${cfg_file}"
@@ -525,12 +543,15 @@ for legacy_name in customer_id customer_id.txt; do
   fi
 done
 
-if ! git -C "${PROJECT_DIR_ABS}" -c core.longpaths=true -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull; then
-  err "ERROR: Failed to update google-ads-api-developer-assistant repository."
-  exit 1
+if [[ "${NO_GIT_PULL}" == "true" ]]; then
+  echo "Skipping git pull (--no-git-pull)."
+else
+  if ! git -C "${PROJECT_DIR_ABS}" -c core.longpaths=true -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull; then
+    err "ERROR: Failed to update google-ads-api-developer-assistant repository."
+    exit 1
+  fi
+  echo "Successfully updated repository."
 fi
-
-echo "Successfully updated repository."
 
 # --- Update Plugin Installation & Client Libraries ---
 mkdir -p "${PLUGIN_SOURCE_DIR}/client_libs"
@@ -555,7 +576,7 @@ done
 
 # Locate and update all client libraries in repository
 echo "Locating client libraries to update..."
-if [[ -d "${PLUGIN_SOURCE_DIR}/client_libs" ]]; then
+if [[ "${NO_GIT_PULL}" != "true" && -d "${PLUGIN_SOURCE_DIR}/client_libs" ]]; then
   for dir in "${PLUGIN_SOURCE_DIR}/client_libs"/*; do
     if [[ -d "${dir}/.git" ]]; then
       echo "Updating repository at: ${dir}..."
@@ -633,15 +654,17 @@ sync_installed_plugin_dir() {
       safe_copy_dir "${target_plugin_dir}/saved" "${existing_saved_backup}"
     fi
 
-    for item in "${PLUGIN_SOURCE_DIR}"/*; do
-      if [[ -e "${item}" ]]; then
-        local item_name
-        item_name=$(basename "${item}")
-        if [[ "${item_name}" != "client_libs" && "${item_name}" != "saved" ]]; then
-          cp -r "${item}" "${target_plugin_dir}/"
+    (
+      shopt -s dotglob nullglob
+      for item in "${PLUGIN_SOURCE_DIR}"/*; do
+        if [[ -e "${item}" ]]; then
+          item_name=$(basename "${item}")
+          if [[ "${item_name}" != "client_libs" && "${item_name}" != "saved" && "${item_name}" != ".git" ]]; then
+            cp -r "${item}" "${target_plugin_dir}/"
+          fi
         fi
-      fi
-    done
+      done
+    )
 
     mkdir -p "${target_plugin_dir}/config"
     rm -f \
@@ -706,7 +729,7 @@ sync_installed_plugin_dir() {
     done
   fi
 
-  if [[ -d "${target_client_libs}" ]]; then
+  if [[ "${NO_GIT_PULL}" != "true" && -d "${target_client_libs}" ]]; then
     for dir in "${target_client_libs}"/*; do
       if [[ -d "${dir}/.git" ]]; then
         local repo_name

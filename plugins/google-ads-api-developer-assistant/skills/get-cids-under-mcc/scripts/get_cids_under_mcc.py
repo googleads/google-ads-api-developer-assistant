@@ -292,7 +292,8 @@ def _extract_row_fields(row: Any) -> tuple[str, int, bool, str, str]:
 def main() -> None:
     """Parses CLI arguments or prompts user, then calls get_cids_under_mcc."""
     parser = argparse.ArgumentParser(
-        description="Retrieves child customer accounts under an MCC."
+        allow_abbrev=False,
+        description="Retrieves child customer accounts under an MCC.",
     )
     parser.add_argument(
         "-c",
@@ -330,6 +331,17 @@ def main() -> None:
         action="store_true",
         default=False,
         help="If set, outputs child accounts in structured JSON format.",
+    )
+    parser.add_argument(
+        "--max-rows",
+        "--max_rows",
+        dest="max_rows",
+        type=int,
+        default=200,
+        help=(
+            "Maximum child accounts emitted to stdout for --json / --print-cids "
+            "(default: 200; 0 = unlimited; --save-csv always writes all rows)."
+        ),
     )
     args = parser.parse_args()
 
@@ -386,9 +398,13 @@ def main() -> None:
             print(f"Error saving CSV file: {e}", file=sys.stderr)
             sys.exit(1)
 
+    max_rows = args.max_rows if args.max_rows is not None else 200
+    is_truncated = max_rows > 0 and len(extracted) > max_rows
+    display_rows = extracted[:max_rows] if is_truncated else extracted
+
     if args.json:
         child_dicts: list[dict[str, Any]] = []
-        for cid, level, is_mcc, desc_name, status_str in extracted:
+        for cid, level, is_mcc, desc_name, status_str in display_rows:
             entry: dict[str, Any] = {
                 "customer_id": cid,
                 "level": level,
@@ -401,8 +417,15 @@ def main() -> None:
         payload: dict[str, Any] = {
             "mcc_customer_id": clean_id,
             "total_child_accounts": len(cids),
+            "returned_child_accounts": len(child_dicts),
+            "truncated": is_truncated,
             "child_accounts": child_dicts,
         }
+        if is_truncated:
+            payload["truncation_notice"] = (
+                f"Output capped at {max_rows} of {len(cids)} accounts. "
+                "Pass --save-csv to export all rows or --max-rows 0 to disable capping."
+            )
         if csv_path:
             payload["csv_path"] = csv_path
         print(json.dumps(payload, indent=2))
@@ -417,7 +440,7 @@ def main() -> None:
             )
             print(header_fmt)
             print("-" * 56)
-            for cid, level, is_mcc, desc_name, status_str in extracted:
+            for cid, level, is_mcc, desc_name, status_str in display_rows:
                 is_mcc_str = "Yes" if is_mcc else "No"
                 suffix = f" ({status_str})" if status_str else ""
                 print(
@@ -426,9 +449,19 @@ def main() -> None:
         else:
             print(f"{'Customer ID':<15} {'Level':<7} {'Is MCC':<8}")
             print("-" * 32)
-            for cid, level, is_mcc, _, _ in extracted:
+            for cid, level, is_mcc, _, _ in display_rows:
                 is_mcc_str = "Yes" if is_mcc else "No"
                 print(f"{cid:<15} {level:<7} {is_mcc_str:<8}")
+        if is_truncated:
+            extra_hint = (
+                f" Full results saved to {csv_path}."
+                if csv_path
+                else " Use --save-csv to export all rows or --max-rows 0 to show all."
+            )
+            print(
+                f"... truncated: showing {len(display_rows)} of {len(cids)} "
+                f"child accounts.{extra_hint}"
+            )
         if not cids:
             print("No child accounts found.")
 

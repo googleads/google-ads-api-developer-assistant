@@ -1,6 +1,6 @@
 ---
 name: troubleshoot-conversions
-description: Investigates conversion upload issues, generates structured diagnostic reports, and validates conversion CSVs.
+description: Investigates Google Ads offline conversion upload issues, validates conversion CSV files, samples recent GCLIDs, and generates diagnostic reports. Use when debugging conversion upload errors or pre-validating conversion CSV payloads. Don't use for general GAQL query validation (use validate-gaql) or mutating campaigns/budgets (use execute-mutation).
 ---
 
 # Troubleshoot Conversions

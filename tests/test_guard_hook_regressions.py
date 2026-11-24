@@ -545,13 +545,17 @@ def test_claude_hooks_json_layout() -> None:
     hooks = data["hooks"]
     assert set(hooks) == {"SessionStart", "PreToolUse", "PostToolUseFailure"}
     matchers = {entry.get("matcher") for entry in hooks["PreToolUse"]}
-    assert matchers == {"Bash", "Write|Edit|MultiEdit"}
+    assert matchers == {
+        "Bash",
+        "Write|Edit|MultiEdit",
+        "mcp__google-ads-api-assistant__(prepare_mutation|execute_mutation|create_account|create_campaign|create_ad_group|create_ad)",
+    }
     assert hooks["PostToolUseFailure"][0]["matcher"] == "Bash"
     for event_entries in hooks.values():
         for entry in event_entries:
             for hook in entry["hooks"]:
                 assert hook["type"] == "command"
-                assert "${CLAUDE_PLUGIN_ROOT}/config/config_init.py" in hook["command"]
+                assert "${CLAUDE_PLUGIN_ROOT}/config/hook_guard.py" in hook["command"]
                 assert "exit 2" in hook["command"]
                 assert "py -3" in hook["command"]
                 assert "enabled" not in hook
@@ -559,12 +563,16 @@ def test_claude_hooks_json_layout() -> None:
 
 def test_antigravity_hooks_json_has_no_post_tool_use_failure() -> None:
     """Antigravity never fires PostToolUseFailure (verified 2026-11-24: failed run_command
-    calls arrive as PostToolUse with an empty "error"), so the agy manifest must not
-    register it."""
+    calls arrive as PostToolUse with an empty "error"), and uses SessionStart + PreToolUse."""
     data = json.loads((PLUGIN_DIR / "hooks.json").read_text(encoding="utf-8"))
     events = data["config-init"]
     assert "PostToolUseFailure" not in events
-    assert {"PreToolUse", "SessionStart", "PreInvocation"} <= set(events)
+    assert "PreInvocation" not in events
+    assert {"PreToolUse", "SessionStart"} <= set(events)
+    matchers = {entry.get("matcher") for entry in events["PreToolUse"]}
+    assert "run_command" in matchers
+    assert any("write_file" in m and "edit_file" in m for m in matchers)
+    assert any("call_mcp_tool" in m for m in matchers)
 
 
 def test_claude_mcp_and_manifest_layout() -> None:
@@ -600,26 +608,37 @@ def _agy_hook_commands() -> list[str]:
 
 
 def test_agy_hooks_have_no_cwd_relative_fallback() -> None:
-    cmds = _agy_hook_commands()
-    assert cmds
-    for cmd in cmds:
-        assert "'plugins/google-ads-api-developer-assistant/config/config_init.py'" not in cmd
+    data = json.loads((PLUGIN_DIR / "hooks.json").read_text(encoding="utf-8"))
+    pre_cmds = [h["command"] for e in data["config-init"]["PreToolUse"] for h in e["hooks"]]
+    sess_cmds = [h["command"] for h in data["config-init"]["SessionStart"]]
+    assert pre_cmds and sess_cmds
+    for cmd in pre_cmds + sess_cmds:
+        assert "'plugins/google-ads-api-developer-assistant/config/" not in cmd
+        assert "os.environ.get('PLUGIN_ROOT')" in cmd
+    for cmd in pre_cmds:
         assert "'decision':'deny'" in cmd
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell required")
 @pytest.mark.parametrize(
-    "stdin_payload,expected",
+    "event_key,stdin_payload,expected",
     [
-        ({"toolCall": {"name": "run_command", "args": {"CommandLine": "python3 x.py"}}}, "deny"),
-        ({"invocationNum": 1}, "{}"),
+        ("PreToolUse", {"toolCall": {"name": "run_command", "args": {"CommandLine": "python3 x.py"}}}, "deny"),
+        ("PreToolUse", {"invocationNum": 1}, "deny"),
+        ("SessionStart", {"invocationNum": 1}, "{}"),
     ],
 )
-def test_agy_hook_fails_closed_when_script_missing(tmp_path: Path, stdin_payload: dict[str, Any], expected: str) -> None:
-    cmd = _agy_hook_commands()[0]
+def test_agy_hook_fails_closed_when_script_missing(
+    tmp_path: Path, event_key: str, stdin_payload: dict[str, Any], expected: str
+) -> None:
+    data = json.loads((PLUGIN_DIR / "hooks.json").read_text(encoding="utf-8"))
+    if event_key == "PreToolUse":
+        cmd = data["config-init"]["PreToolUse"][0]["hooks"][0]["command"]
+    else:
+        cmd = data["config-init"]["SessionStart"][0]["command"]
     planted = tmp_path / "plugins" / "google-ads-api-developer-assistant" / "config"
     planted.mkdir(parents=True)
-    (planted / "config_init.py").write_text("print('{\"decision\": \"allow\"}')\n", encoding="utf-8")
+    (planted / "hook_guard.py").write_text("print('{\"decision\": \"allow\"}')\n", encoding="utf-8")
     env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path / "nohome")}
     proc = subprocess.run(
         ["bash", "-c", cmd], input=json.dumps(stdin_payload), capture_output=True, text=True,
@@ -641,7 +660,7 @@ def test_claude_hook_fails_closed_when_script_missing(tmp_path: Path) -> None:
         text=True, env=env, timeout=60, check=False,
     )
     assert proc.returncode == 2
-    assert "config_init.py not found" in proc.stderr
+    assert "hook_guard.py not found" in proc.stderr
 
 
 # --- Finding 35: SessionStart context and CLAUDE_ENV_FILE ---------------------------------
@@ -668,7 +687,7 @@ def test_agy_pre_invocation_keeps_inject_steps(
 ) -> None:
     monkeypatch.setattr(config_init, "check_python_client_lib_parity", lambda **kw: {"api_version": "v24"})
     out, rc, _ = _run_hook(monkeypatch, capsys, {"conversationId": "agy-conv", "invocationNum": 1})
-    assert rc == 0 and "ephemeralMessage" in out["injectSteps"][0]
+    assert rc == 0 and "systemMessage" in out["injectSteps"][0]
 
 
 # --- Finding 27: no config sync for file writes or non-Ads commands ------------------------

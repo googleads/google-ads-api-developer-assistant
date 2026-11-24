@@ -126,8 +126,32 @@ def _resolve_validate_only(payload: dict[str, Any]) -> bool:
     return True
 
 
+def _is_within_dir(path: str, base: str) -> bool:
+    """Returns True if realpath(path) is inside realpath(base)."""
+    try:
+        real_p = os.path.realpath(path)
+        real_b = os.path.realpath(base)
+        return os.path.commonpath([real_p, real_b]) == real_b
+    except ValueError:
+        return False
+
+
+def _is_in_saved_code_dir(path: str) -> bool:
+    """Returns True if realpath(path) lies inside a saved/code/ directory."""
+    real_p = os.path.realpath(os.path.expanduser(path.strip()))
+    parts = real_p.replace("\\", "/").split("/")
+    return any(
+        parts[i] == "saved" and parts[i + 1] == "code"
+        for i in range(len(parts) - 2)
+    )
+
+
 def _validate_script_path_arg(
-    script_path: Any, allowed_extensions: tuple[str, ...] = (".py",)
+    script_path: Any,
+    allowed_extensions: tuple[str, ...] = (".py",),
+    *,
+    require_saved_code: bool = False,
+    require_workspace_or_saved: bool = False,
 ) -> Optional[str]:
     """Validates an optional file path argument, returning an error message if unsafe."""
     if script_path is None or str(script_path).strip() == "":
@@ -137,23 +161,45 @@ def _validate_script_path_arg(
     clean = script_path.strip()
     if os.path.splitext(clean)[1].lower() not in allowed_extensions:
         return f"Invalid path argument: expected file extension in {allowed_extensions}."
+    if require_saved_code and not _is_in_saved_code_dir(clean):
+        return (
+            "Invalid path argument: mutation 'script_path' must resolve to a .py file "
+            "inside a saved/code/ directory."
+        )
+    if require_workspace_or_saved:
+        real_p = os.path.realpath(os.path.expanduser(clean))
+        parts = real_p.replace("\\", "/").split("/")
+        in_saved = "saved" in parts[:-1]
+        in_cwd = _is_within_dir(real_p, os.getcwd())
+        if not (in_saved or in_cwd):
+            return (
+                "Invalid path argument: file path must resolve inside the current "
+                "workspace or a saved/ directory."
+            )
     return None
 
 
 def _resolve_a2a_auth_token() -> str:
-    """Resolves the A2A Bearer token via env -> 0o600 user token file -> random ephemeral secret."""
+    """Resolves the A2A Bearer token via env -> sandbox data dir / 0o600 user token file -> ephemeral."""
     env_tok = os.environ.get("A2A_AUTH_TOKEN", "").strip()
     if env_tok:
         return env_tok
 
-    token_candidates = [
-        os.path.expanduser(
-            "~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/data/.a2a_token"
-        ),
-        os.path.expanduser(
-            "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/saved/data/.a2a_token"
-        ),
-    ]
+    token_candidates: list[str] = []
+    for data_env in ("ANTIGRAVITY_EXECUTABLE_DATA_DIR", "PLUGIN_DATA"):
+        d = os.environ.get(data_env, "").strip()
+        if d:
+            token_candidates.append(os.path.join(os.path.abspath(d), ".a2a_token"))
+    token_candidates.extend(
+        [
+            os.path.expanduser(
+                "~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/data/.a2a_token"
+            ),
+            os.path.expanduser(
+                "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/saved/data/.a2a_token"
+            ),
+        ]
+    )
     for tok_path in token_candidates:
         if os.path.isfile(tok_path):
             try:
@@ -165,11 +211,19 @@ def _resolve_a2a_auth_token() -> str:
                 continue
 
     generated = secrets.token_hex(32)
+    write_targets: list[str] = []
+    for data_env in ("ANTIGRAVITY_EXECUTABLE_DATA_DIR", "PLUGIN_DATA"):
+        d = os.environ.get(data_env, "").strip()
+        if d:
+            write_targets.append(os.path.join(os.path.abspath(d), ".a2a_token"))
     user_plugin_dir = os.path.expanduser(
         "~/.gemini/config/plugins/google-ads-api-developer-assistant"
     )
     if os.path.isdir(user_plugin_dir):
-        tok_file = os.path.join(user_plugin_dir, "saved", "data", ".a2a_token")
+        write_targets.append(
+            os.path.join(user_plugin_dir, "saved", "data", ".a2a_token")
+        )
+    for tok_file in write_targets:
         try:
             os.makedirs(os.path.dirname(tok_file), mode=0o700, exist_ok=True)
             fd = os.open(tok_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -178,7 +232,7 @@ def _resolve_a2a_auth_token() -> str:
             os.chmod(tok_file, 0o600)
             return generated
         except OSError:
-            pass
+            continue
 
     print(
         "WARNING: A2A_AUTH_TOKEN not configured; generated ephemeral instance-isolated auth token.",
@@ -212,7 +266,18 @@ def get_effective_api_version(
         return env_version
 
     local_base_dir = os.path.dirname(os.path.abspath(__file__))
+    env_plugin_roots = [
+        os.path.abspath(os.path.expanduser(p.strip()))
+        for p in (
+            os.environ.get("PLUGIN_ROOT", ""),
+            os.environ.get("CLAUDE_PLUGIN_ROOT", ""),
+            os.environ.get("GOOGLE_ADS_ASSISTANT_DIR", ""),
+        )
+        if p and p.strip()
+    ]
     candidate_config_files = [
+        os.path.join(r, "config", "assistant_config") for r in env_plugin_roots
+    ] + [
         os.path.join(local_base_dir, "../../config/assistant_config"),
         os.path.join(local_base_dir, "../../../../config/assistant_config"),
         os.path.abspath("config/assistant_config"),
@@ -243,6 +308,11 @@ def get_effective_api_version(
                 continue
 
     candidate_lib_paths = [
+        os.path.join(
+            r, "client_libs", "google-ads-python", "google", "ads", "googleads"
+        )
+        for r in env_plugin_roots
+    ] + [
         os.path.join(
             local_base_dir, "../../client_libs/google-ads-python/google/ads/googleads"
         ),
@@ -366,7 +436,7 @@ def get_plugin_version() -> str:
         candidate_dirs.append(cur)
         cur = os.path.dirname(cur)
 
-    for env_root_key in ("CLAUDE_PLUGIN_ROOT", "GOOGLE_ADS_ASSISTANT_DIR"):
+    for env_root_key in ("PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "GOOGLE_ADS_ASSISTANT_DIR"):
         env_root = os.environ.get(env_root_key, "").strip()
         if env_root:
             candidate_dirs.append(os.path.abspath(env_root))
@@ -920,6 +990,46 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "errors": static_errors,
             }
 
+        live_status = "SKIPPED_STATIC_ONLY"
+        if _strict_bool(payload.get("run_live_dry_run", False)):
+            clean_cid = "".join(re.findall(r"\d+", customer_id))
+            val_script = os.path.abspath(
+                os.path.join(
+                    base_dir, "../../skills/validate-gaql/scripts/validate_gaql.py"
+                )
+            )
+            if not clean_cid:
+                return {
+                    "task_id": task_id,
+                    "status": "VALIDATION_FAILED",
+                    "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                    "errors": ["Live GAQL dry-run requires a numeric customer_id."],
+                }
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    val_script,
+                    "--customer_id",
+                    clean_cid,
+                    "--api_version",
+                    api_version,
+                    "--query",
+                    query,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if proc.returncode != 0:
+                return {
+                    "task_id": task_id,
+                    "status": "VALIDATION_FAILED",
+                    "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                    "errors": [(proc.stderr or proc.stdout or "Live GAQL dry-run failed.").strip()],
+                }
+            live_status = "PASSED"
+
         return {
             "task_id": task_id,
             "status": "COMPLETED",
@@ -929,10 +1039,15 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "gaql_validation": {
                     "status": "PASSED",
                     "static_checks": "PASSED",
+                    "live_dry_run": live_status,
                     "api_version": api_version,
                     "customer_id": customer_id,
                 },
-                "explanation": "GAQL query passed all structural and static analysis checks.",
+                "explanation": (
+                    "GAQL query passed static analysis and live validate_only dry-run."
+                    if live_status == "PASSED"
+                    else "GAQL query passed static analysis (set run_live_dry_run=true to execute live validate_only API validation)."
+                ),
             },
         }
 
@@ -1100,7 +1215,9 @@ class A2AHandler(BaseHTTPRequestHandler):
 
         if csv_path:
             csv_err = _validate_script_path_arg(
-                str(csv_path), allowed_extensions=(".csv",)
+                str(csv_path),
+                allowed_extensions=(".csv",),
+                require_workspace_or_saved=True,
             )
             if csv_err:
                 return {
@@ -1140,33 +1257,78 @@ class A2AHandler(BaseHTTPRequestHandler):
                 },
             }
 
-        if client is not None and customer_id:
-            tc_path = os.path.abspath(
-                os.path.join(
-                    base_dir,
-                    "../../skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py",
-                )
+        if not customer_id:
+            return {
+                "task_id": task_id,
+                "status": "VALIDATION_FAILED",
+                "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                "error": "TROUBLESHOOT_CONVERSIONS requires either 'csv_path' or 'customer_id'.",
+            }
+
+        tc_path = os.path.abspath(
+            os.path.join(
+                base_dir,
+                "../../skills/troubleshoot-conversions/scripts/troubleshoot_conversions.py",
             )
-            tc_mod = _load_skill_module_cached("_sidecar_troubleshoot_conv", tc_path)
-            if tc_mod is not None:
-                diag = tc_mod.troubleshoot_conversions(
-                    client, customer_id, json_output=True, output_dir=payload.get("output_dir")
+        )
+        tc_mod = _load_skill_module_cached("_sidecar_troubleshoot_conv", tc_path)
+        if tc_mod is None:
+            return {
+                "task_id": task_id,
+                "status": "FAILED",
+                "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                "error": "Unable to load troubleshoot_conversions diagnostic module.",
+            }
+
+        active_client = client
+        if active_client is None:
+            try:
+                from google.ads.googleads.client import GoogleAdsClient  # type: ignore[import-not-found]
+
+                env_cfg_yaml = os.environ.get(
+                    "GOOGLE_ADS_CONFIGURATION_FILE_PATH", ""
+                ).strip()
+                if env_cfg_yaml:
+                    cfg_yaml = os.path.expanduser(env_cfg_yaml)
+                elif hasattr(tc_mod, "_get_config_path"):
+                    cfg_yaml = tc_mod._get_config_path()
+                else:
+                    cfg_yaml = os.path.join(_PLUGIN_ROOT, "config", "google-ads.yaml")
+                if not cfg_yaml or not os.path.isfile(cfg_yaml):
+                    return {
+                        "task_id": task_id,
+                        "status": "FAILED",
+                        "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                        "error": (
+                            "Google Ads configuration file (config/google-ads.yaml) was not found. "
+                            "Initialize credentials via config_init.py or pass 'csv_path' for offline CSV validation."
+                        ),
+                    }
+                active_client = GoogleAdsClient.load_from_storage(
+                    path=cfg_yaml, version=api_version
                 )
+            except Exception as exc:
                 return {
                     "task_id": task_id,
-                    "status": "COMPLETED",
+                    "status": "FAILED",
                     "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
-                    "result": {
-                        "header": "Created by the Google Ads API Developer Assistant",
-                        "summary": "; ".join(diag.get("executive_summary", [])) or "Diagnostics completed.",
-                        "api_version": api_version,
-                        "diagnostics": diag,
-                        "checks": [
-                            "offline_conversion_upload_client_summary queried",
-                            "conversion_action diagnostics evaluated",
-                        ],
-                    },
+                    "error": f"Unable to initialize GoogleAdsClient for conversion diagnostics: {exc}",
                 }
+
+        try:
+            diag = tc_mod.troubleshoot_conversions(
+                active_client,
+                customer_id,
+                json_output=True,
+                output_dir=payload.get("output_dir"),
+            )
+        except Exception as exc:
+            return {
+                "task_id": task_id,
+                "status": "FAILED",
+                "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                "error": f"Conversion diagnostics failed: {exc}",
+            }
 
         return {
             "task_id": task_id,
@@ -1174,11 +1336,12 @@ class A2AHandler(BaseHTTPRequestHandler):
             "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
             "result": {
                 "header": "Created by the Google Ads API Developer Assistant",
-                "summary": "Verified offline conversion upload summary.",
+                "summary": "; ".join(diag.get("executive_summary", [])) or "Diagnostics completed.",
                 "api_version": api_version,
+                "diagnostics": diag,
                 "checks": [
                     "offline_conversion_upload_client_summary queried",
-                    "Timestamp constraint verified: conversion_time > click_time",
+                    "conversion_action diagnostics evaluated",
                 ],
             },
         }
@@ -1186,7 +1349,7 @@ class A2AHandler(BaseHTTPRequestHandler):
     def handle_prepare_mutation(
         self, task_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        """Records a validate_only=True dry-run receipt and returns the HITL Consequence Card."""
+        """Runs a real validate_only=True dry-run (or records receipt when record_only=True) and returns the HITL Consequence Card."""
         customer_id = str(payload.get("customer_id", "")).strip()
         operation = str(
             payload.get("operation_summary") or payload.get("operation", "")
@@ -1198,8 +1361,9 @@ class A2AHandler(BaseHTTPRequestHandler):
             consequences = [c.strip() for c in consequences.split(";") if c.strip()]
         reversibility = str(payload.get("reversibility", "REVERSIBLE")).strip().upper()
         script_path = payload.get("script_path")
+        record_only = _strict_bool(payload.get("record_only", False))
 
-        script_err = _validate_script_path_arg(script_path)
+        script_err = _validate_script_path_arg(script_path, require_saved_code=True)
         if script_err:
             return {
                 "task_id": task_id,
@@ -1232,6 +1396,82 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "error": "Unable to load run_mutation verification module.",
             }
 
+        # When a mutation script is supplied without record_only=True, execute a real
+        # validate_only=True dry-run via run_mutation.py instead of synthesizing a receipt.
+        if script_path and not record_only:
+            real_script = os.path.realpath(os.path.expanduser(str(script_path).strip()))
+            if not os.path.isfile(real_script):
+                return {
+                    "task_id": task_id,
+                    "status": "VALIDATION_FAILED",
+                    "destructive_hint": True,
+                    "error": f"Mutation script not found at '{real_script}'.",
+                }
+            cmd = [
+                sys.executable,
+                runner_path,
+                "--script",
+                real_script,
+                "--dry-run",
+                "--customer-id",
+                customer_id,
+                "--operation",
+                operation,
+                "--before",
+                before_state,
+                "--after",
+                after_state,
+                "--consequences",
+                "; ".join(str(c).strip() for c in consequences if str(c).strip()),
+                "--reversibility",
+                reversibility,
+            ]
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                return {
+                    "task_id": task_id,
+                    "status": "FAILED",
+                    "destructive_hint": True,
+                    "error": "PREPARE_MUTATION dry-run subprocess timed out after 120s.",
+                }
+            if proc.returncode != 0:
+                err_out = (proc.stderr or proc.stdout or "Dry-run failed.").strip()
+                is_blocked = proc.returncode == 2 or "BLOCKED" in err_out
+                return {
+                    "task_id": task_id,
+                    "status": "HITL_BLOCKED" if is_blocked else "FAILED",
+                    "destructive_hint": True,
+                    "error": err_out,
+                }
+            ok, msg, receipt = mod.load_and_verify_receipt(script_path=real_script)
+            if not ok:
+                return {
+                    "task_id": task_id,
+                    "status": "HITL_BLOCKED",
+                    "destructive_hint": True,
+                    "error": msg,
+                }
+            card = mod.format_verification_card(receipt)
+            return {
+                "task_id": task_id,
+                "status": "HITL_CONFIRMATION_REQUIRED",
+                "destructive_hint": True,
+                "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                "result": {
+                    "receipt": receipt,
+                    "verification_card": card,
+                    "dry_run_stdout": proc.stdout,
+                    "next_step": "Present verification_card to the user and obtain explicit confirmation before calling EXECUTE_MUTATION.",
+                },
+            }
+
         now_iso = datetime.now(timezone.utc).isoformat()
         try:
             receipt = mod.write_dry_run_receipt(
@@ -1242,9 +1482,10 @@ class A2AHandler(BaseHTTPRequestHandler):
                 consequences=consequences,
                 reversibility=reversibility,
                 script_path=script_path,
-                dry_run_output="Validated via sidecar PREPARE_MUTATION (validate_only=True).",
+                dry_run_output="Recorded via sidecar PREPARE_MUTATION (record_only=True).",
                 request_sent_at_iso=now_iso,
                 response_received_at_iso=now_iso,
+                record_only=True,
             )
         except ValueError as exc:
             err_str = str(exc)
@@ -1347,7 +1588,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                 ),
             }
 
-        script_err = _validate_script_path_arg(script_path)
+        script_err = _validate_script_path_arg(script_path, require_saved_code=True)
         if script_err:
             return {
                 "task_id": task_id,
@@ -1530,14 +1771,25 @@ class A2AHandler(BaseHTTPRequestHandler):
             }
 
         if run_script:
+            if bool(receipt.get("record_only")):
+                return {
+                    "task_id": task_id,
+                    "status": "HITL_BLOCKED",
+                    "destructive_hint": True,
+                    "error": (
+                        "EXECUTE_MUTATION with run_script=True cannot execute against a "
+                        "record_only dry-run receipt. Run a real validate_only=True dry-run "
+                        "via prepare_mutation (record_only=False) or run_mutation.py --dry-run first."
+                    ),
+                }
             if not script_path or not os.path.isfile(os.path.abspath(script_path)):
                 return {
                     "task_id": task_id,
                     "status": "VALIDATION_FAILED",
                     "destructive_hint": True,
-                    "error": "EXECUTE_MUTATION with run_script=True requires an existing .py 'script_path'.",
+                    "error": "EXECUTE_MUTATION with run_script=True requires an existing .py 'script_path' in saved/code/.",
                 }
-            resolved_script = os.path.abspath(script_path)
+            resolved_script = os.path.realpath(os.path.expanduser(script_path))
             proc = subprocess.run(
                 [sys.executable, runner_path, "--script", resolved_script, "--execute"],
                 capture_output=True,
@@ -1775,7 +2027,140 @@ class A2AHandler(BaseHTTPRequestHandler):
                         run_mod,
                     )
 
+        # Enforce Tier 1 Financial Services read-only default posture
+        classify_fn = getattr(run_mod, "classify_mutation", None)
+        tier1_fn = getattr(run_mod, "is_tier1_financial_mutates_enabled", None)
+        if callable(classify_fn) and not isinstance(classify_fn, unittest.mock.MagicMock):
+            cls_info = classify_fn(
+                operation_summary=operation_summary,
+                rpc_calls=financial_rpc_calls,
+            )
+            if int(cls_info.get("tier_number", 3)) == 1 and (
+                not callable(tier1_fn)
+                or (
+                    not isinstance(tier1_fn, unittest.mock.MagicMock)
+                    and not tier1_fn()
+                )
+            ):
+                t1_err = (
+                    "Live execution blocked (TIER 1 FINANCIAL POSTURE): "
+                    "Tier 1 Financial Services are read-only by default even when execute_mutates = true. "
+                    "Set 'allow_tier1_financial_mutates = true' in config/assistant_config to enable live Tier 1 writes."
+                )
+                self._record_live_audit(
+                    run_mod,
+                    status="BLOCKED_TIER1_READONLY_POSTURE",
+                    customer_id=str(
+                        payload.get("customer_id")
+                        or payload.get("manager_customer_id", "")
+                    ),
+                    operation_summary=operation_summary or "A2A:CREATE",
+                    after_state="BLOCKED",
+                    consequences=[t1_err],
+                    exit_code=2,
+                    stderr=t1_err,
+                    command=[f"A2A:{operation_summary or 'CREATE'}"],
+                )
+                return (
+                    {
+                        "task_id": task_id,
+                        "status": "HITL_BLOCKED",
+                        "destructive_hint": True,
+                        "error": t1_err,
+                    },
+                    run_mod,
+                )
+
+        # Require a valid pending validate_only=True dry-run receipt before live execution
+        verify_fn = getattr(run_mod, "load_and_verify_receipt", None)
+        if callable(verify_fn) and not isinstance(verify_fn, unittest.mock.MagicMock):
+            ok_rec, rec_msg, receipt = verify_fn()
+            if not ok_rec:
+                return (
+                    {
+                        "task_id": task_id,
+                        "status": "HITL_BLOCKED",
+                        "destructive_hint": True,
+                        "error": (
+                            "Live execution blocked: a valid pending validate_only=True dry-run receipt "
+                            f"is required before live execution ({rec_msg}). Run this tool with "
+                            "validate_only=True first, disclose consequences, and obtain user confirmation."
+                        ),
+                    },
+                    run_mod,
+                )
+            target_cid = re.sub(
+                r"\D",
+                "",
+                str(payload.get("customer_id") or payload.get("manager_customer_id") or ""),
+            )
+            rec_cid = re.sub(r"\D", "", str(receipt.get("customer_id") or ""))
+            if target_cid and rec_cid and target_cid != rec_cid:
+                return (
+                    {
+                        "task_id": task_id,
+                        "status": "HITL_BLOCKED",
+                        "destructive_hint": True,
+                        "error": (
+                            f"Live execution blocked: pending dry-run receipt is for customer_id "
+                            f"'{rec_cid}', not '{target_cid}'. Re-run validate_only=True first."
+                        ),
+                    },
+                    run_mod,
+                )
+            rec_op = str(receipt.get("operation_summary") or "").strip()
+            if operation_summary and rec_op and rec_op != operation_summary:
+                return (
+                    {
+                        "task_id": task_id,
+                        "status": "HITL_BLOCKED",
+                        "destructive_hint": True,
+                        "error": (
+                            f"Live execution blocked: pending dry-run receipt is for '{rec_op}', "
+                            f"not '{operation_summary}'. Re-run validate_only=True first."
+                        ),
+                    },
+                    run_mod,
+                )
+
         return None, run_mod
+
+    def _record_create_dry_run_receipt(
+        self,
+        *,
+        customer_id: str,
+        operation_summary: str,
+        after_state: str,
+        consequences: list[str],
+        rpc_calls: Optional[list[dict[str, Any]]] = None,
+    ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+        """Records a signed dry-run receipt after a validate_only=True create call succeeds."""
+        try:
+            run_mod = self._load_mutation_script("run_mutation.py")
+        except Exception:
+            return None, None
+        write_fn = getattr(run_mod, "write_dry_run_receipt", None)
+        if not callable(write_fn) or isinstance(write_fn, unittest.mock.MagicMock):
+            return None, None
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            receipt = write_fn(
+                customer_id=customer_id,
+                operation_summary=operation_summary,
+                before_state="None (new resource)",
+                after_state=after_state,
+                consequences=consequences,
+                reversibility="REVERSIBLE",
+                script_path=None,
+                dry_run_output=f"Validated via sidecar {operation_summary} (validate_only=True).",
+                request_sent_at_iso=now_iso,
+                response_received_at_iso=now_iso,
+                rpc_calls=rpc_calls,
+                record_only=False,
+            )
+            return receipt, None
+        except ValueError as exc:
+            return None, str(exc)
 
     @staticmethod
     def _record_live_audit(
@@ -1864,7 +2249,25 @@ class A2AHandler(BaseHTTPRequestHandler):
                 client=payload.get("client"),
                 json_output=False,
             )
-            if not validate_only:
+            if validate_only:
+                receipt, hitl_notice = self._record_create_dry_run_receipt(
+                    customer_id=str(
+                        result.get("manager_customer_id")
+                        or payload.get("manager_customer_id")
+                        or payload.get("customer_id", "")
+                    ),
+                    operation_summary="CustomerService.create_customer_client",
+                    after_state=str(result.get("resource_name", "NEW_ACCOUNT")),
+                    consequences=[
+                        f"Creates a new client account ({result.get('currency_code', 'USD')}) under MCC {result.get('manager_customer_id', '')}"
+                    ],
+                )
+                if receipt:
+                    result["receipt_id"] = receipt.get("receipt_id")
+                    result["verification_card"] = receipt.get("rendered_verification_card", "")
+                elif hitl_notice:
+                    result["hitl_notice"] = hitl_notice
+            else:
                 self._record_live_audit(
                     run_mod,
                     status="SUCCESS",
@@ -1877,6 +2280,14 @@ class A2AHandler(BaseHTTPRequestHandler):
                     stdout=json.dumps(result, default=str),
                     command=["A2A:CREATE_ACCOUNT"],
                 )
+                mark_fn = getattr(run_mod, "mark_receipt_executed", None)
+                if callable(mark_fn) and not isinstance(mark_fn, unittest.mock.MagicMock):
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    mark_fn(
+                        user_approved_at_iso=now_iso,
+                        request_sent_at_iso=now_iso,
+                        response_received_at_iso=now_iso,
+                    )
             return {
                 "task_id": task_id,
                 "status": "COMPLETED",
@@ -1957,7 +2368,22 @@ class A2AHandler(BaseHTTPRequestHandler):
                     payload.get("contains_eu_political_advertising", False)
                 ),
             )
-            if not validate_only:
+            if validate_only:
+                receipt, hitl_notice = self._record_create_dry_run_receipt(
+                    customer_id=str(result.get("customer_id") or payload.get("customer_id", "")),
+                    operation_summary="CampaignService.mutate_campaigns",
+                    after_state=str(result.get("campaign_resource_name", "NEW_CAMPAIGN")),
+                    consequences=[
+                        f"Creates campaign '{result.get('campaign_name', '')}' with daily budget {budget_micros / 1_000_000:.2f} currency units ({budget_micros} micros)"
+                    ],
+                    rpc_calls=fin_calls,
+                )
+                if receipt:
+                    result["receipt_id"] = receipt.get("receipt_id")
+                    result["verification_card"] = receipt.get("rendered_verification_card", "")
+                elif hitl_notice:
+                    result["hitl_notice"] = hitl_notice
+            else:
                 self._record_live_audit(
                     run_mod,
                     status="SUCCESS",
@@ -1970,6 +2396,14 @@ class A2AHandler(BaseHTTPRequestHandler):
                     stdout=json.dumps(result, default=str),
                     command=["A2A:CREATE_CAMPAIGN"],
                 )
+                mark_fn = getattr(run_mod, "mark_receipt_executed", None)
+                if callable(mark_fn) and not isinstance(mark_fn, unittest.mock.MagicMock):
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    mark_fn(
+                        user_approved_at_iso=now_iso,
+                        request_sent_at_iso=now_iso,
+                        response_received_at_iso=now_iso,
+                    )
             return {
                 "task_id": task_id,
                 "status": "COMPLETED",
@@ -2041,7 +2475,27 @@ class A2AHandler(BaseHTTPRequestHandler):
                 client=payload.get("client"),
                 json_output=False,
             )
-            if not validate_only:
+            if validate_only:
+                bid_desc = (
+                    f"with CPC bid {cpc_bid_int / 1_000_000:.2f} currency units ({cpc_bid_int} micros)"
+                    if cpc_bid_int is not None
+                    else "with default bid"
+                )
+                receipt, hitl_notice = self._record_create_dry_run_receipt(
+                    customer_id=str(result.get("customer_id") or payload.get("customer_id", "")),
+                    operation_summary="AdGroupService.mutate_ad_groups",
+                    after_state=str(result.get("ad_group_resource_name", "NEW_AD_GROUP")),
+                    consequences=[
+                        f"Creates ad group '{result.get('ad_group_name', '')}' {bid_desc}"
+                    ],
+                    rpc_calls=fin_calls,
+                )
+                if receipt:
+                    result["receipt_id"] = receipt.get("receipt_id")
+                    result["verification_card"] = receipt.get("rendered_verification_card", "")
+                elif hitl_notice:
+                    result["hitl_notice"] = hitl_notice
+            else:
                 self._record_live_audit(
                     run_mod,
                     status="SUCCESS",
@@ -2054,6 +2508,14 @@ class A2AHandler(BaseHTTPRequestHandler):
                     stdout=json.dumps(result, default=str),
                     command=["A2A:CREATE_AD_GROUP"],
                 )
+                mark_fn = getattr(run_mod, "mark_receipt_executed", None)
+                if callable(mark_fn) and not isinstance(mark_fn, unittest.mock.MagicMock):
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    mark_fn(
+                        user_approved_at_iso=now_iso,
+                        request_sent_at_iso=now_iso,
+                        response_received_at_iso=now_iso,
+                    )
             return {
                 "task_id": task_id,
                 "status": "COMPLETED",
@@ -2106,7 +2568,21 @@ class A2AHandler(BaseHTTPRequestHandler):
                 client=payload.get("client"),
                 json_output=False,
             )
-            if not validate_only:
+            if validate_only:
+                receipt, hitl_notice = self._record_create_dry_run_receipt(
+                    customer_id=str(result.get("customer_id") or payload.get("customer_id", "")),
+                    operation_summary="AdGroupAdService.mutate_ad_group_ads",
+                    after_state=str(result.get("ad_group_ad_resource_name", "NEW_AD")),
+                    consequences=[
+                        f"Creates responsive search ad under {result.get('ad_group_resource_name', '')}"
+                    ],
+                )
+                if receipt:
+                    result["receipt_id"] = receipt.get("receipt_id")
+                    result["verification_card"] = receipt.get("rendered_verification_card", "")
+                elif hitl_notice:
+                    result["hitl_notice"] = hitl_notice
+            else:
                 self._record_live_audit(
                     run_mod,
                     status="SUCCESS",
@@ -2119,6 +2595,14 @@ class A2AHandler(BaseHTTPRequestHandler):
                     stdout=json.dumps(result, default=str),
                     command=["A2A:CREATE_AD"],
                 )
+                mark_fn = getattr(run_mod, "mark_receipt_executed", None)
+                if callable(mark_fn) and not isinstance(mark_fn, unittest.mock.MagicMock):
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    mark_fn(
+                        user_approved_at_iso=now_iso,
+                        request_sent_at_iso=now_iso,
+                        response_received_at_iso=now_iso,
+                    )
             return {
                 "task_id": task_id,
                 "status": "COMPLETED",
@@ -2138,7 +2622,7 @@ class A2AHandler(BaseHTTPRequestHandler):
 _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "gaql_validate",
-        "description": "Validates a Google Ads Query Language (GAQL) query against static syntax and active API schema rules.",
+        "description": "Validates a Google Ads Query Language (GAQL) query against static syntax and active API schema rules (and optional live dry-run via run_live_dry_run=true).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -2150,6 +2634,10 @@ _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "api_version": {
                     "type": "string",
                     "description": "Google Ads API version (format 'v<N>'; defaults to active version).",
+                },
+                "run_live_dry_run": {
+                    "type": "boolean",
+                    "description": "When true with customer_id, also runs validate_gaql.py live API check.",
                 },
             },
             "required": ["query"],
@@ -2177,35 +2665,18 @@ _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "generate_code",
-        "description": "Generates AST-verified Python Google Ads API client code.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "user_prompt": {
-                    "type": "string",
-                    "description": "Description of the Google Ads API task.",
-                },
-                "customer_id": {
-                    "type": "string",
-                    "description": "Target Google Ads Customer ID.",
-                },
-                "api_version": {
-                    "type": "string",
-                    "description": "Google Ads API version (format 'v<N>'; defaults to active version).",
-                },
-            },
-        },
-    },
-    {
         "name": "troubleshoot_conversions",
-        "description": "Runs conversion upload diagnostic checks for a Google Ads customer account.",
+        "description": "Validates an offline conversion upload CSV (via csv_path) or runs live conversion upload diagnostic checks for a Google Ads customer account.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "customer_id": {
                     "type": "string",
-                    "description": "Google Ads Customer ID.",
+                    "description": "Google Ads Customer ID (required for live account diagnostics).",
+                },
+                "csv_path": {
+                    "type": "string",
+                    "description": "Path to a conversion upload CSV file inside the workspace or saved/ directory.",
                 },
                 "api_version": {
                     "type": "string",
@@ -2216,7 +2687,7 @@ _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "prepare_mutation",
-        "description": "Records a signed HITL dry-run receipt and returns a Consequence Verification Card prior to live execution.",
+        "description": "Executes a validate_only=True dry-run via run_mutation.py (for a saved/code/*.py script) or records a receipt, returning a HITL Consequence Verification Card prior to live execution.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -2233,13 +2704,14 @@ _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "enum": ["REVERSIBLE", "IRREVERSIBLE"],
                 },
                 "script_path": {"type": "string"},
+                "record_only": {"type": "boolean"},
             },
             "required": ["customer_id", "operation_summary", "consequences"],
         },
     },
     {
         "name": "execute_mutation",
-        "description": "Verifies HITL confirmation, execute_mutates config, financial limits, and dry-run receipt for live mutation execution.",
+        "description": "Verifies HITL confirmation, execute_mutates config, Tier 1 posture, financial limits, and dry-run receipt for live mutation execution.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -2249,6 +2721,24 @@ _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "run_script": {"type": "boolean"},
             },
             "required": ["user_confirmed", "confirmation_summary"],
+        },
+    },
+    {
+        "name": "reject_mutation",
+        "description": "Invalidates a pending dry-run receipt (REJECTED) for a saved/code/*.py script and logs HUMAN_REJECTED to mutation_audit.jsonl.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "script_path": {
+                    "type": "string",
+                    "description": "Path to the saved/code/*.py mutation script whose pending receipt should be rejected.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Human-readable reason for rejecting the pending mutation.",
+                },
+            },
+            "required": ["script_path"],
         },
     },
     {
@@ -2345,10 +2835,10 @@ _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
 _MCP_TOOL_TO_INTENT: dict[str, str] = {
     "gaql_validate": "GAQL_VALIDATE",
     "inspect_object": "INSPECT_OBJECT",
-    "generate_code": "GENERATE_CODE",
     "troubleshoot_conversions": "TROUBLESHOOT_CONVERSIONS",
     "prepare_mutation": "PREPARE_MUTATION",
     "execute_mutation": "EXECUTE_MUTATION",
+    "reject_mutation": "REJECT_MUTATION",
     "create_account": "CREATE_ACCOUNT",
     "create_campaign": "CREATE_CAMPAIGN",
     "create_ad_group": "CREATE_AD_GROUP",
@@ -2413,7 +2903,7 @@ def run_mcp_stdio_server(
                         "protocolVersion": "2024-11-05",
                         "capabilities": {"tools": {}},
                         "serverInfo": {
-                            "name": "google-ads-assistant",
+                            "name": "google-ads-api-assistant",
                             "version": get_plugin_version(),
                         },
                     },
@@ -2480,6 +2970,7 @@ def run_mcp_stdio_server(
             is_err = res.get("status") not in (
                 "COMPLETED",
                 "HITL_CONFIRMATION_REQUIRED",
+                "HUMAN_REJECTED",
             )
             _write_jsonrpc(
                 {
@@ -2524,6 +3015,15 @@ def run_server() -> None:
         d
         for d in (
             os.environ.get("GOOGLE_ADS_ASSISTANT_CONFIG_DIR", "").strip(),
+            os.path.join(os.environ.get("PLUGIN_ROOT", "").strip(), "config")
+            if os.environ.get("PLUGIN_ROOT", "").strip()
+            else "",
+            os.path.join(os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip(), "config")
+            if os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
+            else "",
+            os.path.join(os.environ.get("GOOGLE_ADS_ASSISTANT_DIR", "").strip(), "config")
+            if os.environ.get("GOOGLE_ADS_ASSISTANT_DIR", "").strip()
+            else "",
             os.path.expanduser(
                 "~/.gemini/config/plugins/google-ads-api-developer-assistant/config"
             ),
@@ -2575,7 +3075,8 @@ def run_server() -> None:
 def main() -> None:
     """CLI entrypoint supporting both MCP stdio mode (--mcp/--stdio) and loopback HTTP A2A mode."""
     parser = argparse.ArgumentParser(
-        description="Google Ads API Developer Assistant A2A HTTP Sidecar & MCP Stdio Server."
+        allow_abbrev=False,
+        description="Google Ads API Developer Assistant A2A HTTP Sidecar & MCP Stdio Server.",
     )
     parser.add_argument(
         "--mcp",

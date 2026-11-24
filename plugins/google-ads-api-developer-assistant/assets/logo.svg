@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Google Ads API Developer Assistant">
+  <rect width="128" height="128" rx="24" fill="#1A73E8"/>
+  <path d="M34 94L60 30c3-7 13-7 16 0l26 64c2 6-2 12-8 12h-8c-4 0-7-2-8-6l-5-13H55l-5 13c-1 4-4 6-8 6h-8c-6 0-10-6-8-12zm27-22h14l-7-19-7 19z" fill="#FFFFFF"/>
+  <circle cx="96" cy="34" r="14" fill="#34A853"/>
+  <path d="M90 34l4 4 8-8" fill="none" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -883,7 +883,9 @@ def validate_gaql(
 
 def main() -> None:
     """Parses command line arguments and calls validate_gaql."""
-    parser = argparse.ArgumentParser(description="Validates a GAQL query.")
+    parser = argparse.ArgumentParser(
+        allow_abbrev=False, description="Validates a GAQL query."
+    )
     parser.add_argument(
         "--customer_id", required=True, help="Google Ads Customer ID."
     )

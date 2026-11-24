@@ -871,7 +871,8 @@ def inspect_protobuf(
 def main() -> None:
     """Parses command line arguments and runs inspection."""
     parser = argparse.ArgumentParser(
-        description="Inspects a Google Ads API Protobuf type structure."
+        allow_abbrev=False,
+        description="Inspects a Google Ads API Protobuf type structure.",
     )
     parser.add_argument(
         "--object_name",

@@ -394,6 +394,7 @@ def create_ad_group(
 def main() -> None:
     """CLI entrypoint for creating a Google Ads ad group."""
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         description=(
             "Creates a Google Ads ad group under a campaign via AdGroupService."
         )

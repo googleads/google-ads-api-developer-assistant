@@ -349,7 +349,8 @@ def create_pmax_webpage_filter(
 def main() -> None:
     """Parses command line arguments and calls filter creation."""
     parser = argparse.ArgumentParser(
-        description="Creates webpage exclusions listing group filter for PMax."
+        allow_abbrev=False,
+        description="Creates webpage exclusions listing group filter for PMax.",
     )
     parser.add_argument(
         "-c",

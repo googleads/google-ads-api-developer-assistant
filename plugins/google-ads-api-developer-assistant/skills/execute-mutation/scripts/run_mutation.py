@@ -3122,20 +3122,108 @@ def _run_target_script_with_interception(
                 pass
 
 
+_EXEC_TOKEN_ENV_VAR = "GOOGLE_ADS_HITL_EXEC_TOKEN"
+_EXEC_TOKEN_FILE_ENV_VAR = "GOOGLE_ADS_HITL_EXEC_TOKEN_FILE"
+DEFAULT_SUBPROCESS_TIMEOUT_SECONDS = 300
+
+
+def _verify_exec_target_authorization(target_script: str) -> Tuple[bool, str]:
+    """Verifies --_exec-target was spawned by _execute_script_subprocess with a matching single-use nonce."""
+    token = os.environ.get(_EXEC_TOKEN_ENV_VAR, "").strip()
+    token_file = os.environ.get(_EXEC_TOKEN_FILE_ENV_VAR, "").strip()
+    if not token or not token_file or not os.path.isfile(token_file):
+        return (
+            False,
+            "BLOCKED BY HITL MUTATION GUARD: Direct invocation of --_exec-target is prohibited; "
+            "it requires a parent-issued single-use execution nonce from run_mutation.py.",
+        )
+    raw_tok = ""
+    try:
+        with open(token_file, "r", encoding="utf-8") as tf:
+            raw_tok = tf.read().strip()
+    except OSError:
+        raw_tok = ""
+    finally:
+        try:
+            os.remove(token_file)
+        except OSError:
+            pass
+    import hmac as _hmac
+
+    try:
+        tok_data = json.loads(raw_tok)
+    except Exception:
+        tok_data = {}
+    if not isinstance(tok_data, dict):
+        tok_data = {}
+    expected = str(tok_data.get("nonce") or "")
+    expected_script = str(tok_data.get("script_path") or "")
+    expected_dry = bool(tok_data.get("dry_run_mode", False))
+    expected_hash = bool(tok_data.get("enforce_request_hash", False))
+    actual_dry = os.environ.get(_DRY_RUN_MODE_ENV_VAR) == "1"
+    actual_hash = os.environ.get(_ENFORCE_HASH_ENV_VAR) == "1"
+    if (
+        not expected
+        or not _hmac.compare_digest(token, expected)
+        or os.path.realpath(target_script) != expected_script
+        or actual_dry != expected_dry
+        or actual_hash != expected_hash
+    ):
+        return (
+            False,
+            "BLOCKED BY HITL MUTATION GUARD: Invalid or mismatched --_exec-target execution nonce.",
+        )
+    return True, ""
+
+
+def _write_exec_token_file(
+    script_path: str, *, dry_run_mode: bool, enforce_request_hash: bool
+) -> Tuple[str, str]:
+    """Creates a 0o600 single-use nonce file binding target script and enforcement flags."""
+    import secrets as _secrets
+
+    nonce = _secrets.token_hex(32)
+    payload = {
+        "nonce": nonce,
+        "script_path": os.path.realpath(script_path),
+        "dry_run_mode": bool(dry_run_mode),
+        "enforce_request_hash": bool(enforce_request_hash),
+    }
+    fd, tok_path = tempfile.mkstemp(prefix="gads_hitl_tok_", suffix=".tok")
+    try:
+        if sys.platform != "win32":
+            os.chmod(tok_path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as tf:
+            json.dump(payload, tf)
+    except OSError:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    return nonce, tok_path
+
+
 def _execute_script_subprocess(
     script_path: str,
     script_args: List[str],
     expected_request_hashes: Optional[List[str]] = None,
     enforce_request_hash: bool = False,
     dry_run_mode: bool = False,
+    timeout_seconds: int = DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
 ) -> Tuple[
     subprocess.CompletedProcess[str], str, str, float, List[Dict[str, Any]]
 ]:
     """Runs mutation script in a subprocess with RPC audit interception."""
-    fd, trace_path = tempfile.mkstemp(
+    trace_fd, trace_path = tempfile.mkstemp(
         prefix="ads_mutation_trace_", suffix=".json"
     )
-    os.close(fd)
+    os.close(trace_fd)
+    if sys.platform != "win32":
+        try:
+            os.chmod(trace_path, 0o600)
+        except OSError:
+            pass
 
     env = os.environ.copy()
     this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -3172,6 +3260,16 @@ def _execute_script_subprocess(
         env.pop(_ENFORCE_HASH_ENV_VAR, None)
         env.pop(_EXPECTED_HASHES_ENV_VAR, None)
 
+    nonce, tok_path = _write_exec_token_file(
+        script_path,
+        dry_run_mode=dry_run_mode,
+        enforce_request_hash=bool(
+            enforce_request_hash or expected_request_hashes is not None
+        ),
+    )
+    env[_EXEC_TOKEN_ENV_VAR] = nonce
+    env[_EXEC_TOKEN_FILE_ENV_VAR] = tok_path
+
     cmd = [
         sys.executable,
         os.path.abspath(__file__),
@@ -3181,9 +3279,40 @@ def _execute_script_subprocess(
     ]
     sent_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     t0 = time.perf_counter()
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, check=False, env=env
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+            timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+        )
+    except subprocess.TimeoutExpired as exc:
+        out_s = (
+            exc.stdout.decode("utf-8", errors="replace")
+            if isinstance(exc.stdout, bytes)
+            else (exc.stdout or "")
+        )
+        err_s = (
+            exc.stderr.decode("utf-8", errors="replace")
+            if isinstance(exc.stderr, bytes)
+            else (exc.stderr or "")
+        )
+        result = subprocess.CompletedProcess(
+            args=cmd,
+            returncode=124,
+            stdout=out_s,
+            stderr=(
+                f"{err_s}\nMutation script timed out after {timeout_seconds}s."
+            ).strip(),
+        )
+    finally:
+        if os.path.isfile(tok_path):
+            try:
+                os.remove(tok_path)
+            except OSError:
+                pass
     duration_ms = round((time.perf_counter() - t0) * 1000.0, 3)
     received_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -3478,8 +3607,23 @@ def append_mutation_audit_log(
     for log_path in get_audit_log_paths():
         try:
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
-            with open(log_path, "a", encoding="utf-8") as f:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+            fd = os.open(log_path, flags, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                if sys.platform != "win32":
+                    import fcntl
+
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    except OSError:
+                        pass
                 f.write(serialized_line)
+                f.flush()
+                if sys.platform != "win32":
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        pass
             if sys.platform != "win32" and os.path.isfile(log_path):
                 try:
                     os.chmod(log_path, 0o600)
@@ -4419,6 +4563,10 @@ def main() -> None:
     """CLI entrypoint for --dry-run, --execute, and --reject Google Ads HITL mutations."""
     if len(sys.argv) >= 3 and sys.argv[1] == "--_exec-target":
         target_script = sys.argv[2]
+        auth_ok, auth_err = _verify_exec_target_authorization(target_script)
+        if not auth_ok:
+            print(auth_err, file=sys.stderr)
+            sys.exit(2)
         target_args = sys.argv[3:]
         trace_file = os.environ.get(_TRACE_ENV_VAR, "")
         _run_target_script_with_interception(
@@ -4427,11 +4575,12 @@ def main() -> None:
         return
 
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         description=(
             "Run Google Ads API mutations with mandatory validate_only=True "
             "dry-run, HITL consequence verification, --reject invalidation, "
             "and audit logging."
-        )
+        ),
     )
     parser.add_argument(
         "--script",
@@ -4519,6 +4668,15 @@ def main() -> None:
         help=(
             "Record the dry-run receipt without invoking the subprocess "
             "(for unit tests or inline dry-runs)."
+        ),
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
+        help=(
+            "Subprocess execution timeout in seconds (default: "
+            f"{DEFAULT_SUBPROCESS_TIMEOUT_SECONDS})."
         ),
     )
 
@@ -4633,6 +4791,7 @@ def main() -> None:
                 script_path,
                 script_args,
                 dry_run_mode=True,
+                timeout_seconds=args.timeout,
             )
             if result.returncode != 0:
                 if any(
@@ -5103,6 +5262,7 @@ def main() -> None:
             script_args,
             expected_request_hashes=expected_hashes_arg,
             enforce_request_hash=enforce_live_hash,
+            timeout_seconds=args.timeout,
         )
     )
 

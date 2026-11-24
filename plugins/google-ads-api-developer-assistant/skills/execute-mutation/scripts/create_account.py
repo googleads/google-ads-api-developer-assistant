@@ -317,6 +317,7 @@ def create_account_under_mcc(
 def main() -> None:
     """CLI entrypoint for creating a client account under an MCC."""
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         description=(
             "Creates a new Google Ads client customer account under an MCC."
         )

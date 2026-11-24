@@ -1,6 +1,6 @@
 ---
 name: inspect-object
-description: Inspects the structure of any Google Ads API Protobuf resource, nested message, or Enum.
+description: Inspects the exact Protobuf fields, nested messages, and enum values of any Google Ads API resource or type. Use before writing GAQL queries or Python mutation code whenever a resource schema or enum value must be verified. Don't use for conceptual plain-language explanations (use google-ads-explain) or validating full GAQL syntax (use validate-gaql).
 ---
 
 # Inspect Object Skill

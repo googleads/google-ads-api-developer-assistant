@@ -1113,7 +1113,7 @@ def test_handle_hook_command_rewriting_and_dual_host_payloads(
     config_init.handle_hook()
     out_pre = json.loads(capsys.readouterr().out)
     assert "injectSteps" in out_pre
-    assert "HITL MUTATION VERIFICATION & AUDIT MANDATE" in out_pre["injectSteps"][0]["ephemeralMessage"]
+    assert "HITL MUTATION VERIFICATION & AUDIT MANDATE" in out_pre["injectSteps"][0]["systemMessage"]["systemMessage"]
 
     # 2. Antigravity PreToolUse hook: rewrites Cases A, B, C, D, E and prepends export
     raw_cmd = (
@@ -1798,7 +1798,13 @@ def test_security_hardening_direct_script_spoofing_executable_and_sidecar(
 
     handler = object.__new__(sidecar_mod.A2AHandler)
 
-    # Step A: PREPARE_MUTATION writes dry-run receipt and logs DRY_RUN_PASSED to audit log
+    # Script path must reside under saved/code/ for PREPARE_MUTATION / EXECUTE_MUTATION
+    saved_code_dir = tmp_path / "saved" / "code"
+    saved_code_dir.mkdir(parents=True, exist_ok=True)
+    sidecar_script = saved_code_dir / "budget_update.py"
+    sidecar_script.write_text(spoof_script.read_text(encoding="utf-8"), encoding="utf-8")
+
+    # Step A: PREPARE_MUTATION (record_only=True) writes dry-run receipt and logs DRY_RUN_PASSED to audit log
     prep_res = handler.handle_prepare_mutation(
         "task-prep-1",
         {
@@ -1808,7 +1814,8 @@ def test_security_hardening_direct_script_spoofing_executable_and_sidecar(
             "after_state": "$25/day",
             "consequences": ["Daily budget increases by +$15/day"],
             "reversibility": "REVERSIBLE",
-            "script_path": str(spoof_script),
+            "script_path": str(sidecar_script),
+            "record_only": True,
         },
     )
     assert prep_res["status"] == "HITL_CONFIRMATION_REQUIRED"
@@ -1820,20 +1827,20 @@ def test_security_hardening_direct_script_spoofing_executable_and_sidecar(
         {
             "user_confirmed": True,
             "confirmation_summary": "User approved +$15/day budget increase",
-            "script_path": str(spoof_script),
+            "script_path": str(sidecar_script),
         },
     )
     assert blocked_res["status"] == "HITL_BLOCKED"
     assert "execute_mutates = false" in blocked_res["error"]
 
-    # Step C: With execute_mutates = true, sidecar EXECUTE_MUTATION succeeds, logs SUCCESS, and marks receipt EXECUTED
+    # Step C: With execute_mutates = true, sidecar EXECUTE_MUTATION succeeds, logs RECEIPT_VERIFIED, and marks receipt EXECUTED
     monkeypatch.setenv("GOOGLE_ADS_EXECUTE_MUTATES", "execute_mutates = true")
     ok_res = handler.handle_execute_mutation(
         "task-exec-ok",
         {
             "user_confirmed": True,
             "confirmation_summary": "User approved +$15/day budget increase",
-            "script_path": str(spoof_script),
+            "script_path": str(sidecar_script),
         },
     )
     assert ok_res["status"] == "COMPLETED"
@@ -2106,7 +2113,9 @@ def test_financial_mutation_classification_and_mandatory_consequence_disclosures
     )
 
     # 2. write_dry_run_receipt rejects financial mutations lacking explicit monetary/spend/billing consequences
-    fin_script = tmp_path / "mutate_account_budget.py"
+    saved_code_fin = tmp_path / "saved" / "code"
+    saved_code_fin.mkdir(parents=True, exist_ok=True)
+    fin_script = saved_code_fin / "mutate_account_budget.py"
     fin_script.write_text(
         "def run(svc, req):\n"
         "    req.validate_only = False\n"
@@ -2195,6 +2204,7 @@ def test_financial_mutation_classification_and_mandatory_consequence_disclosures
             "consequences": ["Applies requested change to account"],
             "reversibility": "IRREVERSIBLE",
             "script_path": str(fin_script),
+            "record_only": True,
         },
     )
     assert bad_sidecar["status"] == "VALIDATION_FAILED"
@@ -3546,12 +3556,17 @@ def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
     spec.loader.exec_module(server_mod)
     handler = server_mod.A2AHandler.__new__(server_mod.A2AHandler)
 
+    saved_code_lim = tmp_path / "saved" / "code"
+    saved_code_lim.mkdir(parents=True, exist_ok=True)
+    saved_exceed_script = saved_code_lim / "cli_exceed_budget.py"
+    saved_exceed_script.write_text(cli_exceed_script.read_text(encoding="utf-8"), encoding="utf-8")
+
     exec_Blocked_resp = handler.handle_execute_mutation(
         "task-fin-limit-exec",
         {
             "user_confirmed": True,
             "confirmation_summary": "User approved",
-            "script_path": str(cli_exceed_script),
+            "script_path": str(saved_exceed_script),
         },
     )
     assert exec_Blocked_resp["status"] == "HITL_BLOCKED"
@@ -3566,7 +3581,8 @@ def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(
             "after_state": "$80.00/day (80,000,000 micros)",
             "consequences": ["Daily budget increases to $80.00/day (80,000,000 micros)"],
             "reversibility": "REVERSIBLE",
-            "script_path": str(cli_exceed_script),
+            "script_path": str(saved_exceed_script),
+            "record_only": True,
         },
     )
     assert prep_blocked_resp["status"] == "HITL_BLOCKED"
@@ -5124,6 +5140,11 @@ def test_only_allow_create_or_update_and_prohibit_deletion_across_all_layers(
     spec.loader.exec_module(sidecar_mod)
     handler = object.__new__(sidecar_mod.A2AHandler)
 
+    saved_code_del = tmp_path / "saved" / "code"
+    saved_code_del.mkdir(parents=True, exist_ok=True)
+    saved_remove_script = saved_code_del / "remove_ad_group.py"
+    saved_remove_script.write_text(remove_script.read_text(encoding="utf-8"), encoding="utf-8")
+
     sidecar_prep_del = handler.handle_prepare_mutation(
         "task-del-prep",
         {
@@ -5133,7 +5154,8 @@ def test_only_allow_create_or_update_and_prohibit_deletion_across_all_layers(
             "after_state": "REMOVED",
             "consequences": ["Ad group permanently deleted"],
             "reversibility": "IRREVERSIBLE",
-            "script_path": str(remove_script),
+            "script_path": str(saved_remove_script),
+            "record_only": True,
         },
     )
     assert sidecar_prep_del["status"] == "HITL_BLOCKED"

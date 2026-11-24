@@ -1,5 +1,12 @@
 {
   "name": "google-ads-api-developer-assistant",
   "version": "4.1.0",
-  "description": "Exposes expert Google Ads API capabilities: HITL-verified API mutations with dry-run & consequence disclosure (execute-mutation), GAQL static analysis & live dry-runs, Protobuf object inspection, conversion diagnostics, PMax webpage filters, MCC account hierarchy retrieval, client library version discovery & sync, interactive tutorial, and Ruff-linted Python code generation."
+  "category": "development",
+  "logo": "assets/logo.svg",
+  "description": "Exposes expert Google Ads API capabilities: HITL-verified API mutations with dry-run & consequence disclosure (execute-mutation), GAQL static analysis & live dry-runs, Protobuf object inspection, conversion diagnostics, PMax webpage filters, MCC account hierarchy retrieval, client library version discovery & sync, interactive tutorial, and Ruff-linted Python code generation.",
+  "suggestedPrompts": [
+    "Validate a GAQL query for campaign impressions and clicks over the last 30 days",
+    "Inspect the CampaignBudget protobuf fields and enums in the active Google Ads API version",
+    "Dry-run a campaign budget update with full consequence disclosure before executing"
+  ]
 }

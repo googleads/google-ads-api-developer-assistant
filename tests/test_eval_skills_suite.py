@@ -45,7 +45,7 @@ class TestEvalSkillsSuiteOffline:
         for skill in ess.EXPECTED_SKILLS:
             assert skill in out
 
-        rc = ess.main(["--mode", "offline", "--skill", "explain"])
+        rc = ess.main(["--mode", "offline", "--skill", "google-ads-explain"])
         assert rc == 0
         out2 = capsys.readouterr().out
         assert "EV-ROUTE-EXP-01" in out2
@@ -105,7 +105,7 @@ class TestEvalSkillsRubricAndLiveProviders:
 
         pass_results = ess.run_live_evals(
             provider="gemini-api",
-            skill_filter="explain",
+            skill_filter="google-ads-explain",
             provider_fn=_passing_provider,
         )
         assert len(pass_results) == 2

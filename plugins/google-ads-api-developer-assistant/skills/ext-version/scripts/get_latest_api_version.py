@@ -386,6 +386,7 @@ def get_active_api_version() -> str:
 def main() -> None:
     """Prints the active or highest installed API version."""
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         description=(
             "Detect the highest installed Google Ads API version and update "
             "config/assistant_config (default), print the active version "

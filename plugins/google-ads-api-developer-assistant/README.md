@@ -2,7 +2,7 @@
 
 [![Plugin Version](https://img.shields.io/badge/version-4.1.0-blue.svg)](plugin.json)
 [![Target Runtimes](https://img.shields.io/badge/runtimes-Antigravity%20%7C%20Claude%20Desktop%20%7C%20Claude%20Code-brightgreen.svg)](plugin.json)
-[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](rules/google_ads_rules.md)
+[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](rules/AGENTS.md)
 
 This plugin adds **Google Ads API** tools to AI assistants in **Antigravity (`agy`)**, **Claude Desktop**, and **Claude Code CLI**. It includes diagnostic scripts, static analysis tools, Protobuf object inspectors, conversion validators, and a 4-Step Human-in-the-Loop (HITL) mutation guard.
 
@@ -61,12 +61,16 @@ google-ads-api-developer-assistant/
 ├── plugin.json                              # Plugin manifest for metadata and features
 ├── README.md                                # Documentation and usage guide
 ├── migration.md                             # Platform migration notes
-├── mcp_config.json                          # MCP server configuration
+├── mcp_config.json                          # MCP stdio server configuration (agy)
+├── .mcp.json                                # MCP stdio server configuration (Claude Code)
+├── hooks.json                               # Lifecycle hooks for Antigravity (agy)
+├── hooks/hooks.json                         # Lifecycle hooks for Claude Code CLI
 ├── config/
-│   ├── assistant_config                     # Unified TOML config (api_version, customer_id, execute_mutates)
-│   └── config_init.py                       # Session config initializer and PreInvocation/PreToolUse hook
+│   ├── assistant_config                     # Unified TOML config (api_version, customer_id, execute_mutates, allow_tier1_financial_mutates, enabled)
+│   ├── hook_guard.py                        # Fast stdlib SessionStart/PreToolUse/PostToolUseFailure guard entrypoint
+│   └── config_init.py                       # Session config initializer and deep mutation/command guard engine
 ├── rules/
-│   └── google_ads_rules.md                  # System directives and safety rules
+│   └── AGENTS.md                            # Concise always-on system directives and safety rules (< 4 KB)
 ├── commands/                               # Claude Code slash commands
 │   ├── validate-gaql.md                     # /validate-gaql [query]
 │   ├── inspect-object.md                    # /inspect-object <name>
@@ -84,7 +88,7 @@ google-ads-api-developer-assistant/
 │   ├── execute-mutation/                    # 4-Step HITL mutation runner and consequence verifier
 │   │   ├── SKILL.md
 │   │   └── scripts/run_mutation.py
-│   ├── explain/                             # 4-part explanations with analogies
+│   ├── google-ads-explain/                  # 4-part explanations with analogies
 │   │   └── SKILL.md
 │   ├── ext-version/                         # Assistant and API version lookup
 │   │   ├── SKILL.md
@@ -100,7 +104,7 @@ google-ads-api-developer-assistant/
 │   ├── pmax-listing-filter/                 # Performance Max asset group webpage listing filters
 │   │   ├── SKILL.md
 │   │   └── scripts/create_pmax_webpage_filter.py
-│   ├── step-by-step/                        # Multi-step task list
+│   ├── google-ads-step-by-step/             # Multi-step task list
 │   │   └── SKILL.md
 │   ├── troubleshoot-conversions/            # Conversion diagnostics, CSV checks, and GCLID sampling
 │   │   ├── SKILL.md
@@ -154,17 +158,17 @@ In Claude Code, use these slash commands to run specific tools:
 | **`get-cids-under-mcc`** | Finds child CIDs under a Manager Account (MCC) and prints a tree or saves a CSV file. | `skills/get-cids-under-mcc/scripts/get_cids_under_mcc.py` |
 | **`pmax-listing-filter`** | Builds asset group webpage exclusion filters (`listing_source = WEBPAGE`) for PMax campaigns. | `skills/pmax-listing-filter/scripts/create_pmax_webpage_filter.py` |
 | **`ext-version`** | Reads current version numbers for diagnostic reports. | `skills/ext-version/scripts/get_extension_version.py` |
-| **`explain`** | Explains topics in 4 parts: *Big Picture*, *Analogy*, *Interconnectedness*, and *Simple Language*. | `skills/explain/SKILL.md` |
+| **`google-ads-explain`** | Explains Google Ads API topics in 4 parts: *Big Picture*, *Analogy*, *Interconnectedness*, and *Simple Language*. | `skills/google-ads-explain/SKILL.md` |
 | **`assistant-tutorial`** | Guides you through 16 Google Ads API topics in an interactive tutorial. | `skills/assistant-tutorial/SKILL.md` |
 | **`sync-client-libs`** | Checks client libraries in `client_libs/` against GitHub releases and updates older libraries. | `skills/sync-client-libs/scripts/sync_client_libs.py` |
 | **`execute-mutation`** | Runs Google Ads API `create` and `update` mutations (blocks delete / `remove` operations) with the 4-Step HITL protocol. | `skills/execute-mutation/scripts/run_mutation.py` |
-| **`step-by-step`** | Divides complex tasks into numbered steps with verification checks. | `skills/step-by-step/SKILL.md` |
+| **`google-ads-step-by-step`** | Divides complex Google Ads API tasks into numbered steps with verification checks. | `skills/google-ads-step-by-step/SKILL.md` |
 
 ---
 
 ## 🔒 Core Directives & Guardrails
 
-The assistant follows the rules in [google_ads_rules.md](rules/google_ads_rules.md):
+The assistant follows the rules in [AGENTS.md](rules/AGENTS.md):
 
 1. **Validate Before Act Protocol**:
    - Reads the active Google Ads API version (`api_version`) from `config/assistant_config`. If `api_version` is not set, the assistant finds the latest stable release, asks for your confirmation, and saves it.
@@ -273,7 +277,7 @@ python3 config/set_financial_limits.py --reset CampaignBudgetService.amount_micr
 python3 config/set_financial_limits.py --reset-all
 ```
 
-When `enabled = true` and you enter your first prompt in Antigravity (`agy`) or Claude Code CLI (`claude`), the `PreInvocation` hook (`python3 config/config_init.py --hook`) copies your credentials to `config/google-ads.yaml` (`0600` permissions), updates `api_version` in `config/assistant_config`, and runs a 5-step version check:
+When `enabled = true` and you start a session in Antigravity (`agy`) or Claude Code CLI (`claude`), the `SessionStart` hook (`config/hook_guard.py` $\rightarrow$ `config/config_init.py`) copies your credentials to `config/google-ads.yaml` (`0600` permissions), updates `api_version` in `config/assistant_config` locally (no blocking network calls at startup), and injects the session parity report. To check upstream PyPI and GitHub releases on demand, run `/sync-client-libs` or `sync_client_libs.py --check_only`:
 1. **Check Python Site-Directory Version Against PyPI:** Compares the installed `google-ads` package in `site.getsitepackages()` against `pypi.org` (`https://pypi.org/pypi/google-ads/json`).
 2. **Check Latest GitHub Release:** Checks the latest release of `googleads/google-ads-python` on GitHub.
 3. **Select Active Google Ads API Version:** Selects the Google Ads API version from steps 1 and 2.
@@ -408,9 +412,9 @@ The plugin includes an Agent-to-Agent (A2A) HTTP service in `sidecars/google-ads
 1. **Lifecycle Control**: When `enabled = true` in `config/assistant_config`, the host reads `sidecars/google-ads-a2a-service/sidecar.json` and starts `python3 server.py` in the background. It sets the port through `ANTIGRAVITY_SIDECAR_WEB_PORT` (or `A2A_PORT`, default `8900`) and restarts the process if it stops (`"restart_policy": "always"`). When you run `./plugin.sh disable`, the script renames `sidecar.json` and `mcp_config.json` to `.disabled` and stops the background server.
 2. **Startup Credential & Config Sync**: At startup (and before each task), `server.py` runs `config_init.sync_and_set_config_kv()`. This function copies credentials from `~/google-ads.yaml` to `config/google-ads.yaml` (`0600` permissions) and reads `customer_id`, `api_version`, and `execute_mutates` from `config/assistant_config`.
 3. **API Version Selection**: For each task, `get_effective_api_version()` checks the request payload, the `GOOGLE_ADS_API_VERSION` environment variable, `config/assistant_config`, local `client_libs/google-ads-python` `v<N>` directories, and installed `google.ads.googleads` packages.
-4. **A2A HTTP Endpoints**: The server listens on `127.0.0.1:8900` (or `ANTIGRAVITY_SIDECAR_WEB_PORT`):
+4. **A2A HTTP & MCP Stdio Endpoints**: The server runs either as a loopback HTTP A2A daemon on `127.0.0.1:8900` (or `ANTIGRAVITY_SIDECAR_WEB_PORT`) or as a JSON-RPC 2.0 MCP stdio server (`server.py --mcp`):
    - `GET /` or `GET /health`: Returns service status, active plugin version, and listening port.
-   - `POST /v1/a2a/tasks`: Runs structured tasks for `GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION` (writes a SHA-256 `validate_only=True` receipt to `saved/data/last_dry_run.json` and returns the **Mutation & Consequence Verification Card**), and `EXECUTE_MUTATION` (checks `execute_mutates = true`, user confirmation, and the SHA-256 dry-run receipt before writing to `saved/logs/mutation_audit.jsonl`).
+   - `POST /v1/a2a/tasks` (11 A2A intents) and MCP `tools/call` (10 MCP tools): `GAQL_VALIDATE`, `INSPECT_OBJECT`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION`, `EXECUTE_MUTATION`, `REJECT_MUTATION`, `CREATE_ACCOUNT`, `CREATE_CAMPAIGN`, `CREATE_AD_GROUP`, `CREATE_AD` (plus A2A-only `GENERATE_CODE`).
 
 To start or test the sidecar manually:
 ```bash
@@ -420,20 +424,20 @@ curl http://127.0.0.1:8900/health
 
 ### Model Context Protocol (MCP)
 
-The `mcp_config.json` file configures the MCP server:
+`mcp_config.json` (`agy`, using `${PLUGIN_ROOT}`) and `.mcp.json` (`Claude Code`, using `${CLAUDE_PLUGIN_ROOT}`) launch `server.py --mcp` over stdio:
 ```json
 {
   "mcpServers": {
     "google-ads-api-assistant": {
       "command": "python3",
       "args": [
-        "sidecars/google-ads-a2a-service/server.py"
+        "${PLUGIN_ROOT}/sidecars/google-ads-a2a-service/server.py",
+        "--mcp"
       ],
       "env": {
-        "A2A_PORT": "8900",
-        "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "config/google-ads.yaml"
-      },
-      "url": "http://127.0.0.1:8900"
+        "GOOGLE_ADS_CONFIGURATION_FILE_PATH": "${PLUGIN_ROOT}/config/google-ads.yaml",
+        "GOOGLE_ADS_ASSISTANT_DIR": "${PLUGIN_ROOT}"
+      }
     }
   }
 }

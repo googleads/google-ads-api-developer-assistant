@@ -1,6 +1,6 @@
 ---
 name: assistant-tutorial
-description: An interactive tutorial on how to use the Google Ads API Developer Assistant.
+description: Runs an interactive, conversational tutorial on how to use the Google Ads API Developer Assistant's skills, hooks, and HITL mutation workflow. Use when the user asks for an interactive walkthrough or tutorial of the assistant. Don't use for single-concept explanations (use google-ads-explain), live API execution, or generating static markdown guide files.
 ---
 
 # Google Ads API Developer Assistant Tutorial (Interactive Guide)
@@ -90,13 +90,13 @@ When a user invokes `/assistant-tutorial` or requests this tutorial:
   2. **Phase 2: Execution Steps** (sequential API operations with GAQL validation and 4-Step HITL mutation checkpoints).
   3. **Phase 3: Verification & Next Steps** (confirming state changes via GAQL or `Mutate-to-Get` responses).
 
-### Topic 15: Lifecycle Hooks & Deterministic Guardrails (`hooks.json` & `config_init.py`)
-- **`PreInvocation` Hook:** Runs at the start of every turn to sync `config/google-ads.yaml` and inject an ephemeral status notice showing the active config path and `execute_mutates` state.
-- **`PreToolUse` Hook (`handle_hook` & `evaluate_mutation_guard`):** Intercepts shell/Python commands before execution to:
+### Topic 15: Lifecycle Hooks & Deterministic Guardrails (`hooks.json`, `hooks/hooks.json`, `hook_guard.py`, & `config_init.py`)
+- **`SessionStart` Hook:** Runs once at session start (`hooks.json` in `agy`, `hooks/hooks.json` in Claude Code) to sync `config/google-ads.yaml`, check local `google-ads` version parity, and inject active config and mutation posture notices (`systemMessage` in `agy`, `additionalContext` + `CLAUDE_ENV_FILE` in Claude Code).
+- **`PreToolUse` Hook (`hook_guard.py` & `config_init.py`):** Intercepts shell commands, file writes (`write_file`/`edit_file`/`write_to_file` in `agy`; `Write`/`Edit`/`MultiEdit` in Claude Code), and MCP mutation tools before execution to:
   - Rewrite `GoogleAdsClient.load_from_storage()` and `~/google-ads.yaml` references to `config/google-ads.yaml`.
-  - Rewrite relative `skills/<skill>/scripts/...` paths to the global plugin root (`GOOGLE_ADS_ASSISTANT_DIR`) when working outside the repository.
+  - Rewrite relative `skills/<skill>/scripts/...` paths to the global plugin root (`PLUGIN_ROOT` / `CLAUDE_PLUGIN_ROOT` / `GOOGLE_ADS_ASSISTANT_DIR`) when working outside the repository.
   - Deterministically allow read-only/dry-run commands (`"decision": "allow"`), block unverified or disabled live mutations (`"decision": "deny"`), and trigger an interactive confirmation card (`"decision": "force_ask"` / `"permissionDecision": "ask"`) for verified live mutations.
 
-### Topic 16: Agent-to-Agent (A2A) Sidecar Service & Cross-Workspace Execution
-- **A2A HTTP Sidecar (`sidecars/google-ads-a2a-service/server.py`):** Background daemon listening on `ANTIGRAVITY_SIDECAR_WEB_PORT` (default port `8900`) supporting 6 structured task intents: `GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION`, and `EXECUTE_MUTATION`.
+### Topic 16: Agent-to-Agent (A2A) Sidecar Service, MCP Stdio Server & Cross-Workspace Execution
+- **A2A HTTP Sidecar & MCP Stdio Server (`sidecars/google-ads-a2a-service/server.py`):** Supports both a sandboxed loopback HTTP daemon (`sidecar.json`, default port `8900`) and a JSON-RPC 2.0 stdio MCP server (`mcp_config.json` / `.mcp.json` via `--mcp`), exposing 11 A2A intents (`GAQL_VALIDATE`, `INSPECT_OBJECT`, `GENERATE_CODE`, `TROUBLESHOOT_CONVERSIONS`, `PREPARE_MUTATION`, `EXECUTE_MUTATION`, `REJECT_MUTATION`, `CREATE_ACCOUNT`, `CREATE_CAMPAIGN`, `CREATE_AD_GROUP`, and `CREATE_AD`).
 - **Global Plugin Installation (`install.sh` / `update.sh`):** Installing for Antigravity (`./install.sh agy`) or Claude Code (`./install.sh claude`), optional language flags (`--php`, `--ruby`, `--java`, `--dotnet`, `--all`), and running assistant skills globally from any workspace.

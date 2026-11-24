@@ -1,6 +1,6 @@
 ---
 name: validate-gaql
-description: Validates Google Ads Query Language (GAQL) queries via 4-step static analysis and live API dry-runs.
+description: Validates Google Ads Query Language (GAQL) queries via 4-step schema discovery, compatibility checks, static analysis, and live validate_only API dry-runs with local caching. Use before presenting or running any GAQL query. Don't use for mutating Google Ads resources (use execute-mutation) or inspecting single Protobuf enums/messages (use inspect-object).
 ---
 
 # Validate GAQL Skill

@@ -1,6 +1,6 @@
 ---
-name: explain
-description: Explains Google Ads API concepts, code snippets, or queries using plain language and analogies.
+name: google-ads-explain
+description: Explains Google Ads API concepts, resources, code snippets, or GAQL queries using plain language and real-world analogies. Use when the user asks to explain a Google Ads API concept, resource, enum, or query in accessible terms. Don't use for non-Google-Ads software concepts, live API execution, or inspecting raw Protobuf schemas (use inspect-object).
 ---
 
 # Explain

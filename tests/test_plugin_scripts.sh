@@ -96,29 +96,54 @@ if ! echo "$output" | grep -qi "claude"; then
 fi
 echo "PASS: update.sh --help is valid."
 
-echo "Test 7: update.sh agy updates Antigravity plugin"
-"${PROJECT_ROOT}/update.sh" agy
+echo "Test 7: update.sh agy --no-git-pull updates Antigravity plugin and preserves allow_tier1_financial_mutates"
+sed -i 's/^allow_tier1_financial_mutates = false$/allow_tier1_financial_mutates = true/' "${AGY_PLUGIN_DIR}/config/assistant_config"
+if ! grep -q '^allow_tier1_financial_mutates = true$' "${AGY_PLUGIN_DIR}/config/assistant_config"; then
+  echo "allow_tier1_financial_mutates = true" >> "${AGY_PLUGIN_DIR}/config/assistant_config"
+fi
+echo 'custom_operator_note = "keep-me"' >> "${AGY_PLUGIN_DIR}/config/assistant_config"
+"${PROJECT_ROOT}/update.sh" agy --no-git-pull
 if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
   echo "FAIL: plugin.json missing after update in agy"
   exit 1
 fi
-echo "PASS: update.sh agy executed successfully."
+if ! grep -q '^allow_tier1_financial_mutates = true$' "${AGY_PLUGIN_DIR}/config/assistant_config"; then
+  echo "FAIL: update.sh clobbered allow_tier1_financial_mutates = true in assistant_config"
+  exit 1
+fi
+if ! grep -q '^custom_operator_note = "keep-me"$' "${AGY_PLUGIN_DIR}/config/assistant_config"; then
+  echo "FAIL: update.sh clobbered custom TOML keys in assistant_config"
+  exit 1
+fi
+echo "PASS: update.sh agy preserved allow_tier1_financial_mutates and custom keys."
 
-echo "Test 8: update.sh claude updates standalone Claude Code plugin"
-"${PROJECT_ROOT}/update.sh" claude
+echo "Test 8: update.sh claude --no-git-pull updates standalone Claude Code plugin including dotfiles (.claude-plugin, .mcp.json)"
+echo '{"stale": true}' > "${CLAUDE_PLUGIN_DIR}/.mcp.json"
+echo '{"stale": true}' > "${CLAUDE_PLUGIN_DIR}/.claude-plugin/plugin.json"
+"${PROJECT_ROOT}/update.sh" claude --no-git-pull
 if [[ ! -f "${CLAUDE_PLUGIN_DIR}/plugin.json" ]]; then
   echo "FAIL: plugin.json missing in standalone Claude plugin after update"
   exit 1
 fi
-echo "PASS: update.sh claude executed successfully."
-
-echo "Test 9: update.sh claude --php adds google-ads-php to standalone Claude plugin client_libs"
-"${PROJECT_ROOT}/update.sh" claude --php
-if [[ ! -d "${CLAUDE_PLUGIN_DIR}/client_libs/google-ads-php" ]]; then
-  echo "FAIL: google-ads-php missing from standalone Claude plugin client_libs"
+if grep -q '"stale"' "${CLAUDE_PLUGIN_DIR}/.mcp.json"; then
+  echo "FAIL: update.sh claude did not sync hidden .mcp.json file"
   exit 1
 fi
-echo "PASS: update.sh claude --php added client library successfully."
+if grep -q '"stale"' "${CLAUDE_PLUGIN_DIR}/.claude-plugin/plugin.json"; then
+  echo "FAIL: update.sh claude did not sync hidden .claude-plugin/ directory"
+  exit 1
+fi
+echo "PASS: update.sh claude synced dotfiles (.claude-plugin and .mcp.json)."
+
+echo "Test 9: update.sh claude --no-git-pull --php adds google-ads-php when present or skips offline pull"
+if [[ -d "${PROJECT_ROOT}/plugins/google-ads-api-developer-assistant/client_libs/google-ads-php" ]]; then
+  "${PROJECT_ROOT}/update.sh" claude --no-git-pull --php
+  if [[ ! -d "${CLAUDE_PLUGIN_DIR}/client_libs/google-ads-php" ]]; then
+    echo "FAIL: google-ads-php missing from standalone Claude plugin client_libs"
+    exit 1
+  fi
+fi
+echo "PASS: update.sh claude --no-git-pull client_libs handling verified."
 
 echo "Test 10: install.sh agy rejects --link option (always installs standalone copy)"
 if "${PROJECT_ROOT}/install.sh" agy --link 2>/dev/null; then
@@ -131,10 +156,10 @@ if [[ -L "${AGY_PLUGIN_DIR}" ]]; then
 fi
 echo "PASS: install.sh agy rejects --link and enforces standalone copy."
 
-echo "Test 11: update.sh agy migrates any legacy symbolic link to a standalone directory copy"
+echo "Test 11: update.sh agy --no-git-pull migrates any legacy symbolic link to a standalone directory copy"
 rm -rf "${AGY_PLUGIN_DIR}"
 ln -sfn "${PROJECT_ROOT}/plugins/google-ads-api-developer-assistant" "${AGY_PLUGIN_DIR}"
-"${PROJECT_ROOT}/update.sh" agy
+"${PROJECT_ROOT}/update.sh" agy --no-git-pull
 if [[ -L "${AGY_PLUGIN_DIR}" || ! -d "${AGY_PLUGIN_DIR}" ]]; then
   echo "FAIL: update.sh agy did not replace legacy symlink at ${AGY_PLUGIN_DIR} with a real directory"
   exit 1
@@ -167,7 +192,7 @@ fi
 "${PROJECT_ROOT}/plugin.sh" test --config-dir "${AGY_PLUGIN_DIR}/config" --expect disabled >/dev/null
 
 # Verify update.sh preserves disabled state unless --enable is specified
-"${PROJECT_ROOT}/update.sh" agy >/dev/null
+"${PROJECT_ROOT}/update.sh" agy --no-git-pull >/dev/null
 if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json.disabled" || -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
   echo "FAIL: update.sh did not preserve disabled state in ${AGY_PLUGIN_DIR}"
   exit 1
@@ -186,12 +211,12 @@ fi
 "${PROJECT_ROOT}/plugin.sh" test --config-dir "${AGY_PLUGIN_DIR}/config" --expect enabled >/dev/null
 echo "PASS: plugin.sh disable, status, test, is-enabled, and enable verified."
 
-echo "Test 14: installed update.sh in plugin directory runs from an arbitrary directory outside the git repo"
+echo "Test 14: installed update.sh in plugin directory runs offline from an arbitrary directory outside the git repo"
 if [[ ! -x "${AGY_PLUGIN_DIR}/update.sh" ]]; then
   echo "FAIL: update.sh was not installed or not executable in ${AGY_PLUGIN_DIR}"
   exit 1
 fi
-(cd "${TEST_HOME}" && "${AGY_PLUGIN_DIR}/update.sh" agy >/dev/null)
+(cd "${TEST_HOME}" && "${AGY_PLUGIN_DIR}/update.sh" agy --no-git-pull >/dev/null)
 echo "PASS: installed update.sh executed successfully from outside the git repository."
 
 echo "=== All Tests Passed Successfully! ==="

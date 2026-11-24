@@ -1,6 +1,6 @@
 ---
 name: pmax-listing-filter
-description: Validates or generates commands to configure Asset Group URL expansion filters (webpage exclusions) for Performance Max campaigns.
+description: Validates and generates Asset Group URL expansion webpage exclusion filters (AssetGroupListingGroupFilter) for Performance Max campaigns. Use when creating or dry-running PMax Asset Group webpage exclusions without Page Feeds. Don't use for Search/AI Max campaigns, general non-PMax mutations (use execute-mutation), or GAQL reporting queries (use validate-gaql).
 ---
 
 # Performance Max Listing Filter Skill

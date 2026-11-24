@@ -1,6 +1,6 @@
 ---
 name: ext-version
-description: Retrieves the current version of the Google Ads API Developer Assistant from plugin.json.
+description: Retrieves the current Google Ads API Developer Assistant plugin version from plugin.json and the active Google Ads API version. Use when verifying the assistant version, active API version, or environment diagnostics. Don't use for upgrading client libraries (use sync-client-libs) or running GAQL queries (use validate-gaql).
 ---
 
 # Get Extension Version

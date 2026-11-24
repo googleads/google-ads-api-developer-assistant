@@ -229,7 +229,8 @@ def get_recent_gclids(client: Any, customer_id: str, date: str) -> None:
 def main() -> None:
     """Parses CLI arguments and prints recent GCLIDs for the customer."""
     parser = argparse.ArgumentParser(
-        description="Retrieve a sample of recent GCLIDs from click_view."
+        allow_abbrev=False,
+        description="Retrieve a sample of recent GCLIDs from click_view.",
     )
     parser.add_argument(
         "-c", "--customer_id", required=True, help="The Google Ads customer ID."

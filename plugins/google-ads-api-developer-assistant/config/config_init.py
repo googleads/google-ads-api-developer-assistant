@@ -47,6 +47,7 @@ def get_version(ext_version_script: Optional[str] = None) -> str:
                     capture_output=True,
                     text=True,
                     check=True,
+                    timeout=5,
                 )
                 ver = result.stdout.strip()
                 if ver and ver not in ("Unknown", "Version not found"):
@@ -118,6 +119,7 @@ def get_version(ext_version_script: Optional[str] = None) -> str:
                     capture_output=True,
                     text=True,
                     check=True,
+                    timeout=5,
                 )
                 ver = result.stdout.strip()
                 if ver and ver not in ("Unknown", "Version not found"):
@@ -1816,22 +1818,31 @@ def ver_str_is_digit(s: str) -> bool:
     return s.isdigit()
 
 
+def _plugin_root_config_dirs() -> list[str]:
+    """Returns config dirs from PLUGIN_ROOT / CLAUDE_PLUGIN_ROOT when present."""
+    dirs: list[str] = []
+    for env_key in ("PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT"):
+        root = os.environ.get(env_key, "").strip()
+        if root:
+            cfg_dir = os.path.join(os.path.abspath(root), "config")
+            if os.path.isdir(cfg_dir) and cfg_dir not in dirs:
+                dirs.append(cfg_dir)
+    return dirs
+
+
 def _claude_plugin_root_config_dir() -> Optional[str]:
-    """Returns $CLAUDE_PLUGIN_ROOT/config when CLAUDE_PLUGIN_ROOT points at this plugin."""
-    root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
-    if root:
-        cfg_dir = os.path.join(os.path.abspath(root), "config")
-        if os.path.isdir(cfg_dir):
-            return cfg_dir
-    return None
+    """Returns $CLAUDE_PLUGIN_ROOT/config (or $PLUGIN_ROOT/config) when present."""
+    dirs = _plugin_root_config_dirs()
+    return dirs[0] if dirs else None
 
 
 def get_assistant_config_paths(config_dir: Optional[str] = None) -> list[str]:
     """Returns candidate paths for reading/writing config/assistant_config.
 
     Precedence: explicit config_dir or GOOGLE_ADS_ASSISTANT_CONFIG_DIR, then the
-    current plugin root (CLAUDE_PLUGIN_ROOT/config and this file's config dir), then
-    the cwd-relative config/, then the Claude Code install, then the Antigravity install.
+    current plugin root (PLUGIN_ROOT/config, CLAUDE_PLUGIN_ROOT/config, and this
+    file's config dir), then the cwd-relative config/, then the Claude Code
+    install, then the Antigravity install.
     """
     this_dir = os.path.dirname(os.path.abspath(__file__))
     candidates: list[str] = []
@@ -1845,9 +1856,8 @@ def get_assistant_config_paths(config_dir: Optional[str] = None) -> list[str]:
             candidates.append(
                 os.path.join(os.path.abspath(env_cfg_dir), ASSISTANT_CONFIG_FILENAME)
             )
-    claude_cfg_dir = _claude_plugin_root_config_dir()
-    if claude_cfg_dir:
-        candidates.append(os.path.join(claude_cfg_dir, ASSISTANT_CONFIG_FILENAME))
+    for root_cfg_dir in _plugin_root_config_dirs():
+        candidates.append(os.path.join(root_cfg_dir, ASSISTANT_CONFIG_FILENAME))
     candidates.extend([
         os.path.join(this_dir, ASSISTANT_CONFIG_FILENAME),
         os.path.abspath(os.path.join("config", ASSISTANT_CONFIG_FILENAME)),
@@ -2408,6 +2418,7 @@ def _toggle_installed_plugin_manifests(
             "plugin.json",
             os.path.join(".claude-plugin", "plugin.json"),
             "mcp_config.json",
+            ".mcp.json",
             os.path.join("sidecars", "google-ads-a2a-service", "sidecar.json"),
         ]
         for rel in manifest_rels:
@@ -3653,6 +3664,24 @@ _DIRECT_REST_MUTATE_RE = re.compile(
     r"createYouTubeVideoUpload|updateYouTubeVideoUpload|removeYouTubeVideoUpload|"
     r"removeAutomaticallyCreatedAssets|removeCampaignAutomaticallyCreatedAsset)\b"
 )
+_DIRECT_REST_ACTION_RE = re.compile(
+    r"(?i):(?:mutate[A-Za-z]*|createCustomerClient|"
+    r"bookCampaigns|applyIncentive|applyRecommendation|dismissRecommendation|"
+    r"uploadClickConversions|uploadCallConversions|uploadConversionAdjustments|"
+    r"uploadUserData|createOfflineUserDataJob|addOfflineUserDataJobOperations|"
+    r"runOfflineUserDataJob|addBatchJobOperations|runBatchJob|"
+    r"createAccountLink|createProductLink|removeProductLink|"
+    r"createProductLinkInvitation|updateProductLinkInvitation|removeProductLinkInvitation|"
+    r"createDataLink|updateDataLink|removeDataLink|moveManagerLink|"
+    r"startIdentityVerification|enablePMaxBrandGuidelines|"
+    r"promoteCampaignDraft|generatePMaxDraftCampaign|"
+    r"graduateExperiment|promoteExperiment|scheduleExperiment|endExperiment|"
+    r"appendLeadConversation|provideLeadFeedback|"
+    r"resolveMultiPartyAuthReview|regenerateShareableLinkId|"
+    r"createYouTubeVideoUpload|updateYouTubeVideoUpload|removeYouTubeVideoUpload|"
+    r"removeAutomaticallyCreatedAssets|removeCampaignAutomaticallyCreatedAsset)\b"
+)
+_HTTP_CLIENT_RE = re.compile(r"\b(?:curl|wget|httpie|http|xh)\b", re.IGNORECASE)
 _SCRIPT_ARG_RE = re.compile(
     r"--script(?:=|\s+)(?:'([^']+)'|\"([^\"]+)\"|([^\s'\"]+))"
 )
@@ -3670,9 +3699,12 @@ _SH_FILE_ARG_RE = re.compile(
 )
 _PY_MODULE_ARG_RE = re.compile(r"\bpython3?(?:\.\d+)?\s+-m\s+([A-Za-z_][A-Za-z0-9_.]*)")
 _SET_EXEC_MUTATES_TRUE_RE = re.compile(
-    r"--(?:set-execute-mutates|allow-tier1-financial-mutates)(?:=|\s+)(?:true|1|yes|on)\b",
+    r"--(?:execute-mutates|set-execute-mutates|allow-tier1-financial-mutates|"
+    r"exec[a-z-]*|set-exec[a-z-]*|allow-tier1[a-z-]*|"
+    r"enable|disable|plugin-enabled|key|value)(?:=|\s|$)",
     re.IGNORECASE,
 )
+_EXEC_TARGET_FLAG_RE = re.compile(r"(?<!\S)--_exec-target(?:=|\s|$)")
 _COMMENT_LINE_RE = re.compile(r"(?m)^\s*#.*$")
 _HELP_KW_RE = re.compile(r"\bhelp\s*=\s*(?:'[^']*'|\"[^\"]*\")")
 _VALIDATE_ONLY_TRUE_RE = re.compile(
@@ -3697,7 +3729,7 @@ _BARE_HOME_YAML_RE = re.compile(
 # Only bare relative paths are rewritten; already-rooted paths such as
 # "$GADS_DIR/skills/..." or "${CLAUDE_PLUGIN_ROOT}/skills/..." or "/abs/skills/..." pass through.
 _SKILL_REL_PATH_RE = re.compile(
-    r"(?<![\w/.$}~-])(?:skills/[a-zA-Z0-9_\-]+/(?:scripts|references)/[a-zA-Z0-9_\-\.]+|config/(?:config_init|set_financial_limits)\.py|set_financial_limits\.py)\b"
+    r"(?<![\w/.$}~-])(?:skills/[a-zA-Z0-9_\-]+/(?:scripts|references)/[a-zA-Z0-9_\-\.]+|config/(?:config_init|hook_guard|set_financial_limits)\.py|set_financial_limits\.py)\b"
 )
 _LEADING_SHELL_COMMENTS_RE = re.compile(r"\A(?:\s*#[^\n]*\n)+")
 
@@ -3707,8 +3739,18 @@ _PROTECTED_ASK_FILES = frozenset({
     "financial_limits",
     "google-ads.yaml",
     "hooks.json",
+    "config_init.py",
+    "hook_guard.py",
+    "run_mutation.py",
+    "server.py",
+    "mcp_config.json",
+    ".mcp.json",
+    "sidecar.json",
+    "plugin.json",
 })
 _FILE_WRITE_TOOLS = frozenset({
+    "write_file",
+    "edit_file",
     "write_to_file",
     "replace_file_content",
     "multi_replace_file_content",
@@ -3725,29 +3767,46 @@ _SHORTCUT_FORBIDDEN_SUBSTRINGS = ("#", "$(", "`", "<(", ">(", "\n", "\r")
 _REDIRECTION_STRIP_RE = re.compile(
     r"(?<![\w-])[0-9&]?(?:>{1,2}|<)(?:&[0-9-]|\s*(?:'[^']*'|\"[^\"]*\"|[^\s;|&<>]+))"
 )
-_GADS_DIR_PREAMBLE_LITERAL = (
-    'GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; '
-    'if [ -z "$GADS_DIR" ]; then '
-    'GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; '
-    'if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then '
-    'GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; '
-    "fi; fi"
+_GADS_DIR_PREAMBLE_LITERALS = (
+    (
+        'GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}}"; '
+        'if [ -z "$GADS_DIR" ]; then '
+        'GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; '
+        'if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then '
+        'GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; '
+        "fi; fi"
+    ),
+    (
+        'GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}"; '
+        'if [ -z "$GADS_DIR" ]; then '
+        'GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; '
+        'if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then '
+        'GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; '
+        "fi; fi"
+    ),
 )
+_GADS_DIR_PREAMBLE_LITERAL = _GADS_DIR_PREAMBLE_LITERALS[0]
 # The canonical SKILL.md preamble only ever selects a trusted install dir, so "$GADS_DIR/..."
 # after it is as trustworthy as the plugin root itself.
 _GADS_DIR_PREAMBLE_RE = re.compile(
-    r"\A\s*"
-    + re.escape(_GADS_DIR_PREAMBLE_LITERAL).replace(r"\ ", r"\s+")
-    + r"\s*(?:&&|;|\n)\s*"
+    r"\A\s*(?:"
+    + "|".join(
+        re.escape(lit).replace(r"\ ", r"\s+") for lit in _GADS_DIR_PREAMBLE_LITERALS
+    )
+    + r")\s*(?:&&|;|\n)\s*"
 )
 _TRUSTED_ROOT_VAR_PREFIXES = {
     "GADS_DIR": ("$GADS_DIR/", "${GADS_DIR}/"),
+    "PLUGIN_ROOT": ("$PLUGIN_ROOT/", "${PLUGIN_ROOT}/"),
     "CLAUDE_PLUGIN_ROOT": ("$CLAUDE_PLUGIN_ROOT/", "${CLAUDE_PLUGIN_ROOT}/"),
 }
 
 _PROTECTED_CONFIG_BASENAMES = _PROTECTED_DENY_FILES | _PROTECTED_ASK_FILES
 _SHELL_REDIRECT_TARGET_RE = re.compile(
     r"(?<![<>&0-9])[0-9&]?>{1,2}\|?\s*(?!&)(?:'([^']*)'|\"([^\"]*)\"|([^\s;|&<>()]+))"
+)
+_SHELL_VAR_ASSIGN_RE = re.compile(
+    r"(?:^|[;&|\n\s])(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(?:'([^']*)'|\"([^\"]*)\"|([^\s;|&<>]+))"
 )
 _INPLACE_EDIT_RE = re.compile(
     r"\b(?:sed|perl)\b[^;|&\n]*?\s(?:-[A-Za-z]*i[A-Za-z]*\b|--in-place\b)"
@@ -3757,6 +3816,8 @@ _SHELL_WRITER_CMD_RE = re.compile(
 )
 _PY_WRITE_RE = re.compile(
     r"open\s*\([^)]*?,\s*(?:mode\s*=\s*)?['\"][^'\"]*[waxWAX+][^'\"]*['\"]|"
+    r"\.open\s*\(\s*(?:mode\s*=\s*)?['\"][^'\"]*[waxWAX+][^'\"]*['\"]|"
+    r"\bos\.open\s*\(|"
     r"\.write_(?:text|bytes)\s*\(|\.unlink\s*\(|"
     r"\bos\.(?:remove|unlink|rename|replace|truncate)\b|\bshutil\.(?:copy\w*|move)\b|"
     r"\bjson\.dump\s*\(|\bfs\.(?:writeFile|appendFile)\w*\b|\bFile\.(?:write|open)\b"
@@ -3827,14 +3888,18 @@ def _strip_gads_dir_preamble(cmd: str) -> Tuple[str, bool]:
 def _trusted_gads_dir_root(cmd: str) -> Optional[str]:
     """Returns the plugin root that the canonical GADS_DIR preamble selects, if cmd uses it.
 
-    Mirrors the preamble: CLAUDE_PLUGIN_ROOT, then GOOGLE_ADS_ASSISTANT_DIR, then the
-    Antigravity install unless running in Claude Code or it is missing, then the Claude
-    Code install. Returns None when the preamble is absent or GADS_DIR is reassigned later.
+    Mirrors the preamble: CLAUDE_PLUGIN_ROOT, then PLUGIN_ROOT, then GOOGLE_ADS_ASSISTANT_DIR,
+    then the Antigravity install unless running in Claude Code or it is missing, then the
+    Claude Code install. Returns None when the preamble is absent or GADS_DIR is reassigned.
     """
     body, has_preamble = _strip_gads_dir_preamble(cmd)
     if not has_preamble or "GADS_DIR=" in body:
         return None
-    root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.environ.get("GOOGLE_ADS_ASSISTANT_DIR")
+    root = (
+        os.environ.get("CLAUDE_PLUGIN_ROOT")
+        or os.environ.get("PLUGIN_ROOT")
+        or os.environ.get("GOOGLE_ADS_ASSISTANT_DIR")
+    )
     if not root:
         root = os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant")
         if os.environ.get("CLAUDECODE") or not os.path.isdir(root):
@@ -3857,6 +3922,7 @@ def _trusted_run_mutation_paths() -> set[str]:
     this_dir = os.path.dirname(os.path.abspath(__file__))
     roots = [
         os.path.dirname(this_dir),
+        os.environ.get("PLUGIN_ROOT", ""),
         os.environ.get("CLAUDE_PLUGIN_ROOT", ""),
         os.environ.get("GOOGLE_ADS_ASSISTANT_DIR", ""),
         os.path.expanduser("~/.gemini/config/plugins/google-ads-api-developer-assistant"),
@@ -3929,7 +3995,11 @@ def _run_mutation_shortcut_flag(
         return None
     flags = argv[2:]
     if any(
-        f == "--execute" or f.startswith("--execute=") or f == "--record-only"
+        f == "--_exec-target"
+        or f.startswith("--_exec-target=")
+        or f == "--record-only"
+        or f.startswith("--record-only=")
+        or f.startswith("--ex")
         for f in flags
     ):
         return None
@@ -3955,6 +4025,8 @@ def _reduce_run_mutation_shortcuts(
     trusted_vars: list[str] = []
     if has_preamble and "GADS_DIR=" not in body:
         trusted_vars.append("GADS_DIR")
+    if "PLUGIN_ROOT=" not in body and os.environ.get("PLUGIN_ROOT"):
+        trusted_vars.append("PLUGIN_ROOT")
     if "CLAUDE_PLUGIN_ROOT=" not in body and os.environ.get("CLAUDE_PLUGIN_ROOT"):
         trusted_vars.append("CLAUDE_PLUGIN_ROOT")
     if any(tok in body for tok in _SHORTCUT_FORBIDDEN_SUBSTRINGS):
@@ -3997,16 +4069,34 @@ def _protected_shell_write_decision(cmd: str) -> Optional[Tuple[str, str]]:
                 found.add(b)
         return found
 
+    # Map shell variables assigned to protected basenames (e.g. F=assistant_config; echo > config/$F)
+    var_to_protected: dict[str, set[str]] = {}
+    for vm in _SHELL_VAR_ASSIGN_RE.finditer(cmd):
+        vname = vm.group(1)
+        vval = vm.group(2) if vm.group(2) is not None else (vm.group(3) if vm.group(3) is not None else vm.group(4) or "")
+        vhits = _basename_hits(vval)
+        if vhits:
+            var_to_protected.setdefault(vname, set()).update(vhits)
+
+    def _expand_var_hits(text: str) -> set[str]:
+        found = _basename_hits(text)
+        for vname, vhits in var_to_protected.items():
+            if f"${vname}" in text or f"${{{vname}}}" in text:
+                found |= vhits
+        return found
+
     # 1. Redirections (> file, >> file, >| file)
     for m in _SHELL_REDIRECT_TARGET_RE.finditer(cmd):
         target = m.group(1) or m.group(2) or m.group(3) or ""
         base = os.path.basename(target.strip().rstrip("/"))
         if base in named:
             hits.add(base)
+        else:
+            hits |= _expand_var_hits(target)
 
     segments = _split_shell_segments(cmd) or [cmd]
     for seg in segments:
-        seg_hits = _basename_hits(seg)
+        seg_hits = _expand_var_hits(seg)
         if not seg_hits:
             continue
         # 2. In-place editors (sed -i, perl -pi)
@@ -4020,7 +4110,7 @@ def _protected_shell_write_decision(cmd: str) -> Optional[Tuple[str, str]]:
 
     # 4. Interpreter snippets (python -c / heredocs) that open protected files for writing
     if _PY_WRITE_RE.search(cmd):
-        hits |= _basename_hits(cmd)
+        hits |= _expand_var_hits(cmd)
 
     if not hits:
         return None
@@ -4038,6 +4128,151 @@ def _protected_shell_write_decision(cmd: str) -> Optional[Tuple[str, str]]:
     )
 
 
+_EXTLESS_TOK_RE = re.compile(r"(?:'([^']+)'|\"([^\"]+)\"|([^\s;|&<>()'\"]+))")
+
+
+def _is_direct_rest_mutate_cmd(cmd: str) -> bool:
+    """True when cmd performs a direct REST/HTTP Google Ads mutation (including $VAR URL indirection)."""
+    if not cmd:
+        return False
+    if "googleads.googleapis.com" in cmd:
+        return bool(
+            _DIRECT_REST_MUTATE_RE.search(cmd) or _DIRECT_REST_ACTION_RE.search(cmd)
+        )
+    if (
+        "curl" not in cmd
+        and "wget" not in cmd
+        and "http" not in cmd
+        and "CURL" not in cmd
+        and "WGET" not in cmd
+    ):
+        return False
+    if _HTTP_CLIENT_RE.search(cmd) and _DIRECT_REST_ACTION_RE.search(cmd):
+        if "googleads" in cmd.lower() or "$" in cmd:
+            return True
+    return False
+
+
+def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
+    """Verifies via Python AST that every Google Ads mutation call receives validate_only=True.
+
+    Defeats decoy `validate_only = True` lines that are not wired into the actual mutate call.
+    Returns False (fail closed) on parse errors, any validate_only=False, or any mutation call
+    missing an explicit validate_only=True binding.
+    """
+    import ast as _ast
+
+    def _is_true_expr(node: _ast.AST, safe_vars: set[str]) -> bool:
+        if isinstance(node, _ast.Constant) and node.value is True:
+            return True
+        if isinstance(node, _ast.Name) and node.id in safe_vars:
+            return True
+        if (
+            isinstance(node, _ast.UnaryOp)
+            and isinstance(node.op, _ast.Not)
+            and isinstance(node.operand, _ast.Attribute)
+            and node.operand.attr == "execute"
+        ):
+            return True
+        return False
+
+    total_mut_calls = 0
+    for blob in source_blobs:
+        if not blob or not MUTATION_CALL_PATTERN.search(_COMMENT_LINE_RE.sub("", blob)):
+            continue
+        try:
+            tree = _ast.parse(blob)
+        except SyntaxError:
+            return False
+
+        safe_bool_vars: set[str] = set()
+        tainted_bool_vars: set[str] = set()
+        safe_request_objs: set[str] = set()
+        tainted_request_objs: set[str] = set()
+
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Assign):
+                for tgt in node.targets:
+                    if isinstance(tgt, _ast.Name):
+                        if _is_true_expr(node.value, safe_bool_vars):
+                            safe_bool_vars.add(tgt.id)
+                        else:
+                            tainted_bool_vars.add(tgt.id)
+                    elif isinstance(tgt, _ast.Attribute) and tgt.attr == "validate_only":
+                        if isinstance(tgt.value, _ast.Name):
+                            if _is_true_expr(node.value, safe_bool_vars):
+                                safe_request_objs.add(tgt.value.id)
+                            else:
+                                tainted_request_objs.add(tgt.value.id)
+                        elif not (isinstance(node.value, _ast.Constant) and node.value.value is True):
+                            return False
+            elif isinstance(node, _ast.AnnAssign) and node.value is not None:
+                tgt = node.target
+                if isinstance(tgt, _ast.Name):
+                    if _is_true_expr(node.value, safe_bool_vars):
+                        safe_bool_vars.add(tgt.id)
+                    else:
+                        tainted_bool_vars.add(tgt.id)
+
+        safe_bool_vars -= tainted_bool_vars
+        safe_request_objs -= tainted_request_objs
+
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.Call):
+                continue
+            call_name = ""
+            if isinstance(node.func, _ast.Attribute):
+                call_name = node.func.attr
+            elif isinstance(node.func, _ast.Name):
+                call_name = node.func.id
+            if not call_name or not MUTATION_CALL_PATTERN.search(f".{call_name}("):
+                continue
+            total_mut_calls += 1
+            kw_map = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+            if "validate_only" in kw_map:
+                if not _is_true_expr(kw_map["validate_only"], safe_bool_vars):
+                    return False
+                continue
+            req_node = kw_map.get("request") or (node.args[0] if node.args else None)
+            if isinstance(req_node, _ast.Name) and req_node.id in safe_request_objs:
+                continue
+            return False
+
+    return total_mut_calls > 0
+
+
+def _collect_extensionless_python_scripts(
+    cmd: str, workspace_cwd: Optional[str]
+) -> list[str]:
+    """Finds directly invoked extensionless executable Python scripts (e.g., ./saved/code/live)."""
+    if "/" not in cmd and "\\" not in cmd:
+        return []
+    found: list[str] = []
+    for raw_tok in _EXTLESS_TOK_RE.findall(cmd):
+        tok = (raw_tok[0] or raw_tok[1] or raw_tok[2] or "").strip()
+        if not tok or tok.startswith("-") or tok.endswith((".py", ".sh", ".bash")):
+            continue
+        if "/" not in tok and "\\" not in tok:
+            continue
+        if tok.startswith(("http://", "https://")):
+            continue
+        resolved = _resolve_candidate_script_path(tok, workspace_cwd)
+        if not resolved or not os.path.isfile(resolved):
+            continue
+        try:
+            with open(resolved, "rb") as f:
+                head = f.read(4096)
+            if b"\x00" in head:
+                continue
+            text_head = head.decode("utf-8", errors="ignore")
+            first_line = text_head.splitlines()[0] if text_head.splitlines() else ""
+            if ("python" in first_line and first_line.startswith("#!")) or MUTATION_CALL_PATTERN.search(text_head):
+                found.append(resolved)
+        except OSError:
+            continue
+    return found
+
+
 def evaluate_mutation_guard(
     cmd: str,
     hook_context: Optional[Dict[str, Any]] = None,
@@ -4047,12 +4282,19 @@ def evaluate_mutation_guard(
     if not cmd:
         return "allow", None
 
-    if "googleads.googleapis.com" in cmd and _DIRECT_REST_MUTATE_RE.search(cmd):
+    if _is_direct_rest_mutate_cmd(cmd):
         return (
             "deny",
             "BLOCKED BY HITL MUTATION GUARD: Direct REST/HTTP Google Ads API mutations via shell tools "
             "are prohibited. Use skills/execute-mutation/scripts/run_mutation.py with the mandatory "
             "4-Step HITL protocol.",
+        )
+
+    if _EXEC_TARGET_FLAG_RE.search(cmd):
+        return (
+            "deny",
+            "BLOCKED BY HITL MUTATION GUARD: Direct invocation of internal '--_exec-target' mode is prohibited. "
+            "Use run_mutation.py with '--dry-run' and '--execute'.",
         )
 
     effective_ws = workspace_cwd or _extract_workspace_cwd(hook_context)
@@ -4062,11 +4304,11 @@ def evaluate_mutation_guard(
     if protected_write is not None and protected_write[0] == "deny":
         return protected_write
 
-    # Gate CLI self-modification enabling live mutations via config_init.py
+    # Gate CLI self-modification via config_init.py (mutating flags require confirmation)
     if "config_init.py" in cmd and _SET_EXEC_MUTATES_TRUE_RE.search(cmd):
         return (
             "force_ask",
-            "⚠️ ENABLE LIVE MUTATIONS: Confirm enabling live mutation configuration in config/assistant_config?",
+            "⚠️ PROTECTED CONFIGURATION CHANGE: Confirm modifying Google Ads Assistant configuration via config_init.py?",
         )
     if protected_write is not None:
         return protected_write
@@ -4115,9 +4357,7 @@ def evaluate_mutation_guard(
                 try:
                     with open(resolved_sh, "r", encoding="utf-8") as sf:
                         sh_text = sf.read()
-                    if "googleads.googleapis.com" in sh_text and _DIRECT_REST_MUTATE_RE.search(
-                        sh_text
-                    ):
+                    if _is_direct_rest_mutate_cmd(sh_text):
                         return (
                             "deny",
                             "BLOCKED BY HITL MUTATION GUARD: Direct REST/HTTP Google Ads API mutations "
@@ -4128,8 +4368,9 @@ def evaluate_mutation_guard(
                     pass
 
     effective_cmd = cmd + ("\n" + "\n".join(sh_blobs) if sh_blobs else "")
+    extensionless_py = _collect_extensionless_python_scripts(effective_cmd, effective_ws)
 
-    if not any(
+    if not extensionless_py and not any(
         tok in effective_cmd
         for tok in ("python", "python3", "run_mutation.py", ".py")
     ):
@@ -4177,7 +4418,7 @@ def evaluate_mutation_guard(
                 "a live validate_only=True Google Ads API call?",
             )
 
-        if "--execute" in effective_cmd:
+        if _EXECUTE_FLAG_RE.search(effective_cmd):
             if not is_execute_mutates_enabled():
                 return (
                     "deny",
@@ -4192,13 +4433,17 @@ def evaluate_mutation_guard(
             )
             return ("force_ask", message) if ok else ("deny", message)
 
-    # 2. Direct execution of a .py script, python -m module, or python -c snippet
+    # 2. Direct execution of a .py script, extensionless Python script, python -m module, or python -c snippet
     script_candidates = _PY_FILE_ARG_RE.findall(effective_cmd)
     py_files: list[str] = []
     for grp in script_candidates:
         candidate = grp[0] or grp[1] or grp[2]
         if candidate and os.path.basename(candidate) not in _READONLY_SKILL_SCRIPTS_SET:
             py_files.append(candidate)
+
+    for ext_py in extensionless_py:
+        if ext_py not in py_files:
+            py_files.append(ext_py)
 
     for mod_name in _PY_MODULE_ARG_RE.findall(effective_cmd):
         if mod_name not in ("pytest", "ruff", "mypy", "flake8", "pip", "venv", "json.tool"):
@@ -4210,6 +4455,8 @@ def evaluate_mutation_guard(
                     break
 
     code_blobs: list[str] = [effective_cmd]
+    file_code_blobs: list[str] = []
+    resolved_scripts: list[str] = []
     resolved_target_script: Optional[str] = None
     gads_root = _trusted_gads_dir_root(cmd)
     unverifiable: list[str] = []
@@ -4218,9 +4465,13 @@ def evaluate_mutation_guard(
         resolved_py = _resolve_candidate_script_path(expanded_py, effective_ws)
         if resolved_py and os.path.isfile(resolved_py):
             resolved_target_script = resolved_py
+            if resolved_py not in resolved_scripts:
+                resolved_scripts.append(resolved_py)
             try:
                 with open(resolved_py, "r", encoding="utf-8") as f:
-                    code_blobs.append(f.read())
+                    src = f.read()
+                    code_blobs.append(src)
+                    file_code_blobs.append(src)
             except OSError:
                 pass
         elif "$" in py_file:
@@ -4240,6 +4491,14 @@ def evaluate_mutation_guard(
     if not MUTATION_CALL_PATTERN.search(uncommented_code):
         return "allow", None
 
+    # Block multi-script chaining when any script executes a Google Ads mutation (prevents receipt shadowing)
+    if len(resolved_scripts) > 1:
+        return (
+            "deny",
+            "BLOCKED BY HITL MUTATION GUARD: Chaining multiple Python scripts in a single command "
+            "with a Google Ads mutation is prohibited. Run the mutation script alone via run_mutation.py.",
+        )
+
     del_ok, del_err, _ = _check_prohibited_deletion_for_hook(
         script_path=resolved_target_script,
         code_text=uncommented_code,
@@ -4255,18 +4514,69 @@ def evaluate_mutation_guard(
         return "deny", limits_err
 
     # A Google Ads mutation method is present in the executed code.
-    explicit_execute_flag = "--execute" in cmd
-    sanitized_for_vo = _HELP_KW_RE.sub("", uncommented_code)
-
-    has_validate_only_true = bool(_VALIDATE_ONLY_TRUE_RE.search(sanitized_for_vo))
-    has_validate_only_false = bool(_VALIDATE_ONLY_FALSE_RE.search(sanitized_for_vo))
+    explicit_execute_flag = bool(_EXECUTE_FLAG_RE.search(cmd))
+    has_validate_only_false = bool(_VALIDATE_ONLY_FALSE_RE.search(_HELP_KW_RE.sub("", uncommented_code)))
     has_non_validate_only_call = bool(_NON_VALIDATE_ONLY_CALL_RE.search(uncommented_code))
 
+    # Extract any inline `python -c "..."` code for AST verification alongside script files
+    ast_blobs = list(file_code_blobs)
+    if not ast_blobs:
+        for cm in re.finditer(r"\s-c\s+(?:'([^']*)'|\"([^\"]*)\")", cmd):
+            snippet = cm.group(1) if cm.group(1) is not None else (cm.group(2) or "")
+            if snippet.strip():
+                ast_blobs.append(snippet)
+
+    # Trusted built-in creation/filter skill scripts honor --dry-run (validate_only=True)
+    # when invoked without --execute / --ex* and without chained segments.
+    _builtin_dry_run_names = frozenset(
+        {
+            "create_account.py",
+            "create_campaign.py",
+            "create_ad_group.py",
+            "create_ad.py",
+            "create_pmax_webpage_filter.py",
+        }
+    )
+    is_trusted_builtin_dry_run = False
     if (
-        has_validate_only_true
+        len(resolved_scripts) == 1
+        and resolved_target_script
+        and os.path.basename(resolved_target_script) in _builtin_dry_run_names
+        and "--dry-run" in cmd
+        and not explicit_execute_flag
+        and len(segments) <= 1
+    ):
+        real_target = os.path.realpath(resolved_target_script)
+        plugin_roots = [
+            os.path.realpath(os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))),
+            *(
+                os.path.realpath(os.path.abspath(os.path.expanduser(p.strip())))
+                for p in (
+                    os.environ.get("PLUGIN_ROOT", ""),
+                    os.environ.get("CLAUDE_PLUGIN_ROOT", ""),
+                    os.environ.get("GOOGLE_ADS_ASSISTANT_DIR", ""),
+                )
+                if p and p.strip()
+            ),
+        ]
+        for pr in plugin_roots:
+            skills_root = os.path.realpath(os.path.join(pr, "skills"))
+            try:
+                if os.path.commonpath([real_target, skills_root]) == skills_root:
+                    is_trusted_builtin_dry_run = True
+                    break
+            except ValueError:
+                continue
+
+    if is_trusted_builtin_dry_run:
+        return "allow", None
+
+    if (
+        ast_blobs
         and not has_validate_only_false
         and not has_non_validate_only_call
         and not explicit_execute_flag
+        and _is_strictly_ast_validate_only_true(ast_blobs)
     ):
         return "allow", None
 
@@ -4324,7 +4634,7 @@ def _should_run_first_prompt_parity(input_data: Dict[str, Any]) -> bool:
 
 
 _CLAUDE_PERMISSION_DECISIONS = {"allow": "allow", "deny": "deny", "force_ask": "ask", "ask": "ask"}
-_EXECUTE_FLAG_RE = re.compile(r"(?<!\S)--execute(?:=\S*)?(?!\S)")
+_EXECUTE_FLAG_RE = re.compile(r"(?<!\S)--ex(?:e(?:c(?:u(?:t(?:e)?)?)?)?)?(?:=\S*)?(?!\S)")
 
 
 def _format_pretooluse_response(
@@ -4439,7 +4749,11 @@ def _resolve_hook_plugin_root() -> str:
             if os.path.isdir(cand):
                 plugin_root = cand
                 break
-    env_dir = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.environ.get("GOOGLE_ADS_ASSISTANT_DIR")
+    env_dir = (
+        os.environ.get("PLUGIN_ROOT")
+        or os.environ.get("CLAUDE_PLUGIN_ROOT")
+        or os.environ.get("GOOGLE_ADS_ASSISTANT_DIR")
+    )
     if env_dir and os.path.isdir(env_dir):
         plugin_root = os.path.abspath(env_dir)
     return plugin_root
@@ -4514,39 +4828,88 @@ def _log_execute_failure_for_hook(
         return None
 
 
-def handle_hook() -> int:
-    """Handles Antigravity and Claude Code CLI lifecycle hooks (PreInvocation, SessionStart,
+def _load_concise_rules_text() -> str:
+    """Loads condensed core rules from rules/AGENTS.md (capped at 4 KiB) for Claude SessionStart."""
+    plugin_root = _resolve_hook_plugin_root()
+    for rel in (os.path.join("rules", "AGENTS.md"), os.path.join("rules", "google_ads_rules.md")):
+        p = os.path.join(plugin_root, rel)
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return f.read(4096).strip()
+            except OSError:
+                continue
+    return ""
+
+
+def handle_hook(
+    explicit_event: Optional[str] = None,
+    explicit_cli: Optional[str] = None,
+    raw_stdin: Optional[str] = None,
+) -> int:
+    """Handles Antigravity and Claude Code CLI lifecycle hooks (SessionStart, PreInvocation,
     PreToolUse, PostToolUseFailure). Returns the process exit code (2 = Claude Code deny)."""
     input_data: Dict[str, Any] = {}
-    raw_stdin = ""
-    malformed_reason = "BLOCKED BY HITL MUTATION GUARD: Malformed hook JSON payload."
-    if not sys.stdin.isatty():
-        try:
-            raw_stdin = sys.stdin.read()
-            if raw_stdin.strip():
-                parsed = json.loads(raw_stdin)
-                if isinstance(parsed, dict):
-                    input_data = parsed
-                elif "toolCall" in raw_stdin or "tool_input" in raw_stdin:
-                    return _emit_pretooluse_response(
-                        "deny", malformed_reason, "tool_input" in raw_stdin
-                    )
-        except Exception:
-            if "toolCall" in raw_stdin or "tool_input" in raw_stdin:
-                return _emit_pretooluse_response(
-                    "deny", malformed_reason, "tool_input" in raw_stdin
-                )
+    if raw_stdin is None:
+        raw_stdin = ""
+        if not sys.stdin.isatty():
+            try:
+                raw_stdin = sys.stdin.read()
+            except Exception:
+                raw_stdin = ""
 
-    hook_event = str(
-        input_data.get("hook_event_name")
-        or input_data.get("hookEventName")
-        or input_data.get("event")
-        or ""
-    ).strip()
-    is_tool_event = "toolCall" in input_data or "tool_input" in input_data
+    event_hint = (explicit_event or "").strip()
+    is_claude_hint = (
+        (explicit_cli or "").strip().lower() == "claude"
+        or "tool_input" in raw_stdin
+        or "hook_event_name" in raw_stdin
+        or bool(os.environ.get("CLAUDECODE"))
+        or bool(os.environ.get("CLAUDE_CODE"))
+    )
+    is_pretool_hint = (
+        event_hint == "PreToolUse"
+        or "toolCall" in raw_stdin
+        or "tool_input" in raw_stdin
+        or '"PreToolUse"' in raw_stdin
+    )
+    malformed_reason = "BLOCKED BY HITL MUTATION GUARD: Malformed hook JSON payload."
+
+    if raw_stdin.strip():
+        try:
+            parsed = json.loads(raw_stdin)
+            if isinstance(parsed, dict):
+                input_data = parsed
+            elif is_pretool_hint:
+                return _emit_pretooluse_response("deny", malformed_reason, is_claude_hint)
+        except Exception:
+            if is_pretool_hint:
+                return _emit_pretooluse_response("deny", malformed_reason, is_claude_hint)
+    elif is_pretool_hint:
+        return _emit_pretooluse_response(
+            "deny",
+            "BLOCKED BY HITL MUTATION GUARD: Empty PreToolUse hook payload.",
+            is_claude_hint,
+        )
+
+    hook_event = (
+        event_hint
+        or str(
+            input_data.get("hook_event_name")
+            or input_data.get("hookEventName")
+            or input_data.get("event")
+            or ""
+        ).strip()
+    )
+    is_tool_event = (
+        "toolCall" in input_data
+        or "tool_input" in input_data
+        or hook_event == "PreToolUse"
+    )
     is_claude_payload = (
-        "tool_input" in input_data
+        (explicit_cli or "").strip().lower() == "claude"
+        or "tool_input" in input_data
         or "hook_event_name" in input_data
+        or bool(os.environ.get("CLAUDECODE"))
         or bool(os.environ.get("CLAUDE_CODE"))
     )
 
@@ -4557,7 +4920,7 @@ def handle_hook() -> int:
             print(json.dumps({}))
         return 0
 
-    # 1. PreToolUse hook (shell execution & protected file-write interception)
+    # 1. PreToolUse / PostToolUseFailure hook (shell execution & protected file-write interception)
     if is_tool_event:
         tool_call = input_data.get("toolCall", {})
         tool_name = str(
@@ -4576,7 +4939,8 @@ def handle_hook() -> int:
 
         # Check file-write tool calls before touching filesystem credential sync
         target_file = (
-            args.get("TargetFile")
+            args.get("Path")
+            or args.get("TargetFile")
             or args.get("file_path")
             or args.get("path")
             or ""
@@ -4732,7 +5096,11 @@ def handle_hook() -> int:
                 elif os.path.isdir(claude_plugin_dir):
                     plugin_root = claude_plugin_dir
 
-            env_dir = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.environ.get("GOOGLE_ADS_ASSISTANT_DIR")
+            env_dir = (
+                os.environ.get("PLUGIN_ROOT")
+                or os.environ.get("CLAUDE_PLUGIN_ROOT")
+                or os.environ.get("GOOGLE_ADS_ASSISTANT_DIR")
+            )
             if env_dir and os.path.isdir(env_dir):
                 plugin_root = os.path.abspath(env_dir)
 
@@ -4762,8 +5130,12 @@ def handle_hook() -> int:
                 updated_cmd,
             )
 
+            use_cmd_exe_syntax = sys.platform == "win32" and not is_claude
+
             # Case F: skills/<skill_name>/(scripts|references)/<file> and config/config_init.py path resolution
             if any(ptok in updated_cmd for ptok in ("python", ".py")):
+                import shlex as _shlex
+
                 def _resolve_skill_path(match: re.Match) -> str:
                     rel_path = match.group(0)
                     if os.path.exists(rel_path):
@@ -4773,6 +5145,8 @@ def handle_hook() -> int:
                     for candidate_root in (plugin_root, global_plugin_dir, claude_plugin_dir):
                         target = os.path.join(candidate_root, rel_path)
                         if os.path.exists(target):
+                            if any(ch.isspace() for ch in target):
+                                return f'"{target}"' if use_cmd_exe_syntax else _shlex.quote(target)
                             return target
                     return rel_path
 
@@ -4794,25 +5168,36 @@ def handle_hook() -> int:
             escaped_cfg = _escape_dq(config_path)
             escaped_root = _escape_dq(plugin_root)
             escaped_cfg_dir = _escape_dq(os.path.join(plugin_root, "config"))
-
-            # Ensure GOOGLE_ADS_CONFIGURATION_FILE_PATH is exported in the subshell
-            if "GOOGLE_ADS_CONFIGURATION_FILE_PATH" not in updated_cmd:
-                updated_cmd = (
-                    f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{escaped_cfg}" && {updated_cmd}'
-                )
-
-            # Ensure GOOGLE_ADS_ASSISTANT_DIR is exported in the subshell
-            if "GOOGLE_ADS_ASSISTANT_DIR" not in updated_cmd:
-                updated_cmd = (
-                    f'export GOOGLE_ADS_ASSISTANT_DIR="{escaped_root}" && {updated_cmd}'
-                )
-
-            # Ensure PYTHONPATH includes the plugin config directory so sitecustomize.py resolves config/ paths
             plugin_config_dir = os.path.join(plugin_root, "config")
-            if "PYTHONPATH" not in updated_cmd and os.path.isdir(plugin_config_dir):
-                updated_cmd = (
-                    f'export PYTHONPATH="{escaped_cfg_dir}${{PYTHONPATH:+:$PYTHONPATH}}" && {updated_cmd}'
-                )
+
+            if use_cmd_exe_syntax:
+                clean_cfg = config_path.replace("\r", "").replace("\n", "").replace('"', "")
+                clean_root = plugin_root.replace("\r", "").replace("\n", "").replace('"', "")
+                clean_cfg_dir = plugin_config_dir.replace("\r", "").replace("\n", "").replace('"', "")
+                if "GOOGLE_ADS_CONFIGURATION_FILE_PATH" not in updated_cmd:
+                    updated_cmd = f'set "GOOGLE_ADS_CONFIGURATION_FILE_PATH={clean_cfg}" && {updated_cmd}'
+                if "GOOGLE_ADS_ASSISTANT_DIR" not in updated_cmd:
+                    updated_cmd = f'set "GOOGLE_ADS_ASSISTANT_DIR={clean_root}" && {updated_cmd}'
+                if "PYTHONPATH" not in updated_cmd and os.path.isdir(plugin_config_dir):
+                    updated_cmd = f'set "PYTHONPATH={clean_cfg_dir};%PYTHONPATH%" && {updated_cmd}'
+            else:
+                # Ensure GOOGLE_ADS_CONFIGURATION_FILE_PATH is exported in the subshell
+                if "GOOGLE_ADS_CONFIGURATION_FILE_PATH" not in updated_cmd:
+                    updated_cmd = (
+                        f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{escaped_cfg}" && {updated_cmd}'
+                    )
+
+                # Ensure GOOGLE_ADS_ASSISTANT_DIR is exported in the subshell
+                if "GOOGLE_ADS_ASSISTANT_DIR" not in updated_cmd:
+                    updated_cmd = (
+                        f'export GOOGLE_ADS_ASSISTANT_DIR="{escaped_root}" && {updated_cmd}'
+                    )
+
+                # Ensure PYTHONPATH includes the plugin config directory so sitecustomize.py resolves config/ paths
+                if "PYTHONPATH" not in updated_cmd and os.path.isdir(plugin_config_dir):
+                    updated_cmd = (
+                        f'export PYTHONPATH="{escaped_cfg_dir}${{PYTHONPATH:+:$PYTHONPATH}}" && {updated_cmd}'
+                    )
 
             if "command" in args:
                 overwrite["command"] = updated_cmd
@@ -4841,9 +5226,12 @@ def handle_hook() -> int:
     mutates_state_str = "execute_mutates = true" if mutates_enabled else "execute_mutates = false"
 
     if is_first_prompt:
+        # Never perform blocking PyPI/GitHub HTTPS calls on the synchronous hook path;
+        # use fast local site-packages vs client_libs parity (users run sync_client_libs.py
+        # for live upstream release checks).
         parity_info: Dict[str, Any] = check_python_client_lib_parity(
-            check_github=not bool(os.environ.get("PYTEST_CURRENT_TEST")),
-            check_pypi=not bool(os.environ.get("PYTEST_CURRENT_TEST")),
+            check_github=False,
+            check_pypi=False,
         )
 
         active_api_version = (
@@ -4869,8 +5257,8 @@ def handle_hook() -> int:
             f"   (d) Disclose the exact financial/serving/structural consequences to the user and wait for explicit confirmation before calling --execute (which appends to saved/logs/mutation_audit.jsonl).\n"
             f"3. RUNNABLE CODE STORAGE MANDATE: When asked to save code that can be run later, it MUST strictly be saved in the current working directory in a sub-directory called 'saved' (e.g., ./saved/ or ./saved/code/).\n"
             f"4. STARTUP CLIENT LIBRARY & SITE-DIRECTORY PARITY VERIFICATION (FIRST PROMPT ENTRY):\n"
-            f"   - (1) google-ads in site directory vs pypi.org: Installed = {parity_info.get('system_version') or 'NOT INSTALLED'}, Latest PyPI = {parity_info.get('pypi_version') or 'UNKNOWN'}\n"
-            f"   - (2) client_libs/google-ads-python vs GitHub: Local = {parity_info.get('local_version') or 'NOT INSTALLED'}, Latest GitHub = {parity_info.get('github_version') or 'UNKNOWN'}\n"
+            f"   - (1) google-ads in site directory vs pypi.org: Installed = {parity_info.get('system_version') or 'NOT INSTALLED'}, Latest PyPI = {parity_info.get('pypi_version') or 'LOCAL_CHECK_ONLY'}\n"
+            f"   - (2) client_libs/google-ads-python vs GitHub: Local = {parity_info.get('local_version') or 'NOT INSTALLED'}, Latest GitHub = {parity_info.get('github_version') or 'LOCAL_CHECK_ONLY'}\n"
             f"   - (3) Determined Google Ads API Version to use: {active_api_version}\n\n"
             f"   Parity Table:\n{table_markdown}\n\n"
             f"   MANDATORY FIRST-PROMPT DIRECTIVE:\n"
@@ -4879,12 +5267,12 @@ def handle_hook() -> int:
         if parity_info.get("upgrade_prompt_required"):
             msg += (
                 "   Because one or more components are not the latest version, you MUST ask the user if they want to update them before proceeding:\n"
-                "   - If the user replies YES: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system` to install the latest version of google-ads from pypi.org into the site directory, install the latest version of the client library into the site directory, update client_libs/google-ads-python in the Assistant directory structure, update api_version in config/assistant_config (and config/api_version.txt if present) to the latest version, and print the results to the screen.\n"
+                "   - If the user replies YES: run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system` to install the latest version of google-ads from pypi.org into the site directory, update client_libs/google-ads-python in the Assistant directory structure, update api_version in config/assistant_config to the latest version, and print the results to the screen.\n"
                 "   - If the user replies NO: proceed using the currently active versions."
             )
         else:
             msg += (
-                "   All Google Ads components are up to date and match the latest upstream releases. State this, confirm active API version, and proceed directly to answer the user's prompt."
+                "   Local Google Ads components match. State this, confirm active API version, and proceed directly to answer the user's prompt (run sync-client-libs to query live upstream releases)."
             )
     else:
         active_api_version = get_configured_api_version() or detect_latest_api_version()
@@ -4901,12 +5289,14 @@ def handle_hook() -> int:
 
     if is_claude_payload and hook_event == "SessionStart":
         _export_claude_session_env(config_path)
+        rules_text = _load_concise_rules_text()
+        claude_context = f"{msg}\n\n{rules_text}" if rules_text else msg
         print(
             json.dumps(
                 {
                     "hookSpecificOutput": {
                         "hookEventName": "SessionStart",
-                        "additionalContext": msg,
+                        "additionalContext": claude_context,
                     }
                 }
             )
@@ -4928,7 +5318,9 @@ def handle_hook() -> int:
     response_payload = {
         "injectSteps": [
             {
-                "ephemeralMessage": msg,
+                "systemMessage": {
+                    "systemMessage": msg,
+                }
             }
         ]
     }
@@ -4964,13 +5356,28 @@ def main() -> None:
     import argparse
 
     if "--hook" in sys.argv or (not sys.stdin.isatty() and len(sys.argv) == 1):
-        exit_code = handle_hook()
+        explicit_event: Optional[str] = None
+        explicit_cli: Optional[str] = None
+        for idx, tok in enumerate(sys.argv[1:], start=1):
+            if tok == "--event" and idx + 1 < len(sys.argv):
+                explicit_event = sys.argv[idx + 1]
+            elif tok.startswith("--event="):
+                explicit_event = tok.split("=", 1)[1]
+            elif tok == "--cli" and idx + 1 < len(sys.argv):
+                explicit_cli = sys.argv[idx + 1]
+            elif tok.startswith("--cli="):
+                explicit_cli = tok.split("=", 1)[1]
+        exit_code = handle_hook(
+            explicit_event=explicit_event,
+            explicit_cli=explicit_cli,
+        )
         if exit_code:
             sys.exit(exit_code)
         return
 
     parser = argparse.ArgumentParser(
-        description="Initialize config/google-ads.yaml from ~/google-ads.yaml and manage plugin configuration."
+        allow_abbrev=False,
+        description="Initialize config/google-ads.yaml from ~/google-ads.yaml and manage plugin configuration.",
     )
     parser.add_argument("--key", default="login_customer_id", help="Config key to set or verify")
     parser.add_argument("--value", default=None, help="Config value to set")

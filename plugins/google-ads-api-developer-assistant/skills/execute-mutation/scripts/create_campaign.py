@@ -685,6 +685,7 @@ def create_campaign(
 def main() -> None:
     """CLI entrypoint for creating a Google Ads campaign."""
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         description=(
             "Creates a Google Ads campaign (and optional budget) via "
             "GoogleAdsService / CampaignService."

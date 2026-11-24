@@ -103,7 +103,7 @@ The `config/assistant_config` file stores the active API version (`api_version =
 The skill scripts use this order to select the version: the `--api_version` argument, then the `GOOGLE_ADS_API_VERSION` environment variable, then `api_version` in `config/assistant_config`, then the newest version in `client_libs/google-ads-python` or the installed `google-ads` package. Each value must have the form `vNN` (for example, `v24`). An invalid `--api_version` or `GOOGLE_ADS_API_VERSION` value causes an error. The assistant ignores an invalid value in `config/assistant_config` and never writes one.
 
 ### How do I use the assistant with my existing application code?
-Install the plugin globally with `./install.sh agy` or `./install.sh claude`. Then start your Antigravity (`agy`) or Claude Code (`claude`) session inside your application directory, or include your file paths in your prompt. The `PreInvocation` and `PreToolUse` hooks find the global plugin skills and keep your local `./config/assistant_config` settings.
+Install the plugin globally with `./install.sh agy` or `./install.sh claude`. Then start your Antigravity (`agy`) or Claude Code (`claude`) session inside your application directory, or include your file paths in your prompt. The `SessionStart` and `PreToolUse` hooks find the global plugin skills and keep your local `./config/assistant_config` settings.
 
 ---
 

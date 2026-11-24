@@ -272,9 +272,9 @@ enabled = true
 
 ##### When to Use `--disable` and `--enable`
 Because the installer puts the plugin in your global config directory (`~/.gemini/config/plugins/google-ads-api-developer-assistant` for Antigravity and `~/.claude/plugins/...` for Claude Code), the host CLI loads it in **every workspace** by default. When the plugin is on:
-1. **Session Startup (`PreInvocation` Hook):** Your first prompt in each session syncs credentials, checks `pypi.org` and GitHub releases, and shows the **Google Ads API Version & Parity Verification Report** table.
-2. **Context Window & Rules:** The host loads `rules/google_ads_rules.md`, 11 domain skills (`skills/`), and slash commands (`commands/`) into the context window.
-3. **Command Interception (`PreToolUse` Hook) & Background Sidecar:** `config_init.py` checks every terminal command (to set `PYTHONPATH` and apply the 4-Step HITL Mutation Guard), and the host starts the A2A sidecar / MCP server (`sidecar.json` / `mcp_config.json`).
+1. **Session Startup (`SessionStart` Hook):** At session start, `config/hook_guard.py` (delegating to `config/config_init.py`) syncs credentials (`0600`), resolves the active API version locally without blocking on external network calls, and injects the session rule summary.
+2. **Context Window & Rules:** The host loads `rules/AGENTS.md` (auto-loaded in `agy` and injected via `SessionStart` `additionalContext` in Claude Code), 11 domain skills (`skills/`), and slash commands (`commands/`).
+3. **Command, File & MCP Interception (`PreToolUse` Hook) & Background Sidecar:** `config/hook_guard.py` (with `config/config_init.py`) checks shell commands, protected file edits (`write_file`/`edit_file` in `agy`, `Write`/`Edit`/`MultiEdit` in Claude Code), and MCP mutation tool calls (setting `PYTHONPATH` and enforcing the 4-Step HITL Mutation Guard), while the host manages the sandboxed A2A HTTP sidecar (`sidecar.json`) and stdio MCP server (`mcp_config.json` / `.mcp.json`).
 
 When you work on **non-Google Ads repositories**, run `--disable` (`disable`) to turn the plugin off **without uninstalling it** or deleting your `client_libs/` and `config/assistant_config` files. When you return to Google Ads API work, run `--enable` (`enable`) to turn the plugin back on.
 
@@ -283,9 +283,9 @@ Passing `--disable` or `--enable` (to `plugin.sh`, `plugin.ps1`, `update.sh`, `u
 
 | Layer | What `--disable` (`disable`) Does | What `--enable` (`enable`) Does |
 | :--- | :--- | :--- |
-| **1. Configuration (`config/assistant_config`)** | Sets `enabled = false` in `config/assistant_config` and keeps your `api_version`, `customer_id`, and `execute_mutates` values. | Sets `enabled = true` in `config/assistant_config` and keeps all other settings. |
-| **2. Lifecycle Hooks (`config/config_init.py` & `hooks.json`)** | Sets `"enabled": false` in the installed `hooks.json` and causes `handle_hook()` in `config_init.py` to exit immediately:<br>• **`PreInvocation` / `SessionStart`:** Returns `{}` (skips credential sync, PyPI/GitHub checks, and the version table).<br>• **`PreToolUse`:** Returns `{"decision": "allow"}` without changing `PYTHONPATH` or running the mutation guard. | Sets `"enabled": true` in `hooks.json` and restores `PreInvocation` startup sync, version table output, `PYTHONPATH` setup, and `PreToolUse` mutation guard checks. |
-| **3. Installed Plugin, MCP & Sidecar Manifests (`~/.gemini/...` & `~/.claude/...`)** | In installed plugin directories (never in the git repository), renames:<br>• `plugin.json` $\rightarrow$ `plugin.json.disabled`<br>• `.claude-plugin/plugin.json` $\rightarrow$ `.claude-plugin/plugin.json.disabled`<br>• `mcp_config.json` $\rightarrow$ `mcp_config.json.disabled`<br>• `sidecars/google-ads-a2a-service/sidecar.json` $\rightarrow$ `sidecar.json.disabled`<br>This stops `jetski`/`agy` and `claude` from loading the plugin rules, skills, MCP servers, or sidecar daemon on new sessions. | Renames all `.disabled` manifest files back to `plugin.json`, `.claude-plugin/plugin.json`, `mcp_config.json`, and `sidecar.json` so the host CLI loads the plugin on the next session. |
+| **1. Configuration (`config/assistant_config`)** | Sets `enabled = false` in `config/assistant_config` and keeps your `api_version`, `customer_id`, `execute_mutates`, and `allow_tier1_financial_mutates` values. | Sets `enabled = true` in `config/assistant_config` and keeps all other settings. |
+| **2. Lifecycle Hooks (`config/hook_guard.py`, `config/config_init.py` & `hooks.json`)** | Sets `"enabled": false` in the installed `hooks.json` and causes `handle_hook()` to exit immediately:<br>• **`SessionStart`:** Returns `{}` (skips credential sync and session context injection).<br>• **`PreToolUse`:** Returns `{"decision": "allow"}` without changing `PYTHONPATH` or running the mutation guard. | Sets `"enabled": true` in `hooks.json` and restores `SessionStart` sync, `PYTHONPATH` setup, and `PreToolUse` command, file, and MCP mutation guard checks. |
+| **3. Installed Plugin, MCP & Sidecar Manifests (`~/.gemini/...` & `~/.claude/...`)** | In installed plugin directories (never in the git repository), renames:<br>• `plugin.json` $\rightarrow$ `plugin.json.disabled`<br>• `.claude-plugin/plugin.json` $\rightarrow$ `.claude-plugin/plugin.json.disabled`<br>• `mcp_config.json` $\rightarrow$ `mcp_config.json.disabled`<br>• `.mcp.json` $\rightarrow$ `.mcp.json.disabled`<br>• `sidecars/google-ads-a2a-service/sidecar.json` $\rightarrow$ `sidecar.json.disabled`<br>This stops `jetski`/`agy` and `claude` from loading the plugin rules, skills, MCP servers, or sidecar daemon on new sessions. | Renames all `.disabled` manifest files back to `plugin.json`, `.claude-plugin/plugin.json`, `mcp_config.json`, `.mcp.json`, and `sidecar.json` so the host CLI loads the plugin on the next session. |
 
 > **Tip — Single-Session Environment Override:** Set `GOOGLE_ADS_ASSISTANT_ENABLED=false` (or `true`) in your shell environment before you start `agy` or `claude` to turn the plugin hooks off or on for one terminal session without changing files on disk.
 
@@ -381,26 +381,26 @@ python3 plugins/google-ads-api-developer-assistant/config/config_init.py --statu
 
 The assistant includes sync tools to keep your runtime credentials, `config/assistant_config`, local client libraries (`client_libs/`), Protobuf definitions, and system `google-ads` package up to date.
 
-### 1. What Syncs at Session Startup (`config/config_init.py`)
+### 1. What Syncs at Session Startup (`config/hook_guard.py` & `config/config_init.py`)
 
-When you enter your first prompt in Antigravity (`agy`) or Claude Code (`claude`), a lifecycle hook runs `config/config_init.py --hook`. This command syncs your credentials and runs a 5-step version check.
+When a session starts in Antigravity (`agy`) or Claude Code (`claude`), a `SessionStart` lifecycle hook runs `config/hook_guard.py` (delegating to `config/config_init.py`) to sync your credentials locally (`0600`) and verify your local installed API version without blocking on network requests.
 
 The two CLIs load different hook files:
 
-* **Antigravity (`agy`):** The `PreInvocation`, `SessionStart`, and `PreToolUse` entries in [`hooks.json`](plugins/google-ads-api-developer-assistant/hooks.json). The hook command looks for `config/config_init.py` only in the installed plugin directories. If it cannot find the script, it blocks tool calls. Antigravity does not fire `PostToolUseFailure`, and its `PostToolUse` payload has no exit code (`error` is empty even when a command fails), so on Antigravity a failed `run_mutation.py --execute` is recorded only by the `FAILED` audit record that `run_mutation.py` writes itself.
-* **Claude Code (`claude`):** [`hooks/hooks.json`](plugins/google-ads-api-developer-assistant/hooks/hooks.json) (`SessionStart`, `PreToolUse` for `Bash` and `Write|Edit|MultiEdit`, and `PostToolUseFailure` for `Bash`), [`.mcp.json`](plugins/google-ads-api-developer-assistant/.mcp.json), and [`.claude-plugin/plugin.json`](plugins/google-ads-api-developer-assistant/.claude-plugin/plugin.json). The hooks run `${CLAUDE_PLUGIN_ROOT}/config/config_init.py` with `python3`, then `python`, then `py -3`. If Python or the script is missing, the hook exits with code 2, which blocks the tool call. The `SessionStart` hook also writes `GOOGLE_ADS_ASSISTANT_DIR` and `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `CLAUDE_ENV_FILE`, so every `Bash` command in the session has them.
+* **Antigravity (`agy`):** The `SessionStart` and `PreToolUse` entries in [`hooks.json`](plugins/google-ads-api-developer-assistant/hooks.json) covering `run_command`, `write_file|edit_file|...`, and `call_mcp_tool|mcp_.*`. The hook resolves `PLUGIN_ROOT` (then `CLAUDE_PLUGIN_ROOT`, `GOOGLE_ADS_ASSISTANT_DIR`, and installed plugin paths — never untrusted CWD). If `config/hook_guard.py` is missing or stdin is malformed, `PreToolUse` fails closed (`decision: "deny"`). Antigravity does not fire `PostToolUseFailure`, and its `PostToolUse` payload has no exit code (`error` is empty even when a command fails), so on Antigravity a failed `run_mutation.py --execute` is recorded by the `FAILED` audit record that `run_mutation.py` writes itself.
+* **Claude Code (`claude`):** [`hooks/hooks.json`](plugins/google-ads-api-developer-assistant/hooks/hooks.json) (`SessionStart`, `PreToolUse` for `Bash`, `Write|Edit|MultiEdit`, and `mcp__google-ads-api-assistant__*` mutation tools, plus `PostToolUseFailure` for `Bash`), [`.mcp.json`](plugins/google-ads-api-developer-assistant/.mcp.json), and [`.claude-plugin/plugin.json`](plugins/google-ads-api-developer-assistant/.claude-plugin/plugin.json). The hooks run `${CLAUDE_PLUGIN_ROOT}/config/hook_guard.py` with `python3`, then `python`, then `py -3`. If Python or the script is missing, the hook exits with code 2, which blocks the tool call. The `SessionStart` hook also writes `GOOGLE_ADS_ASSISTANT_DIR` and `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `CLAUDE_ENV_FILE`, and injects `rules/AGENTS.md` into `additionalContext`.
 
-The guard returns `deny` or `ask` in the format of each CLI. In Claude Code, a `deny` also exits with code 2. When the guard has no objection, it does not approve the command for you: your Claude Code permission rules still apply.
+The guard returns `deny` or `ask` (`force_ask` in `agy`) in the format of each CLI. In Claude Code, a `deny` also exits with code 2. When the guard has no objection, it does not approve the command for you: your Claude Code permission rules still apply.
 
-The 5-step version check:
+The 5-step version check (local parity at `SessionStart`, and upstream PyPI/GitHub checks on demand via `/sync-client-libs` or `sync_client_libs.py --check_only`):
 
 | Startup Step | Execution Mode | What Happens | What Changes |
 | :--- | :--- | :--- | :--- |
 | **Credential Sync & `api_version` Lookup** (`sync_and_set_config_kv` & `detect_latest_api_version`) | **Automatic** (Every session start) | Reads your `$HOME` config (`~/google-ads.yaml`, `~/google_ads_php.ini`, `~/google_ads_config.rb`, `~/ads.properties`, or `.NET` `App.config` / `appsettings.json`), writes `config/google-ads.yaml` (`0600` permissions) with `use_proto_plus: True` and `ads_assistant: <version>`, exports `GOOGLE_ADS_CONFIGURATION_FILE_PATH`, checks `v<N>` directories in `client_libs/google-ads-python` and `google.ads.googleads.__path__`, and updates `api_version` in `config/assistant_config` when a newer version is installed. | `config/google-ads.yaml` and `config/assistant_config` (Never changes your `$HOME` config) |
-| **Step 1 — Check Python Site-Directory Version Against PyPI** (`detect_system_package_version` / `fetch_latest_pypi_python_version`) | **Automatic** (Read-only check) | Checks `google-ads` in `site.getsitepackages()` (`importlib.metadata.version("google-ads")`) and queries `pypi.org` (`https://pypi.org/pypi/google-ads/json`) for the latest release. | None (Read-only check) |
-| **Step 2 — Check Latest GitHub Release** (`fetch_latest_github_python_version` / `fetch_github_latest_release`) | **Automatic** (Read-only check, 1-hour cache) | Queries the GitHub Releases API (`googleads/google-ads-python/releases/latest`, cached in `$TMPDIR/gads_assistant_github_release.json` for 1 hour) to find the latest client library release. | `$TMPDIR/gads_assistant_github_release.json` |
-| **Step 3 — Select Active API Version & Show Table** (`determine_api_version` & `format_parity_table_markdown`) | **Automatic** (First-prompt display) | Selects the active Google Ads API version from steps 1 and 2, adds the comparison table to the assistant context, and shows the table at the top of the first response. | None (Session display) |
-| **Step 4 — Ask User If Any Version Is Outdated** (`handle_hook` $\rightarrow$ `PreInvocation`) | **Interactive Prompt** (When any version `<` upstream) | If the version in your Python site directory or `client_libs/` is older than `pypi.org` or GitHub, the assistant asks if you want to update before continuing. | None (Waits for your `yes` or `no` reply) |
+| **Step 1 — Check Python Site-Directory Version Against PyPI** (`detect_system_package_version` / `fetch_latest_pypi_python_version`) | **On-Demand** (`/sync-client-libs` or `--check_only`) | Checks `google-ads` in `site.getsitepackages()` (`importlib.metadata.version("google-ads")`) and queries `pypi.org` (`https://pypi.org/pypi/google-ads/json`) for the latest release. | None (Read-only check) |
+| **Step 2 — Check Latest GitHub Release** (`fetch_latest_github_python_version` / `fetch_github_latest_release`) | **On-Demand** (`/sync-client-libs`, 1-hour cache) | Queries the GitHub Releases API (`googleads/google-ads-python/releases/latest`, cached in `$TMPDIR/gads_assistant_github_release.json` for 1 hour) to find the latest client library release. | `$TMPDIR/gads_assistant_github_release.json` |
+| **Step 3 — Select Active API Version & Show Table** (`determine_api_version` & `format_parity_table_markdown`) | **Automatic** (`SessionStart` local check) | Selects the active Google Ads API version locally and injects the session parity table into context via `systemMessage` (`agy`) or `additionalContext` (`claude`). | None (Session display) |
+| **Step 4 — Ask User If Any Version Is Outdated** (`sync_client_libs.py --check_only`) | **Interactive Prompt** (When any version `<` upstream) | If the version in your Python site directory or `client_libs/` is older than `pypi.org` or GitHub, the assistant asks if you want to update before continuing. | None (Waits for your `yes` or `no` reply) |
 | **Step 5 — Upgrade on Confirmation or Keep Current Versions** (`sync_client_libs.py --upgrade_system` / `--check_only`) | **On Confirmation (`Yes`) or Decline (`No`)** | If **Yes**: installs the latest `google-ads` from `pypi.org`, updates `client_libs/google-ads-python`, and updates `api_version` in `config/assistant_config`. If **No**: keeps the installed versions. | Python `site-packages`, `client_libs/`, and `config/assistant_config` (only if you reply `Yes`) |
 
 > **Run the sync directly from your terminal:**
@@ -493,7 +493,8 @@ To prevent schema mismatches or missing fields:
 *   `plugins/google-ads-api-developer-assistant/mcp_config.json`: Model Context Protocol configuration.
 *   `config/`: Workspace configuration directory:
     *   `config/assistant_config`: Unified TOML file that stores `api_version`, `customer_id`, `execute_mutates`, `allow_tier1_financial_mutates`, and `enabled`.
-    *   `config/config_init.py`: Session initializer and `PreInvocation` / `PreToolUse` / `PostToolUseFailure` hook handler.
+    *   `config/hook_guard.py`: Lightweight stdlib `PreToolUse` / `SessionStart` / `PostToolUseFailure` entrypoint enforcing fail-closed HITL, protected-file, and MCP guards with low latency.
+    *   `config/config_init.py`: Session initializer, TOML config manager, and deep command/mutation guard engine.
     *   `config/google-ads.yaml`: Runtime Google Ads API credentials file (`0600` permissions).
 *   `saved/`: Working directory for saved files and scripts:
     *   `saved/` (or `saved/code/`): Executable Python scripts saved for later use.
@@ -529,10 +530,10 @@ A sidecar daemon gives you three benefits:
 
 ### How the Sidecar Is Configured in This Repository
 
-The sidecar is the **Google Ads Agent-to-Agent (A2A) Service** in `plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/`:
-*   **`sidecar.json`**: The sidecar manifest read by Antigravity (`command: "python3"`, `args: ["server.py"]`, `restart_policy: "always"`).
-*   **`mcp_config.json`**: The MCP server configuration that registers `google-ads-api-assistant` at `http://127.0.0.1:8900`.
-*   **`server.py`**: The Python HTTP server (`A2AHandler` / `HTTPServer`) that handles health checks and task requests.
+The sidecar is the **Google Ads Agent-to-Agent (A2A) & MCP Service** in `plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/`:
+*   **`sidecar.json`**: The sandboxed sidecar manifest read by Antigravity (`command: "python3"`, `args: ["server.py"]`, `restart_policy: "always"`, narrow `sandbox.allowed_http_hosts`).
+*   **`mcp_config.json` (`agy`) & `.mcp.json` (`Claude Code`)**: Register the `google-ads-api-assistant` stdio MCP server (`python3 ${PLUGIN_ROOT}/sidecars/google-ads-a2a-service/server.py --mcp` / `${CLAUDE_PLUGIN_ROOT}/... --mcp`).
+*   **`server.py`**: Dual-mode Python server supporting JSON-RPC 2.0 MCP over stdio (`--mcp`) and loopback HTTP A2A tasks (`A2AHandler` / `HTTPServer`).
 
 ### How the Host Manages the Sidecar Lifecycle
 
@@ -574,12 +575,14 @@ The sidecar exposes two HTTP endpoints on `http://127.0.0.1:8900`:
 
 | Intent | Function |
 | :--- | :--- |
-| **`GAQL_VALIDATE`** | Runs static analysis checks on a GAQL query. It blocks `OR` operators, rejects `FROM` clauses in `GoogleAdsFieldService` metadata queries, and blocks invalid `segments.hour_of_day` in favor of `segments.hour`. |
-| **`INSPECT_OBJECT`** | Returns Protobuf resource metadata and selectable fields for a `resource` and `api_version`. |
-| **`GENERATE_CODE`** | Generates `ruff`-checked Python code that calls `GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version=...)` and catches `GoogleAdsException`. |
-| **`TROUBLESHOOT_CONVERSIONS`** | Runs offline conversion upload checks (`offline_conversion_upload_client_summary` and `conversion_time > click_time` validation) for a `customer_id`. |
-| **`PREPARE_MUTATION`** | Runs Steps 2 and 3 of the 4-Step HITL Mutation Protocol with `skills/execute-mutation/scripts/run_mutation.py`: writes a SHA-256 `validate_only=True` dry-run receipt to `saved/data/last_dry_run.json`, writes `DRY_RUN_VERIFIED` to `saved/logs/mutation_audit.jsonl`, and returns the **Mutation & Consequence Verification Card** (`status: "HITL_CONFIRMATION_REQUIRED"`). |
-| **`EXECUTE_MUTATION`** | Enforces Step 4 of the HITL Mutation Protocol: checks `user_confirmed=True`, a non-empty `confirmation_summary`, `execute_mutates = true` in `config/assistant_config`, and a valid matching SHA-256 receipt in `saved/data/last_dry_run.json` before marking the receipt `EXECUTED` and logging the execution in `saved/logs/mutation_audit.jsonl`. |
+| **`GAQL_VALIDATE`** | Runs static analysis checks on a GAQL query (and optional live `validate_only=True` dry-run via `run_live_dry_run=true`). Blocks `OR` operators, rejects `FROM` clauses in `GoogleAdsFieldService` metadata queries, and blocks invalid `segments.hour_of_day` in favor of `segments.hour`. |
+| **`INSPECT_OBJECT`** | Returns Protobuf resource metadata and selectable fields for a `resource_name` and `api_version`. |
+| **`TROUBLESHOOT_CONVERSIONS`** | Validates an offline conversion upload CSV (`csv_path`, confined to workspace/`saved/`) or runs live account conversion upload diagnostics (`troubleshoot_conversions.py`) for a `customer_id`. |
+| **`PREPARE_MUTATION`** | Executes a real `validate_only=True` dry-run via `run_mutation.py` for a `saved/code/*.py` script (or records a `record_only` receipt), writes the signed receipt to `saved/data/last_dry_run.json`, and returns the **Mutation & Consequence Verification Card** (`status: "HITL_CONFIRMATION_REQUIRED"`). |
+| **`EXECUTE_MUTATION`** | Enforces Step 4 of the HITL Mutation Protocol: verifies `user_confirmed=True`, `confirmation_summary`, `execute_mutates = true`, Tier 1 financial posture (`allow_tier1_financial_mutates = true`), financial upper limits, and a matching non-`record_only` SHA-256 receipt in `saved/data/last_dry_run.json` before executing or marking the receipt `EXECUTED`. |
+| **`REJECT_MUTATION`** | Invalidates a pending `DRY_RUN_PASSED` receipt for a `saved/code/*.py` script (`status: "REJECTED"`) and logs `HUMAN_REJECTED` to `saved/logs/mutation_audit.jsonl`. |
+| **`CREATE_ACCOUNT` / `CREATE_CAMPAIGN` / `CREATE_AD_GROUP` / `CREATE_AD`** | Defaults to `validate_only=True` (issuing a signed dry-run receipt and consequence card); live `execute=True` enforces `user_confirmed=True`, `execute_mutates = true`, Tier 1 financial posture, financial upper limits, and a matching pending dry-run receipt. |
+| **`GENERATE_CODE`** *(A2A HTTP only)* | Legacy A2A HTTP endpoint returning an AST- and `ruff`-checked starter Python query script (not exposed as an MCP tool). |
 
 ### Run or Test the Sidecar Manually
 

@@ -1,9 +1,11 @@
 ---
 name: execute-mutation
-description: Executes Google Ads API write/mutation operations using the mandatory 4-Step Human-in-the-Loop (HITL) Verification & Consequence Disclosure Protocol (GAQL Before-State lookup, validate_only=True dry-run receipt, consequence matrix evaluation, and hook-gated live execution).
+description: Executes Google Ads API create and update mutations using the mandatory 4-Step Human-in-the-Loop (HITL) Verification & Consequence Disclosure Protocol (GAQL before-state lookup, validate_only=True dry-run receipt, consequence matrix evaluation, and hook-gated live execution). Use for any Google Ads API write, creation, budget/bid update, or status change. Don't use for read-only GAQL queries (use validate-gaql), schema inspection (use inspect-object), or resource deletions (strictly prohibited; update status to PAUSED instead).
 ---
 
 # Execute Mutation Skill (4-Step HITL & Consequence Protocol)
+
+> **Plugin directory:** Every command starts with a `GADS_DIR=...` line that finds the installed plugin: `CLAUDE_PLUGIN_ROOT`, `PLUGIN_ROOT`, or `GOOGLE_ADS_ASSISTANT_DIR` when set, otherwise the Claude Code install (`~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant`) when running in Claude Code or when the Antigravity install (`~/.gemini/config/plugins/google-ads-api-developer-assistant`) is missing. Run both lines together in one command.
 
 When a user requests a write or mutation operation against the Google Ads API (`create`, `update`, `apply_recommendation`, or offline conversion uploads), you MUST follow this 4-step workflow.
 
@@ -25,7 +27,8 @@ Live mutations without both `execute_mutates = true` in `config/assistant_config
 > - Live `--execute` of a Tier 1 mutation is blocked (`BLOCKED_TIER1_READONLY_POSTURE`) by the `PreToolUse` hook, `run_mutation.py`, and the Layer 4 gRPC interceptor until an Account Owner opts in with `allow_tier1_financial_mutates = true` in `config/assistant_config` (separate from, and in addition to, `execute_mutates = true`).
 > - Only enable it when the user explicitly asks for it and confirms they accept live financial changes. Tell the user what the flag allows, get their explicit consent, then run:
 >   ```bash
->   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/config/config_init.py" --allow-tier1-financial-mutates true
+>   GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+>   python3 "$GADS_DIR/config/config_init.py" --allow-tier1-financial-mutates true
 >   ```
 >   The hook asks for confirmation before this command runs. Never edit `config/assistant_config` by other means to turn this flag on, and never enable it on your own initiative. To return to the read-only posture, run the same command with `false`.
 > - When a Tier 1 `--execute` is blocked, explain the Tier 1 rule to the user and ask whether they want to opt in; do not retry or work around the block.
@@ -65,7 +68,8 @@ Evaluate and articulate the exact consequences of the requested change across th
 2. Lint the generated script with `ruff check --fix saved/code/<mutation_name>.py`.
 3. Execute the dry-run via `run_mutation.py` to validate against the Google Ads API and generate the signed verification receipt (`saved/data/last_dry_run.json`):
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
+   GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+   python3 "$GADS_DIR/skills/execute-mutation/scripts/run_mutation.py" \
      --script saved/code/<mutation_name>.py \
      --dry-run \
      --customer-id "<customer_id>" \
@@ -82,18 +86,19 @@ Evaluate and articulate the exact consequences of the requested change across th
 
 1. After `--dry-run` succeeds, present the **Mutation & Consequence Verification Card** output to the user and ask for explicit confirmation, using your CLI's normal way of asking the user a question.
 2. **Wait for the user's response.** Do NOT invoke `--execute` in the same turn as `--dry-run`.
-   - **If the user declines** (says no, cancels, or asks for changes), invalidate the pending receipt and record the rejection in the audit log, then stop. Do not run `--execute`:
+   - **If the user declines** (in chat, or by denying the native CLI confirmation prompt for `--execute`), invalidate the pending receipt and record the rejection in the audit log, then stop. Do not run `--execute`:
      ```bash
-     python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
+     GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+     python3 "$GADS_DIR/skills/execute-mutation/scripts/run_mutation.py" \
        --reject \
        --script saved/code/<mutation_name>.py \
        --rejection-reason "<the user's reason, in their words>"
      ```
-     `--reject` only marks receipts that are still pending (`DRY_RUN_PASSED`) and match `--script`. It writes a `HUMAN_REJECTED` audit record and exits non-zero when no matching pending receipt exists. If the user wants a changed mutation, run a new `--dry-run` after the rejection.
-   - If the user declines the native CLI confirmation prompt that the hook shows for `--execute`, the hook records the rejection itself.
-3. Verify that `config/assistant_config` contains `execute_mutates = true` (or update it via `python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/config/config_init.py" --execute-mutates true` if the user explicitly requests enabling mutations). For a Tier 1 mutation, also check `allow_tier1_financial_mutates = true` (see **Tier 1 Financial Services** above). Once confirmed by the user, execute the live mutation (including `--script-args "..."` if extra CLI arguments were passed during `--dry-run`):
+     `--reject` only marks receipts that are still pending (`DRY_RUN_PASSED`) and match `--script`. It writes a `HUMAN_REJECTED` audit record and exits non-zero when no matching pending receipt exists. Because neither `agy` nor Claude Code fires a hook on human permission denials, always run `--reject` explicitly after a declined native CLI confirmation prompt before proceeding or running a new `--dry-run`.
+3. Verify that `config/assistant_config` contains `execute_mutates = true` (or update it via `python3 "$GADS_DIR/config/config_init.py" --execute-mutates true` if the user explicitly requests enabling mutations). For a Tier 1 mutation, also check `allow_tier1_financial_mutates = true` (see **Tier 1 Financial Services** above). Once confirmed by the user, execute the live mutation (including `--script-args "..."` if extra CLI arguments were passed during `--dry-run`):
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
+   GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+   python3 "$GADS_DIR/skills/execute-mutation/scripts/run_mutation.py" \
      --script saved/code/<mutation_name>.py \
      --execute
    ```
@@ -169,8 +174,9 @@ The skill includes ready-to-use, HITL-compliant creation scripts supporting `--d
 
 1. **Create Account under MCC (`create_account.py`)** — `CustomerService.create_customer_client`
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
-     --script "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_account.py" \
+   GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+   python3 "$GADS_DIR/skills/execute-mutation/scripts/run_mutation.py" \
+     --script "$GADS_DIR/skills/execute-mutation/scripts/create_account.py" \
      --dry-run \
      --customer-id "<mcc_customer_id>" \
      --operation "CustomerService.create_customer_client under MCC <mcc_customer_id>" \
@@ -182,8 +188,9 @@ The skill includes ready-to-use, HITL-compliant creation scripts supporting `--d
    ```
 2. **Create Campaign (`create_campaign.py`)** — `CampaignBudgetService.mutate_campaign_budgets` + `CampaignService.mutate_campaigns`
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
-     --script "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_campaign.py" \
+   GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+   python3 "$GADS_DIR/skills/execute-mutation/scripts/run_mutation.py" \
+     --script "$GADS_DIR/skills/execute-mutation/scripts/create_campaign.py" \
      --dry-run \
      --customer-id "<customer_id>" \
      --operation "CampaignBudgetService + CampaignService.mutate_campaigns" \
@@ -196,8 +203,9 @@ The skill includes ready-to-use, HITL-compliant creation scripts supporting `--d
    > **Tier 1 note:** creating a new budget calls `CampaignBudgetService`, which is Tier 1. The `--dry-run` above works, but `--execute` is blocked until `allow_tier1_financial_mutates = true` is set with the user's explicit consent (see **Tier 1 Financial Services**). To create a campaign without a Tier 1 budget write, pass an existing budget with `--budget-resource-name "customers/<customer_id>/campaignBudgets/<budget_id>"` instead of `--budget-amount-micros`.
 3. **Create Ad Group (`create_ad_group.py`)** — `AdGroupService.mutate_ad_groups`
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
-     --script "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_ad_group.py" \
+   GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+   python3 "$GADS_DIR/skills/execute-mutation/scripts/run_mutation.py" \
+     --script "$GADS_DIR/skills/execute-mutation/scripts/create_ad_group.py" \
      --dry-run \
      --customer-id "<customer_id>" \
      --operation "AdGroupService.mutate_ad_groups under Campaign <campaign_id>" \
@@ -209,8 +217,9 @@ The skill includes ready-to-use, HITL-compliant creation scripts supporting `--d
    ```
 4. **Create Responsive Search Ad (`create_ad.py`)** — `AdGroupAdService.mutate_ad_group_ads`
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/run_mutation.py" \
-     --script "${CLAUDE_PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-$HOME/.gemini/config/plugins/google-ads-api-developer-assistant}}/skills/execute-mutation/scripts/create_ad.py" \
+   GADS_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${GOOGLE_ADS_ASSISTANT_DIR:-}}}"; if [ -z "$GADS_DIR" ]; then GADS_DIR="$HOME/.gemini/config/plugins/google-ads-api-developer-assistant"; if [ -n "${CLAUDECODE:-}" ] || [ ! -d "$GADS_DIR" ]; then GADS_DIR="$HOME/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant"; fi; fi
+   python3 "$GADS_DIR/skills/execute-mutation/scripts/run_mutation.py" \
+     --script "$GADS_DIR/skills/execute-mutation/scripts/create_ad.py" \
      --dry-run \
      --customer-id "<customer_id>" \
      --operation "AdGroupAdService.mutate_ad_group_ads in AdGroup <ad_group_id>" \

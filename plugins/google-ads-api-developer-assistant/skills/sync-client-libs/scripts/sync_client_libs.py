@@ -952,15 +952,22 @@ def update_codebase_via_archive(
                     _write_sync_version_marker(lib_path, tag)
                 return ok
 
-        # 2. Try tarball extraction (validate HTTPS URL first)
+        # 2. Try tarball extraction (validate HTTPS URL and trusted GitHub host first)
         archive_url = (
             tarball_url
             or f"https://github.com/{repo_slug}/archive/refs/tags/{tag}.tar.gz"
         )
         parsed_url = urllib.parse.urlparse(archive_url)
-        if parsed_url.scheme != "https" or not parsed_url.netloc:
+        allowed_archive_hosts = frozenset(
+            {"github.com", "api.github.com", "codeload.github.com"}
+        )
+        if (
+            parsed_url.scheme != "https"
+            or parsed_url.netloc.lower() not in allowed_archive_hosts
+        ):
             print(
-                f"Error: Refusing non-HTTPS archive URL '{archive_url}'.",
+                f"Error: Refusing untrusted or non-HTTPS archive URL '{archive_url}'. "
+                "Only GitHub archive hosts (github.com, api.github.com, codeload.github.com) are permitted.",
                 file=sys.stderr,
             )
             return False
@@ -1424,6 +1431,38 @@ def check_system_package_parity(
     }
 
 
+def _is_verified_googleads_python_checkout(lib_path: str) -> bool:
+    """Returns True only when lib_path is a git checkout with origin under https://github.com/googleads/."""
+    if (
+        not lib_path
+        or not os.path.isdir(lib_path)
+        or not os.path.isfile(os.path.join(lib_path, "pyproject.toml"))
+    ):
+        return False
+    git_cfg = os.path.join(lib_path, ".git", "config")
+    if not os.path.isfile(git_cfg):
+        return False
+    try:
+        with open(git_cfg, "r", encoding="utf-8", errors="ignore") as f:
+            in_origin = False
+            for raw in f:
+                line = raw.strip()
+                if line.startswith("[") and line.endswith("]"):
+                    in_origin = line.lower() in (
+                        '[remote "origin"]',
+                        "[remote 'origin']",
+                    )
+                    continue
+                if in_origin and line.lower().startswith("url"):
+                    _, _, rhs = line.partition("=")
+                    origin_url = rhs.strip()
+                    if origin_url.startswith("https://github.com/googleads/"):
+                        return True
+    except OSError:
+        return False
+    return False
+
+
 def upgrade_system_package(
     package_name: str = "google-ads",
     target_version: Optional[str] = None,
@@ -1491,12 +1530,7 @@ def upgrade_system_package(
                     or getattr(retry_res, "stdout", "")
                     or last_err
                 )
-        if (
-            not ok
-            and lib_path
-            and os.path.isdir(lib_path)
-            and os.path.isfile(os.path.join(lib_path, "pyproject.toml"))
-        ):
+        if not ok and lib_path and _is_verified_googleads_python_checkout(lib_path):
             local_res = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "--upgrade", lib_path],
                 capture_output=True,
@@ -1957,7 +1991,7 @@ def print_table(results: list[dict[str, Any]]) -> None:
                 print(f"  Latest upstream release       : {tgt_v}")
                 print(f"  Site directory path           : {primary_dir}")
                 print(
-                    "  Action: Gemini should alert the user and ask if they "
+                    "  Action: The assistant should alert the user and ask if they "
                     "would like to upgrade."
                 )
                 print("!" * 80)
@@ -1975,10 +2009,11 @@ def print_table(results: list[dict[str, Any]]) -> None:
 def main() -> None:
     """CLI entry point for discovery and updating client_libs."""
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         description=(
             "Automated discovery and update tool for Google Ads client "
             "libraries."
-        )
+        ),
     )
     parser.add_argument(
         "--client_libs_dir",

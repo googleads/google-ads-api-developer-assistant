@@ -48,17 +48,17 @@ PLUGIN_ROOT = os.path.join(
 )
 SKILLS_DIR = os.path.join(PLUGIN_ROOT, "skills")
 COMMANDS_DIR = os.path.join(PLUGIN_ROOT, "commands")
-RULES_PATH = os.path.join(PLUGIN_ROOT, "rules", "google_ads_rules.md")
+RULES_PATH = os.path.join(PLUGIN_ROOT, "rules", "AGENTS.md")
 
 EXPECTED_SKILLS: tuple[str, ...] = (
     "assistant-tutorial",
     "execute-mutation",
-    "explain",
+    "google-ads-explain",
     "ext-version",
     "get-cids-under-mcc",
     "inspect-object",
     "pmax-listing-filter",
-    "step-by-step",
+    "google-ads-step-by-step",
     "sync-client-libs",
     "troubleshoot-conversions",
     "validate-gaql",
@@ -83,14 +83,14 @@ EXPECTED_COMMANDS: tuple[str, ...] = (
 COMMAND_ALIAS_TO_SKILL: dict[str, str] = {
     "assistant-tutorial": "assistant-tutorial",
     "execute-mutation": "execute-mutation",
-    "explain": "explain",
+    "explain": "google-ads-explain",
     "ext-version": "ext-version",
     "get-cids": "get-cids-under-mcc",
     "get-cids-under-mcc": "get-cids-under-mcc",
     "inspect-object": "inspect-object",
     "pmax-filter": "pmax-listing-filter",
     "pmax-listing-filter": "pmax-listing-filter",
-    "step-by-step": "step-by-step",
+    "step-by-step": "google-ads-step-by-step",
     "sync-client-libs": "sync-client-libs",
     "troubleshoot-conversions": "troubleshoot-conversions",
     "validate-gaql": "validate-gaql",
@@ -287,20 +287,29 @@ def route_prompt_to_skill(
         for t in tset:
             doc_freq[t] = doc_freq.get(t, 0) + 1
 
+    def _positive_desc(desc: str) -> str:
+        return re.split(r"\b(?:Don'?t|Do\s+not)\s+use\s+for\b", desc, maxsplit=1, flags=re.IGNORECASE)[0]
+
     num_skills = max(len(catalog), 1)
     for s_name, info in catalog.items():
         score = 0.0
-        if s_name.replace("-", " ") in prompt_lower or s_name in prompt_lower:
+        cmd_names = [c["command"].lstrip("/") for c in info["commands"]]
+        name_phrases = [s_name, s_name.replace("-", " ")] + [
+            p for cn in cmd_names for p in (cn, cn.replace("-", " "))
+        ]
+        if any(p and p in prompt_lower for p in name_phrases):
             score += 8.0
 
         meta_tokens = set(
             _tokenize(
                 s_name
                 + " "
-                + str(info["frontmatter"].get("description", ""))
+                + _positive_desc(str(info["frontmatter"].get("description", "")))
                 + " "
                 + " ".join(
-                    c["command"] + " " + str(c["frontmatter"].get("description", ""))
+                    c["command"]
+                    + " "
+                    + _positive_desc(str(c["frontmatter"].get("description", "")))
                     for c in info["commands"]
                 )
             )
@@ -343,10 +352,10 @@ def grade_response(case: EvalCase, response_text: str) -> tuple[bool, list[str]]
 def build_eval_cases() -> list[EvalCase]:
     """Returns 22 structured evaluation cases covering all 11 skills (2 per skill)."""
     return [
-        # 1. explain (prompt-only skill)
+        # 1. google-ads-explain (prompt-only skill)
         EvalCase(
             case_id="EV-ROUTE-EXP-01",
-            skill="explain",
+            skill="google-ads-explain",
             description="Explain click_view using mandatory 4-section protocol",
             prompt="/explain click_view",
             required_patterns=[
@@ -372,7 +381,7 @@ def build_eval_cases() -> list[EvalCase]:
         ),
         EvalCase(
             case_id="EV-ROUTE-EXP-02",
-            skill="explain",
+            skill="google-ads-explain",
             description="Explain AI Max vs Performance Max with plain-language analogy",
             prompt="Explain the difference between AI Max and Performance Max using an analogy in simple language",
             required_patterns=[
@@ -396,10 +405,10 @@ def build_eval_cases() -> list[EvalCase]:
                 "AI Max upgrades Search campaigns; Performance Max runs ads across all Google channels."
             ),
         ),
-        # 2. step-by-step (prompt-only skill)
+        # 2. google-ads-step-by-step (prompt-only skill)
         EvalCase(
             case_id="EV-ROUTE-SBS-01",
-            skill="step-by-step",
+            skill="google-ads-step-by-step",
             description="Step-by-step workflow breakdown with numbered phases and verification",
             prompt="/step-by-step audit disapproved ads across all child accounts under an MCC",
             required_patterns=[
@@ -422,7 +431,7 @@ def build_eval_cases() -> list[EvalCase]:
         ),
         EvalCase(
             case_id="EV-ROUTE-SBS-02",
-            skill="step-by-step",
+            skill="google-ads-step-by-step",
             description="Step-by-step integration plan for safe campaign budget update",
             prompt="Give me a step-by-step workflow to safely update a campaign budget via the Google Ads API",
             required_patterns=[
@@ -1010,17 +1019,17 @@ def run_offline_checks(
             ]
             for label, pat in required_rules:
                 if not re.search(pat, rules_txt, flags=re.IGNORECASE):
-                    raise AssertionError(f"rules/google_ads_rules.md missing directive: {label}")
+                    raise AssertionError(f"rules/AGENTS.md missing directive: {label}")
 
             # Verify prompt-only skill contracts
-            exp_body = catalog["explain"]["body"]
+            exp_body = catalog["google-ads-explain"]["body"]
             for sec in ("The Big Picture", "Analogy", "Interconnectedness", "Simple Language"):
                 if sec not in exp_body:
-                    raise AssertionError(f"skills/explain/SKILL.md missing section '{sec}'.")
+                    raise AssertionError(f"skills/google-ads-explain/SKILL.md missing section '{sec}'.")
 
-            sbs_body = catalog["step-by-step"]["body"]
+            sbs_body = catalog["google-ads-step-by-step"]["body"]
             if "numbered" not in sbs_body.lower() or "verification" not in sbs_body.lower():
-                raise AssertionError("skills/step-by-step/SKILL.md missing numbered/verification directives.")
+                raise AssertionError("skills/google-ads-step-by-step/SKILL.md missing numbered/verification directives.")
 
             tut_body = catalog["assistant-tutorial"]["body"]
             for req_phrase in (

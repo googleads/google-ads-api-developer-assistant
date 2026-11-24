@@ -576,7 +576,7 @@ def test_skill_md_api_version_documented_as_optional():
 
 def test_commands_and_rules_use_new_path_pattern_and_optional_version():
     commands = sorted((PLUGIN_ROOT / "commands").glob("*.md"))
-    rules = PLUGIN_ROOT / "rules" / "google_ads_rules.md"
+    rules = PLUGIN_ROOT / "rules" / "AGENTS.md"
     for md in [*commands, rules]:
         text = md.read_text(encoding="utf-8")
         assert _OLD_ROOT not in text, md

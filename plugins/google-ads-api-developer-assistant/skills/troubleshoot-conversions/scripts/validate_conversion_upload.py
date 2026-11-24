@@ -303,7 +303,8 @@ def validate_conversion_csv(
 def main() -> None:
     """Parses command line arguments and validates the conversion CSV."""
     parser = argparse.ArgumentParser(
-        description="Validates a conversion upload CSV."
+        allow_abbrev=False,
+        description="Validates a conversion upload CSV.",
     )
     parser.add_argument(
         "--csv_path", required=True, help="Path to the conversion CSV file."

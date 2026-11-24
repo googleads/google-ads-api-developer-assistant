@@ -2024,6 +2024,7 @@ def run_interactive_prompt(
 def build_arg_parser() -> argparse.ArgumentParser:
     """Builds the CLI argument parser for set_financial_limits.py."""
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         description=(
             "Configure upper limits for Google Ads API financial transactions "
             "by Service.field in config/financial_limits. All values must be "
