@@ -97,7 +97,8 @@ fi
 echo "PASS: update.sh --help is valid."
 
 echo "Test 7: update.sh agy --no-git-pull updates Antigravity plugin and preserves allow_tier1_financial_mutates"
-sed -i 's/^allow_tier1_financial_mutates = false$/allow_tier1_financial_mutates = true/' "${AGY_PLUGIN_DIR}/config/assistant_config"
+sed 's/^allow_tier1_financial_mutates = false$/allow_tier1_financial_mutates = true/' "${AGY_PLUGIN_DIR}/config/assistant_config" > "${AGY_PLUGIN_DIR}/config/assistant_config.tmp"
+mv "${AGY_PLUGIN_DIR}/config/assistant_config.tmp" "${AGY_PLUGIN_DIR}/config/assistant_config"
 if ! grep -q '^allow_tier1_financial_mutates = true$' "${AGY_PLUGIN_DIR}/config/assistant_config"; then
   echo "allow_tier1_financial_mutates = true" >> "${AGY_PLUGIN_DIR}/config/assistant_config"
 fi
