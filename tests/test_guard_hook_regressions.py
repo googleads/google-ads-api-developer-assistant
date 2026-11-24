@@ -557,6 +557,16 @@ def test_claude_hooks_json_layout() -> None:
                 assert "enabled" not in hook
 
 
+def test_antigravity_hooks_json_has_no_post_tool_use_failure() -> None:
+    """Antigravity never fires PostToolUseFailure (verified 2026-11-24: failed run_command
+    calls arrive as PostToolUse with an empty "error"), so the agy manifest must not
+    register it."""
+    data = json.loads((PLUGIN_DIR / "hooks.json").read_text(encoding="utf-8"))
+    events = data["config-init"]
+    assert "PostToolUseFailure" not in events
+    assert {"PreToolUse", "SessionStart", "PreInvocation"} <= set(events)
+
+
 def test_claude_mcp_and_manifest_layout() -> None:
     mcp = json.loads((PLUGIN_DIR / ".mcp.json").read_text(encoding="utf-8"))
     server = mcp["mcpServers"]["google-ads-api-assistant"]
