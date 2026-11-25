@@ -174,27 +174,37 @@ def compute_gaql_cache_key(
     """Computes the SHA-256 cache key for query, version, and customer_id."""
     clean_query = query.strip()
     clean_version = _normalize_api_version(api_version)
-    if customer_id is not None:
-        clean_cid = "".join(re.findall(r"\d+", str(customer_id)))
-        if clean_cid:
-            raw = f"{clean_query}|{clean_version}|{clean_cid}"
-            return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    raw = f"{clean_query}|{clean_version}"
+    clean_cid = (
+        "".join(re.findall(r"\d+", str(customer_id)))
+        if customer_id is not None
+        else ""
+    )
+    payload = (
+        [clean_query, clean_version, clean_cid]
+        if clean_cid
+        else [clean_query, clean_version]
+    )
+    raw = json.dumps(payload, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _cache_mem_prefix(resolved_path: str) -> str:
+    """Returns the normalized in-memory cache key prefix for a cache path."""
+    return f"{os.path.normcase(resolved_path)}:"
 
 
 def _get_cache_file_path(cache_path: Optional[str] = None) -> str:
     """Resolves the file path for persistent GAQL validation caching."""
     global _LAST_PYTEST_TEST
     if cache_path:
-        return os.path.abspath(cache_path)
+        return os.path.abspath(os.path.expanduser(cache_path))
 
     env_path = (
         os.environ.get("GAQL_CACHE_PATH", "").strip()
         or os.environ.get("GOOGLE_ADS_GAQL_CACHE_PATH", "").strip()
     )
     if env_path:
-        return os.path.abspath(env_path)
+        return os.path.abspath(os.path.expanduser(env_path))
 
     pytest_current = os.environ.get("PYTEST_CURRENT_TEST")
     if pytest_current:
@@ -268,7 +278,7 @@ def get_cached_validation(
     """Retrieves a cached validation result if present and not expired."""
     resolved_path = _get_cache_file_path(cache_path)
     key = compute_gaql_cache_key(query, api_version, customer_id=customer_id)
-    mem_key = f"{resolved_path}:{key}"
+    mem_key = f"{_cache_mem_prefix(resolved_path)}{key}"
 
     entry = _GAQL_MEMORY_CACHE.get(mem_key)
     disk_data: Optional[dict[str, dict[str, Any]]] = None
@@ -315,7 +325,7 @@ def set_cached_validation(
     """Stores a validation result in both memory and on-disk cache."""
     resolved_path = _get_cache_file_path(cache_path)
     key = compute_gaql_cache_key(query, api_version, customer_id=customer_id)
-    mem_key = f"{resolved_path}:{key}"
+    mem_key = f"{_cache_mem_prefix(resolved_path)}{key}"
 
     resolved_ts = float(timestamp if timestamp is not None else time.time())
     entry: dict[str, Any] = {
@@ -344,96 +354,96 @@ def invalidate_gaql_cache(
     cache_path: Optional[str] = None,
     customer_id: Optional[str] = None,
 ) -> int:
-    """Invalidates cached GAQL validation results.
+    """Invalidates cached GAQL validation results matching all supplied filters.
 
-    - If both `query` and `api_version` are provided, invalidates that entry.
-    - If only `query` is provided, invalidates entries matching that query.
-    - If only `api_version` is provided, invalidates entries for that version.
-    - If neither is provided, clears the entire cache.
+    Filters uniformly across both disk and in-memory caches using whichever of
+    `(query, api_version, customer_id)` are non-None:
+    - When `customer_id` is None, matches entries across all customers
+      (including customer-scoped and unscoped entries).
+    - When `customer_id` is provided, only invalidates entries for that
+      normalized customer ID (further narrowed by `query`/`api_version` if set).
+    - When all three filters are None, clears the entire cache.
 
     Args:
         query: Optional GAQL query string to invalidate.
         api_version: Optional API version string to invalidate.
         cache_path: Optional explicit cache file path.
-        customer_id: Optional customer ID scoping the cache key.
+        customer_id: Optional customer ID scoping the invalidation.
 
     Returns:
         The number of invalidated cache entries.
     """
     resolved_path = _get_cache_file_path(cache_path)
     disk_data = _load_disk_cache(resolved_path)
-    removed = 0
+    prefix = _cache_mem_prefix(resolved_path)
 
-    if query is not None and api_version is not None:
-        key = compute_gaql_cache_key(
-            query, api_version, customer_id=customer_id
+    clean_query = query.strip() if query is not None else None
+    norm_ver = (
+        _normalize_api_version(api_version) if api_version is not None else None
+    )
+    norm_cid: Optional[str] = None
+    if customer_id is not None:
+        norm_cid = "".join(re.findall(r"\d+", str(customer_id)))
+        if not norm_cid:
+            return 0
+
+    if clean_query is None and norm_ver is None and norm_cid is None:
+        # Clear all entries for resolved_path
+        removed_keys = set(disk_data)
+        for mk in list(_GAQL_MEMORY_CACHE):
+            if mk.startswith(prefix):
+                removed_keys.add(mk[len(prefix) :])
+                del _GAQL_MEMORY_CACHE[mk]
+        if disk_data or os.path.isfile(resolved_path):
+            _save_disk_cache(resolved_path, {})
+        return len(removed_keys)
+
+    exact_key: Optional[str] = None
+    if clean_query is not None and norm_ver is not None:
+        exact_key = compute_gaql_cache_key(
+            clean_query, norm_ver, customer_id=norm_cid
         )
-        mem_key = f"{resolved_path}:{key}"
-        in_mem = _GAQL_MEMORY_CACHE.pop(mem_key, None) is not None
-        in_disk = disk_data.pop(key, None) is not None
-        if in_disk:
-            _save_disk_cache(resolved_path, disk_data)
-        return 1 if (in_mem or in_disk) else 0
 
-    prefix = f"{resolved_path}:"
-    if query is not None and api_version is None:
-        clean_query = query.strip()
-        keys_to_delete = [
-            k
-            for k, v in disk_data.items()
-            if isinstance(v, dict) and v.get("query") == clean_query
-        ]
-        for k in keys_to_delete:
+    def _matches_entry(entry_key: str, entry: Any) -> bool:
+        if exact_key is not None and entry_key == exact_key:
+            return True
+        if not isinstance(entry, dict):
+            return False
+        if clean_query is not None and entry.get("query") != clean_query:
+            return False
+        if norm_ver is not None and entry.get("api_version") != norm_ver:
+            return False
+        if norm_cid is not None:
+            raw_cid = entry.get("customer_id")
+            entry_cid = (
+                "".join(re.findall(r"\d+", str(raw_cid)))
+                if raw_cid is not None
+                else ""
+            )
+            if entry_cid != norm_cid:
+                return False
+        return True
+
+    removed_keys = set()
+    disk_changed = False
+    for k in list(disk_data):
+        if _matches_entry(k, disk_data[k]):
             del disk_data[k]
-            _GAQL_MEMORY_CACHE.pop(f"{prefix}{k}", None)
-            removed += 1
-        for mk in list(_GAQL_MEMORY_CACHE):
-            val = _GAQL_MEMORY_CACHE.get(mk)
-            if (
-                mk.startswith(prefix)
-                and isinstance(val, dict)
-                and val.get("query") == clean_query
-            ):
-                del _GAQL_MEMORY_CACHE[mk]
-                if mk[len(prefix) :] not in keys_to_delete:
-                    removed += 1
-        if keys_to_delete:
-            _save_disk_cache(resolved_path, disk_data)
-        return removed
+            removed_keys.add(k)
+            disk_changed = True
 
-    if api_version is not None:
-        norm_ver = _normalize_api_version(api_version)
-        keys_to_delete = [
-            k
-            for k, v in disk_data.items()
-            if isinstance(v, dict) and v.get("api_version") == norm_ver
-        ]
-        for k in keys_to_delete:
-            del disk_data[k]
-            _GAQL_MEMORY_CACHE.pop(f"{prefix}{k}", None)
-            removed += 1
-        for mk in list(_GAQL_MEMORY_CACHE):
-            val = _GAQL_MEMORY_CACHE.get(mk)
-            if (
-                mk.startswith(prefix)
-                and isinstance(val, dict)
-                and val.get("api_version") == norm_ver
-            ):
-                del _GAQL_MEMORY_CACHE[mk]
-                if mk[len(prefix) :] not in keys_to_delete:
-                    removed += 1
-        if keys_to_delete:
-            _save_disk_cache(resolved_path, disk_data)
-        return removed
-
-    # Clear all entries for resolved_path
-    removed_keys = set(disk_data)
     for mk in list(_GAQL_MEMORY_CACHE):
-        if mk.startswith(prefix):
-            removed_keys.add(mk[len(prefix) :])
+        if not mk.startswith(prefix):
+            continue
+        entry_key = mk[len(prefix) :]
+        if entry_key in removed_keys or _matches_entry(
+            entry_key, _GAQL_MEMORY_CACHE.get(mk)
+        ):
             del _GAQL_MEMORY_CACHE[mk]
-    if disk_data or os.path.isfile(resolved_path):
-        _save_disk_cache(resolved_path, {})
+            removed_keys.add(entry_key)
+
+    if disk_changed:
+        _save_disk_cache(resolved_path, disk_data)
     return len(removed_keys)
 
 

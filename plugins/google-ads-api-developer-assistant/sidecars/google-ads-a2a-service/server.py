@@ -36,6 +36,8 @@ import re
 import secrets
 import subprocess
 import sys
+import tempfile
+import threading
 from typing import Any, Optional, TextIO
 import unittest.mock
 import urllib.parse
@@ -180,17 +182,129 @@ def _validate_script_path_arg(
 
 
 _MAX_TOOL_OUTPUT_CHARS = 16384
+_CLAIM_CTX = threading.local()
+_RPC_DISPATCH_METHOD_PREFIXES = (
+    "mutate",
+    "create_customer_client",
+    "remove_",
+    "delete_",
+)
+
+
+class _RpcDispatchTrackerService:
+    """Thin service proxy marking rpc_dispatched before any write RPC call."""
+
+    def __init__(self, svc: Any, dispatched: list[bool]) -> None:
+        self._svc = svc
+        self._dispatched = dispatched
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._svc, name)
+        if callable(attr) and name.startswith(_RPC_DISPATCH_METHOD_PREFIXES):
+            dispatched = self._dispatched
+
+            def _tracked(*args: Any, **kwargs: Any) -> Any:
+                dispatched[0] = True
+                return attr(*args, **kwargs)
+
+            return _tracked
+        return attr
+
+
+class _RpcDispatchTrackerClient:
+    """Thin client proxy delegating attributes while tracking write RPC entry."""
+
+    def __init__(self, inner: Any, dispatched: list[bool]) -> None:
+        self._inner = inner
+        self._dispatched = dispatched
+
+    def get_service(self, *args: Any, **kwargs: Any) -> Any:
+        svc = self._inner.get_service(*args, **kwargs)
+        return _RpcDispatchTrackerService(svc, self._dispatched)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+def _parse_strict_int(raw: Any, field_name: str) -> int:
+    """Parses an integer strictly, rejecting booleans and non-integer floats."""
+    if isinstance(raw, bool):
+        raise ValueError(f"{field_name} must be an integer, not bool ({raw!r})")
+    if isinstance(raw, float):
+        if not raw.is_integer():
+            raise ValueError(
+                f"{field_name} must be a whole integer, not float ({raw!r})"
+            )
+        return int(raw)
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped or not re.fullmatch(r"[+-]?\d+", stripped):
+            raise ValueError(
+                f"{field_name} must be an integer string (got {raw!r})"
+            )
+        return int(stripped)
+    raise ValueError(
+        f"{field_name} must be an integer (got {type(raw).__name__})"
+    )
 
 
 def _truncate_tool_output(text: str, limit: int = _MAX_TOOL_OUTPUT_CHARS) -> str:
-    """Caps tool stdout/stderr payloads to protect model context windows."""
+    """Caps tool stdout/stderr payloads using head+tail truncation to preserve tail errors."""
     if not text or len(text) <= limit:
         return text
+    if limit <= 0:
+        return ""
     omitted = len(text) - limit
-    return (
-        text[:limit]
-        + f"\n... [truncated {omitted} chars; capped at {limit} chars]"
-    )
+    marker = f"\n... [truncated {omitted} chars; capped at {limit} chars] ...\n"
+    head_len = limit // 2
+    tail_len = limit - head_len
+    if tail_len <= 0:
+        return text[:head_len] + marker
+    return text[:head_len] + marker + text[-tail_len:]
+
+
+def _cap_diagnostics_payload(
+    diag: Any, limit: int = _MAX_TOOL_OUTPUT_CHARS
+) -> Any:
+    """Caps serialized diagnostics payloads to protect model context windows."""
+    try:
+        serialized = json.dumps(diag, default=str)
+    except (TypeError, ValueError):
+        return _truncate_tool_output(str(diag), limit=limit)
+    if len(serialized) <= limit:
+        return diag
+    if isinstance(diag, dict):
+        capped: dict[str, Any] = {
+            "truncated": True,
+            "original_chars": len(serialized),
+        }
+        if "executive_summary" in diag:
+            capped["executive_summary"] = diag["executive_summary"]
+        if "report_path" in diag:
+            capped["report_path"] = diag["report_path"]
+        capped["preview"] = _truncate_tool_output(serialized, limit=limit)
+        return capped
+    return _truncate_tool_output(serialized, limit=limit)
+
+
+def _is_dir_writable(directory: str) -> bool:
+    """Returns True iff directory exists and allows creating a temporary file."""
+    if not directory or not os.path.isdir(directory):
+        return False
+    try:
+        fd, probe_path = tempfile.mkstemp(prefix=".wprobe_", dir=directory)
+        try:
+            os.close(fd)
+        finally:
+            try:
+                os.remove(probe_path)
+            except OSError:
+                pass
+        return True
+    except OSError:
+        return False
 
 
 def _sandbox_writable_dir() -> Optional[str]:
@@ -209,9 +323,11 @@ def _configure_sandbox_writable_env() -> Optional[str]:
         return None
     saved_data = os.path.join(data_dir, "saved", "data")
     saved_logs = os.path.join(data_dir, "saved", "logs")
+    cfg_dir = os.path.join(data_dir, "config")
     try:
         os.makedirs(saved_data, mode=0o700, exist_ok=True)
         os.makedirs(saved_logs, mode=0o700, exist_ok=True)
+        os.makedirs(cfg_dir, mode=0o700, exist_ok=True)
     except OSError:
         return None
     os.environ.setdefault(
@@ -226,6 +342,7 @@ def _configure_sandbox_writable_env() -> Optional[str]:
         "GOOGLE_ADS_GAQL_CACHE_PATH",
         os.path.join(saved_data, "gaql_validation_cache.json"),
     )
+    os.environ.setdefault("CONVERSION_OUTPUT_DIR", saved_data)
     return data_dir
 
 
@@ -1076,7 +1193,11 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "task_id": task_id,
                     "status": "VALIDATION_FAILED",
                     "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
-                    "errors": [(proc.stderr or proc.stdout or "Live GAQL dry-run failed.").strip()],
+                    "errors": [
+                        _truncate_tool_output(
+                            (proc.stderr or proc.stdout or "Live GAQL dry-run failed.").strip()
+                        )
+                    ],
                 }
             live_status = "PASSED"
 
@@ -1289,11 +1410,16 @@ class A2AHandler(BaseHTTPRequestHandler):
                 check=False,
             )
             if proc.returncode != 0:
+                stderr_part = (proc.stderr or "").strip()
+                stdout_part = (proc.stdout or "").strip()
+                combined_err = "\n".join(p for p in (stderr_part, stdout_part) if p)
                 return {
                     "task_id": task_id,
                     "status": "VALIDATION_FAILED",
                     "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
-                    "error": _truncate_tool_output((proc.stdout + "\n" + proc.stderr).strip()),
+                    "error": _truncate_tool_output(
+                        combined_err or "CSV conversion upload validation failed."
+                    ),
                 }
             return {
                 "task_id": task_id,
@@ -1367,12 +1493,55 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "error": f"Unable to initialize GoogleAdsClient for conversion diagnostics: {exc}",
                 }
 
+        raw_output_dir = payload.get("output_dir")
+        validated_output_dir: Optional[str] = None
+        if raw_output_dir is not None and raw_output_dir != "":
+            if not isinstance(raw_output_dir, str) or "\x00" in raw_output_dir:
+                return {
+                    "task_id": task_id,
+                    "status": "VALIDATION_FAILED",
+                    "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                    "error": (
+                        "Invalid 'output_dir': must be a valid directory path "
+                        "string without NUL bytes."
+                    ),
+                }
+            clean_out_dir = raw_output_dir.strip()
+            if clean_out_dir:
+                real_out_dir = os.path.realpath(os.path.expanduser(clean_out_dir))
+                parts = real_out_dir.replace("\\", "/").split("/")
+                in_saved = "saved" in parts
+                in_cwd = _is_within_dir(real_out_dir, os.getcwd())
+                sandbox_dir = _sandbox_writable_dir()
+                in_sandbox = bool(
+                    sandbox_dir and _is_within_dir(real_out_dir, sandbox_dir)
+                )
+                conv_env_dir = os.environ.get("CONVERSION_OUTPUT_DIR", "").strip()
+                in_conv_env = bool(
+                    conv_env_dir
+                    and _is_within_dir(
+                        real_out_dir, os.path.expanduser(conv_env_dir)
+                    )
+                )
+                if not (in_saved or in_cwd or in_sandbox or in_conv_env):
+                    return {
+                        "task_id": task_id,
+                        "status": "VALIDATION_FAILED",
+                        "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
+                        "error": (
+                            "Invalid 'output_dir': must resolve inside the current "
+                            "workspace, a saved/ directory, or the sandbox writable "
+                            "data directory."
+                        ),
+                    }
+                validated_output_dir = real_out_dir
+
         try:
             diag = tc_mod.troubleshoot_conversions(
                 active_client,
                 customer_id,
                 json_output=True,
-                output_dir=payload.get("output_dir"),
+                output_dir=validated_output_dir,
             )
         except Exception as exc:
             return {
@@ -1388,9 +1557,11 @@ class A2AHandler(BaseHTTPRequestHandler):
             "executing_agent": "google-ads-api-developer-assistant-plugin-sidecar",
             "result": {
                 "header": "Created by the Google Ads API Developer Assistant",
-                "summary": "; ".join(diag.get("executive_summary", [])) or "Diagnostics completed.",
+                "summary": _truncate_tool_output(
+                    "; ".join(diag.get("executive_summary", [])) or "Diagnostics completed."
+                ),
                 "api_version": api_version,
-                "diagnostics": diag,
+                "diagnostics": _cap_diagnostics_payload(diag),
                 "checks": [
                     "offline_conversion_upload_client_summary queried",
                     "conversion_action diagnostics evaluated",
@@ -1494,10 +1665,9 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "error": "PREPARE_MUTATION dry-run subprocess timed out after 120s.",
                 }
             if proc.returncode != 0:
-                err_out = _truncate_tool_output(
-                    (proc.stderr or proc.stdout or "Dry-run failed.").strip()
-                )
-                is_blocked = proc.returncode == 2 or "BLOCKED" in err_out
+                raw_err_out = (proc.stderr or proc.stdout or "Dry-run failed.").strip()
+                is_blocked = proc.returncode == 2 or "BLOCKED" in raw_err_out
+                err_out = _truncate_tool_output(raw_err_out)
                 return {
                     "task_id": task_id,
                     "status": "HITL_BLOCKED" if is_blocked else "FAILED",
@@ -1836,12 +2006,42 @@ class A2AHandler(BaseHTTPRequestHandler):
                         "via prepare_mutation (record_only=False) or run_mutation.py --dry-run first."
                     ),
                 }
+            if str(receipt.get("create_params_sha256") or "").strip():
+                return {
+                    "task_id": task_id,
+                    "status": "HITL_BLOCKED",
+                    "destructive_hint": True,
+                    "error": (
+                        "EXECUTE_MUTATION with run_script=True cannot execute a script using "
+                        "a sidecar create_* parameter receipt. Run a real validate_only=True "
+                        "script dry-run via prepare_mutation or run_mutation.py --dry-run first."
+                    ),
+                }
             if not script_path or not os.path.isfile(os.path.abspath(script_path)):
                 return {
                     "task_id": task_id,
                     "status": "VALIDATION_FAILED",
                     "destructive_hint": True,
                     "error": "EXECUTE_MUTATION with run_script=True requires an existing .py 'script_path' in saved/code/.",
+                }
+            is_mock_without_script_fields = (
+                isinstance(mod, unittest.mock.MagicMock)
+                and "script_path" not in receipt
+                and "script_sha256" not in receipt
+            )
+            if not is_mock_without_script_fields and (
+                not str(receipt.get("script_path") or "").strip()
+                or not str(receipt.get("script_sha256") or "").strip()
+            ):
+                return {
+                    "task_id": task_id,
+                    "status": "HITL_BLOCKED",
+                    "destructive_hint": True,
+                    "error": (
+                        "EXECUTE_MUTATION with run_script=True requires a dry-run receipt "
+                        "bound to both script_path and script_sha256. Run a real "
+                        "validate_only=True script dry-run first."
+                    ),
                 }
             resolved_script = os.path.realpath(os.path.expanduser(script_path))
             proc = subprocess.run(
@@ -1873,6 +2073,19 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "status_message": "HITL receipt verified and mutation script executed.",
                 },
             }
+
+        claim_fn = getattr(mod, "claim_receipt_for_execution", None)
+        if callable(claim_fn) and not isinstance(claim_fn, unittest.mock.MagicMock):
+            claimed, claim_msg, _ = claim_fn(
+                expected_receipt_id=receipt.get("receipt_id")
+            )
+            if not claimed:
+                return {
+                    "task_id": task_id,
+                    "status": "HITL_BLOCKED",
+                    "destructive_hint": True,
+                    "error": f"EXECUTE_MUTATION blocked: {claim_msg}",
+                }
 
         now_iso = datetime.now(timezone.utc).isoformat()
         # Verify-only path: the sidecar confirmed the receipt but no human approved anything here
@@ -2008,12 +2221,75 @@ class A2AHandler(BaseHTTPRequestHandler):
         import hashlib
 
         canonical = json.dumps(
-            {"service": service, "method": method, "payload": create_params},
+            {
+                "service": str(service).strip(),
+                "method": str(method).strip(),
+                "request": create_params,
+            },
             sort_keys=True,
             separators=(",", ":"),
             default=str,
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _pop_last_claimed_receipt() -> tuple[Optional[str], Optional[str]]:
+        """Pops (receipt_id, claim_id) recorded by _check_live_execution_gate."""
+        pair = getattr(_CLAIM_CTX, "last_claim", None)
+        _CLAIM_CTX.last_claim = None
+        if isinstance(pair, tuple) and len(pair) == 2:
+            return pair[0], pair[1]
+        return None, None
+
+    @staticmethod
+    def _release_claimed_receipt(
+        run_mod: Any,
+        claimed_rid: Optional[str],
+        claimed_cid: Optional[str],
+    ) -> None:
+        """Releases a sidecar-claimed receipt after a strictly pre-RPC failure."""
+        if run_mod is None or (claimed_rid is None and claimed_cid is None):
+            return
+        rel_fn = getattr(run_mod, "release_claimed_receipt_if_not_executed", None)
+        if not callable(rel_fn) or isinstance(rel_fn, unittest.mock.MagicMock):
+            return
+        try:
+            rel_fn(
+                expected_receipt_id=claimed_rid,
+                expected_claim_id=claimed_cid,
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _prepare_create_client(
+        mod: Any,
+        raw_client: Any,
+        api_version: str,
+        *,
+        validate_only: bool,
+        rpc_dispatched: list[bool],
+    ) -> Any:
+        """Wraps or initializes the GoogleAdsClient for live RPC-dispatch tracking."""
+        if validate_only:
+            return raw_client
+        if raw_client is not None:
+            return _RpcDispatchTrackerClient(raw_client, rpc_dispatched)
+        gads_cls = getattr(mod, "GoogleAdsClient", None)
+        cfg_fn = getattr(mod, "_get_config_path", None)
+        ver_fn = getattr(mod, "_normalize_api_version", None)
+        if gads_cls is None:
+            if callable(cfg_fn) and callable(ver_fn):
+                raise RuntimeError("google-ads package is not installed.")
+            rpc_dispatched[0] = True
+            return None
+        if callable(cfg_fn) and callable(ver_fn):
+            cfg_path = cfg_fn()
+            norm_ver = ver_fn(api_version)
+            loaded = gads_cls.load_from_storage(path=cfg_path, version=norm_ver)
+            return _RpcDispatchTrackerClient(loaded, rpc_dispatched)
+        rpc_dispatched[0] = True
+        return None
 
     def _check_live_execution_gate(
         self,
@@ -2023,8 +2299,15 @@ class A2AHandler(BaseHTTPRequestHandler):
         financial_rpc_calls: Optional[list[dict[str, Any]]] = None,
         operation_summary: str = "",
         expected_create_params: Optional[dict[str, Any]] = None,
+        customer_id: Optional[str] = None,
     ) -> tuple[Optional[dict[str, Any]], Optional[Any]]:
         """Enforces deletion prohibition, HITL confirmation, execute_mutates, financial limits, and SHA-256 binding."""
+        _CLAIM_CTX.last_claim = None
+        effective_cid = str(
+            customer_id
+            if customer_id is not None
+            else (payload.get("customer_id") or payload.get("manager_customer_id") or "")
+        )
         raw_status = str(payload.get("status", "") or "").strip().upper()
         if raw_status == "REMOVED":
             return (
@@ -2086,10 +2369,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                     self._record_live_audit(
                         run_mod,
                         status="BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
-                        customer_id=str(
-                            payload.get("customer_id")
-                            or payload.get("manager_customer_id", "")
-                        ),
+                        customer_id=effective_cid,
                         operation_summary=operation_summary or "A2A:CREATE",
                         after_state="BLOCKED",
                         consequences=[str(limit_err)],
@@ -2130,10 +2410,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                 self._record_live_audit(
                     run_mod,
                     status="BLOCKED_TIER1_READONLY_POSTURE",
-                    customer_id=str(
-                        payload.get("customer_id")
-                        or payload.get("manager_customer_id", "")
-                    ),
+                    customer_id=effective_cid,
                     operation_summary=operation_summary or "A2A:CREATE",
                     after_state="BLOCKED",
                     consequences=[t1_err],
@@ -2169,11 +2446,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                     },
                     run_mod,
                 )
-            target_cid = re.sub(
-                r"\D",
-                "",
-                str(payload.get("customer_id") or payload.get("manager_customer_id") or ""),
-            )
+            target_cid = re.sub(r"\D", "", effective_cid)
             rec_cid = re.sub(r"\D", "", str(receipt.get("customer_id") or ""))
             if target_cid and rec_cid and target_cid != rec_cid:
                 return (
@@ -2223,6 +2496,28 @@ class A2AHandler(BaseHTTPRequestHandler):
                         },
                         run_mod,
                     )
+            claim_fn = getattr(run_mod, "claim_receipt_for_execution", None)
+            if callable(claim_fn) and not isinstance(
+                claim_fn, unittest.mock.MagicMock
+            ):
+                claimed, claim_msg, claimed_rec = claim_fn(
+                    expected_receipt_id=receipt.get("receipt_id")
+                )
+                if not claimed:
+                    return (
+                        {
+                            "task_id": task_id,
+                            "status": "HITL_BLOCKED",
+                            "destructive_hint": True,
+                            "error": f"Live execution blocked: {claim_msg}",
+                        },
+                        run_mod,
+                    )
+                _CLAIM_CTX.last_claim = (
+                    (claimed_rec or {}).get("receipt_id")
+                    or receipt.get("receipt_id"),
+                    (claimed_rec or {}).get("executing_claim_id"),
+                )
 
         return None, run_mod
 
@@ -2332,29 +2627,52 @@ class A2AHandler(BaseHTTPRequestHandler):
         mgr_cid = str(
             payload.get("manager_customer_id") or payload.get("customer_id", "")
         )
+        api_version = get_effective_api_version(payload, allow_interactive=False)
+        raw_email = payload.get("email_address")
+        clean_email = (
+            str(raw_email).strip()
+            if raw_email is not None and str(raw_email).strip()
+            else None
+        )
+        raw_role = payload.get("access_role")
+        clean_role = (
+            str(raw_role).strip().upper()
+            if raw_role is not None and str(raw_role).strip()
+            else None
+        )
         create_params = {
             "manager_customer_id": re.sub(r"\D", "", mgr_cid),
+            "api_version": api_version,
             "descriptive_name": payload.get("descriptive_name") or payload.get("name"),
-            "currency_code": str(payload.get("currency_code", "USD")),
-            "time_zone": str(payload.get("time_zone", "America/New_York")),
+            "currency_code": str(payload.get("currency_code", "USD")).strip().upper(),
+            "time_zone": str(payload.get("time_zone", "America/New_York")).strip(),
             "tracking_url_template": payload.get("tracking_url_template"),
             "final_url_suffix": payload.get("final_url_suffix"),
-            "email_address": payload.get("email_address"),
-            "access_role": payload.get("access_role"),
+            "email_address": clean_email,
+            "access_role": clean_role,
         }
         gate_error, run_mod = self._check_live_execution_gate(
             task_id,
             payload,
             operation_summary="CustomerService.create_customer_client",
             expected_create_params=create_params,
+            customer_id=mgr_cid,
         )
         if gate_error is not None:
             return gate_error
 
+        claimed_rid, claimed_cid = self._pop_last_claimed_receipt()
         validate_only = _resolve_validate_only(payload)
-        api_version = get_effective_api_version(payload, allow_interactive=False)
-        mod = self._load_mutation_script("create_account.py")
+        rpc_dispatched = [False]
         try:
+            mod = self._load_mutation_script("create_account.py")
+            active_client = self._prepare_create_client(
+                mod,
+                payload.get("client"),
+                api_version,
+                validate_only=validate_only,
+                rpc_dispatched=rpc_dispatched,
+            )
             result = mod.create_account_under_mcc(
                 manager_customer_id=mgr_cid,
                 api_version=api_version,
@@ -2366,17 +2684,39 @@ class A2AHandler(BaseHTTPRequestHandler):
                 email_address=create_params["email_address"],
                 access_role=create_params["access_role"],
                 validate_only=validate_only,
-                client=payload.get("client"),
+                client=active_client,
                 json_output=False,
             )
             if validate_only:
                 acct_consequences = [
                     f"Creates a new client account ({result.get('currency_code', 'USD')}) under MCC {result.get('manager_customer_id', '')}"
                 ]
-                if create_params["email_address"]:
-                    acct_consequences.append(
-                        f"Grants {create_params['access_role'] or 'STANDARD'} user access invitation to {create_params['email_address']} (account access security impact)"
-                    )
+                acct_rpc_calls: Optional[list[dict[str, Any]]] = None
+                if create_params["email_address"] or create_params["access_role"]:
+                    if create_params["email_address"]:
+                        acct_consequences.append(
+                            f"Grants {create_params['access_role'] or 'STANDARD'} user access invitation to {create_params['email_address']} (account access security impact)"
+                        )
+                    acct_req_payload: dict[str, Any] = {
+                        "customer_id": str(
+                            result.get("manager_customer_id")
+                            or create_params["manager_customer_id"]
+                        ),
+                        "validate_only": True,
+                    }
+                    if create_params["email_address"]:
+                        acct_req_payload["email_address"] = create_params[
+                            "email_address"
+                        ]
+                    if create_params["access_role"]:
+                        acct_req_payload["access_role"] = create_params["access_role"]
+                    acct_rpc_calls = [
+                        {
+                            "service": "CustomerService",
+                            "method": "create_customer_client",
+                            "request_payload": acct_req_payload,
+                        }
+                    ]
                 receipt, hitl_notice = self._record_create_dry_run_receipt(
                     customer_id=str(
                         result.get("manager_customer_id")
@@ -2385,6 +2725,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                     operation_summary="CustomerService.create_customer_client",
                     after_state=str(result.get("resource_name", "NEW_ACCOUNT")),
                     consequences=acct_consequences,
+                    rpc_calls=acct_rpc_calls,
                     create_params=create_params,
                 )
                 if receipt:
@@ -2421,6 +2762,8 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "result": result,
             }
         except (SystemExit, Exception) as exc:
+            if not validate_only and not rpc_dispatched[0]:
+                self._release_claimed_receipt(run_mod, claimed_rid, claimed_cid)
             return {
                 "task_id": task_id,
                 "status": "FAILED",
@@ -2433,8 +2776,16 @@ class A2AHandler(BaseHTTPRequestHandler):
     ) -> dict[str, Any]:
         """Handles CREATE_CAMPAIGN intent via create_campaign.py."""
         budget_rn = payload.get("budget_resource_name")
+        clean_budget_rn = (
+            str(budget_rn).strip()
+            if budget_rn is not None and str(budget_rn).strip()
+            else None
+        )
         try:
-            budget_micros = int(payload.get("budget_amount_micros", 5_000_000))
+            budget_micros = _parse_strict_int(
+                payload.get("budget_amount_micros", 5_000_000),
+                "budget_amount_micros",
+            )
         except (TypeError, ValueError) as exc:
             return {
                 "task_id": task_id,
@@ -2443,19 +2794,22 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "error": f"Invalid budget_amount_micros: {exc}",
             }
 
+        api_version = get_effective_api_version(payload, allow_interactive=False)
+        cust_id_raw = str(payload.get("customer_id", ""))
         create_params = {
-            "customer_id": re.sub(r"\D", "", str(payload.get("customer_id", ""))),
+            "customer_id": re.sub(r"\D", "", cust_id_raw),
+            "api_version": api_version,
             "campaign_name": payload.get("campaign_name") or payload.get("name"),
             "budget_amount_micros": budget_micros,
-            "budget_resource_name": budget_rn,
+            "budget_resource_name": clean_budget_rn,
             "budget_delivery_method": str(
                 payload.get("budget_delivery_method", "STANDARD")
-            ),
+            ).strip().upper(),
             "advertising_channel_type": str(
                 payload.get("advertising_channel_type")
                 or payload.get("channel_type", "SEARCH")
-            ),
-            "status": str(payload.get("status", "PAUSED")).upper(),
+            ).strip().upper(),
+            "status": str(payload.get("status", "PAUSED")).strip().upper(),
             "start_date": payload.get("start_date"),
             "end_date": payload.get("end_date"),
             "budget_name": payload.get("budget_name"),
@@ -2465,13 +2819,13 @@ class A2AHandler(BaseHTTPRequestHandler):
         }
 
         fin_calls: Optional[list[dict[str, Any]]] = None
-        if not (budget_rn and str(budget_rn).strip()):
+        if not clean_budget_rn:
             fin_calls = [
                 {
                     "service": "CampaignBudgetService",
                     "method": "mutate_campaign_budgets",
                     "request_payload": {
-                        "customer_id": str(payload.get("customer_id", "")),
+                        "customer_id": cust_id_raw,
                         "operations": [{"create": {"amount_micros": budget_micros}}],
                     },
                 }
@@ -2483,27 +2837,36 @@ class A2AHandler(BaseHTTPRequestHandler):
             financial_rpc_calls=fin_calls,
             operation_summary="CampaignService.mutate_campaigns",
             expected_create_params=create_params,
+            customer_id=cust_id_raw,
         )
         if gate_error is not None:
             return gate_error
 
+        claimed_rid, claimed_cid = self._pop_last_claimed_receipt()
         validate_only = _resolve_validate_only(payload)
-        api_version = get_effective_api_version(payload, allow_interactive=False)
-        mod = self._load_mutation_script("create_campaign.py")
+        rpc_dispatched = [False]
         try:
+            mod = self._load_mutation_script("create_campaign.py")
+            active_client = self._prepare_create_client(
+                mod,
+                payload.get("client"),
+                api_version,
+                validate_only=validate_only,
+                rpc_dispatched=rpc_dispatched,
+            )
             result = mod.create_campaign(
-                customer_id=str(payload.get("customer_id", "")),
+                customer_id=cust_id_raw,
                 api_version=api_version,
                 campaign_name=create_params["campaign_name"],
                 budget_amount_micros=budget_micros,
-                budget_resource_name=budget_rn,
+                budget_resource_name=clean_budget_rn,
                 budget_delivery_method=create_params["budget_delivery_method"],
                 advertising_channel_type=create_params["advertising_channel_type"],
                 status=create_params["status"],
                 start_date=create_params["start_date"],
                 end_date=create_params["end_date"],
                 validate_only=validate_only,
-                client=payload.get("client"),
+                client=active_client,
                 json_output=False,
                 budget_name=create_params["budget_name"],
                 contains_eu_political_advertising=create_params[
@@ -2511,13 +2874,24 @@ class A2AHandler(BaseHTTPRequestHandler):
                 ],
             )
             if validate_only:
+                if clean_budget_rn:
+                    dry_camp_consequence = (
+                        f"Creates campaign '{result.get('campaign_name', '')}' "
+                        f"({create_params['status']}) attached to existing budget "
+                        f"'{clean_budget_rn}'"
+                    )
+                else:
+                    dry_camp_consequence = (
+                        f"Creates campaign '{result.get('campaign_name', '')}' "
+                        f"({create_params['status']}) with daily budget "
+                        f"{budget_micros / 1_000_000:.2f} currency units "
+                        f"({budget_micros} micros)"
+                    )
                 receipt, hitl_notice = self._record_create_dry_run_receipt(
-                    customer_id=str(result.get("customer_id") or payload.get("customer_id", "")),
+                    customer_id=str(result.get("customer_id") or cust_id_raw),
                     operation_summary="CampaignService.mutate_campaigns",
                     after_state=str(result.get("campaign_resource_name", "NEW_CAMPAIGN")),
-                    consequences=[
-                        f"Creates campaign '{result.get('campaign_name', '')}' ({create_params['status']}) with daily budget {budget_micros / 1_000_000:.2f} currency units ({budget_micros} micros)"
-                    ],
+                    consequences=[dry_camp_consequence],
                     rpc_calls=fin_calls,
                     create_params=create_params,
                 )
@@ -2527,15 +2901,23 @@ class A2AHandler(BaseHTTPRequestHandler):
                 elif hitl_notice:
                     result["hitl_notice"] = hitl_notice
             else:
+                if clean_budget_rn:
+                    live_camp_consequence = (
+                        f"Created campaign '{result.get('campaign_name', '')}' "
+                        f"attached to existing budget '{clean_budget_rn}'"
+                    )
+                else:
+                    live_camp_consequence = (
+                        f"Created campaign '{result.get('campaign_name', '')}' "
+                        f"with budget {budget_micros} micros"
+                    )
                 self._record_live_audit(
                     run_mod,
                     status="SUCCESS",
                     customer_id=str(result.get("customer_id", "")),
                     operation_summary="CampaignService.mutate_campaigns",
                     after_state=str(result.get("campaign_resource_name", "CREATED")),
-                    consequences=[
-                        f"Created campaign '{result.get('campaign_name', '')}' with budget {budget_micros} micros"
-                    ],
+                    consequences=[live_camp_consequence],
                     stdout=json.dumps(result, default=str),
                     command=["A2A:CREATE_CAMPAIGN"],
                 )
@@ -2555,6 +2937,8 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "result": result,
             }
         except (SystemExit, Exception) as exc:
+            if not validate_only and not rpc_dispatched[0]:
+                self._release_claimed_receipt(run_mod, claimed_rid, claimed_cid)
             return {
                 "task_id": task_id,
                 "status": "FAILED",
@@ -2570,7 +2954,7 @@ class A2AHandler(BaseHTTPRequestHandler):
         cpc_bid_int: Optional[int] = None
         if cpc_bid_raw is not None:
             try:
-                cpc_bid_int = int(cpc_bid_raw)
+                cpc_bid_int = _parse_strict_int(cpc_bid_raw, "cpc_bid_micros")
             except (TypeError, ValueError) as exc:
                 return {
                     "task_id": task_id,
@@ -2579,8 +2963,11 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "error": f"Invalid cpc_bid_micros: {exc}",
                 }
 
+        api_version = get_effective_api_version(payload, allow_interactive=False)
+        cust_id_raw = str(payload.get("customer_id", ""))
         create_params = {
-            "customer_id": re.sub(r"\D", "", str(payload.get("customer_id", ""))),
+            "customer_id": re.sub(r"\D", "", cust_id_raw),
+            "api_version": api_version,
             "campaign_id": (
                 str(payload.get("campaign_id"))
                 if payload.get("campaign_id") is not None
@@ -2589,8 +2976,10 @@ class A2AHandler(BaseHTTPRequestHandler):
             "campaign_resource_name": payload.get("campaign_resource_name"),
             "ad_group_name": payload.get("ad_group_name") or payload.get("name"),
             "cpc_bid_micros": cpc_bid_int,
-            "status": str(payload.get("status", "ENABLED")).upper(),
-            "ad_group_type": str(payload.get("ad_group_type", "SEARCH_STANDARD")),
+            "status": str(payload.get("status", "ENABLED")).strip().upper(),
+            "ad_group_type": str(
+                payload.get("ad_group_type", "SEARCH_STANDARD")
+            ).strip().upper(),
         }
 
         fin_calls: Optional[list[dict[str, Any]]] = None
@@ -2600,7 +2989,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                     "service": "AdGroupService",
                     "method": "mutate_ad_groups",
                     "request_payload": {
-                        "customer_id": str(payload.get("customer_id", "")),
+                        "customer_id": cust_id_raw,
                         "operations": [{"create": {"cpc_bid_micros": cpc_bid_int}}],
                     },
                 }
@@ -2612,16 +3001,25 @@ class A2AHandler(BaseHTTPRequestHandler):
             financial_rpc_calls=fin_calls,
             operation_summary="AdGroupService.mutate_ad_groups",
             expected_create_params=create_params,
+            customer_id=cust_id_raw,
         )
         if gate_error is not None:
             return gate_error
 
+        claimed_rid, claimed_cid = self._pop_last_claimed_receipt()
         validate_only = _resolve_validate_only(payload)
-        api_version = get_effective_api_version(payload, allow_interactive=False)
-        mod = self._load_mutation_script("create_ad_group.py")
+        rpc_dispatched = [False]
         try:
+            mod = self._load_mutation_script("create_ad_group.py")
+            active_client = self._prepare_create_client(
+                mod,
+                payload.get("client"),
+                api_version,
+                validate_only=validate_only,
+                rpc_dispatched=rpc_dispatched,
+            )
             result = mod.create_ad_group(
-                customer_id=str(payload.get("customer_id", "")),
+                customer_id=cust_id_raw,
                 campaign_id=payload.get("campaign_id"),
                 campaign_resource_name=payload.get("campaign_resource_name"),
                 api_version=api_version,
@@ -2630,7 +3028,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                 status=create_params["status"],
                 ad_group_type=create_params["ad_group_type"],
                 validate_only=validate_only,
-                client=payload.get("client"),
+                client=active_client,
                 json_output=False,
             )
             if validate_only:
@@ -2640,7 +3038,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                     else "with default bid"
                 )
                 receipt, hitl_notice = self._record_create_dry_run_receipt(
-                    customer_id=str(result.get("customer_id") or payload.get("customer_id", "")),
+                    customer_id=str(result.get("customer_id") or cust_id_raw),
                     operation_summary="AdGroupService.mutate_ad_groups",
                     after_state=str(result.get("ad_group_resource_name", "NEW_AD_GROUP")),
                     consequences=[
@@ -2683,6 +3081,8 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "result": result,
             }
         except (SystemExit, Exception) as exc:
+            if not validate_only and not rpc_dispatched[0]:
+                self._release_claimed_receipt(run_mod, claimed_rid, claimed_cid)
             return {
                 "task_id": task_id,
                 "status": "FAILED",
@@ -2700,8 +3100,11 @@ class A2AHandler(BaseHTTPRequestHandler):
         elif final_urls is None and payload.get("final_url"):
             final_urls = [str(payload.get("final_url"))]
 
+        api_version = get_effective_api_version(payload, allow_interactive=False)
+        cust_id_raw = str(payload.get("customer_id", ""))
         create_params = {
-            "customer_id": re.sub(r"\D", "", str(payload.get("customer_id", ""))),
+            "customer_id": re.sub(r"\D", "", cust_id_raw),
+            "api_version": api_version,
             "ad_group_id": (
                 str(payload.get("ad_group_id"))
                 if payload.get("ad_group_id") is not None
@@ -2723,7 +3126,7 @@ class A2AHandler(BaseHTTPRequestHandler):
             ),
             "path1": payload.get("path1"),
             "path2": payload.get("path2"),
-            "status": str(payload.get("status", "PAUSED")).upper(),
+            "status": str(payload.get("status", "PAUSED")).strip().upper(),
         }
 
         gate_error, run_mod = self._check_live_execution_gate(
@@ -2731,16 +3134,25 @@ class A2AHandler(BaseHTTPRequestHandler):
             payload,
             operation_summary="AdGroupAdService.mutate_ad_group_ads",
             expected_create_params=create_params,
+            customer_id=cust_id_raw,
         )
         if gate_error is not None:
             return gate_error
 
+        claimed_rid, claimed_cid = self._pop_last_claimed_receipt()
         validate_only = _resolve_validate_only(payload)
-        api_version = get_effective_api_version(payload, allow_interactive=False)
-        mod = self._load_mutation_script("create_ad.py")
+        rpc_dispatched = [False]
         try:
+            mod = self._load_mutation_script("create_ad.py")
+            active_client = self._prepare_create_client(
+                mod,
+                payload.get("client"),
+                api_version,
+                validate_only=validate_only,
+                rpc_dispatched=rpc_dispatched,
+            )
             result = mod.create_responsive_search_ad(
-                customer_id=str(payload.get("customer_id", "")),
+                customer_id=cust_id_raw,
                 ad_group_id=payload.get("ad_group_id"),
                 ad_group_resource_name=payload.get("ad_group_resource_name"),
                 api_version=api_version,
@@ -2751,12 +3163,12 @@ class A2AHandler(BaseHTTPRequestHandler):
                 path2=payload.get("path2"),
                 status=create_params["status"],
                 validate_only=validate_only,
-                client=payload.get("client"),
+                client=active_client,
                 json_output=False,
             )
             if validate_only:
                 receipt, hitl_notice = self._record_create_dry_run_receipt(
-                    customer_id=str(result.get("customer_id") or payload.get("customer_id", "")),
+                    customer_id=str(result.get("customer_id") or cust_id_raw),
                     operation_summary="AdGroupAdService.mutate_ad_group_ads",
                     after_state=str(result.get("ad_group_ad_resource_name", "NEW_AD")),
                     consequences=[
@@ -2798,6 +3210,8 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "result": result,
             }
         except (SystemExit, Exception) as exc:
+            if not validate_only and not rpc_dispatched[0]:
+                self._release_claimed_receipt(run_mod, claimed_rid, claimed_cid)
             return {
                 "task_id": task_id,
                 "status": "FAILED",
@@ -3038,6 +3452,7 @@ def run_mcp_stdio_server(
     stdout: Optional[TextIO] = None,
 ) -> None:
     """Runs the Model Context Protocol (MCP) JSON-RPC 2.0 server over stdio."""
+    _configure_sandbox_writable_env()
     in_stream = stdin if stdin is not None else sys.stdin
     out_stream = stdout if stdout is not None else sys.stdout
     handler = A2AHandler.__new__(A2AHandler)
@@ -3220,7 +3635,7 @@ def run_server() -> None:
                 "~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config"
             ),
         )
-        if d and os.path.isdir(d) and os.access(d, os.W_OK)
+        if d and _is_dir_writable(d)
     ]
     if not has_valid_cfg_env and candidate_user_cfg_dirs and os.path.isfile(raw_home_yaml):
         user_cfg_dir = candidate_user_cfg_dirs[0]

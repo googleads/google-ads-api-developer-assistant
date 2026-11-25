@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+import dis
 import json
 import os
 from pathlib import Path
@@ -45,7 +46,9 @@ import shutil
 import subprocess
 import sys
 import threading
+import tokenize
 import trace
+import types
 from typing import Any
 import pytest
 
@@ -414,6 +417,37 @@ def run_coverage_collection(fast_mode: bool = True, clean: bool = True) -> int:
     return exit_code
 
 
+def _find_executable_lines(filename: str) -> set[int]:
+    """Returns executable line numbers, excluding PEP 649 __annotate__-only lines on Python 3.14+."""
+    exec_lines = trace._find_executable_linenos(filename)
+    executable_set = {k for k in exec_lines.keys() if isinstance(k, int) and k > 0}
+    if sys.version_info < (3, 14) or not executable_set:
+        return executable_set
+
+    try:
+        with tokenize.open(filename) as f:
+            prog = f.read()
+        code = compile(prog, filename, "exec")
+    except (OSError, SyntaxError):
+        return executable_set
+
+    non_annotate_lines: set[int] = set()
+    annotate_lines: set[int] = set()
+
+    def _walk(code_obj: types.CodeType, in_annotate: bool = False) -> None:
+        is_annotate = in_annotate or code_obj.co_name == "__annotate__"
+        target = annotate_lines if is_annotate else non_annotate_lines
+        for _, lineno in dis.findlinestarts(code_obj):
+            if isinstance(lineno, int) and lineno > 0:
+                target.add(lineno)
+        for const in code_obj.co_consts:
+            if isinstance(const, types.CodeType):
+                _walk(const, is_annotate)
+
+    _walk(code)
+    return executable_set - (annotate_lines - non_annotate_lines)
+
+
 def compute_and_print_report(
     show_missed: bool = False,
     json_output: bool = False,
@@ -469,8 +503,7 @@ def compute_and_print_report(
             rel_p = p.relative_to(REPO_ROOT).as_posix() + " (root)"
             cat = "root"
 
-        exec_lines = trace._find_executable_linenos(abs_p)
-        executable_set = {k for k in exec_lines.keys() if isinstance(k, int) and k > 0}
+        executable_set = _find_executable_lines(abs_p)
         inproc_set = inproc_hits[abs_p] & executable_set
         comb_set = combined_hits[abs_p] & executable_set
 

@@ -561,7 +561,7 @@ def test_claude_hooks_json_layout() -> None:
     assert matchers == {
         "Bash",
         "Write|Edit|MultiEdit",
-        "Read",
+        "Read|Grep",
         "mcp__(?:plugin_google-ads-api-developer-assistant_)?google-ads-api-assistant__(prepare_mutation|execute_mutation|create_account|create_campaign|create_ad_group|create_ad)",
     }
     assert hooks["PostToolUseFailure"][0]["matcher"] == "Bash"

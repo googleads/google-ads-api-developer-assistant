@@ -15,6 +15,7 @@
 """Unit tests for local SHA-256 response caching in validate_gaql.py."""
 
 import hashlib
+import json
 import os
 import sys
 import time
@@ -49,7 +50,7 @@ class TestValidateGaqlCache:
         key3 = vg.compute_gaql_cache_key(query, CURRENT_API_VERSION.upper())
 
         expected = hashlib.sha256(
-            f"{query}|{CURRENT_API_VERSION}".encode("utf-8")
+            json.dumps([query, CURRENT_API_VERSION], separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         assert key1 == expected
         assert key1 == key2

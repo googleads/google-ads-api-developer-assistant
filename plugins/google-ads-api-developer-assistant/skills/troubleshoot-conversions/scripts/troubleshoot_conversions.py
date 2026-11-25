@@ -267,6 +267,8 @@ def merge_previous_findings(
             break
         if abs_exclude and os.path.abspath(pf) == abs_exclude:
             continue
+        if os.path.islink(pf):
+            continue
         try:
             # Cap file read at 64KB to avoid unbounded memory allocation
             with open(pf, "r", encoding="utf-8") as f:
@@ -835,7 +837,7 @@ def troubleshoot_conversions(
     intro_body = summary or [f"Diagnostic Report for Customer ID: {clean_cid}"]
     err_body = errors or ["No blocking errors detected."]
     report_flags = (
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     )
     report_fd = os.open(output_path, report_flags, 0o600)
     with os.fdopen(report_fd, "w", encoding="utf-8") as f:

@@ -971,10 +971,11 @@ class TestSidecarA2A:
         assert "GoogleAdsClient" in res["result"]["generated_code"]
         assert 'load_from_storage(path="config/google-ads.yaml"' in res["result"]["generated_code"]
 
-    def test_troubleshoot_conversions_task(self, tmp_path):
+    def test_troubleshoot_conversions_task(self, tmp_path, monkeypatch):
         handler = server.A2AHandler.__new__(server.A2AHandler)
         mock_client = MagicMock()
         mock_client.get_service.return_value.search_stream.return_value = []
+        monkeypatch.setenv("CONVERSION_OUTPUT_DIR", str(tmp_path))
         with patch("server.get_effective_api_version", return_value=CURRENT_API_VERSION):
             res = handler.handle_troubleshoot_conversions(
                 "task-6",

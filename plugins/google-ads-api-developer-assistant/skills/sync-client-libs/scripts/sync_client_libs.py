@@ -16,10 +16,12 @@
 
 import argparse
 import concurrent.futures
+import datetime
 import glob
 import importlib
 import importlib.metadata
 import json
+import math
 import os
 import re
 import shutil
@@ -269,6 +271,49 @@ def get_repo_slug(lib_name: str, lib_path: str) -> str:
     return f"googleads/{lib_name}"
 
 
+def _extract_pyproject_version(content: str) -> Optional[str]:
+    """Extracts project version from pyproject.toml without matching python_version."""
+    try:
+        data = tomllib.loads(content)
+        if isinstance(data, dict):
+            project = data.get("project")
+            if isinstance(project, dict):
+                ver = project.get("version")
+                if isinstance(ver, str) and ver.strip():
+                    return ver.strip()
+            tool = data.get("tool")
+            if isinstance(tool, dict):
+                poetry = tool.get("poetry")
+                if isinstance(poetry, dict):
+                    ver = poetry.get("version")
+                    if isinstance(ver, str) and ver.strip():
+                        return ver.strip()
+            top_ver = data.get("version")
+            if isinstance(top_ver, str) and top_ver.strip():
+                return top_ver.strip()
+        return None
+    except tomllib.TOMLDecodeError:
+        pass
+
+    # Malformed TOML fallback: strictly match anchored `version = "..."` inside
+    # `[project]` (or before the first section header when `[project]` is absent).
+    project_sec = re.search(
+        r"(?ms)^\s*\[project\]\s*(?:#[^\r\n]*)?\r?$(.*?)(?=^\s*\[|\Z)",
+        content,
+    )
+    search_scope = (
+        project_sec.group(1)
+        if project_sec
+        else re.split(r"(?m)^\s*\[", content, maxsplit=1)[0]
+    )
+    match = re.search(
+        r'(?m)^\s*version\s*=\s*["\']([^"\']+)["\']', search_scope
+    )
+    if match:
+        return match.group(1).strip()
+    return None
+
+
 def detect_installed_version(lib_name: str, lib_path: str) -> Optional[str]:
     """Detects the installed version of a client library from local files."""
     del lib_name
@@ -278,9 +323,9 @@ def detect_installed_version(lib_name: str, lib_path: str) -> Optional[str]:
         try:
             with open(pyproject_path, "r", encoding="utf-8") as f:
                 content = f.read()
-                match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
-                if match:
-                    return match.group(1).strip()
+            pyproject_ver = _extract_pyproject_version(content)
+            if pyproject_ver:
+                return pyproject_ver
         except OSError:
             pass
 
@@ -1022,13 +1067,127 @@ def update_codebase_via_archive(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+_SYNC_PRESERVED_TOP_LEVEL = frozenset({
+    ".git",
+    "google-ads.yaml",
+    "config.yaml",
+    "saved",
+    "client_libs",
+})
+
+
+def _validate_source_tree_symlinks(
+    source_dir: str, skip_top_level: frozenset[str]
+) -> None:
+    """Rejects any symlink in source_dir whose resolved target escapes it."""
+    real_source = os.path.realpath(source_dir)
+    for root, dirs, files in os.walk(
+        source_dir, topdown=True, followlinks=False
+    ):
+        if root == source_dir:
+            dirs[:] = [d for d in dirs if d not in skip_top_level]
+            candidate_names = [
+                *dirs,
+                *(f for f in files if f not in skip_top_level),
+            ]
+        else:
+            candidate_names = [*dirs, *files]
+
+        real_root = os.path.realpath(root)
+        for name in candidate_names:
+            full_path = os.path.join(root, name)
+            if not os.path.islink(full_path):
+                continue
+            link_target = os.readlink(full_path)
+            resolved_target = os.path.realpath(
+                os.path.join(real_root, link_target)
+            )
+            try:
+                within = (
+                    os.path.commonpath([real_source, resolved_target])
+                    == real_source
+                )
+            except ValueError:
+                within = False
+            if not within:
+                raise ValueError(
+                    "Unsafe symlink target escaping source directory: "
+                    f"{full_path} -> {link_target}"
+                )
+
+
+def _copy_symlink_safe(
+    src_link: str,
+    dst_link: str,
+    visited_real_dirs: Optional[frozenset[str]] = None,
+) -> None:
+    """Copies a validated symlink, falling back on Windows WinError 1314."""
+    link_target = os.readlink(src_link)
+    try:
+        os.symlink(link_target, dst_link)
+    except OSError as ex:
+        if getattr(ex, "winerror", None) != 1314:
+            raise
+        # Windows without Developer Mode / symlink privilege: copy the
+        # already-validated in-tree target contents instead.
+        resolved_target = os.path.realpath(src_link)
+        seen = visited_real_dirs or frozenset()
+        if os.path.isdir(resolved_target):
+            if resolved_target in seen:
+                return
+            _copy_tree_safe(
+                resolved_target,
+                dst_link,
+                visited_real_dirs=seen | {resolved_target},
+            )
+        elif os.path.isfile(resolved_target):
+            shutil.copy2(resolved_target, dst_link)
+
+
+def _copy_tree_safe(
+    src_dir: str,
+    dst_dir: str,
+    visited_real_dirs: Optional[frozenset[str]] = None,
+) -> None:
+    """Recursively copies src_dir to dst_dir with safe symlink handling."""
+    real_src = os.path.realpath(src_dir)
+    seen = (visited_real_dirs or frozenset()) | {real_src}
+    os.makedirs(dst_dir, exist_ok=True)
+    for entry in os.listdir(src_dir):
+        src_entry = os.path.join(src_dir, entry)
+        dst_entry = os.path.join(dst_dir, entry)
+        if os.path.islink(src_entry):
+            _copy_symlink_safe(src_entry, dst_entry, visited_real_dirs=seen)
+        elif os.path.isdir(src_entry):
+            _copy_tree_safe(src_entry, dst_entry, visited_real_dirs=seen)
+        else:
+            shutil.copy2(src_entry, dst_entry)
+    try:
+        shutil.copystat(src_dir, dst_dir)
+    except OSError:
+        pass
+
+
 def sync_directories(source_dir: str, target_dir: str) -> bool:
     """Cleanly synchronizes content from source_dir into target_dir."""
+    preserved_plugin_configs: dict[str, bytes] = {}
+    cfg_subdir = os.path.join(target_dir, "config")
+    stage_dir: Optional[str] = None
+    stage_name: Optional[str] = None
+    target_modified = False
     try:
+        if not os.path.isdir(source_dir):
+            raise FileNotFoundError(
+                f"Source directory does not exist: {source_dir}"
+            )
         os.makedirs(target_dir, exist_ok=True)
+        if os.path.realpath(source_dir) == os.path.realpath(target_dir):
+            return True
+
+        # Validate all symlinks in source_dir before mutating target_dir.
+        _validate_source_tree_symlinks(source_dir, _SYNC_PRESERVED_TOP_LEVEL)
+
         # Preserve user config files if syncing an installed standalone plugin
-        preserved_plugin_configs: dict[str, bytes] = {}
-        cfg_subdir = os.path.join(target_dir, "config")
         if os.path.isdir(cfg_subdir):
             for cfg_fname in (
                 "google-ads.yaml",
@@ -1043,15 +1202,31 @@ def sync_directories(source_dir: str, target_dir: str) -> bool:
                     except OSError:
                         pass
 
-        # Remove existing contents except .git, user yaml/config, and runtime saved/client_libs dirs
+        # Stage copy into a sibling temp dir (fallback inside target_dir) so
+        # copy failures never destroy existing files or credentials.
+        parent_dir = os.path.dirname(os.path.abspath(target_dir))
+        try:
+            stage_dir = tempfile.mkdtemp(prefix=".sync_stage_", dir=parent_dir)
+        except OSError:
+            stage_dir = tempfile.mkdtemp(prefix=".sync_stage_", dir=target_dir)
+            stage_name = os.path.basename(stage_dir)
+
+        for item in os.listdir(source_dir):
+            if item in _SYNC_PRESERVED_TOP_LEVEL:
+                continue
+            src_item = os.path.join(source_dir, item)
+            staged_item = os.path.join(stage_dir, item)
+            if os.path.islink(src_item):
+                _copy_symlink_safe(src_item, staged_item)
+            elif os.path.isdir(src_item):
+                _copy_tree_safe(src_item, staged_item)
+            else:
+                shutil.copy2(src_item, staged_item)
+
+        # Remove existing contents except preserved top-level items
+        target_modified = True
         for item in os.listdir(target_dir):
-            if item in [
-                ".git",
-                "google-ads.yaml",
-                "config.yaml",
-                "saved",
-                "client_libs",
-            ]:
+            if item in _SYNC_PRESERVED_TOP_LEVEL or item == stage_name:
                 continue
             item_path = os.path.join(target_dir, item)
             if os.path.islink(item_path) or os.path.isfile(item_path):
@@ -1059,20 +1234,25 @@ def sync_directories(source_dir: str, target_dir: str) -> bool:
             elif os.path.isdir(item_path):
                 shutil.rmtree(item_path)
 
-        for item in os.listdir(source_dir):
-            if item == ".git":
-                continue
-            src_item = os.path.join(source_dir, item)
-            dst_item = os.path.join(target_dir, item)
-            if os.path.islink(src_item):
-                os.symlink(os.readlink(src_item), dst_item)
-            elif os.path.isdir(src_item):
-                shutil.copytree(src_item, dst_item, symlinks=True)
-            else:
-                shutil.copy2(src_item, dst_item)
+        for item in os.listdir(stage_dir):
+            shutil.move(
+                os.path.join(stage_dir, item),
+                os.path.join(target_dir, item),
+            )
 
-        if preserved_plugin_configs:
-            os.makedirs(cfg_subdir, exist_ok=True)
+        return True
+    except (shutil.Error, OSError, ValueError) as ex:
+        print(
+            f"Failed to copy files from {source_dir} to {target_dir}: {ex}",
+            file=sys.stderr,
+        )
+        return False
+    finally:
+        if preserved_plugin_configs and target_modified:
+            try:
+                os.makedirs(cfg_subdir, exist_ok=True)
+            except OSError:
+                pass
             for cfg_fname, raw_bytes in preserved_plugin_configs.items():
                 restored_path = os.path.join(cfg_subdir, cfg_fname)
                 try:
@@ -1088,14 +1268,8 @@ def sync_directories(source_dir: str, target_dir: str) -> bool:
                             pass
                 except OSError:
                     pass
-
-        return True
-    except (shutil.Error, OSError, ValueError) as ex:
-        print(
-            f"Failed to copy files from {source_dir} to {target_dir}: {ex}",
-            file=sys.stderr,
-        )
-        return False
+        if stage_dir and os.path.exists(stage_dir):
+            shutil.rmtree(stage_dir, ignore_errors=True)
 
 
 def detect_lib_api_version(lib_path: str) -> Optional[str]:
@@ -1130,6 +1304,210 @@ def _is_git_tracked_plugin_config_dir(cfg_dir: str) -> bool:
         and os.path.basename(plugins_parent) == "plugins"
         and os.path.isdir(os.path.join(repo_root, ".git"))
     )
+
+
+def _strip_toml_comment_outside_quotes(raw: str) -> str:
+    """Strips inline '#' comments outside single- or double-quoted strings."""
+    in_quote: Optional[str] = None
+    escaped = False
+    for idx, ch in enumerate(raw):
+        if in_quote == '"':
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_quote = None
+        elif in_quote == "'":
+            if ch == "'":
+                in_quote = None
+        else:
+            if ch in ('"', "'"):
+                in_quote = ch
+            elif ch == "#":
+                return raw[:idx].rstrip()
+    return raw.rstrip()
+
+
+def _parse_fallback_toml_value(raw_rhs: str) -> tuple[bool, Any]:
+    """Parses a single-line TOML value for malformed-config recovery."""
+    rhs = raw_rhs.strip()
+    if not rhs or rhs.startswith(('"""', "'''")):
+        return False, None
+
+    cleaned = _strip_toml_comment_outside_quotes(rhs).strip()
+    if not cleaned:
+        return False, None
+
+    # Use tomllib on the individual assignment so quoted strings (including
+    # "true"/"false" and "#..." inside quotes), ints, floats, bools, and valid
+    # single-line arrays/inline tables keep exact TOML types.
+    try:
+        parsed = tomllib.loads(f"v = {cleaned}\n")
+        if "v" in parsed:
+            return True, parsed["v"]
+    except tomllib.TOMLDecodeError:
+        pass
+
+    # Skip unclosed/malformed multiline openers or broken quoted strings.
+    if cleaned[0] in ("[", "{", '"', "'"):
+        return False, None
+
+    # Legacy bareword fallback (e.g. unquoted strings or mixed-case booleans).
+    low = cleaned.lower()
+    if low in ("true", "false"):
+        return True, low == "true"
+    try:
+        return True, int(cleaned, 10)
+    except ValueError:
+        pass
+    try:
+        f_val = float(cleaned)
+        if math.isfinite(f_val):
+            return True, f_val
+    except ValueError:
+        pass
+    return True, cleaned
+
+
+def _parse_assistant_config_fallback(
+    existing_text: str,
+) -> tuple[str, str, Optional[str], dict[str, Any]]:
+    """Recovers top-level assistant_config keys when full TOML parsing fails."""
+    cid = "12345678"
+    exec_mutates_str = "false"
+    enabled_str: Optional[str] = None
+    extra_toml: dict[str, Any] = {}
+
+    lines = existing_text.splitlines()
+    idx = 0
+    while idx < len(lines):
+        raw_line = lines[idx]
+        idx += 1
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        # Stop top-level flag/key matching at the first [section] header.
+        if stripped.startswith("["):
+            break
+
+        m_kv = re.match(r"^\s*([A-Za-z0-9_-]+)\s*=\s*(.*)$", raw_line)
+        if not m_kv:
+            continue
+        k_name, raw_rhs = m_kv.group(1), m_kv.group(2).strip()
+        if not raw_rhs:
+            continue
+
+        # Skip multiline triple-quoted string openers (and any closed body).
+        if raw_rhs.startswith(('"""', "'''")):
+            delim = raw_rhs[:3]
+            if delim not in raw_rhs[3:]:
+                close_idx = next(
+                    (j for j in range(idx, len(lines)) if delim in lines[j]),
+                    None,
+                )
+                if close_idx is not None:
+                    idx = close_idx + 1
+            continue
+
+        ok, val = _parse_fallback_toml_value(raw_rhs)
+        if not ok:
+            # If an unclosed inline table `{` has a closing `}` later, skip it.
+            if raw_rhs.startswith("{"):
+                close_idx = next(
+                    (
+                        j
+                        for j in range(idx, len(lines))
+                        if "}" in _strip_toml_comment_outside_quotes(lines[j])
+                    ),
+                    None,
+                )
+                if close_idx is not None:
+                    idx = close_idx + 1
+            continue
+
+        if k_name == "api_version":
+            continue
+        if k_name == "customer_id":
+            cid_str = str(val).strip()
+            if cid_str:
+                cid = cid_str
+        elif k_name == "execute_mutates":
+            if isinstance(val, bool):
+                exec_mutates_str = "true" if val else "false"
+        elif k_name == "enabled":
+            if isinstance(val, bool):
+                enabled_str = "true" if val else "false"
+        elif k_name not in extra_toml:
+            extra_toml[k_name] = val
+
+    return cid, exec_mutates_str, enabled_str, extra_toml
+
+
+def _format_toml_key(key: str) -> str:
+    """Formats a TOML key segment as bare when valid, else quoted."""
+    if re.fullmatch(r"[A-Za-z0-9_-]+", key):
+        return key
+    return json.dumps(key)
+
+
+def _format_toml_value(val: Any) -> Optional[str]:
+    """Formats a Python value as a valid TOML inline value."""
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    if isinstance(val, int):
+        return str(val)
+    if isinstance(val, float):
+        return str(val)
+    if isinstance(val, str):
+        return json.dumps(val)
+    if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
+        return val.isoformat()
+    if isinstance(val, list):
+        formatted_items: list[str] = []
+        for item in val:
+            fmt_item = _format_toml_value(item)
+            if fmt_item is None:
+                return None
+            formatted_items.append(fmt_item)
+        return "[" + ", ".join(formatted_items) + "]"
+    if isinstance(val, dict):
+        parts: list[str] = []
+        for dk, dv in val.items():
+            fmt_dv = _format_toml_value(dv)
+            if fmt_dv is None:
+                return None
+            parts.append(f"{_format_toml_key(str(dk))} = {fmt_dv}")
+        return "{" + ", ".join(parts) + "}"
+    if val is None:
+        return None
+    return json.dumps(str(val))
+
+
+def _serialize_toml_table(
+    section_path: list[str], table: dict[str, Any]
+) -> list[str]:
+    """Serializes a TOML table dict into [section] header + key/value lines."""
+    lines: list[str] = []
+    scalar_items: list[tuple[str, Any]] = []
+    nested_tables: list[tuple[str, dict[str, Any]]] = []
+    for k, v in table.items():
+        if isinstance(v, dict):
+            nested_tables.append((str(k), v))
+        elif v is not None:
+            scalar_items.append((str(k), v))
+
+    header = ".".join(_format_toml_key(seg) for seg in section_path)
+    if scalar_items or not nested_tables:
+        lines.append(f"\n[{header}]\n")
+        for sk, sv in scalar_items:
+            fmt_v = _format_toml_value(sv)
+            if fmt_v is not None:
+                lines.append(f"{_format_toml_key(sk)} = {fmt_v}\n")
+
+    for sub_k, sub_tbl in nested_tables:
+        lines.extend(_serialize_toml_table([*section_path, sub_k], sub_tbl))
+    return lines
 
 
 def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
@@ -1214,74 +1592,34 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
                                 ):
                                     extra_toml[k] = v
                     except tomllib.TOMLDecodeError:
-                        cid_pat = (
-                            r'(?m)^\s*customer_id\s*=\s*["\']?([^"\'\s#]+)'
-                            r'["\']?'
-                        )
-                        em_pat = (
-                            r"(?m)^\s*execute_mutates\s*=\s*"
-                            r'["\']?(true|false)["\']?'
-                        )
-                        en_pat = (
-                            r'(?m)^\s*enabled\s*=\s*["\']?(true|false)["\']?'
-                        )
-                        t1_pat = (
-                            r"(?m)^\s*allow_tier1_financial_mutates\s*=\s*"
-                            r'["\']?(true|false)["\']?'
-                        )
-                        m_cid = re.search(cid_pat, existing_text)
-                        if m_cid:
-                            cid = m_cid.group(1).strip()
-                        m_em = re.search(em_pat, existing_text, re.IGNORECASE)
-                        if m_em:
-                            exec_mutates_str = m_em.group(1).lower()
-                        m_en = re.search(en_pat, existing_text, re.IGNORECASE)
-                        if m_en:
-                            enabled_str = m_en.group(1).lower()
-                        m_t1 = re.search(t1_pat, existing_text, re.IGNORECASE)
-                        if m_t1:
-                            extra_toml["allow_tier1_financial_mutates"] = (
-                                m_t1.group(1).lower() == "true"
-                            )
-                        for raw_line in existing_text.splitlines():
-                            m_kv = re.match(
-                                r"^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*(?:#.*)?$",
-                                raw_line,
-                            )
-                            if not m_kv:
-                                continue
-                            k_name, raw_val = m_kv.group(1), m_kv.group(2).strip()
-                            if k_name in (
-                                "api_version",
-                                "customer_id",
-                                "execute_mutates",
-                                "enabled",
-                                "allow_tier1_financial_mutates",
-                            ) or k_name in extra_toml:
-                                continue
-                            low_v = raw_val.strip("\"'").lower()
-                            if low_v in ("true", "false"):
-                                extra_toml[k_name] = low_v == "true"
-                            else:
-                                extra_toml[k_name] = raw_val.strip("\"'")
+                        (
+                            cid,
+                            exec_mutates_str,
+                            enabled_str,
+                            extra_toml,
+                        ) = _parse_assistant_config_fallback(existing_text)
                 except OSError:
                     pass
             content_out = (
                 f'api_version = "{latest_v}"\n'
-                f'customer_id = "{cid}"\n'
+                f"customer_id = {json.dumps(cid)}\n"
                 f"execute_mutates = {exec_mutates_str}\n"
             )
             if enabled_str is not None:
                 content_out += f"enabled = {enabled_str}\n"
+            nested_tables: list[tuple[str, dict[str, Any]]] = []
             for k, v in extra_toml.items():
-                if re.fullmatch(r"[A-Za-z0-9_-]+", str(k)):
-                    if isinstance(v, bool):
-                        fmt_v = "true" if v else "false"
-                    elif isinstance(v, (int, float)):
-                        fmt_v = str(v)
-                    else:
-                        fmt_v = json.dumps(str(v))
-                    content_out += f"{k} = {fmt_v}\n"
+                k_str = str(k)
+                if isinstance(v, dict):
+                    nested_tables.append((k_str, v))
+                    continue
+                fmt_v = _format_toml_value(v)
+                if fmt_v is not None:
+                    content_out += f"{_format_toml_key(k_str)} = {fmt_v}\n"
+            for tbl_name, tbl_val in nested_tables:
+                content_out += "".join(
+                    _serialize_toml_table([tbl_name], tbl_val)
+                )
             if content_out != existing_text or not os.path.isfile(cfg_path):
                 if os.path.islink(cfg_path):
                     continue

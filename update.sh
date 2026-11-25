@@ -376,8 +376,17 @@ detect_and_seed_api_version() {
   if [[ -d "${search_dir}" ]]; then
     latest_v=$(find "${search_dir}" -mindepth 1 -maxdepth 1 -type d -name 'v*' 2>/dev/null | sed 's/.*\/v//' | grep -E '^[0-9]+$' | sort -n | tail -n 1 || true)
   fi
-  if [[ -z "${latest_v}" ]] && command -v python3 >/dev/null 2>&1; then
-    latest_v=$(python3 -c 'import importlib.util, os, re; s = importlib.util.find_spec("google.ads.googleads"); locs = list(s.submodule_search_locations or ()) if s else []; vs = sorted([int(d[1:]) for p in locs if os.path.isdir(p) for d in os.listdir(p) if re.fullmatch(r"v\d+", d)]); print(vs[-1] if vs else "")' 2>/dev/null || true)
+  if [[ -z "${latest_v}" ]]; then
+    local py_cmd=""
+    for cmd in python3 python; do
+      if command -v "${cmd}" >/dev/null 2>&1 && "${cmd}" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+        py_cmd="${cmd}"
+        break
+      fi
+    done
+    if [[ -n "${py_cmd}" ]]; then
+      latest_v=$("${py_cmd}" -c 'import importlib.util, os, re; s = importlib.util.find_spec("google.ads.googleads"); locs = list(s.submodule_search_locations or ()) if s else []; vs = sorted([int(d[1:]) for p in locs if os.path.isdir(p) for d in os.listdir(p) if re.fullmatch(r"v\d+", d)]); print(vs[-1] if vs else "")' 2>/dev/null || true)
+    fi
   fi
 
   if [[ -n "${latest_v}" || -n "${CUSTOMER_ID}" ]]; then
@@ -517,8 +526,30 @@ echo "Updating google-ads-api-developer-assistant..."
 
 PLUGIN_SOURCE_DIR="${PROJECT_DIR_ABS}/plugins/google-ads-api-developer-assistant"
 TEMP_CONFIG_DIR=$(mktemp -d)
+UPDATE_SUCCEEDED=false
+PULL_SUCCEEDED=false
+HAS_BACKUP_DATA=false
 cleanup() {
-  rm -rf "${TEMP_CONFIG_DIR}"
+  if [[ "${UPDATE_SUCCEEDED}" == "true" ]]; then
+    rm -rf "${TEMP_CONFIG_DIR}"
+    return
+  fi
+  if [[ "${PULL_SUCCEEDED}" != "true" ]]; then
+    for tracked_rel in \
+      "plugins/google-ads-api-developer-assistant/config/assistant_config" \
+      "plugins/google-ads-api-developer-assistant/config/financial_limits"; do
+      local tracked_base
+      tracked_base=$(basename "${tracked_rel}")
+      if [[ -f "${TEMP_CONFIG_DIR}/repo_${tracked_base}" ]]; then
+        cp "${TEMP_CONFIG_DIR}/repo_${tracked_base}" "${PROJECT_DIR_ABS}/${tracked_rel}" 2>/dev/null || true
+      fi
+    done
+  fi
+  if [[ "${HAS_BACKUP_DATA}" == "true" && -d "${TEMP_CONFIG_DIR}" ]]; then
+    echo "WARNING: Update did not complete. Preserved backed-up configuration and data at: ${TEMP_CONFIG_DIR}" >&2
+  else
+    rm -rf "${TEMP_CONFIG_DIR}"
+  fi
 }
 trap cleanup EXIT
 
@@ -532,6 +563,7 @@ for tracked_rel in \
   if git -C "${PROJECT_DIR_ABS}" ls-files --error-unmatch "${tracked_rel}" >/dev/null 2>&1; then
     if ! git -C "${PROJECT_DIR_ABS}" diff --quiet -- "${tracked_rel}" 2>/dev/null; then
       cp "${PROJECT_DIR_ABS}/${tracked_rel}" "${TEMP_CONFIG_DIR}/repo_${tracked_base}"
+      HAS_BACKUP_DATA=true
       git -C "${PROJECT_DIR_ABS}" checkout -- "${tracked_rel}" >/dev/null 2>&1 || true
     fi
   fi
@@ -545,11 +577,13 @@ done
 
 if [[ "${NO_GIT_PULL}" == "true" ]]; then
   echo "Skipping git pull (--no-git-pull)."
+  PULL_SUCCEEDED=true
 else
   if ! git -C "${PROJECT_DIR_ABS}" -c core.longpaths=true -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull; then
     err "ERROR: Failed to update google-ads-api-developer-assistant repository."
     exit 1
   fi
+  PULL_SUCCEEDED=true
   echo "Successfully updated repository."
 fi
 
@@ -643,15 +677,19 @@ sync_installed_plugin_dir() {
 
     if [[ -f "${target_plugin_dir}/config/assistant_config" ]]; then
       cp "${target_plugin_dir}/config/assistant_config" "${existing_cfg_backup}"
+      HAS_BACKUP_DATA=true
     fi
     if [[ -f "${target_plugin_dir}/config/financial_limits" ]]; then
       cp "${target_plugin_dir}/config/financial_limits" "${existing_fin_backup}"
+      HAS_BACKUP_DATA=true
     fi
     if [[ -f "${target_plugin_dir}/config/google-ads.yaml" ]]; then
       cp "${target_plugin_dir}/config/google-ads.yaml" "${existing_yaml_backup}"
+      HAS_BACKUP_DATA=true
     fi
     if [[ -d "${target_plugin_dir}/saved" ]]; then
       safe_copy_dir "${target_plugin_dir}/saved" "${existing_saved_backup}"
+      HAS_BACKUP_DATA=true
     fi
 
     (
@@ -745,6 +783,17 @@ sync_installed_plugin_dir() {
     done
   fi
 
+  # Strip Claude-Code-only files from the installed agy copy before plugin disable/enable
+  # so `jetski plugin validate` emits 0 warnings and no orphaned `.mcp.json.disabled` remains
+  if [[ "${platform_label}" == "agy" ]]; then
+    rm -rf \
+      "${target_plugin_dir}/.claude-plugin" \
+      "${target_plugin_dir}/.mcp.json" \
+      "${target_plugin_dir}/.mcp.json.disabled" \
+      "${target_plugin_dir}/hooks" \
+      "${target_plugin_dir}/commands"
+  fi
+
   detect_and_seed_api_version "${target_plugin_dir}/client_libs/google-ads-python/google/ads/googleads" "${target_plugin_dir}/config"
 
   if [[ "${PLUGIN_ENABLED_OPT}" == "false" ]] || [[ -z "${PLUGIN_ENABLED_OPT}" && "${was_disabled}" == "true" ]]; then
@@ -762,12 +811,6 @@ sync_installed_plugin_dir() {
 
 if [[ "${TYPE}" == "agy" ]]; then
   sync_installed_plugin_dir "${AGY_PLUGIN_TARGET_DIR}" "agy"
-  # Strip Claude-Code-only files from the installed agy copy so `jetski plugin validate` emits 0 warnings
-  rm -rf \
-    "${AGY_PLUGIN_TARGET_DIR}/.claude-plugin" \
-    "${AGY_PLUGIN_TARGET_DIR}/.mcp.json" \
-    "${AGY_PLUGIN_TARGET_DIR}/hooks" \
-    "${AGY_PLUGIN_TARGET_DIR}/commands"
 elif [[ "${TYPE}" == "claude" ]]; then
   mkdir -p "${CLAUDE_MARKETPLACE_DIR}/.claude-plugin"
   cp "${PROJECT_DIR_ABS}/.claude-plugin/marketplace.json" "${CLAUDE_MARKETPLACE_DIR}/.claude-plugin/marketplace.json"
@@ -779,6 +822,7 @@ elif [[ "${TYPE}" == "claude" ]]; then
   fi
 fi
 
+UPDATE_SUCCEEDED=true
 echo "Plugin update for ${TYPE} complete."
 echo ""
 if [[ "${TYPE}" == "agy" ]]; then

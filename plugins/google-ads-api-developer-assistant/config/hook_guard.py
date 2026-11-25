@@ -21,7 +21,9 @@ _FILE_READ_TOOLS = frozenset(
     {
         "read_file",
         "view_file",
+        "grep_search",
         "Read",
+        "Grep",
     }
 )
 _FILE_WRITE_TOOLS = frozenset(
@@ -45,12 +47,18 @@ _PROTECTED_CREDENTIAL_FILES = frozenset(
         ".a2a_token",
     }
 )
-_PROTECTED_DENY_FILES = frozenset({"last_dry_run.json", "mutation_audit.jsonl"})
+_PROTECTED_DENY_FILES = frozenset(
+    {"last_dry_run.json", ".last_dry_run.lock", "mutation_audit.jsonl"}
+)
 _PROTECTED_ASK_FILES = frozenset(
     {
         "assistant_config",
         "financial_limits",
         "google-ads.yaml",
+        "google_ads_php.ini",
+        "google_ads_config.rb",
+        "ads.properties",
+        ".a2a_token",
         "hooks.json",
         "config_init.py",
         "hook_guard.py",
@@ -70,6 +78,11 @@ _PROTECTED_ASK_FILES = frozenset(
         "plugin.json",
     }
 )
+_PROTECTED_CREDENTIAL_FILES_LOWER = frozenset(
+    f.lower() for f in _PROTECTED_CREDENTIAL_FILES
+)
+_PROTECTED_DENY_FILES_LOWER = frozenset(f.lower() for f in _PROTECTED_DENY_FILES)
+_PROTECTED_ASK_FILES_LOWER = frozenset(f.lower() for f in _PROTECTED_ASK_FILES)
 _CLAUDE_DECISIONS = {
     "allow": "allow",
     "deny": "deny",
@@ -94,16 +107,18 @@ _DELETION_TEXT_RE = re.compile(
 # Any shell command containing none of these tokens cannot write protected files,
 # spoof env vars, invoke obfuscated/piped/quoted commands, run Ads scripts, or need rewrites.
 _SHELL_INSPECT_RE = re.compile(
-    r"(?:python|pytest|googleads|GoogleAdsClient|google-ads|GOOGLE_ADS_|skills/|"
+    r"(?:python|pytest|mypy|googleads|GoogleAdsClient|google-ads|GOOGLE_ADS_|skills/|"
+    r"google_ads_php|google_ads_config|ads\.properties|"
     r"\.(?:py|sh|bash|php|rb|js|mjs|cjs|ts)\b|"
     r"run_mutation|config_init|hook_guard|sitecustomize|AGENTS\.md|set_financial_limits|"
     r"create_(?:account|campaign|ad_group|ad|pmax_webpage_filter)|"
     r"assistant_config|financial_limits|last_dry_run|mutation_audit|hooks\.json|"
     r"mcp_config|\.mcp\.json|sidecar\.json|plugin\.json|server\.py|\.a2a_token|"
-    r"\b(?:curl|wget|http|httpie|xh|sed|perl|awk|gawk|mawk|nawk|patch|"
+    r"\b(?:curl|wget|http|httpie|xh|sed|perl|awk|gawk|mawk|nawk|patch|ed|ex|find|"
     r"tee|cp|mv|install|ln|rm|truncate|dd|rsync|eval|exec|env|xargs|source|"
     r"php|ruby|node|nodejs|deno|bun|bash|sh|zsh|dash|ksh)\b|"
-    r":mutate|saved/|>{1,2}|\./|''|\"\"|\$|`|\||\\)",
+    r":mutate|saved/|>{1,2}|\./|''|\"\"|\$'|\$|`|\||\\|"
+    r"[A-Za-z0-9_./:-]['\"]|['\"][A-Za-z0-9_./:-])",
     re.IGNORECASE,
 )
 _ENABLED_LINE_RE = re.compile(
@@ -156,10 +171,13 @@ def _fast_is_plugin_enabled() -> bool:
     for cfg in candidates:
         if os.path.isfile(cfg):
             try:
-                with open(cfg, "r", encoding="utf-8") as f:
+                with open(cfg, "r", encoding="utf-8-sig") as f:
                     m = _ENABLED_LINE_RE.search(f.read())
                 if m:
                     return m.group(1).lower() == "true"
+                # Stop at the highest-precedence readable assistant_config so lower-precedence
+                # configs cannot silently override an isolated config that omits `enabled`.
+                return True
             except OSError:
                 continue
     return True
@@ -549,12 +567,13 @@ def handle_fast_hook(
         decision, reason = _evaluate_mcp_guard(mcp_tool, mcp_args, parsed)
         return _emit_pretooluse(decision, reason, is_claude)
 
-    # 2. File-read / file-write tool interception (agy + legacy + Claude Read/Write/Edit)
+    # 2. File-read / file-write tool interception (agy + legacy + Claude Read/Grep/Write/Edit)
     ws_cwd = _extract_workspace_cwd(parsed)
     target_file = (
         args.get("Path")
         or args.get("TargetFile")
         or args.get("AbsolutePath")
+        or args.get("SearchPath")
         or args.get("file_path")
         or args.get("path")
         or ""
@@ -566,7 +585,10 @@ def handle_fast_hook(
     if tool_name in _FILE_READ_TOOLS:
         if isinstance(target_file, str) and target_file.strip():
             bases = _candidate_basenames(target_file, ws_cwd)
-            cred_hit = next((b for b in bases if b in _PROTECTED_CREDENTIAL_FILES), None)
+            cred_hit = next(
+                (b for b in bases if b.lower() in _PROTECTED_CREDENTIAL_FILES_LOWER),
+                None,
+            )
             if cred_hit:
                 return _emit_pretooluse(
                     "deny",
@@ -574,13 +596,37 @@ def handle_fast_hook(
                     "are prohibited to prevent leaking OAuth secrets or sidecar tokens into model context.",
                     is_claude,
                 )
+        raw_globs: list[str] = []
+        g_val = args.get("glob")
+        if isinstance(g_val, str) and g_val.strip():
+            raw_globs.append(g_val.strip())
+        inc_val = args.get("Includes")
+        if isinstance(inc_val, list):
+            raw_globs.extend(str(x).strip() for x in inc_val if isinstance(x, str) and x.strip())
+        if raw_globs:
+            import fnmatch
+
+            for gpat in raw_globs:
+                gbase = os.path.basename(gpat.replace("\\", "/").rstrip("/")).lower()
+                literal_chars = re.sub(r"[*?\[\]!]", "", gbase)
+                if len(literal_chars) >= 3:
+                    for cred_name in _PROTECTED_CREDENTIAL_FILES:
+                        if fnmatch.fnmatchcase(cred_name.lower(), gbase):
+                            return _emit_pretooluse(
+                                "deny",
+                                f"BLOCKED BY CREDENTIAL ISOLATION GUARD: Direct file search targeting '{cred_name}' "
+                                "is prohibited to prevent leaking OAuth secrets or sidecar tokens into model context.",
+                                is_claude,
+                            )
         return _emit_pretooluse("allow", None, is_claude)
 
     if (tool_name in _FILE_WRITE_TOOLS or (target_file and not cmd)) and isinstance(
         target_file, str
     ):
         bases = _candidate_basenames(target_file, ws_cwd)
-        deny_hit = next((b for b in bases if b in _PROTECTED_DENY_FILES), None)
+        deny_hit = next(
+            (b for b in bases if b.lower() in _PROTECTED_DENY_FILES_LOWER), None
+        )
         if deny_hit:
             return _emit_pretooluse(
                 "deny",
@@ -588,7 +634,9 @@ def handle_fast_hook(
                 "Receipts and audit logs may only be written by run_mutation.py.",
                 is_claude,
             )
-        ask_hit = next((b for b in bases if b in _PROTECTED_ASK_FILES), None)
+        ask_hit = next(
+            (b for b in bases if b.lower() in _PROTECTED_ASK_FILES_LOWER), None
+        )
         if ask_hit:
             return _emit_pretooluse(
                 "force_ask",

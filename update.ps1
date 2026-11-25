@@ -139,8 +139,8 @@ function Get-RepoName {
 # Helper to safely remove a symlink or directory junction without deleting target contents
 function Remove-ReparsePointSafely {
     param([string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    $Item = Get-Item -LiteralPath $Path -Force
+    $Item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $Item) { return }
     if ($IsWindows -or $env:OS -eq "Windows_NT") {
         if ($Item.PSIsContainer) {
             [System.IO.Directory]::Delete($Item.FullName)
@@ -153,6 +153,62 @@ function Remove-ReparsePointSafely {
         } catch {
             Remove-Item -Force -LiteralPath $Item.FullName
         }
+    }
+}
+
+# Helper to write UTF-8 without BOM (compatible with Windows PowerShell 5.1 and PowerShell 7+)
+function Write-Utf8NoBom {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+    $FullPath = if ([System.IO.Path]::IsPathRooted($Path)) { $Path } else { Join-Path (Get-Location).ProviderPath $Path }
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($FullPath, $Content, $Utf8NoBom)
+}
+
+# Helper to locate a working Python 3.11+ interpreter (rejects Windows Store alias stubs)
+function Find-WorkingPython {
+    $FoundVersion = $null
+    $FoundPath = $null
+    foreach ($Candidate in @(
+        @{ Name = "python3"; PrefixArgs = @() },
+        @{ Name = "python";  PrefixArgs = @() },
+        @{ Name = "py";      PrefixArgs = @("-3") },
+        @{ Name = "py";      PrefixArgs = @() }
+    )) {
+        $Cmd = $Candidate.Name
+        $PrefixArgs = $Candidate.PrefixArgs
+        $CmdInfo = Get-Command $Cmd -ErrorAction SilentlyContinue
+        if (-not $CmdInfo) { continue }
+        try {
+            $ProbeArgs = @($PrefixArgs) + @("-c", 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"); sys.exit(0 if sys.version_info >= (3, 11) else 1)')
+            $global:LASTEXITCODE = 0
+            $VerOutput = (& $Cmd @ProbeArgs 2>$null | Out-String)
+            $ExitCode = $LASTEXITCODE
+            $VerTrimmed = if ($null -ne $VerOutput) { $VerOutput.Trim() } else { "" }
+            if ($ExitCode -eq 0 -and $VerTrimmed -match '^\d+\.\d+\.\d+$') {
+                return @{
+                    Found      = $true
+                    Name       = $Cmd
+                    PrefixArgs = $PrefixArgs
+                    Source     = $CmdInfo.Source
+                    Version    = $VerTrimmed
+                }
+            }
+            elseif ($VerTrimmed -match '^\d+\.\d+\.\d+$') {
+                $FoundVersion = $VerTrimmed
+                $FoundPath = $CmdInfo.Source
+            }
+        }
+        catch {}
+    }
+    return @{
+        Found      = $false
+        Name       = $null
+        PrefixArgs = @()
+        Source     = $FoundPath
+        Version    = $FoundVersion
     }
 }
 
@@ -169,7 +225,7 @@ function Merge-FinancialLimits {
     }
     $Overrides = [ordered]@{}
     $CurrentSection = ""
-    foreach ($RawLine in (Get-Content -LiteralPath $BackupPath)) {
+    foreach ($RawLine in (Get-Content -LiteralPath $BackupPath -Encoding UTF8)) {
         $Line = ($RawLine -replace '#.*$', '').Trim()
         if (-not $Line) { continue }
         if ($Line -match '^\[([A-Za-z0-9_.]+)\]$') {
@@ -193,7 +249,7 @@ function Merge-FinancialLimits {
     if ($Overrides.Count -eq 0) { return }
 
     $Applied = @{}
-    $UpdatedLines = foreach ($RawLine in (Get-Content -LiteralPath $TemplatePath)) {
+    $UpdatedLines = @(foreach ($RawLine in (Get-Content -LiteralPath $TemplatePath -Encoding UTF8)) {
         if ($RawLine -match '^(\s*)([A-Za-z0-9_.]+)(\s*=\s*)([^#]+?)(\s*#.*)?$') {
             $Indent = $Matches[1]
             $TKey = $Matches[2]
@@ -206,7 +262,7 @@ function Merge-FinancialLimits {
             }
         }
         $RawLine
-    }
+    })
     $ExtraLines = @()
     foreach ($OKey in $Overrides.Keys) {
         if (-not $Applied.ContainsKey($OKey)) {
@@ -217,7 +273,7 @@ function Merge-FinancialLimits {
     if (-not $FinalContent.EndsWith("`n")) {
         $FinalContent += "`n"
     }
-    Set-Content -LiteralPath $TemplatePath -Value $FinalContent -NoNewline
+    Write-Utf8NoBom -Path $TemplatePath -Content $FinalContent
 }
 
 function Update-GitRepo {
@@ -271,7 +327,7 @@ function Set-LatestApiVersion {
     )
     $Latest = $null
     if (Test-Path -LiteralPath $SearchDir) {
-        $VersionDirs = Get-ChildItem -Directory -Path $SearchDir -Filter "v*" |
+        $VersionDirs = Get-ChildItem -Directory -LiteralPath $SearchDir -Filter "v*" |
             Where-Object { $_.Name -match "^v\d+$" } |
             Sort-Object { [int]($_.Name.Substring(1)) }
         if ($VersionDirs) {
@@ -279,12 +335,16 @@ function Set-LatestApiVersion {
         }
     }
     if (-not $Latest) {
-        $PyCmd = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } elseif (Get-Command python -ErrorAction SilentlyContinue) { "python" } else { $null }
-        if ($PyCmd) {
-            $DetectedPy = & $PyCmd -c 'import importlib.util, os, re; s = importlib.util.find_spec("google.ads.googleads"); locs = list(s.submodule_search_locations or ()) if s else []; vs = sorted([d for p in locs if os.path.isdir(p) for d in os.listdir(p) if re.fullmatch(r"v\d+", d)], key=lambda d: int(d[1:])); print(vs[-1] if vs else "")' 2>$null
-            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($DetectedPy)) {
-                $Latest = $DetectedPy.Trim()
-            }
+        $Py = Find-WorkingPython
+        if ($Py.Found) {
+            try {
+                $DetectArgs = @($Py.PrefixArgs) + @("-c", 'import importlib.util, os, re; s = importlib.util.find_spec("google.ads.googleads"); locs = list(s.submodule_search_locations or ()) if s else []; vs = sorted([d for p in locs if os.path.isdir(p) for d in os.listdir(p) if re.fullmatch(r"v\d+", d)], key=lambda d: int(d[1:])); print(vs[-1] if vs else "")')
+                $global:LASTEXITCODE = 0
+                $DetectedPy = (& $Py.Name @DetectArgs 2>$null | Out-String)
+                if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($DetectedPy)) {
+                    $Latest = $DetectedPy.Trim()
+                }
+            } catch {}
         }
     }
     if ($Latest -or $CustomerId) {
@@ -299,32 +359,34 @@ function Set-LatestApiVersion {
         $PluginEnabled = "true"
         $ExtraLines = @()
         if (Test-Path -LiteralPath $CfgFile) {
-            $Existing = Get-Content -LiteralPath $CfgFile -Raw
-            if (-not $Latest -and ($Existing -match '(?m)^\s*api_version\s*=\s*["'']?([^"''\s#]+)["'']?')) {
-                $ExistingVer = $Matches[1].Trim()
-                if ($ExistingVer -match '^v?(\d+)$') {
-                    $ApiVer = "v$($Matches[1])"
+            $Existing = Get-Content -LiteralPath $CfgFile -Raw -Encoding UTF8
+            if ($null -ne $Existing) {
+                if (-not $Latest -and ($Existing -match '(?m)^\s*api_version\s*=\s*["'']?([^"''\s#]+)["'']?')) {
+                    $ExistingVer = $Matches[1].Trim()
+                    if ($ExistingVer -match '^v?(\d+)$') {
+                        $ApiVer = "v$($Matches[1])"
+                    }
+                    else {
+                        Write-Warning "Ignoring invalid api_version '$ExistingVer' in $CfgFile (expected vNN)."
+                    }
                 }
-                else {
-                    Write-Warning "Ignoring invalid api_version '$ExistingVer' in $CfgFile (expected vNN)."
+                if ($Existing -match '(?m)^\s*customer_id\s*=\s*["'']?([^"''\s#]+)["'']?') {
+                    $Cid = $Matches[1].Trim()
                 }
-            }
-            if ($Existing -match '(?m)^\s*customer_id\s*=\s*["'']?([^"''\s#]+)["'']?') {
-                $Cid = $Matches[1].Trim()
-            }
-            if ($Existing -match '(?mi)^\s*execute_mutates\s*=\s*["'']?(true|false)["'']?') {
-                $ExecMutates = $Matches[1].ToLower()
-            }
-            if ($Existing -match '(?mi)^\s*allow_tier1_financial_mutates\s*=\s*["'']?(true|false)["'']?') {
-                $Tier1Mutates = $Matches[1].ToLower()
-            }
-            if ($Existing -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?(true|false)["'']?') {
-                $PluginEnabled = $Matches[1].ToLower()
-            }
-            foreach ($RawLine in ($Existing -split "`r?`n")) {
-                if ([string]::IsNullOrWhiteSpace($RawLine)) { continue }
-                if ($RawLine -notmatch '^\s*(?:api_version|customer_id|execute_mutates|allow_tier1_financial_mutates|enabled|plugin_enabled)\s*=') {
-                    $ExtraLines += $RawLine
+                if ($Existing -match '(?mi)^\s*execute_mutates\s*=\s*["'']?(true|false)["'']?') {
+                    $ExecMutates = $Matches[1].ToLower()
+                }
+                if ($Existing -match '(?mi)^\s*allow_tier1_financial_mutates\s*=\s*["'']?(true|false)["'']?') {
+                    $Tier1Mutates = $Matches[1].ToLower()
+                }
+                if ($Existing -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?(true|false)["'']?') {
+                    $PluginEnabled = $Matches[1].ToLower()
+                }
+                foreach ($RawLine in ($Existing -split "`r?`n")) {
+                    if ([string]::IsNullOrWhiteSpace($RawLine)) { continue }
+                    if ($RawLine -notmatch '^\s*(?:api_version|customer_id|execute_mutates|allow_tier1_financial_mutates|enabled|plugin_enabled)\s*=') {
+                        $ExtraLines += $RawLine
+                    }
                 }
             }
         }
@@ -351,10 +413,13 @@ function Set-LatestApiVersion {
             )
             foreach ($LegacyFile in $LegacyCandidates) {
                 if ($LegacyFile -and (Test-Path -LiteralPath $LegacyFile)) {
-                    $LegacyCid = (Get-Content -LiteralPath $LegacyFile -Raw).Trim().Trim("`"'")
-                    if ($LegacyCid -and $LegacyCid -ne "12345678") {
-                        $Cid = $LegacyCid
-                        break
+                    $LegacyRaw = Get-Content -LiteralPath $LegacyFile -Raw -Encoding UTF8
+                    if ($null -ne $LegacyRaw) {
+                        $LegacyCid = $LegacyRaw.Trim().Trim("`"'")
+                        if ($LegacyCid -and $LegacyCid -ne "12345678") {
+                            $Cid = $LegacyCid
+                            break
+                        }
                     }
                 }
             }
@@ -363,7 +428,7 @@ function Set-LatestApiVersion {
         if ($ExtraLines.Count -gt 0) {
             $TomlContent += ($ExtraLines -join "`n") + "`n"
         }
-        Set-Content -Path $CfgFile -Value $TomlContent -NoNewline
+        Write-Utf8NoBom -Path $CfgFile -Content $TomlContent
         if ($ApiVer) {
             Write-Host "Configured API version $ApiVer in $CfgFile"
         }
@@ -411,10 +476,13 @@ if (-not $ProjectDirAbs) {
         (Join-Path (Join-Path $ClaudePluginTargetDirTmp "config") ".repo_root")
     )) {
         if (Test-Path -LiteralPath $RepoRootFile) {
-            $SavedRoot = (Get-Content -LiteralPath $RepoRootFile -Raw).Trim()
-            if ($SavedRoot -and (Test-Path -LiteralPath (Join-Path $SavedRoot "plugins\google-ads-api-developer-assistant"))) {
-                $ProjectDirAbs = (Get-Item -LiteralPath $SavedRoot).FullName
-                break
+            $SavedRootRaw = Get-Content -LiteralPath $RepoRootFile -Raw -Encoding UTF8
+            if ($null -ne $SavedRootRaw) {
+                $SavedRoot = $SavedRootRaw.Trim()
+                if ($SavedRoot -and (Test-Path -LiteralPath (Join-Path $SavedRoot "plugins\google-ads-api-developer-assistant"))) {
+                    $ProjectDirAbs = (Get-Item -LiteralPath $SavedRoot).FullName
+                    break
+                }
             }
         }
     }
@@ -440,6 +508,10 @@ Write-Host "Updating google-ads-api-developer-assistant repository..."
 $ConfigDir = Join-Path (Join-Path $ProjectDirAbs "plugins\google-ads-api-developer-assistant") "config"
 $TempConfigDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gads_update_" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $TempConfigDir | Out-Null
+$UpdateSucceeded = $false
+$PullSucceeded = $false
+$BackupState = @{ HasData = $false }
+$BackedUpTrackedFiles = @()
 
 try {
     # If git-tracked config files in the repository checkout have local modifications,
@@ -455,8 +527,11 @@ try {
             git -C $ProjectDirAbs diff --quiet -- $TrackedRel 2>$null
             if ($LASTEXITCODE -ne 0) {
                 $FullTracked = Join-Path $ProjectDirAbs ($TrackedRel -replace '/', '\')
+                $RepoBakDest = Join-Path $TempConfigDir "repo_$TrackedBase"
                 if (Test-Path -LiteralPath $FullTracked) {
-                    Copy-Item -LiteralPath $FullTracked -Destination (Join-Path $TempConfigDir "repo_$TrackedBase") -Force
+                    Copy-Item -LiteralPath $FullTracked -Destination $RepoBakDest -Force
+                    $BackupState.HasData = $true
+                    $BackedUpTrackedFiles += @{ Source = $FullTracked; Backup = $RepoBakDest }
                 }
                 git -C $ProjectDirAbs checkout -- $TrackedRel 2>$null | Out-Null
             }
@@ -472,11 +547,13 @@ try {
 
     if ($NoGitPull) {
         Write-Host "Skipping git pull (-NoGitPull)."
+        $PullSucceeded = $true
     } else {
         git -C $ProjectDirAbs -c core.longpaths=true -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false pull
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to update google-ads-api-developer-assistant repository."
         }
+        $PullSucceeded = $true
         Write-Host "Successfully updated repository."
     }
 
@@ -512,8 +589,7 @@ try {
                 Write-Host "Library $RepoName not found in repository client_libs. Cloning into $SourceLibPath..."
                 git -c core.longpaths=true -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false clone --depth 1 $RepoUrl $SourceLibPath
                 if ($LASTEXITCODE -ne 0) {
-                    Write-Error "ERROR: Failed to clone $RepoUrl"
-                    exit 1
+                    throw "Failed to clone $RepoUrl"
                 }
                 Remove-Item -Force -LiteralPath (Join-Path $SourceLibPath "google-ads.yaml") -ErrorAction SilentlyContinue
             }
@@ -561,8 +637,8 @@ try {
         $ParentPluginDir = Split-Path $TargetPluginDir
         $IsSymlink = $false
         $WasDisabled = $false
-        if (Test-Path -LiteralPath $TargetPluginDir) {
-            $TargetItem = Get-Item -LiteralPath $TargetPluginDir -Force
+        $TargetItem = Get-Item -LiteralPath $TargetPluginDir -Force -ErrorAction SilentlyContinue
+        if ($TargetItem) {
             if (($TargetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $TargetItem.LinkType) {
                 $IsSymlink = $true
             }
@@ -570,8 +646,8 @@ try {
                 $WasDisabled = $true
             }
             elseif (Test-Path -LiteralPath (Join-Path (Join-Path $TargetPluginDir "config") "assistant_config")) {
-                $PriorCfg = Get-Content -LiteralPath (Join-Path (Join-Path $TargetPluginDir "config") "assistant_config") -Raw
-                if ($PriorCfg -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?false["'']?') {
+                $PriorCfg = Get-Content -LiteralPath (Join-Path (Join-Path $TargetPluginDir "config") "assistant_config") -Raw -Encoding UTF8
+                if ($null -ne $PriorCfg -and $PriorCfg -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?false["'']?') {
                     $WasDisabled = $true
                 }
             }
@@ -615,32 +691,58 @@ try {
             $TargetCfgFile = Join-Path $TargetCfgDir "assistant_config"
             $TargetFinFile = Join-Path $TargetCfgDir "financial_limits"
             $TargetYamlFile = Join-Path $TargetCfgDir "google-ads.yaml"
+            $TargetCidFile = Join-Path $TargetCfgDir "customer_id"
+            $TargetCidTxtFile = Join-Path $TargetCfgDir "customer_id.txt"
             $TargetCfgBak = Join-Path $TempConfigDir "target_assistant_config"
             $TargetFinBak = Join-Path $TempConfigDir "target_financial_limits"
             $TargetYamlBak = Join-Path $TempConfigDir "target_google_ads_yaml"
+            $TargetCidBak = Join-Path $TempConfigDir "target_customer_id"
+            $TargetCidTxtBak = Join-Path $TempConfigDir "target_customer_id_txt"
             $TargetSavedBak = Join-Path $TempConfigDir "target_saved"
-            Remove-Item -Force -LiteralPath $TargetCfgBak, $TargetFinBak, $TargetYamlBak -ErrorAction SilentlyContinue
+            Remove-Item -Force -LiteralPath $TargetCfgBak, $TargetFinBak, $TargetYamlBak, $TargetCidBak, $TargetCidTxtBak -ErrorAction SilentlyContinue
             if (Test-Path -LiteralPath $TargetSavedBak) {
                 Remove-Item -Recurse -Force -LiteralPath $TargetSavedBak -ErrorAction SilentlyContinue
             }
 
             if (Test-Path -LiteralPath $TargetCfgFile) {
                 Copy-Item -Force -LiteralPath $TargetCfgFile -Destination $TargetCfgBak
+                $BackupState.HasData = $true
             }
             if (Test-Path -LiteralPath $TargetFinFile) {
                 Copy-Item -Force -LiteralPath $TargetFinFile -Destination $TargetFinBak
+                $BackupState.HasData = $true
             }
             if (Test-Path -LiteralPath $TargetYamlFile) {
                 Copy-Item -Force -LiteralPath $TargetYamlFile -Destination $TargetYamlBak
+                $BackupState.HasData = $true
+            }
+            if (Test-Path -LiteralPath $TargetCidFile) {
+                Copy-Item -Force -LiteralPath $TargetCidFile -Destination $TargetCidBak
+                $BackupState.HasData = $true
+            }
+            if (Test-Path -LiteralPath $TargetCidTxtFile) {
+                Copy-Item -Force -LiteralPath $TargetCidTxtFile -Destination $TargetCidTxtBak
+                $BackupState.HasData = $true
             }
             $ExistingSaved = Join-Path $TargetPluginDir "saved"
             if (Test-Path -LiteralPath $ExistingSaved) {
                 Copy-Item -Recurse -Force -LiteralPath $ExistingSaved -Destination $TargetSavedBak
+                $BackupState.HasData = $true
             }
 
             Get-ChildItem -LiteralPath $PluginSourceDir -Force | ForEach-Object {
-                if ($_.Name -ne "client_libs" -and $_.Name -ne "saved") {
-                    Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination (Join-Path $TargetPluginDir $_.Name)
+                if ($_.Name -ne "client_libs" -and $_.Name -ne "saved" -and $_.Name -ne ".git") {
+                    $DestItemPath = Join-Path $TargetPluginDir $_.Name
+                    $ExistingDestItem = Get-Item -LiteralPath $DestItemPath -Force -ErrorAction SilentlyContinue
+                    if ($ExistingDestItem) {
+                        if (($ExistingDestItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $ExistingDestItem.LinkType) {
+                            Remove-ReparsePointSafely -Path $DestItemPath
+                        }
+                        else {
+                            Remove-Item -Recurse -Force -LiteralPath $DestItemPath
+                        }
+                    }
+                    Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination $DestItemPath
                 }
             }
 
@@ -668,6 +770,12 @@ try {
             if (Test-Path -LiteralPath $TargetYamlBak) {
                 Copy-Item -Force -LiteralPath $TargetYamlBak -Destination $TargetYamlFile
             }
+            if (Test-Path -LiteralPath $TargetCidBak) {
+                Copy-Item -Force -LiteralPath $TargetCidBak -Destination $TargetCidFile
+            }
+            if (Test-Path -LiteralPath $TargetCidTxtBak) {
+                Copy-Item -Force -LiteralPath $TargetCidTxtBak -Destination $TargetCidTxtFile
+            }
             if ((Test-Path -LiteralPath $TargetSavedBak) -and -not (Test-Path -LiteralPath $ExistingSaved)) {
                 Copy-Item -Recurse -Force -LiteralPath $TargetSavedBak -Destination $ExistingSaved
             }
@@ -683,7 +791,23 @@ try {
         if (-not (Test-Path -LiteralPath $TargetCfgDir)) {
             New-Item -ItemType Directory -Force -Path $TargetCfgDir | Out-Null
         }
-        Set-Content -Path (Join-Path $TargetCfgDir ".repo_root") -Value "$ProjectDirAbs`n" -NoNewline
+        Write-Utf8NoBom -Path (Join-Path $TargetCfgDir ".repo_root") -Content "$ProjectDirAbs`n"
+
+        # Strip Claude-Code-only files from the installed agy copy before manifest normalization
+        # and plugin disable/enable so `jetski plugin validate` emits 0 warnings and no orphaned `.mcp.json.disabled` remains
+        if ($Type -eq "agy") {
+            foreach ($ClaudeOnly in @(".claude-plugin", ".mcp.json", ".mcp.json.disabled", "hooks", "commands")) {
+                $ClaudeOnlyPath = Join-Path $TargetPluginDir $ClaudeOnly
+                $ClaudeOnlyItem = Get-Item -LiteralPath $ClaudeOnlyPath -Force -ErrorAction SilentlyContinue
+                if ($ClaudeOnlyItem) {
+                    if (($ClaudeOnlyItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $ClaudeOnlyItem.LinkType) {
+                        Remove-ReparsePointSafely -Path $ClaudeOnlyPath
+                    } else {
+                        Remove-Item -Recurse -Force -LiteralPath $ClaudeOnlyPath -ErrorAction SilentlyContinue
+                    }
+                }
+            }
+        }
 
         $TargetClientLibs = Join-Path $TargetPluginDir "client_libs"
         if (-not (Test-Path -LiteralPath $TargetClientLibs)) {
@@ -720,22 +844,33 @@ try {
             }
         }
 
-        $HasWorkingPython3 = $false
-        $Py3Info = Get-Command "python3" -ErrorAction SilentlyContinue
-        if ($Py3Info) {
-            try {
-                & "python3" -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" *> $null
-                if ($LASTEXITCODE -eq 0) { $HasWorkingPython3 = $true }
-            } catch {}
-        }
-        if (-not $HasWorkingPython3 -and (Get-Command "python" -ErrorAction SilentlyContinue)) {
+        $WorkingPy = Find-WorkingPython
+        if ($WorkingPy.Found -and $WorkingPy.Name -ne "python3") {
             foreach ($RelJson in @("hooks.json", "mcp_config.json", ".mcp.json", "sidecars\google-ads-a2a-service\sidecar.json")) {
                 $ManifestPath = Join-Path $TargetPluginDir $RelJson
                 if (Test-Path -LiteralPath $ManifestPath) {
                     $RawJson = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8
-                    $UpdatedJson = $RawJson -replace '"command"\s*:\s*"python3(?=\s|")', '"command": "python'
+                    if ($null -eq $RawJson) { continue }
+                    if ($WorkingPy.Name -eq "python") {
+                        $UpdatedJson = $RawJson -replace '"command"\s*:\s*"python3(?=\s|")', '"command": "python'
+                    }
+                    else {
+                        $PyPrefix = if ($WorkingPy.PrefixArgs -contains "-3") { "py -3" } else { "py" }
+                        $UpdatedJson = $RawJson -replace '"command"\s*:\s*"python3(?=\s)', ('"command": "' + $PyPrefix)
+                        if ($UpdatedJson -match '"command"\s*:\s*"python3"') {
+                            $UpdatedJson = $UpdatedJson -replace '"command"\s*:\s*"python3"', '"command": "py"'
+                            if ($WorkingPy.PrefixArgs -contains "-3") {
+                                if ($UpdatedJson -match '"args"\s*:\s*\[\s*\]') {
+                                    $UpdatedJson = $UpdatedJson -replace '"args"\s*:\s*\[\s*\]', '"args": ["-3"]'
+                                }
+                                else {
+                                    $UpdatedJson = $UpdatedJson -replace '("args"\s*:\s*\[)(\s*)(?=[^\]\s])', '$1$2"-3", '
+                                }
+                            }
+                        }
+                    }
                     if ($UpdatedJson -ne $RawJson) {
-                        Set-Content -LiteralPath $ManifestPath -Value $UpdatedJson -Encoding UTF8 -NoNewline
+                        Write-Utf8NoBom -Path $ManifestPath -Content $UpdatedJson
                     }
                 }
             }
@@ -745,22 +880,23 @@ try {
         Set-LatestApiVersion -SearchDir $TargetPythonDir -TargetConfigDir $TargetCfgDir -TempLegacyDir $TempConfigDir
 
         if ($Disable -or (-not $Enable -and $WasDisabled)) {
+            $global:LASTEXITCODE = 0
             & (Join-Path $ProjectDirAbs "plugin.ps1") disable -ConfigDir $TargetCfgDir -Quiet
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to disable plugin via plugin.ps1 (exit code $LASTEXITCODE)."
+            }
         }
         elseif ($Enable) {
+            $global:LASTEXITCODE = 0
             & (Join-Path $ProjectDirAbs "plugin.ps1") enable -ConfigDir $TargetCfgDir -Quiet
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to enable plugin via plugin.ps1 (exit code $LASTEXITCODE)."
+            }
         }
     }
 
     if ($Type -eq "agy") {
         Sync-InstalledPluginDir -TargetPluginDir $AgyPluginTargetDir
-        # Strip Claude-Code-only files from the installed agy copy so `jetski plugin validate` emits 0 warnings
-        foreach ($ClaudeOnly in @(".claude-plugin", ".mcp.json", "hooks", "commands")) {
-            $ClaudeOnlyPath = Join-Path $AgyPluginTargetDir $ClaudeOnly
-            if (Test-Path -LiteralPath $ClaudeOnlyPath) {
-                Remove-Item -Recurse -Force -LiteralPath $ClaudeOnlyPath -ErrorAction SilentlyContinue
-            }
-        }
     }
     elseif ($Type -eq "claude") {
         $ClaudeMarketplaceDir = Join-Path $UserHome ".claude\plugins\google-ads-assistant-local"
@@ -776,9 +912,14 @@ try {
             $PrevEAP = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
+                $global:LASTEXITCODE = 0
                 & claude plugin update google-ads-api-developer-assistant@google-ads-assistant-local *> $null
                 if ($LASTEXITCODE -ne 0) {
+                    $global:LASTEXITCODE = 0
                     & claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local *> $null
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warning "WARN: Failed to refresh plugin registration in Claude Code CLI (exit code $LASTEXITCODE)."
+                    }
                 }
             } catch {}
             finally {
@@ -786,14 +927,27 @@ try {
             }
         }
     }
+    $UpdateSucceeded = $true
 }
 catch {
+    if (-not $PullSucceeded -and $BackedUpTrackedFiles.Count -gt 0) {
+        foreach ($Entry in $BackedUpTrackedFiles) {
+            if (Test-Path -LiteralPath $Entry.Backup) {
+                Copy-Item -Force -LiteralPath $Entry.Backup -Destination $Entry.Source -ErrorAction SilentlyContinue
+            }
+        }
+    }
     Write-Error "ERROR: $_"
     exit 1
 }
 finally {
-    if (Test-Path -LiteralPath $TempConfigDir) {
-        Remove-Item -Recurse -Force -LiteralPath $TempConfigDir -ErrorAction SilentlyContinue
+    if ($UpdateSucceeded -or -not $BackupState.HasData) {
+        if (Test-Path -LiteralPath $TempConfigDir) {
+            Remove-Item -Recurse -Force -LiteralPath $TempConfigDir -ErrorAction SilentlyContinue
+        }
+    }
+    elseif (Test-Path -LiteralPath $TempConfigDir) {
+        Write-Warning "Update did not complete. Preserved backed-up configuration and data at: $TempConfigDir"
     }
 }
 
@@ -804,3 +958,4 @@ if ($Type -eq "agy") {
 } else {
     Write-Host "In your Claude Code session, run /reload-plugins to apply changes."
 }
+exit 0

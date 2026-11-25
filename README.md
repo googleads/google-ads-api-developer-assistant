@@ -1,115 +1,163 @@
 # Google Ads API Developer Assistant
 
-**Summary:** Use this assistant to work with the Google Ads API through natural language prompts. You can ask questions, create GAQL queries, generate code in multiple languages, and run API calls in your terminal.
+**Summary:** Use this assistant to work with the Google Ads API through natural
+language prompts. You can ask questions, create GAQL queries, generate code in
+multiple languages, and run API calls in your terminal.
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Agentic Design & Approach](#agentic-design--approach)
-  - [1. Unified Context via `rules/AGENTS.md`](#1-unified-context-via-rulesagentsmd)
-  - [2. Domain Skills & Slash Commands](#2-domain-skills--slash-commands)
-- [Key Features](#key-features)
-- [Supported Languages](#supported-languages)
-- [Prerequisites](#prerequisites)
-- [Setup](#setup)
-  - [1. Install Host Platform](#1-install-host-platform)
-  - [2. Clone the Assistant](#2-clone-the-assistant)
-  - [3. Run Install Script](#3-run-install-script)
-  - [4. Configure Credentials](#4-configure-credentials)
-  - [5. Configure Assistant Settings (`config/assistant_config`) & Enable/Disable Plugin](#5-configure-assistant-settings-configassistant_config--enabledisable-plugin)
-- [Usage](#usage)
-- [Stay in sync](#stay-in-sync)
-  - [1. What Syncs at Session Startup (`config/config_init.py`)](#1-what-syncs-at-session-startup-configconfig_initpy)
-  - [2. Sync Client Libraries During a Session](#2-sync-client-libraries-during-a-session)
-  - [3. Manual Terminal Updates](#3-manual-terminal-updates)
-  - [4. Client Library & Runtime Version Parity](#4-client-library--runtime-version-parity)
-- [Directory Structure](#directory-structure)
-- [Plugin Architecture](#plugin-architecture)
-- [Sidecar Daemon & How It Functions](#sidecar-daemon--how-it-functions)
-  - [What Is a Sidecar?](#what-is-a-sidecar)
-  - [How the Sidecar Is Configured in This Repository](#how-the-sidecar-is-configured-in-this-repository)
-  - [How the Host Manages the Sidecar Lifecycle](#how-the-host-manages-the-sidecar-lifecycle)
-  - [How the Sidecar Functions Within the Assistant](#how-the-sidecar-functions-within-the-assistant)
-  - [Run or Test the Sidecar Manually](#run-or-test-the-sidecar-manually)
-- [How Mutates Work](#how-mutates-work)
-  - [1. Configure the Mutate Switch (`execute_mutates` in `config/assistant_config`)](#1-configure-the-mutate-switch-execute_mutates-in-configassistant_config)
-  - [2. The 4-Step HITL Mutation Workflow & What You See on Screen](#2-the-4-step-hitl-mutation-workflow--what-you-see-on-screen)
-  - [3. Summary of Safeguards (`config/config_init.py` & `run_mutation.py`)](#3-summary-of-safeguards-configconfig_initpy--run_mutationpy)
-- [Behavioral Differences in 4.1.0](#behavioral-differences-in-410)
-- [Performance & Functionality Benchmarks](#performance--functionality-benchmarks)
-  - [How to Run the Benchmarks](#how-to-run-the-benchmarks)
-  - [How to Read the Benchmark Results](#how-to-read-the-benchmark-results)
-- [Functional Tests Against a Test Account](#functional-tests-against-a-test-account)
-  - [1. Prerequisites & Test Account Access](#1-prerequisites--test-account-access)
-  - [2. Configure the Test Account (`tests/test_account_config.yaml`)](#2-configure-the-test-account-teststest_account_configyaml)
-  - [3. Run the Functional Test Suite](#3-run-the-functional-test-suite)
-  - [4. Inspect & Filter the JSONL Audit Log](#4-inspect--filter-the-jsonl-audit-log)
-  - [5. Read the End-of-Run Results Tables](#5-read-the-end-of-run-results-tables)
-- [Audit Logs](#audit-logs)
-  - [1. Runtime HITL Mutation Audit Log (`mutation_audit.jsonl`)](#1-runtime-hitl-mutation-audit-log-mutation_auditjsonl)
-  - [2. HITL Policy Functional Test Audit Log (`<UTC_TIMESTAMP>_hitl_policy_functional_audit.jsonl`)](#2-hitl-policy-functional-test-audit-log-utc_timestamp_hitl_policy_functional_auditjsonl)
-  - [3. Live Mutate RPC Test Harness Audit Log (`<UTC_TIMESTAMP>_<conversation_id>.jsonl`)](#3-live-mutate-rpc-test-harness-audit-log-utc_timestamp_conversation_idjsonl)
-- [Maintenance](#maintenance)
-- [Uninstallation](#uninstallation)
-  - [Antigravity](#antigravity)
-  - [Claude Code](#claude-code)
-- [Contributing](#contributing)
-- [Support](#support)
-- [License](#license)
+-   [Overview](#overview)
+-   [Agentic Design & Approach](#agentic-design--approach)
+    -   [1. Unified Context via `rules/AGENTS.md`](#1-unified-context-via-rulesagentsmd)
+    -   [2. Domain Skills & Slash Commands](#2-domain-skills--slash-commands)
+-   [Key Features](#key-features)
+-   [Supported Languages](#supported-languages)
+-   [Prerequisites](#prerequisites)
+-   [Setup](#setup)
+    -   [1. Install Host Platform](#1-install-host-platform)
+    -   [2. Clone the Assistant](#2-clone-the-assistant)
+    -   [3. Run Install Script](#3-run-install-script)
+    -   [4. Configure Credentials](#4-configure-credentials)
+    -   [5. Configure Assistant Settings (`config/assistant_config`) & Enable/Disable Plugin](#5-configure-assistant-settings-configassistant_config--enabledisable-plugin)
+-   [Usage](#usage)
+-   [Stay in sync](#stay-in-sync)
+    -   [1. What Syncs at Session Startup (`config/config_init.py`)](#1-what-syncs-at-session-startup-configconfig_initpy)
+    -   [2. Sync Client Libraries During a Session](#2-sync-client-libraries-during-a-session)
+    -   [3. Manual Terminal Updates](#3-manual-terminal-updates)
+    -   [4. Client Library & Runtime Version Parity](#4-client-library--runtime-version-parity)
+-   [Directory Structure](#directory-structure)
+-   [Plugin Architecture](#plugin-architecture)
+-   [Sidecar Daemon & How It Functions](#sidecar-daemon--how-it-functions)
+    -   [What Is a Sidecar?](#what-is-a-sidecar)
+    -   [How the Sidecar Is Configured in This Repository](#how-the-sidecar-is-configured-in-this-repository)
+    -   [How the Host Manages the Sidecar Lifecycle](#how-the-host-manages-the-sidecar-lifecycle)
+    -   [How the Sidecar Functions Within the Assistant](#how-the-sidecar-functions-within-the-assistant)
+    -   [Run or Test the Sidecar Manually](#run-or-test-the-sidecar-manually)
+-   [How Mutates Work](#how-mutates-work)
+    -   [1. Configure the Mutate Switch (`execute_mutates` in `config/assistant_config`)](#1-configure-the-mutate-switch-execute_mutates-in-configassistant_config)
+    -   [2. The 4-Step HITL Mutation Workflow & What You See on Screen](#2-the-4-step-hitl-mutation-workflow--what-you-see-on-screen)
+    -   [3. Summary of Safeguards (`config/config_init.py` & `run_mutation.py`)](#3-summary-of-safeguards-configconfig_initpy--run_mutationpy)
+-   [Behavioral Differences in 4.1.0](#behavioral-differences-in-410)
+-   [Performance & Functionality Benchmarks](#performance--functionality-benchmarks)
+    -   [How to Run the Benchmarks](#how-to-run-the-benchmarks)
+    -   [How to Read the Benchmark Results](#how-to-read-the-benchmark-results)
+-   [Functional Tests Against a Test Account](#functional-tests-against-a-test-account)
+    -   [1. Prerequisites & Test Account Access](#1-prerequisites--test-account-access)
+    -   [2. Configure the Test Account (`tests/test_account_config.yaml`)](#2-configure-the-test-account-teststest_account_configyaml)
+    -   [3. Run the Functional Test Suite](#3-run-the-functional-test-suite)
+    -   [4. Inspect & Filter the JSONL Audit Log](#4-inspect--filter-the-jsonl-audit-log)
+    -   [5. Read the End-of-Run Results Tables](#5-read-the-end-of-run-results-tables)
+-   [Audit Logs](#audit-logs)
+    -   [1. Runtime HITL Mutation Audit Log (`mutation_audit.jsonl`)](#1-runtime-hitl-mutation-audit-log-mutation_auditjsonl)
+    -   [2. HITL Policy Functional Test Audit Log (`<UTC_TIMESTAMP>_hitl_policy_functional_audit.jsonl`)](#2-hitl-policy-functional-test-audit-log-utc_timestamp_hitl_policy_functional_auditjsonl)
+    -   [3. Live Mutate RPC Test Harness Audit Log (`<UTC_TIMESTAMP>_<conversation_id>.jsonl`)](#3-live-mutate-rpc-test-harness-audit-log-utc_timestamp_conversation_idjsonl)
+-   [Maintenance](#maintenance)
+-   [Uninstallation](#uninstallation)
+    -   [Antigravity](#antigravity)
+    -   [Claude Code](#claude-code)
+-   [Contributing](#contributing)
+-   [Support](#support)
+-   [License](#license)
 
----
+--------------------------------------------------------------------------------
 
 ## Overview
 
-The Google Ads API Developer Assistant helps developers work with the Google Ads API. Use natural language prompts to do these tasks:
+The Google Ads API Developer Assistant helps developers work with the Google Ads
+API. Use natural language prompts to do these tasks:
 
 *   Get answers to Google Ads API questions.
 *   Create Google Ads Query Language (GAQL) queries.
 *   Generate executable code with the Google Ads client libraries.
 *   Get and show data from the API.
 
-The Google Ads API Developer Assistant (v4.1.0) runs on the **Antigravity (`agy`)** and **Claude Code CLI** agent frameworks. It uses `rules/AGENTS.md` (auto-loaded by `agy` and injected on `SessionStart` in Claude Code CLI), slash commands (`commands/` on Claude Code CLI), and custom **Skills** (`skills/*/SKILL.md` on both CLIs) to apply safety rules and run validation pipelines.
+The Google Ads API Developer Assistant (v4.1.0) runs on the **Antigravity
+(`agy`)** and **Claude Code CLI** agent frameworks. It uses `rules/AGENTS.md`
+(auto-loaded by `agy` and injected on `SessionStart` in Claude Code CLI), slash
+commands (`commands/` on Claude Code CLI), and custom **Skills**
+(`skills/*/SKILL.md` on both CLIs) to apply safety rules and run validation
+pipelines.
 
 ## Agentic Design & Approach
 
-The assistant uses instruction files, slash commands, and domain tools to interact safely with the Google Ads API.
+The assistant uses instruction files, slash commands, and domain tools to
+interact safely with the Google Ads API.
 
 ### 1. Unified Context via `rules/AGENTS.md`
+
 The configuration files define the core rules for the assistant:
-*   **Version Cache Protocol**: Finds and saves the latest active API version (`api_version` in `config/assistant_config`).
-*   **Version Parity Check**: Compares the installed `google-ads` Python package with the local `client_libs/google-ads-python` files and warns you if they do not match.
-*   **Code Generation Pipeline**: Checks all generated Python code with `ruff` before it saves or shows the code.
-*   **GAQL Validation**: Checks queries against field metadata and compatibility rules.
-*   **Safety Constraints (4-Step HITL Mutation Guard — `create` & `update` Only)**: Applies a mandatory 4-step Human-in-the-Loop (HITL) verification protocol to all API mutations. It allows only **`create`** and **`update`** operations and blocks all delete operations (**`remove`** / `remove_all` operations, `remove_*` / `delete_*` RPCs, and `status = REMOVED`). Before any live write runs, the protocol requires a GAQL before-state read, a `validate_only=True` dry-run with a SHA-256 receipt (`saved/data/last_dry_run.json`), a consequence summary, and `PreToolUse` hook confirmation (`"decision": "force_ask"`).
+
+*   **Version Cache Protocol**: Finds and saves the latest active API version
+    (`api_version` in `config/assistant_config`).
+*   **Version Parity Check**: Compares the installed `google-ads` Python package
+    with the local `client_libs/google-ads-python` files and warns you if they
+    do not match.
+*   **Code Generation Pipeline**: Checks all generated Python code with `ruff`
+    before it saves or shows the code.
+*   **GAQL Validation**: Checks queries against field metadata and compatibility
+    rules.
+*   **Safety Constraints (4-Step HITL Mutation Guard — `create` & `update`
+    Only)**: Applies a mandatory 4-step Human-in-the-Loop (HITL) verification
+    protocol to all API mutations. It allows only **`create`** and **`update`**
+    operations and blocks all delete operations (**`remove`** / `remove_all`
+    operations, `remove_*` / `delete_*` RPCs, and `status = REMOVED`). Before
+    any live write runs, the protocol requires a GAQL before-state read, a
+    `validate_only=True` dry-run with a SHA-256 receipt
+    (`saved/data/last_dry_run.json`), a consequence summary, and `PreToolUse`
+    hook confirmation (`"decision": "force_ask"`).
 
 ### 2. Domain Skills & Slash Commands
-The assistant includes tool directories under `plugins/google-ads-api-developer-assistant/skills/` and slash commands under `plugins/google-ads-api-developer-assistant/commands/`.
 
-You can start each tool with natural language prompts in Antigravity or with slash commands in Claude Code:
-*   **HITL-Verified Mutations (`/execute-mutation`)**: Runs a two-step `--dry-run` (`validate_only=True`) and `--execute` workflow for `create` and `update` operations (blocks delete / `remove` operations) with SHA-256 receipt checks and consequence summaries.
-*   **GAQL Validation (`/validate-gaql`)**: Validates queries with the API `validate_only` parameter.
-*   **Object Inspection (`/inspect-object`)**: Checks API resources, nested messages, and enum definitions.
-*   **MCC Account Mapping (`/get-cids`)**: Lists client account hierarchies and sub-account CIDs under manager accounts.
-*   **Conversion Troubleshooting (`/troubleshoot-conversions`)**: Checks conversion upload summaries and validates CSV files.
-*   **PMax Listing Filters & URL Exclusions (`/pmax-filter`)**: Creates product partition trees and webpage URL exclusions.
-*   **Structured Explanations (`/explain`, `/step-by-step`, `/assistant-tutorial`)**: Gives 4-part explanations, numbered step lists, and interactive tutorials.
-*   **Environment & Library Sync (`/sync-client-libs`, `/ext-version`)**: Updates client libraries and checks the active API version.
+The assistant includes tool directories under
+`plugins/google-ads-api-developer-assistant/skills/` and slash commands under
+`plugins/google-ads-api-developer-assistant/commands/`.
+
+You can start each tool with natural language prompts in Antigravity or with
+slash commands in Claude Code:
+
+*   **HITL-Verified Mutations (`/execute-mutation`)**: Runs a two-step
+    `--dry-run` (`validate_only=True`) and `--execute` workflow for `create` and
+    `update` operations (blocks delete / `remove` operations) with SHA-256
+    receipt checks and consequence summaries.
+*   **GAQL Validation (`/validate-gaql`)**: Validates queries with the API
+    `validate_only` parameter.
+*   **Object Inspection (`/inspect-object`)**: Checks API resources, nested
+    messages, and enum definitions.
+*   **MCC Account Mapping (`/get-cids`)**: Lists client account hierarchies and
+    sub-account CIDs under manager accounts.
+*   **Conversion Troubleshooting (`/troubleshoot-conversions`)**: Checks
+    conversion upload summaries and validates CSV files.
+*   **PMax Listing Filters & URL Exclusions (`/pmax-filter`)**: Creates product
+    partition trees and webpage URL exclusions.
+*   **Structured Explanations (`/explain`, `/step-by-step`,
+    `/assistant-tutorial`)**: Gives 4-part explanations, numbered step lists,
+    and interactive tutorials.
+*   **Environment & Library Sync (`/sync-client-libs`, `/ext-version`)**:
+    Updates client libraries and checks the active API version.
 
 ## Key Features
 
-*   **Natural Language Q&A & Conceptual Guidance:** Ask questions about Google Ads API concepts, fields, and usage, or use explanation commands.
-    *   *Natural Language:* "What are the available campaign types?", "Tell me about reporting for Performance Max campaigns."
+*   **Natural Language Q&A & Conceptual Guidance:** Ask questions about Google
+    Ads API concepts, fields, and usage, or use explanation commands.
+
+    *   *Natural Language:* "What are the available campaign types?", "Tell me
+        about reporting for Performance Max campaigns."
     *   *Claude Code:* `/explain`, `/step-by-step`, `/assistant-tutorial`
 
-*   **Natural Language to GAQL & Client Library Code:** Turn prompts into executable code that uses the Google Ads client libraries.
+*   **Natural Language to GAQL & Client Library Code:** Turn prompts into
+    executable code that uses the Google Ads client libraries.
+
     *   The assistant saves executable code in `saved/code/`.
     *   *"Show me campaigns with the most conversions last 30 days."*
     *   *"Get all ad groups for customer '123-456-7890'."*
     *   *"Find disapproved ads across all campaigns."*
 
-*   **Validate Complex GAQL Queries:** Check GAQL queries against API metadata and compatibility rules.
+*   **Validate Complex GAQL Queries:** Check GAQL queries against API metadata
+    and compatibility rules.
+
     *   *Claude Code:* `/validate-gaql`
     *   *Natural Language:*
+
         ```sql
         validate:
         SELECT
@@ -139,15 +187,20 @@ You can start each tool with natural language prompts in Antigravity or with sla
         LIMIT 500
         ```
 
-*   **Direct API Execution:** Run generated Python code directly and see the results as tables.
+*   **Direct API Execution:** Run generated Python code directly and see the
+    results as tables.
 
-*   **CSV Export:** Save API table results to a CSV file in the `saved/data/` directory.
+*   **CSV Export:** Save API table results to a CSV file in the `saved/data/`
+    directory.
+
     *   *"Save results to a csv file"*
 
-*   **Conversion Troubleshooting & Diagnostics:** Create diagnostic reports to find offline conversion upload errors.
-    *   *Claude Code:* `/troubleshoot-conversions`
-    *   *Natural Language:* *"Troubleshoot my conversions for customer '123-456-7890'."* (Saves reports in `saved/data/`).
+*   **Conversion Troubleshooting & Diagnostics:** Create diagnostic reports to
+    find offline conversion upload errors.
 
+    *   *Claude Code:* `/troubleshoot-conversions`
+    *   *Natural Language:* *"Troubleshoot my conversions for customer
+        '123-456-7890'."* (Saves reports in `saved/data/`).
 
 ## Supported Languages
 
@@ -157,17 +210,27 @@ You can start each tool with natural language prompts in Antigravity or with sla
 *   Java
 *   C# (.NET)
 
-The assistant can run Python, PHP, and Ruby code directly. Because of security rules, you must compile and run generated Java and C# code yourself. To generate C# code, include `'in dotnet'` in your prompt.
+The assistant can run Python, PHP, and Ruby code directly. Because of security
+rules, you must compile and run generated Java and C# code yourself. To generate
+C# code, include `'in dotnet'` in your prompt.
 
-By default, the assistant uses Python to generate and run code, even if other language libraries or project files exist. The assistant uses another language only when you ask for it. Because the installation script installs the plugin globally, you can start `agy` or `claude` inside your own application directory so the assistant can read your project files.
-   * Before you ask for code in another language, tell the assistant: `write saved code examples in <language of your application>`
+By default, the assistant uses Python to generate and run code, even if other
+language libraries or project files exist. The assistant uses another language
+only when you ask for it. Because the installation script installs the plugin
+globally, you can start `agy` or `claude` inside your own application directory
+so the assistant can read your project files.
+
+*   Before you ask for code in another language, tell the assistant:
+    `write saved code examples in <language of your application>`
 
 ## Prerequisites
 
 1.  Basic knowledge of Google Ads API concepts and authentication.
-2.  A credentials file in your home directory for Python (`google-ads.yaml`), PHP (`google_ads_php.ini`), or Ruby (`google_ads_config.rb`).
+2.  A credentials file in your home directory for Python (`google-ads.yaml`),
+    PHP (`google_ads_php.ini`), or Ruby (`google_ads_config.rb`).
 3.  An installed Antigravity or Claude Code CLI environment.
-4.  A local clone of each client library that you want to use. Run `install.sh` (Linux/macOS) or `install.ps1` (Windows) to clone them automatically.
+4.  A local clone of each client library that you want to use. Run `install.sh`
+    (Linux/macOS) or `install.ps1` (Windows) to clone them automatically.
 5.  Python >= 3.11 installed and on your system `PATH`.
 
 ## Setup
@@ -177,82 +240,120 @@ By default, the assistant uses Python to generate and run code, even if other la
 Set up your assistant CLI environment:
 
 #### Antigravity CLI
-* Download and install `antigravity-cli` from [https://antigravity.google/](https://antigravity.google/).
-* Check your installation:
-  ```bash
-  agy --version
-  ```
+
+*   Download and install `antigravity-cli` from
+    [https://antigravity.google/](https://antigravity.google/).
+*   Check your installation:
+
+    ```bash
+    agy --version
+    ```
 
 #### Claude Code
-1. **Prerequisites:** Make sure [Node.js](https://nodejs.org/) (version 18 or later) is installed:
-   ```bash
-   node --version
-   ```
-2. **Install Claude Code CLI:** Install Claude Code globally with `npm`:
-   ```bash
-   npm install -g @anthropic-ai/claude-code
-   ```
-   *(Or on macOS with Homebrew: `brew install claude-code`)*
-3. **Authenticate:** Run `claude` in your terminal to sign in to your Anthropic account or set your API key:
-   ```bash
-   claude
-   ```
-4. **Check Installation:** Verify that the CLI is available:
-   ```bash
-   claude --version
-   ```
 
----
+1.  **Prerequisites:** Make sure [Node.js](https://nodejs.org/) (version 18 or
+    later) is installed:
+
+    ```bash
+    node --version
+    ```
+2.  **Install Claude Code CLI:** Install Claude Code globally with `npm`:
+
+    ```bash
+    npm install -g @anthropic-ai/claude-code
+    ```
+
+    *(Or on macOS with Homebrew: `brew install claude-code`)*
+3.  **Authenticate:** Run `claude` in your terminal to sign in to your Anthropic
+    account or set your API key:
+
+    ```bash
+    claude
+    ```
+4.  **Check Installation:** Verify that the CLI is available:
+
+    ```bash
+    claude --version
+    ```
+
+--------------------------------------------------------------------------------
 
 ### 2. Clone the Assistant
+
 Clone the repository to your computer:
+
 ```bash
 git clone https://github.com/googleads/google-ads-api-developer-assistant
 cd google-ads-api-developer-assistant
 ```
 
----
+--------------------------------------------------------------------------------
 
 ### 3. Run Install Script
+
 Run the installation script for your platform:
 
 *   **Antigravity (Linux/macOS):**
+
     ```bash
     ./install.sh agy
     ```
-    *Installs the plugin globally in `~/.gemini/config/plugins/google-ads-api-developer-assistant`.*
-    *To add more client libraries: `./install.sh agy --php --ruby --dotnet`.*
+
+    *Installs the plugin globally in
+    `~/.gemini/config/plugins/google-ads-api-developer-assistant`.* *To add more
+    client libraries: `./install.sh agy --php --ruby --dotnet`.*
 
 *   **Claude Code (Linux/macOS):**
+
     ```bash
     ./install.sh claude
     ```
-    *Registers the repository as a local marketplace and installs the plugin in Claude Code.*
-    *To add more client libraries: `./install.sh claude --php --ruby --dotnet`.*
+
+    *Registers the repository as a local marketplace and installs the plugin in
+    Claude Code.* *To add more client libraries:
+    `./install.sh claude --php --ruby --dotnet`.*
 
 *   **Antigravity (Windows - PowerShell):**
+
     ```powershell
     .\install.ps1 -Type agy
     ```
-    *Installs the plugin globally in `%USERPROFILE%\.gemini\config\plugins\google-ads-api-developer-assistant`.*
-    *To add more client libraries: `.\install.ps1 -Type agy -Php -Ruby -Dotnet`.*
+
+    *Installs the plugin globally in
+    `%USERPROFILE%\.gemini\config\plugins\google-ads-api-developer-assistant`.*
+    *To add more client libraries:
+    `.\install.ps1 -Type agy -Php -Ruby -Dotnet`.*
 
 *   **Claude Code (Windows - PowerShell):**
+
     ```powershell
     .\install.ps1 -Type claude
     ```
-    *Registers the local marketplace and installs the plugin in Claude Code.*
-    *To add more client libraries: `.\install.ps1 -Type claude -Php -Ruby -Dotnet`.*
 
----
+    *Registers the local marketplace and installs the plugin in Claude Code.*
+    *To add more client libraries:
+    `.\install.ps1 -Type claude -Php -Ruby -Dotnet`.*
+
+--------------------------------------------------------------------------------
 
 ### 4. Configure Credentials
-Put your Google Ads API credentials file in your `$HOME` directory (`~/google-ads.yaml` for Python, `~/google_ads_php.ini` for PHP, `~/google_ads_config.rb` for Ruby, or `~/ads.properties` for Java). At session startup, [`config/config_init.py`](plugins/google-ads-api-developer-assistant/config/config_init.py) copies your credentials to `config/google-ads.yaml` (`0600` permissions) and sets `GOOGLE_ADS_CONFIGURATION_FILE_PATH`.
 
----
+Put your Google Ads API credentials file in your `$HOME` directory
+(`~/google-ads.yaml` for Python, `~/google_ads_php.ini` for PHP,
+`~/google_ads_config.rb` for Ruby, or `~/ads.properties` for Java). At session
+startup,
+[`config/config_init.py`](plugins/google-ads-api-developer-assistant/config/config_init.py)
+copies your credentials to `config/google-ads.yaml` (`0600` permissions) and
+sets `GOOGLE_ADS_CONFIGURATION_FILE_PATH`.
+
+--------------------------------------------------------------------------------
 
 ### 5. Configure Assistant Settings (`config/assistant_config`) & Enable/Disable Plugin
-The [`config/assistant_config`](plugins/google-ads-api-developer-assistant/config/assistant_config) file (copied into your installed plugin directory by `install.sh` / `install.ps1`) stores all assistant settings in TOML format:
+
+The
+[`config/assistant_config`](plugins/google-ads-api-developer-assistant/config/assistant_config)
+file (copied into your installed plugin directory by `install.sh` /
+`install.ps1`) stores all assistant settings in TOML format:
 
 ```toml
 api_version = "<api_version> (e.g., vXX)"
@@ -261,79 +362,122 @@ execute_mutates = false
 enabled = true
 ```
 
-| Key | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| **`api_version`** | `string` | `"<api_version>"` (e.g., `vXX`) | Active Google Ads API version for GAQL validation, Protobuf inspection, and code generation. Updated automatically when you run `install.sh`, `update.sh`, `sync_client_libs.py`, `get_latest_api_version.py`, or `python3 config/config_init.py --key api_version`. |
-| **`customer_id`** | `string` | `"12345678"` | Default 10-digit Google Ads Customer ID (without dashes) used when your prompt does not include a CID (for example, *"Get my campaigns"*). |
-| **`execute_mutates`** | `boolean` | `false` | Controls if the 4-Step HITL protocol allows live Google Ads API `create` and `update` mutations (`--execute` / `validate_only=False`). Delete (`remove`) operations are always blocked. |
-| **`enabled`** | `boolean` | `true` | Controls if the plugin is active when you start `jetski`/`agy` or Claude Code. When set to `false` (with `./plugin.sh disable`), the host does not load the plugin on new sessions and its hooks do nothing. |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
+
+Key                   | Type      | Default                         | Description
+:-------------------- | :-------- | :------------------------------ | :----------
+**`api_version`**     | `string`  | `"<api_version>"` (e.g., `vXX`) | Active Google Ads API version for GAQL validation, Protobuf inspection, and code generation. Updated automatically when you run `install.sh`, `update.sh`, `sync_client_libs.py`, `get_latest_api_version.py`, or `python3 config/config_init.py --key api_version`.
+**`customer_id`**     | `string`  | `"12345678"`                    | Default 10-digit Google Ads Customer ID (without dashes) used when your prompt does not include a CID (for example, *"Get my campaigns"*).
+**`execute_mutates`** | `boolean` | `false`                         | Controls if the 4-Step HITL protocol allows live Google Ads API `create` and `update` mutations (`--execute` / `validate_only=False`). Delete (`remove`) operations are always blocked.
+**`enabled`**         | `boolean` | `true`                          | Controls if the plugin is active when you start `jetski`/`agy` or Claude Code. When set to `false` (with `./plugin.sh disable`), the host does not load the plugin on new sessions and its hooks do nothing.
+
+<!-- mdformat on -->
 
 #### Turn the Plugin Off or On (`--enable` & `--disable`)
 
 ##### When to Use `--disable` and `--enable`
-Because the installer puts the plugin in your global config directory (`~/.gemini/config/plugins/google-ads-api-developer-assistant` for Antigravity and `~/.claude/plugins/...` for Claude Code), the host CLI loads it in **every workspace** by default. When the plugin is on:
-1. **Session Startup (`SessionStart` Hook):** At session start, `config/hook_guard.py` (delegating to `config/config_init.py`) syncs credentials (`0600`), resolves the active API version locally without blocking on external network calls, and injects the session rule summary.
-2. **Context Window & Rules:** The host loads `rules/AGENTS.md` (auto-loaded in `agy` and injected via `SessionStart` `additionalContext` in Claude Code), 11 domain skills (`skills/`), and slash commands (`commands/`).
-3. **Command, File & MCP Interception (`PreToolUse` Hook) & Background Sidecar:** `config/hook_guard.py` (with `config/config_init.py`) checks shell commands, protected file edits (`write_file`/`edit_file` in `agy`, `Write`/`Edit`/`MultiEdit` in Claude Code), and MCP mutation tool calls (setting `PYTHONPATH` and enforcing the 4-Step HITL Mutation Guard), while the host manages the sandboxed A2A HTTP sidecar (`sidecar.json`) and stdio MCP server (`mcp_config.json` / `.mcp.json`).
 
-When you work on **non-Google Ads repositories**, run `--disable` (`disable`) to turn the plugin off **without uninstalling it** or deleting your `client_libs/` and `config/assistant_config` files. When you return to Google Ads API work, run `--enable` (`enable`) to turn the plugin back on.
+Because the installer puts the plugin in your global config directory
+(`~/.gemini/config/plugins/google-ads-api-developer-assistant` for Antigravity
+and `~/.claude/plugins/...` for Claude Code), the host CLI loads it in **every
+workspace** by default. When the plugin is on:
+
+1.  **Session Startup (`SessionStart` Hook):** At session start,
+    `config/hook_guard.py` (delegating to `config/config_init.py`) syncs
+    credentials (`0600`), resolves the active API version locally without
+    blocking on external network calls, and injects the session rule summary.
+2.  **Context Window & Rules:** The host loads `rules/AGENTS.md` (auto-loaded in
+    `agy` and injected via `SessionStart` `additionalContext` in Claude Code),
+    11 domain skills (`skills/`), and slash commands (`commands/`).
+3.  **Command, File & MCP Interception (`PreToolUse` Hook) & Background
+    Sidecar:** `config/hook_guard.py` (with `config/config_init.py`) checks
+    shell commands, protected file edits (`write_file`/`edit_file` in `agy`,
+    `Write`/`Edit`/`MultiEdit` in Claude Code), and MCP mutation tool calls
+    (setting `PYTHONPATH` and enforcing the 4-Step HITL Mutation Guard), while
+    the host manages the sandboxed A2A HTTP sidecar (`sidecar.json`) and stdio
+    MCP server (`mcp_config.json` / `.mcp.json`).
+
+When you work on **non-Google Ads repositories**, run `--disable` (`disable`) to
+turn the plugin off **without uninstalling it** or deleting your `client_libs/`
+and `config/assistant_config` files. When you return to Google Ads API work, run
+`--enable` (`enable`) to turn the plugin back on.
 
 ##### What `--disable` and `--enable` Do
-Passing `--disable` or `--enable` (to `plugin.sh`, `plugin.ps1`, `update.sh`, `update.ps1`, `install.sh`, `install.ps1`, or `config_init.py`) updates three layers so that both **running sessions** and **new sessions** use the new state:
 
-| Layer | What `--disable` (`disable`) Does | What `--enable` (`enable`) Does |
-| :--- | :--- | :--- |
-| **1. Configuration (`config/assistant_config`)** | Sets `enabled = false` in `config/assistant_config` and keeps your `api_version`, `customer_id`, `execute_mutates`, and `allow_tier1_financial_mutates` values. | Sets `enabled = true` in `config/assistant_config` and keeps all other settings. |
-| **2. Lifecycle Hooks (`config/hook_guard.py`, `config/config_init.py` & `hooks.json`)** | Sets `"enabled": false` in the installed `hooks.json` and causes `handle_hook()` to exit immediately:<br>• **`SessionStart`:** Returns `{}` (skips credential sync and session context injection).<br>• **`PreToolUse`:** Returns `{"decision": "allow"}` without changing `PYTHONPATH` or running the mutation guard. | Sets `"enabled": true` in `hooks.json` and restores `SessionStart` sync, `PYTHONPATH` setup, and `PreToolUse` command, file, and MCP mutation guard checks. |
-| **3. Installed Plugin, MCP & Sidecar Manifests (`~/.gemini/...` & `~/.claude/...`)** | In installed plugin directories (never in the git repository), renames:<br>• `plugin.json` $\rightarrow$ `plugin.json.disabled`<br>• `.claude-plugin/plugin.json` $\rightarrow$ `.claude-plugin/plugin.json.disabled`<br>• `mcp_config.json` $\rightarrow$ `mcp_config.json.disabled`<br>• `.mcp.json` $\rightarrow$ `.mcp.json.disabled`<br>• `sidecars/google-ads-a2a-service/sidecar.json` $\rightarrow$ `sidecar.json.disabled`<br>This stops `jetski`/`agy` and `claude` from loading the plugin rules, skills, MCP servers, or sidecar daemon on new sessions. | Renames all `.disabled` manifest files back to `plugin.json`, `.claude-plugin/plugin.json`, `mcp_config.json`, `.mcp.json`, and `sidecar.json` so the host CLI loads the plugin on the next session. |
+Passing `--disable` or `--enable` (to `plugin.sh`, `plugin.ps1`, `update.sh`,
+`update.ps1`, `install.sh`, `install.ps1`, or `config_init.py`) updates three
+layers so that both **running sessions** and **new sessions** use the new state:
 
-> **Tip — Single-Session Environment Override:** Set `GOOGLE_ADS_ASSISTANT_ENABLED=false` (or `true`) in your shell environment before you start `agy` or `claude` to turn the plugin hooks off or on for one terminal session without changing files on disk.
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
+
+Layer                                                                                   | What `--disable` (`disable`) Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | What `--enable` (`enable`) Does
+:-------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------
+**1. Configuration (`config/assistant_config`)**                                        | Sets `enabled = false` in `config/assistant_config` and keeps your `api_version`, `customer_id`, `execute_mutates`, and `allow_tier1_financial_mutates` values.                                                                                                                                                                                                                                                                                                                                                                                                      | Sets `enabled = true` in `config/assistant_config` and keeps all other settings.
+**2. Lifecycle Hooks (`config/hook_guard.py`, `config/config_init.py` & `hooks.json`)** | Sets `"enabled": false` in the installed `hooks.json` and causes `handle_hook()` to exit immediately:<br>• **`SessionStart`:** Returns `{}` (skips credential sync and session context injection).<br>• **`PreToolUse`:** Returns `{"decision": "allow"}` without changing `PYTHONPATH` or running the mutation guard.                                                                                                                                                                                                                                               | Sets `"enabled": true` in `hooks.json` and restores `SessionStart` sync, `PYTHONPATH` setup, and `PreToolUse` command, file, and MCP mutation guard checks.
+**3. Installed Plugin, MCP & Sidecar Manifests (`~/.gemini/...` & `~/.claude/...`)**    | In installed plugin directories (never in the git repository), renames:<br>• `plugin.json` $\rightarrow$ `plugin.json.disabled`<br>• `.claude-plugin/plugin.json` $\rightarrow$ `.claude-plugin/plugin.json.disabled`<br>• `mcp_config.json` $\rightarrow$ `mcp_config.json.disabled`<br>• `.mcp.json` $\rightarrow$ `.mcp.json.disabled`<br>• `sidecars/google-ads-a2a-service/sidecar.json` $\rightarrow$ `sidecar.json.disabled`<br>This stops `jetski`/`agy` and `claude` from loading the plugin rules, skills, MCP servers, or sidecar daemon on new sessions. | Renames all `.disabled` manifest files back to `plugin.json`, `.claude-plugin/plugin.json`, `mcp_config.json`, `.mcp.json`, and `sidecar.json` so the host CLI loads the plugin on the next session.
+
+<!-- mdformat on -->
+
+> **Tip — Single-Session Environment Override:** Set
+> `GOOGLE_ADS_ASSISTANT_ENABLED=false` (or `true`) in your shell environment
+> before you start `agy` or `claude` to turn the plugin hooks off or on for one
+> terminal session without changing files on disk.
 
 ##### Commands to Enable, Disable, and Check Status (`plugin.sh` & `plugin.ps1`)
-Run [`plugin.sh`](plugin.sh) (Linux/macOS) or [`plugin.ps1`](plugin.ps1) (Windows PowerShell) from the repository root or from **any directory** through your installed plugin path:
 
-* **Linux/macOS (from repository root):**
-  ```bash
-  # Turn off the plugin
-  ./plugin.sh disable
+Run [`plugin.sh`](plugin.sh) (Linux/macOS) or [`plugin.ps1`](plugin.ps1)
+(Windows PowerShell) from the repository root or from **any directory** through
+your installed plugin path:
 
-  # Turn on the plugin
-  ./plugin.sh enable
+*   **Linux/macOS (from repository root):**
 
-  # Show the current plugin status and hook state (or pass --json)
-  ./plugin.sh status
+    ```bash
+    # Turn off the plugin
+    ./plugin.sh disable
 
-  # Run a self-test of the config, manifest, and hook state
-  ./plugin.sh test
+    # Turn on the plugin
+    ./plugin.sh enable
 
-  # Check status in shell scripts (prints 'enabled' with exit 0, or 'disabled' with exit 1)
-  ./plugin.sh is-enabled
-  ```
+    # Show the current plugin status and hook state (or pass --json)
+    ./plugin.sh status
 
-* **Linux/macOS (from any directory):**
-  ```bash
-  ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh disable
-  ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh enable
-  ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh status
-  ```
+    # Run a self-test of the config, manifest, and hook state
+    ./plugin.sh test
 
-* **Windows PowerShell (from repository root):**
-  ```powershell
-  .\plugin.ps1 disable
-  .\plugin.ps1 enable
-  .\plugin.ps1 status
-  .\plugin.ps1 test
-  .\plugin.ps1 is-enabled
-  ```
+    # Check status in shell scripts (prints 'enabled' with exit 0, or 'disabled' with exit 1)
+    ./plugin.sh is-enabled
+    ```
 
-* **Windows PowerShell (from any directory):**
-  ```powershell
-  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" disable
-  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" enable
-  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" status
-  ```
+*   **Linux/macOS (from any directory):**
 
-You can also set options during installation (`./install.sh agy --cid 1234567890` or `./install.sh agy --disable`), edit `config/assistant_config` directly, or run `config_init.py`:
+    ```bash
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh disable
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh enable
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh status
+    ```
+
+*   **Windows PowerShell (from repository root):**
+
+    ```powershell
+    .\plugin.ps1 disable
+    .\plugin.ps1 enable
+    .\plugin.ps1 status
+    .\plugin.ps1 test
+    .\plugin.ps1 is-enabled
+    ```
+
+*   **Windows PowerShell (from any directory):**
+
+    ```powershell
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" disable
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" enable
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" status
+    ```
+
+You can also set options during installation
+(`./install.sh agy --cid 1234567890` or `./install.sh agy --disable`), edit
+`config/assistant_config` directly, or run `config_init.py`:
+
 ```bash
 # Set default Customer ID in config/assistant_config and sync config/google-ads.yaml (from repo root)
 python3 plugins/google-ads-api-developer-assistant/config/config_init.py --key customer_id --value 1234567890
@@ -360,209 +504,365 @@ python3 plugins/google-ads-api-developer-assistant/config/config_init.py --enabl
 python3 plugins/google-ads-api-developer-assistant/config/config_init.py --status
 ```
 
-
 ## Usage
 
-1.  **Start an Assistant Session:**
-    Open Antigravity or Claude Code to ask questions, generate code, and validate queries.
+1.  **Start an Assistant Session:** Open Antigravity or Claude Code to ask
+    questions, generate code, and validate queries.
 
 2.  **Ask a Question:**
-    > "What are the resource names for my enabled campaigns sorted by campaign id"
+
+    > "What are the resource names for my enabled campaigns sorted by campaign
+    > id"
 
 3.  **Generate Code:**
+
     > "Get me the top 5 campaigns by cost last month for customer 1234567890"
 
 4.  **Run Code and Save Output:**
-    > "Run the code"
-    > ... (shows the output from the previous request) ...
-    > "Save the results to csv"
+
+    > "Run the code" ... (shows the output from the previous request) ... "Save
+    > the results to csv"
 
 ## Stay in sync
 
-The assistant includes sync tools to keep your runtime credentials, `config/assistant_config`, local client libraries (`client_libs/`), Protobuf definitions, and system `google-ads` package up to date.
+The assistant includes sync tools to keep your runtime credentials,
+`config/assistant_config`, local client libraries (`client_libs/`), Protobuf
+definitions, and system `google-ads` package up to date.
 
 ### 1. What Syncs at Session Startup (`config/hook_guard.py` & `config/config_init.py`)
 
-When a session starts in Antigravity (`agy`) or Claude Code (`claude`), a `SessionStart` lifecycle hook runs `config/hook_guard.py` (delegating to `config/config_init.py`) to sync your credentials locally (`0600`) and verify your local installed API version without blocking on network requests.
+When a session starts in Antigravity (`agy`) or Claude Code (`claude`), a
+`SessionStart` lifecycle hook runs `config/hook_guard.py` (delegating to
+`config/config_init.py`) to sync your credentials locally (`0600`) and verify
+your local installed API version without blocking on network requests.
 
 The two CLIs load different hook files:
 
-* **Antigravity (`agy`):** The `SessionStart` and `PreToolUse` entries in [`hooks.json`](plugins/google-ads-api-developer-assistant/hooks.json) covering `run_command`, `write_file|edit_file|...`, `read_file|view_file`, and `call_mcp_tool|mcp_.*`. The hook resolves `PLUGIN_ROOT` (then `CLAUDE_PLUGIN_ROOT`, `GOOGLE_ADS_ASSISTANT_DIR`, a `plugin.json`+`hooks.json`-verified plugin CWD, and installed plugin paths — never an untrusted workspace CWD). If `config/hook_guard.py` is missing or stdin is malformed, `PreToolUse` fails closed (`decision: "deny"`). Antigravity does not fire `PostToolUseFailure`, and its `PostToolUse` payload has no exit code (`error` is empty even when a command fails), so on Antigravity a failed `run_mutation.py --execute` is recorded by the `FAILED` audit record that `run_mutation.py` writes itself.
-* **Claude Code (`claude`):** [`hooks/hooks.json`](plugins/google-ads-api-developer-assistant/hooks/hooks.json) (`SessionStart`, `PreToolUse` for `Bash`, `Write|Edit|MultiEdit`, `Read`, and `mcp__(?:plugin_google-ads-api-developer-assistant_)?google-ads-api-assistant__*` mutation tools, plus `PostToolUseFailure` for `Bash`), [`.mcp.json`](plugins/google-ads-api-developer-assistant/.mcp.json), and [`.claude-plugin/plugin.json`](plugins/google-ads-api-developer-assistant/.claude-plugin/plugin.json). The hooks run `${CLAUDE_PLUGIN_ROOT}/config/hook_guard.py` with `python3`, then `python`, then `py -3`. If Python or the script is missing, the shell wrapper exits with code 2 and stderr, which blocks the tool call. The `SessionStart` hook also writes `GOOGLE_ADS_ASSISTANT_DIR` and `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `CLAUDE_ENV_FILE`, and injects `rules/AGENTS.md` into `additionalContext`.
+*   **Antigravity (`agy`):** The `SessionStart` and `PreToolUse` entries in
+    [`hooks.json`](plugins/google-ads-api-developer-assistant/hooks.json)
+    covering `run_command`, `write_file|edit_file|...`, `read_file|view_file`,
+    and `call_mcp_tool|mcp_.*`. The hook resolves `PLUGIN_ROOT` (then
+    `CLAUDE_PLUGIN_ROOT`, `GOOGLE_ADS_ASSISTANT_DIR`, a
+    `plugin.json`+`hooks.json`-verified plugin CWD, and installed plugin paths —
+    never an untrusted workspace CWD). If `config/hook_guard.py` is missing or
+    stdin is malformed, `PreToolUse` fails closed (`decision: "deny"`).
+    Antigravity does not fire `PostToolUseFailure`, and its `PostToolUse`
+    payload has no exit code (`error` is empty even when a command fails), so on
+    Antigravity a failed `run_mutation.py --execute` is recorded by the `FAILED`
+    audit record that `run_mutation.py` writes itself.
+*   **Claude Code (`claude`):**
+    [`hooks/hooks.json`](plugins/google-ads-api-developer-assistant/hooks/hooks.json)
+    (`SessionStart`, `PreToolUse` for `Bash`, `Write|Edit|MultiEdit`, `Read`,
+    and
+    `mcp__(?:plugin_google-ads-api-developer-assistant_)?google-ads-api-assistant__*`
+    mutation tools, plus `PostToolUseFailure` for `Bash`),
+    [`.mcp.json`](plugins/google-ads-api-developer-assistant/.mcp.json), and
+    [`.claude-plugin/plugin.json`](plugins/google-ads-api-developer-assistant/.claude-plugin/plugin.json).
+    The hooks run `${CLAUDE_PLUGIN_ROOT}/config/hook_guard.py` with `python3`,
+    then `python`, then `py -3`. If Python or the script is missing, the shell
+    wrapper exits with code 2 and stderr, which blocks the tool call. The
+    `SessionStart` hook also writes `GOOGLE_ADS_ASSISTANT_DIR` and
+    `GOOGLE_ADS_CONFIGURATION_FILE_PATH` to `CLAUDE_ENV_FILE`, and injects
+    `rules/AGENTS.md` into `additionalContext`.
 
-The guard returns `deny` or `ask` (`force_ask` in `agy`) in the canonical JSON format of each CLI (`decision` on `agy`; exit `0` + `hookSpecificOutput.permissionDecision` on Claude Code). When the guard has no objection, it does not approve the command for you: your Claude Code permission rules still apply.
+The guard returns `deny` or `ask` (`force_ask` in `agy`) in the canonical JSON
+format of each CLI (`decision` on `agy`; exit `0` +
+`hookSpecificOutput.permissionDecision` on Claude Code). When the guard has no
+objection, it does not approve the command for you: your Claude Code permission
+rules still apply.
 
-The 5-step version check (local parity at `SessionStart`, and upstream PyPI/GitHub checks on demand via `/sync-client-libs` or `sync_client_libs.py --check_only`):
+The 5-step version check (local parity at `SessionStart`, and upstream
+PyPI/GitHub checks on demand via `/sync-client-libs` or
+`sync_client_libs.py --check_only`):
 
-| Startup Step | Execution Mode | What Happens | What Changes |
-| :--- | :--- | :--- | :--- |
-| **Credential Sync & `api_version` Lookup** (`sync_and_set_config_kv` & `detect_latest_api_version`) | **Automatic** (Every session start) | Reads your `$HOME` config (`~/google-ads.yaml`, `~/google_ads_php.ini`, `~/google_ads_config.rb`, `~/ads.properties`, or `.NET` `App.config` / `appsettings.json`), writes `config/google-ads.yaml` (`0600` permissions) with `use_proto_plus: True` and `ads_assistant: <version>`, exports `GOOGLE_ADS_CONFIGURATION_FILE_PATH`, checks `v<N>` directories in `client_libs/google-ads-python` and `google.ads.googleads.__path__`, and updates `api_version` in `config/assistant_config` when a newer version is installed. | `config/google-ads.yaml` and `config/assistant_config` (Never changes your `$HOME` config) |
-| **Step 1 — Check Python Site-Directory Version Against PyPI** (`detect_system_package_version` / `fetch_latest_pypi_python_version`) | **On-Demand** (`/sync-client-libs` or `--check_only`) | Checks `google-ads` in `site.getsitepackages()` (`importlib.metadata.version("google-ads")`) and queries `pypi.org` (`https://pypi.org/pypi/google-ads/json`) for the latest release. | None (Read-only check) |
-| **Step 2 — Check Latest GitHub Release** (`fetch_latest_github_python_version` / `fetch_github_latest_release`) | **On-Demand** (`/sync-client-libs`, 1-hour cache) | Queries the GitHub Releases API (`googleads/google-ads-python/releases/latest`, cached in `$TMPDIR/gads_assistant_github_release_<uid>.json` for 1 hour) to find the latest client library release. | `$TMPDIR/gads_assistant_github_release_<uid>.json` |
-| **Step 3 — Select Active API Version & Show Table** (`determine_api_version` & `format_parity_table_markdown`) | **Automatic** (`SessionStart` local check) | Selects the active Google Ads API version locally and injects the session parity table into context via `systemMessage` (`agy`) or `additionalContext` (`claude`). | None (Session display) |
-| **Step 4 — Ask User If Any Version Is Outdated** (`sync_client_libs.py --check_only`) | **Interactive Prompt** (When any version `<` upstream) | If the version in your Python site directory or `client_libs/` is older than `pypi.org` or GitHub, the assistant asks if you want to update before continuing. | None (Waits for your `yes` or `no` reply) |
-| **Step 5 — Upgrade on Confirmation or Keep Current Versions** (`sync_client_libs.py --upgrade_system` / `--check_only`) | **On Confirmation (`Yes`) or Decline (`No`)** | If **Yes**: installs the latest `google-ads` from `pypi.org`, updates `client_libs/google-ads-python`, and updates `api_version` in `config/assistant_config`. If **No**: keeps the installed versions. | Python `site-packages`, `client_libs/`, and `config/assistant_config` (only if you reply `Yes`) |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
+
+Startup Step                                                                                                                         | Execution Mode                                         | What Happens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | What Changes
+:----------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-----------
+**Credential Sync & `api_version` Lookup** (`sync_and_set_config_kv` & `detect_latest_api_version`)                                  | **Automatic** (Every session start)                    | Reads your `$HOME` config (`~/google-ads.yaml`, `~/google_ads_php.ini`, `~/google_ads_config.rb`, `~/ads.properties`, or `.NET` `App.config` / `appsettings.json`), writes `config/google-ads.yaml` (`0600` permissions) with `use_proto_plus: True` and `ads_assistant: <version>`, exports `GOOGLE_ADS_CONFIGURATION_FILE_PATH`, checks `v<N>` directories in `client_libs/google-ads-python` and `google.ads.googleads.__path__`, and updates `api_version` in `config/assistant_config` when a newer version is installed. | `config/google-ads.yaml` and `config/assistant_config` (Never changes your `$HOME` config)
+**Step 1 — Check Python Site-Directory Version Against PyPI** (`detect_system_package_version` / `fetch_latest_pypi_python_version`) | **On-Demand** (`/sync-client-libs` or `--check_only`)  | Checks `google-ads` in `site.getsitepackages()` (`importlib.metadata.version("google-ads")`) and queries `pypi.org` (`https://pypi.org/pypi/google-ads/json`) for the latest release.                                                                                                                                                                                                                                                                                                                                          | None (Read-only check)
+**Step 2 — Check Latest GitHub Release** (`fetch_latest_github_python_version` / `fetch_github_latest_release`)                      | **On-Demand** (`/sync-client-libs`, 1-hour cache)      | Queries the GitHub Releases API (`googleads/google-ads-python/releases/latest`, cached in `$TMPDIR/gads_assistant_github_release_<uid>.json` for 1 hour) to find the latest client library release.                                                                                                                                                                                                                                                                                                                            | `$TMPDIR/gads_assistant_github_release_<uid>.json`
+**Step 3 — Select Active API Version & Show Table** (`determine_api_version` & `format_parity_table_markdown`)                       | **Automatic** (`SessionStart` local check)             | Selects the active Google Ads API version locally and injects the session parity table into context via `systemMessage` (`agy`) or `additionalContext` (`claude`).                                                                                                                                                                                                                                                                                                                                                             | None (Session display)
+**Step 4 — Ask User If Any Version Is Outdated** (`sync_client_libs.py --check_only`)                                                | **Interactive Prompt** (When any version `<` upstream) | If the version in your Python site directory or `client_libs/` is older than `pypi.org` or GitHub, the assistant asks if you want to update before continuing.                                                                                                                                                                                                                                                                                                                                                                 | None (Waits for your `yes` or `no` reply)
+**Step 5 — Upgrade on Confirmation or Keep Current Versions** (`sync_client_libs.py --upgrade_system` / `--check_only`)              | **On Confirmation (`Yes`) or Decline (`No`)**          | If **Yes**: installs the latest `google-ads` from `pypi.org`, updates `client_libs/google-ads-python`, and updates `api_version` in `config/assistant_config`. If **No**: keeps the installed versions.                                                                                                                                                                                                                                                                                                                        | Python `site-packages`, `client_libs/`, and `config/assistant_config` (only if you reply `Yes`)
+
+<!-- mdformat on -->
 
 > **Run the sync directly from your terminal:**
+>
 > ```bash
 > # Check installed site-packages and client_libs versions against GitHub
 > python3 plugins/google-ads-api-developer-assistant/skills/sync-client-libs/scripts/sync_client_libs.py --check_only
->
+> 
 > # Upgrade site-packages from pypi.org, update client_libs, and refresh api_version
 > python3 plugins/google-ads-api-developer-assistant/skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system
 > ```
 
 ### 2. Sync Client Libraries During a Session
+
 Use these prompts or commands to check for updates during an active session:
 
-* **Natural Language Prompts (Antigravity & Claude Code):**
-  * *"Sync my client libraries"*
-  * *"Check for Google Ads client library updates"*
-  * *"Update the Python client library to the latest release"*
+*   **Natural Language Prompts (Antigravity & Claude Code):**
 
-* **Slash Command (Claude Code):**
-  * Run `/sync-client-libs` to check and update all local client libraries.
-  * Update one library: `/sync-client-libs python` or `/sync-client-libs dotnet`.
+    *   *"Sync my client libraries"*
+    *   *"Check for Google Ads client library updates"*
+    *   *"Update the Python client library to the latest release"*
 
-* **Check the Active Version:**
-  * Claude Code: `/ext-version`
-  * Natural Language: *"What is the active Google Ads API version?"*
+*   **Slash Command (Claude Code):**
+
+    *   Run `/sync-client-libs` to check and update all local client libraries.
+    *   Update one library: `/sync-client-libs python` or
+        `/sync-client-libs dotnet`.
+
+*   **Check the Active Version:**
+
+    *   Claude Code: `/ext-version`
+    *   Natural Language: *"What is the active Google Ads API version?"*
 
 ### 3. Manual Terminal Updates
-Run `update.sh` or `update.ps1` from the repository root or from **any directory** through your installed plugin directory:
-* **Linux/macOS (from repository root):**
-  ```bash
-  ./update.sh agy --all          # Update Antigravity plugin and all client libraries
-  ./update.sh claude --all       # Update Claude Code plugin and all client libraries
-  ```
-* **Linux/macOS (from any directory):**
-  ```bash
-  # Update plugin and all client libraries
-  ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --all
-  ~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/update.sh claude --all
 
-  # Disable or enable the plugin from any directory (with update.sh or plugin.sh)
-  ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --disable
-  ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --enable
-  ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh disable
-  ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh enable
-  ```
-* **Windows PowerShell (from repository root):**
-  ```powershell
-  .\update.ps1 -Type agy -All
-  .\update.ps1 -Type claude -All
-  ```
-* **Windows PowerShell (from any directory):**
-  ```powershell
-  # Update plugin and all client libraries
-  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -All
-  & "$HOME\.claude\plugins\google-ads-assistant-local\plugins\google-ads-api-developer-assistant\update.ps1" -Type claude -All
+Run `update.sh` or `update.ps1` from the repository root or from **any
+directory** through your installed plugin directory:
 
-  # Disable or enable the plugin from any directory (with update.ps1 or plugin.ps1)
-  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -Disable
-  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -Enable
-  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" disable
-  & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" enable
-  ```
+*   **Linux/macOS (from repository root):**
+
+    ```bash
+    ./update.sh agy --all          # Update Antigravity plugin and all client libraries
+    ./update.sh claude --all       # Update Claude Code plugin and all client libraries
+    ```
+*   **Linux/macOS (from any directory):**
+
+    ```bash
+    # Update plugin and all client libraries
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --all
+    ~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/update.sh claude --all
+
+    # Disable or enable the plugin from any directory (with update.sh or plugin.sh)
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --disable
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy --enable
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh disable
+    ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh enable
+    ```
+*   **Windows PowerShell (from repository root):**
+
+    ```powershell
+    .\update.ps1 -Type agy -All
+    .\update.ps1 -Type claude -All
+    ```
+*   **Windows PowerShell (from any directory):**
+
+    ```powershell
+    # Update plugin and all client libraries
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -All
+    & "$HOME\.claude\plugins\google-ads-assistant-local\plugins\google-ads-api-developer-assistant\update.ps1" -Type claude -All
+
+    # Disable or enable the plugin from any directory (with update.ps1 or plugin.ps1)
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -Disable
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy -Enable
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" disable
+    & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\plugin.ps1" enable
+    ```
 
 ### 4. Client Library & Runtime Version Parity
-The assistant reads local client library files (`client_libs/google-ads-python`) as the **source of truth** for Protobuf schemas, resource definitions, and enum descriptors. It runs queries and generated code with the installed `google-ads` Python package in your environment.
+
+The assistant reads local client library files (`client_libs/google-ads-python`)
+as the **source of truth** for Protobuf schemas, resource definitions, and enum
+descriptors. It runs queries and generated code with the installed `google-ads`
+Python package in your environment.
 
 To prevent schema mismatches or missing fields:
-* **Automatic Parity Checks:** Tool scripts (`inspect_object.py` and `sync_client_libs.py`) compare the installed package version (`importlib.metadata.version('google-ads')`) against `client_libs/google-ads-python` (`pyproject.toml` / `ChangeLog`) and GitHub releases.
-* **System Site-Directory Upgrades:** When a newer release of `google-ads` is available, the sync tool checks `site.getsitepackages()`. If the versions do not match, the assistant shows a warning and asks if you want to upgrade. If you confirm, it runs `pip install --upgrade google-ads` (or `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system`).
-* **Warning Banner:** If the versions do not match, the tools print this warning:
-  ```text
-  WARNING: Installed google-ads package version (<installed_version>) does not match client_libs/google-ads-python version (<client_libs_version>) used for protobuf inspection. Schema inspection or API calls may encounter field discrepancies.
-  ```
-* **How to Fix a Mismatch:**
-  * Sync client libraries: `/sync-client-libs` (or enter *"Sync client libraries"*).
-  * Upgrade the Python package: `pip install --upgrade google-ads` (or run `python3 skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system`).
-  * Run a full update: `./update.sh agy --all` or `./update.sh claude --all`.
 
+*   **Automatic Parity Checks:** Tool scripts (`inspect_object.py` and
+    `sync_client_libs.py`) compare the installed package version
+    (`importlib.metadata.version('google-ads')`) against
+    `client_libs/google-ads-python` (`pyproject.toml` / `ChangeLog`) and GitHub
+    releases.
+*   **System Site-Directory Upgrades:** When a newer release of `google-ads` is
+    available, the sync tool checks `site.getsitepackages()`. If the versions do
+    not match, the assistant shows a warning and asks if you want to upgrade. If
+    you confirm, it runs `pip install --upgrade google-ads` (or `python3
+    skills/sync-client-libs/scripts/sync_client_libs.py --upgrade_system`).
+*   **Warning Banner:** If the versions do not match, the tools print this
+    warning:
+
+    ```text
+    WARNING: Installed google-ads package version (<installed_version>) does not match client_libs/google-ads-python version (<client_libs_version>) used for protobuf inspection. Schema inspection or API calls may encounter field discrepancies.
+    ```
+*   **How to Fix a Mismatch:**
+
+    *   Sync client libraries: `/sync-client-libs` (or enter *"Sync client
+        libraries"*).
+    *   Upgrade the Python package: `pip install --upgrade google-ads` (or run
+        `python3 skills/sync-client-libs/scripts/sync_client_libs.py
+        --upgrade_system`).
+    *   Run a full update: `./update.sh agy --all` or
+        `./update.sh claude --all`.
 
 ## Directory Structure
 
-*   `plugins/google-ads-api-developer-assistant/`: Source directory for the assistant plugin.
-*   `plugins/google-ads-api-developer-assistant/commands/`: Slash commands for Claude Code.
-*   `plugins/google-ads-api-developer-assistant/skills/`: Assistant skills (GAQL validator, proto inspector, HITL mutation runner, and others).
-*   `plugins/google-ads-api-developer-assistant/rules/`: Agent rules and safety protocols.
-*   `plugins/google-ads-api-developer-assistant/sidecars/`: Background sidecar services.
-*   `plugins/google-ads-api-developer-assistant/client_libs/`: Cloned client libraries.
-*   `plugins/google-ads-api-developer-assistant/config/`: Plugin configuration files (`assistant_config` and `config_init.py`).
-*   `plugins/google-ads-api-developer-assistant/mcp_config.json`: Model Context Protocol configuration.
+*   `plugins/google-ads-api-developer-assistant/`: Source directory for the
+    assistant plugin.
+*   `plugins/google-ads-api-developer-assistant/commands/`: Slash commands for
+    Claude Code.
+*   `plugins/google-ads-api-developer-assistant/skills/`: Assistant skills (GAQL
+    validator, proto inspector, HITL mutation runner, and others).
+*   `plugins/google-ads-api-developer-assistant/rules/`: Agent rules and safety
+    protocols.
+*   `plugins/google-ads-api-developer-assistant/sidecars/`: Background sidecar
+    services.
+*   `plugins/google-ads-api-developer-assistant/client_libs/`: Cloned client
+    libraries.
+*   `plugins/google-ads-api-developer-assistant/config/`: Plugin configuration
+    files (`assistant_config` and `config_init.py`).
+*   `plugins/google-ads-api-developer-assistant/mcp_config.json`: Model Context
+    Protocol configuration.
 *   `config/`: Workspace configuration directory:
-    *   `config/assistant_config`: Unified TOML file that stores `api_version`, `customer_id`, `execute_mutates`, `allow_tier1_financial_mutates`, and `enabled`.
-    *   `config/hook_guard.py`: Lightweight stdlib `PreToolUse` / `SessionStart` / `PostToolUseFailure` entrypoint enforcing fail-closed HITL, protected-file, and MCP guards with low latency.
-    *   `config/config_init.py`: Session initializer, TOML config manager, and deep command/mutation guard engine.
-    *   `config/google-ads.yaml`: Runtime Google Ads API credentials file (`0600` permissions).
+    *   `config/assistant_config`: Unified TOML file that stores `api_version`,
+        `customer_id`, `execute_mutates`, `allow_tier1_financial_mutates`, and
+        `enabled`.
+    *   `config/hook_guard.py`: Lightweight stdlib `PreToolUse` / `SessionStart`
+        / `PostToolUseFailure` entrypoint enforcing fail-closed HITL,
+        protected-file, and MCP guards with low latency.
+    *   `config/config_init.py`: Session initializer, TOML config manager, and
+        deep command/mutation guard engine.
+    *   `config/google-ads.yaml`: Runtime Google Ads API credentials file
+        (`0600` permissions).
 *   `saved/`: Working directory for saved files and scripts:
-    *   `saved/` (or `saved/code/`): Executable Python scripts saved for later use.
-    *   `saved/data/`: GAQL validation cache, CSV exports, diagnostic reports, and mutation dry-run receipts.
+    *   `saved/` (or `saved/code/`): Executable Python scripts saved for later
+        use.
+    *   `saved/data/`: GAQL validation cache, CSV exports, diagnostic reports,
+        and mutation dry-run receipts.
     *   `saved/logs/`: Append-only audit logs (`mutation_audit.jsonl`).
 *   `tests/`: Unit, coverage, benchmark, evaluation, and functional test suites:
-    *   `tests/test_account_config.yaml`: Test Account configuration file for live HITL & skills functional tests.
-    *   `tests/hitl_policy_functional_suite.py`: 72-test HITL & mutation policy functional test runner against a Google Ads Test Account.
-    *   `tests/skills_functional_suite.py`: 30-test functional runner covering all non-mutation skills, creation helpers, A2A/MCP sidecar, and `sitecustomize.py` (`--offline` supported).
-    *   `tests/eval_skills_suite.py`: Dual-mode skill & prompt evaluation harness (`--mode offline` deterministic CI + `--mode live` LLM-in-the-loop across all 11 skills and 13 commands).
-    *   `tests/hitl_audit_logger.py`: Correlated JSONL audit logger (`0600` permissions), error filter, and results table formatter.
-    *   `tests/test_hitl_functional_suite.py`, `tests/test_skills_functional_suite.py`, `tests/test_eval_skills_suite.py`: Offline `pytest` verification suites.
-    *   `tests/benchmark_suite.py`: Two-version performance and functionality benchmark runner.
+    *   `tests/test_account_config.yaml`: Test Account configuration file for
+        live HITL & skills functional tests.
+    *   `tests/hitl_policy_functional_suite.py`: 72-test HITL & mutation policy
+        functional test runner against a Google Ads Test Account.
+    *   `tests/skills_functional_suite.py`: 30-test functional runner covering
+        all non-mutation skills, creation helpers, A2A/MCP sidecar, and
+        `sitecustomize.py` (`--offline` supported).
+    *   `tests/eval_skills_suite.py`: Dual-mode skill & prompt evaluation
+        harness (`--mode offline` deterministic CI + `--mode live`
+        LLM-in-the-loop across all 11 skills and 13 commands).
+    *   `tests/hitl_audit_logger.py`: Correlated JSONL audit logger (`0600`
+        permissions), error filter, and results table formatter.
+    *   `tests/test_hitl_functional_suite.py`,
+        `tests/test_skills_functional_suite.py`,
+        `tests/test_eval_skills_suite.py`: Offline `pytest` verification suites.
+    *   `tests/benchmark_suite.py`: Two-version performance and functionality
+        benchmark runner.
 
 ## Plugin Architecture
 
-For details on how Antigravity and Claude define plugins, see the [Antigravity plugin specification](https://antigravity.google/docs/cli/plugins/) and the [Claude plugin specification](https://github.com/anthropics/knowledge-work-plugins).
+For details on how Antigravity and Claude define plugins, see the
+[Antigravity plugin specification](https://antigravity.google/docs/cli/plugins/)
+and the
+[Claude plugin specification](https://github.com/anthropics/knowledge-work-plugins).
 
 ## Sidecar Daemon & How It Functions
 
 ### What Is a Sidecar?
 
-A **sidecar** is a separate helper process that runs next to a main application on the same computer. It shares the local network (`127.0.0.1`), local files, and session lifecycle with the main application.
+A **sidecar** is a separate helper process that runs next to a main application
+on the same computer. It shares the local network (`127.0.0.1`), local files,
+and session lifecycle with the main application.
 
-In CLI agent environments such as **Antigravity (`agy`)** and **Claude Code CLI**, tools run in two ways:
-*   **Skill Scripts & Hooks (One-Time Subprocesses)**: When the agent runs a skill script (in `skills/`) or a hook (`config_init.py`), the host starts a new OS process for that command, reads the output, and stops the process.
-*   **Sidecar Daemons (Background Services)**: The host CLI starts a sidecar server in the background when the plugin loads and keeps it running during the session.
+In CLI agent environments such as **Antigravity (`agy`)** and **Claude Code
+CLI**, tools run in two ways:
+
+*   **Skill Scripts & Hooks (One-Time Subprocesses)**: When the agent runs a
+    skill script (in `skills/`) or a hook (`config_init.py`), the host starts a
+    new OS process for that command, reads the output, and stops the process.
+*   **Sidecar Daemons (Background Services)**: The host CLI starts a sidecar
+    server in the background when the plugin loads and keeps it running during
+    the session.
 
 A sidecar daemon gives you three benefits:
-1.  **Low Latency**: The Python interpreter and libraries stay in memory, so requests do not wait for process startup.
-2.  **Structured HTTP & MCP Requests**: The sidecar listens on a local port (`127.0.0.1`) and accepts typed JSON requests over HTTP or Model Context Protocol (MCP).
-3.  **Automatic Lifecycle Control**: The host CLI starts, monitors, restarts, and stops the sidecar automatically using `sidecar.json` or `mcp_config.json`.
+
+1.  **Low Latency**: The Python interpreter and libraries stay in memory, so
+    requests do not wait for process startup.
+2.  **Structured HTTP & MCP Requests**: The sidecar listens on a local port
+    (`127.0.0.1`) and accepts typed JSON requests over HTTP or Model Context
+    Protocol (MCP).
+3.  **Automatic Lifecycle Control**: The host CLI starts, monitors, restarts,
+    and stops the sidecar automatically using `sidecar.json` or
+    `mcp_config.json`.
 
 ### How the Sidecar Is Configured in This Repository
 
-The sidecar is the **Google Ads Agent-to-Agent (A2A) & MCP Service** in `plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/`:
-*   **`sidecar.json`**: The sandboxed sidecar manifest read by Antigravity (`command: "python3"`, `args: ["server.py"]`, `restart_policy: "always"`, `GOOGLE_ADS_CONFIGURATION_FILE_PATH: "${PLUGIN_ROOT}/config/google-ads.yaml"`, narrow `sandbox.allowed_http_hosts`). Under the Linux sidecar sandbox, `PLUGIN_ROOT` is read-only and `$HOME` / user workspaces are isolated; `server.py` automatically routes writable receipts, audit logs, and GAQL cache files into `ANTIGRAVITY_EXECUTABLE_DATA_DIR` / `PLUGIN_DATA`. Executing workspace-local `saved/code/*.py` scripts requires **stdio MCP mode** (`mcp_config.json` / `.mcp.json`) or running the skill scripts directly from the terminal.
-*   **`mcp_config.json` (`agy`) & `.mcp.json` (`Claude Code`)**: Register the `google-ads-api-assistant` stdio MCP server (`python3 ${PLUGIN_ROOT}/sidecars/google-ads-a2a-service/server.py --mcp` / `${CLAUDE_PLUGIN_ROOT}/... --mcp`).
-*   **`server.py`**: Dual-mode Python server supporting JSON-RPC 2.0 MCP over stdio (`--mcp`) and loopback HTTP A2A tasks (`A2AHandler` / `HTTPServer`).
+The sidecar is the **Google Ads Agent-to-Agent (A2A) & MCP Service** in
+`plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/`:
+
+*   **`sidecar.json`**: The sandboxed sidecar manifest read by Antigravity
+    (`command: "python3"`, `args: ["server.py"]`, `restart_policy: "always"`,
+    `GOOGLE_ADS_CONFIGURATION_FILE_PATH:
+    "${PLUGIN_ROOT}/config/google-ads.yaml"`, narrow
+    `sandbox.allowed_http_hosts`). Under the Linux sidecar sandbox,
+    `PLUGIN_ROOT` is read-only and `$HOME` / user workspaces are isolated;
+    `server.py` automatically routes writable receipts, audit logs, and GAQL
+    cache files into `ANTIGRAVITY_EXECUTABLE_DATA_DIR` / `PLUGIN_DATA`.
+    Executing workspace-local `saved/code/*.py` scripts requires **stdio MCP
+    mode** (`mcp_config.json` / `.mcp.json`) or running the skill scripts
+    directly from the terminal.
+*   **`mcp_config.json` (`agy`) & `.mcp.json` (`Claude Code`)**: Register the
+    `google-ads-api-assistant` stdio MCP server
+    (`python3 ${PLUGIN_ROOT}/sidecars/google-ads-a2a-service/server.py --mcp` /
+    `${CLAUDE_PLUGIN_ROOT}/... --mcp`).
+*   **`server.py`**: Dual-mode Python server supporting JSON-RPC 2.0 MCP over
+    stdio (`--mcp`) and loopback HTTP A2A tasks (`A2AHandler` / `HTTPServer`).
 
 ### How the Host Manages the Sidecar Lifecycle
 
-1.  **Automatic Startup**: When `enabled = true` in `config/assistant_config`, the host reads `sidecar.json` and starts `python3 server.py` in the background.
-2.  **Port Assignment**: The server listens on `127.0.0.1` using the port in `ANTIGRAVITY_SIDECAR_WEB_PORT`, or uses `A2A_PORT` (default `8900`).
-3.  **Automatic Restart**: Because `sidecar.json` sets `"restart_policy": "always"`, the host restarts the process if it stops unexpectedly.
-4.  **Stop the Sidecar**: Running `./plugin.sh disable` (or `./update.sh --disable`) renames `sidecar.json` to `sidecar.json.disabled` and `mcp_config.json` to `mcp_config.json.disabled`. The host detects this change and stops the background server immediately.
+1.  **Automatic Startup**: When `enabled = true` in `config/assistant_config`,
+    the host reads `sidecar.json` and starts `python3 server.py` in the
+    background.
+2.  **Port Assignment**: The server listens on `127.0.0.1` using the port in
+    `ANTIGRAVITY_SIDECAR_WEB_PORT`, or uses `A2A_PORT` (default `8900`).
+3.  **Automatic Restart**: Because `sidecar.json` sets
+    `"restart_policy": "always"`, the host restarts the process if it stops
+    unexpectedly.
+4.  **Stop the Sidecar**: Running `./plugin.sh disable` (or
+    `./update.sh --disable`) renames `sidecar.json` to `sidecar.json.disabled`
+    and `mcp_config.json` to `mcp_config.json.disabled`. The host detects this
+    change and stops the background server immediately.
 
 ### How the Sidecar Functions Within the Assistant
 
 When `server.py` runs, it does three tasks:
 
 #### 1. Startup Credential & Configuration Sync
-At startup (and before each task), `server.py` calls `config/config_init.py` (`sync_and_set_config_kv()`) to:
-*   Copy credentials from `~/google-ads.yaml` to `config/google-ads.yaml` with `0600` permissions.
-*   Read `customer_id`, `api_version`, and `execute_mutates` from `config/assistant_config`.
+
+At startup (and before each task), `server.py` calls `config/config_init.py`
+(`sync_and_set_config_kv()`) to:
+
+*   Copy credentials from `~/google-ads.yaml` to `config/google-ads.yaml` with
+    `0600` permissions.
+*   Read `customer_id`, `api_version`, and `execute_mutates` from
+    `config/assistant_config`.
 
 #### 2. Dynamic API Version Selection
-For each task request, `get_effective_api_version()` selects the target Google Ads API version in this priority order:
-1.  An `api_version` field in the request payload or the `GOOGLE_ADS_API_VERSION` environment variable.
+
+For each task request, `get_effective_api_version()` selects the target Google
+Ads API version in this priority order:
+
+1.  An `api_version` field in the request payload or the
+    `GOOGLE_ADS_API_VERSION` environment variable.
 2.  The `api_version` value in `config/assistant_config`.
-3.  The highest `v<N>` directory in `client_libs/google-ads-python/google/ads/googleads/`.
-4.  The highest `v<N>` package in the installed `google.ads.googleads` Python module.
-5.  If it cannot find a valid API version, `get_effective_api_version()` raises a `ValueError` and the task returns `"status": "FAILED"` with instructions to pass `api_version` (`vN`) or set it in `config/assistant_config`.
+3.  The highest `v<N>` directory in
+    `client_libs/google-ads-python/google/ads/googleads/`.
+4.  The highest `v<N>` package in the installed `google.ads.googleads` Python
+    module.
+5.  If it cannot find a valid API version, `get_effective_api_version()` raises
+    a `ValueError` and the task returns `"status": "FAILED"` with instructions
+    to pass `api_version` (`vN`) or set it in `config/assistant_config`.
 
 #### 3. HTTP & Agent-to-Agent (A2A) Task Endpoints
+
 The sidecar exposes two HTTP endpoints on `http://127.0.0.1:8900`:
 
-*   **`GET /` or `GET /health`**: Returns a JSON health status object with the service name, plugin version (`plugin.json`), and port:
+*   **`GET /` or `GET /health`**: Returns a JSON health status object with the
+    service name, plugin version (`plugin.json`), and port:
+
     ```json
     {
       "status": "healthy",
@@ -571,22 +871,29 @@ The sidecar exposes two HTTP endpoints on `http://127.0.0.1:8900`:
       "port": 8900
     }
     ```
-*   **`POST /v1/a2a/tasks`**: Accepts a JSON task payload (`{"task_id": "...", "intent": "...", "payload": {...}}`) and runs one of these intents:
+*   **`POST /v1/a2a/tasks`**: Accepts a JSON task payload
+    (`{"task_id": "...", "intent": "...", "payload": {...}}`) and runs one of
+    these intents:
 
-| Intent | Function |
-| :--- | :--- |
-| **`GAQL_VALIDATE`** | Runs static analysis checks on a GAQL query (and optional live `validate_only=True` dry-run via `run_live_dry_run=true`). Blocks `OR` operators, rejects `FROM` clauses in `GoogleAdsFieldService` metadata queries, and blocks invalid `segments.hour_of_day` in favor of `segments.hour`. |
-| **`INSPECT_OBJECT`** | Returns Protobuf resource metadata and selectable fields for a `resource_name` and `api_version`. |
-| **`TROUBLESHOOT_CONVERSIONS`** | Validates an offline conversion upload CSV (`csv_path`, confined to workspace/`saved/`) or runs live account conversion upload diagnostics (`troubleshoot_conversions.py`) for a `customer_id`. |
-| **`PREPARE_MUTATION`** | Executes a real `validate_only=True` dry-run via `run_mutation.py` for a `saved/code/*.py` script (or records a `record_only` receipt), writes the signed receipt to `saved/data/last_dry_run.json`, and returns the **Mutation & Consequence Verification Card** (`status: "HITL_CONFIRMATION_REQUIRED"`). |
-| **`EXECUTE_MUTATION`** | Enforces Step 4 of the HITL Mutation Protocol: verifies `user_confirmed=True`, `confirmation_summary`, `execute_mutates = true`, Tier 1 financial posture (`allow_tier1_financial_mutates = true`), financial upper limits, and a matching non-`record_only` SHA-256 receipt in `saved/data/last_dry_run.json` before executing or marking the receipt `EXECUTED`. |
-| **`REJECT_MUTATION`** | Invalidates a pending `DRY_RUN_PASSED` receipt for a `saved/code/*.py` script (`status: "REJECTED"`) and logs `HUMAN_REJECTED` to `saved/logs/mutation_audit.jsonl`. |
-| **`CREATE_ACCOUNT` / `CREATE_CAMPAIGN` / `CREATE_AD_GROUP` / `CREATE_AD`** | Defaults to `validate_only=True` (issuing a signed dry-run receipt and consequence card); live `execute=True` enforces `user_confirmed=True`, `execute_mutates = true`, Tier 1 financial posture, financial upper limits, and a matching pending dry-run receipt. |
-| **`GENERATE_CODE`** *(A2A HTTP only)* | Legacy A2A HTTP endpoint returning an AST- and `ruff`-checked starter Python query script (not exposed as an MCP tool). |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
+
+Intent                                                                     | Function
+:------------------------------------------------------------------------- | :-------
+**`GAQL_VALIDATE`**                                                        | Runs static analysis checks on a GAQL query (and optional live `validate_only=True` dry-run via `run_live_dry_run=true`). Blocks `OR` operators, rejects `FROM` clauses in `GoogleAdsFieldService` metadata queries, and blocks invalid `segments.hour_of_day` in favor of `segments.hour`.
+**`INSPECT_OBJECT`**                                                       | Returns Protobuf resource metadata and selectable fields for a `resource_name` and `api_version`.
+**`TROUBLESHOOT_CONVERSIONS`**                                             | Validates an offline conversion upload CSV (`csv_path`, confined to workspace/`saved/`) or runs live account conversion upload diagnostics (`troubleshoot_conversions.py`) for a `customer_id`.
+**`PREPARE_MUTATION`**                                                     | Executes a real `validate_only=True` dry-run via `run_mutation.py` for a `saved/code/*.py` script (or records a `record_only` receipt), writes the signed receipt to `saved/data/last_dry_run.json`, and returns the **Mutation & Consequence Verification Card** (`status: "HITL_CONFIRMATION_REQUIRED"`).
+**`EXECUTE_MUTATION`**                                                     | Enforces Step 4 of the HITL Mutation Protocol: verifies `user_confirmed=True`, `confirmation_summary`, `execute_mutates = true`, Tier 1 financial posture (`allow_tier1_financial_mutates = true`), financial upper limits, and a matching non-`record_only` SHA-256 receipt in `saved/data/last_dry_run.json` before executing or marking the receipt `EXECUTED`.
+**`REJECT_MUTATION`**                                                      | Invalidates a pending `DRY_RUN_PASSED` receipt for a `saved/code/*.py` script (`status: "REJECTED"`) and logs `HUMAN_REJECTED` to `saved/logs/mutation_audit.jsonl`.
+**`CREATE_ACCOUNT` / `CREATE_CAMPAIGN` / `CREATE_AD_GROUP` / `CREATE_AD`** | Defaults to `validate_only=True` (issuing a signed dry-run receipt and consequence card); live `execute=True` enforces `user_confirmed=True`, `execute_mutates = true`, Tier 1 financial posture, financial upper limits, and a matching pending dry-run receipt.
+**`GENERATE_CODE`** *(A2A HTTP only)*                                      | Legacy A2A HTTP endpoint returning an AST- and `ruff`-checked starter Python query script (not exposed as an MCP tool).
+
+<!-- mdformat on -->
 
 ### Run or Test the Sidecar Manually
 
-Start the sidecar from the repository or check its health endpoint from a terminal:
+Start the sidecar from the repository or check its health endpoint from a
+terminal:
 
 ```bash
 # Start the sidecar server in the foreground (default port 8900)
@@ -598,64 +905,143 @@ curl http://127.0.0.1:8900/health
 
 ## How Mutates Work
 
-When you ask the assistant to run a write or mutation operation (such as creating a campaign, ad group, or ad, updating a campaign budget, pausing an ad group, applying a recommendation, or uploading conversions), the plugin enforces a **4-Step Human-in-the-Loop (HITL) Verification Protocol** (`skills/execute-mutation/`) with `PreToolUse` hooks (`config/config_init.py`) and pre-RPC SHA-256 checks.
+When you ask the assistant to run a write or mutation operation (such as
+creating a campaign, ad group, or ad, updating a campaign budget, pausing an ad
+group, applying a recommendation, or uploading conversions), the plugin enforces
+a **4-Step Human-in-the-Loop (HITL) Verification Protocol**
+(`skills/execute-mutation/`) with `PreToolUse` hooks (`config/config_init.py`)
+and pre-RPC SHA-256 checks.
 
-> **Create & Update Only (Deletion Prohibited):** You can run only **`create`** and **`update`** mutations. The `PreToolUse` hook, `run_mutation.py`, and the A2A sidecar block any delete operation (`remove` / `remove_all` operations, `remove_*` RPC calls, or setting `status = REMOVED`) with `BLOCKED_PROHIBITED_DELETION`. To stop ad serving without deleting a resource, update its `status` to `PAUSED`.
+> **Create & Update Only (Deletion Prohibited):** You can run only **`create`**
+> and **`update`** mutations. The `PreToolUse` hook, `run_mutation.py`, and the
+> A2A sidecar block any delete operation (`remove` / `remove_all` operations,
+> `remove_*` RPC calls, or setting `status = REMOVED`) with
+> `BLOCKED_PROHIBITED_DELETION`. To stop ad serving without deleting a resource,
+> update its `status` to `PAUSED`.
 
----
+--------------------------------------------------------------------------------
 
 ### 1. Configure the Mutate Switch (`execute_mutates` in `config/assistant_config`)
 
-By default, live mutations are **off** (`execute_mutates = false` in `config/assistant_config`). In this state, the assistant can run read-only GAQL queries and `validate_only=True` dry-runs (`--dry-run`), but it blocks any live write (`--execute` or `validate_only=False`).
+By default, live mutations are **off** (`execute_mutates = false` in
+`config/assistant_config`). In this state, the assistant can run read-only GAQL
+queries and `validate_only=True` dry-runs (`--dry-run`), but it blocks any live
+write (`--execute` or `validate_only=False`).
 
 #### How to Enable or Disable Live Mutations
+
 Use either of these methods:
 
-1. **Edit `config/assistant_config` (TOML) directly:**
-   Open `config/assistant_config` and set `execute_mutates` to `true` or `false`:
-   ```toml
-   api_version = "<api_version> (e.g., vXX)"
-   customer_id = "12345678"
-   execute_mutates = false
-   ```
-   ```toml
-   api_version = "<api_version> (e.g., vXX)"
-   customer_id = "12345678"
-   execute_mutates = true
-   ```
-2. **Use the `config_init.py` CLI flag:**
-   ```bash
-   # Enable live mutations in config/assistant_config (from repo root)
-   python3 plugins/google-ads-api-developer-assistant/config/config_init.py --execute-mutates true
+1.  **Edit `config/assistant_config` (TOML) directly:** Open
+    `config/assistant_config` and set `execute_mutates` to `true` or `false`:
 
-   # Disable live mutations (default)
-   python3 plugins/google-ads-api-developer-assistant/config/config_init.py --execute-mutates false
-   ```
+    ```toml
+    api_version = "<api_version> (e.g., vXX)"
+    customer_id = "12345678"
+    execute_mutates = false
+    ```
 
-**Configuration File Priority:**
-When resolving settings (`config_init.get_assistant_config_paths()`), the plugin checks these paths in order and uses the **first file that exists**:
-1. `$GOOGLE_ADS_ASSISTANT_CONFIG_DIR/assistant_config` (explicit config dir override, when set)
-2. `$PLUGIN_ROOT/config/assistant_config`, `$CLAUDE_PLUGIN_ROOT/config/assistant_config`, or `$GOOGLE_ADS_ASSISTANT_DIR/config/assistant_config` (active CLI plugin root)
-3. The running plugin's own `config/assistant_config` (adjacent to `config/config_init.py`)
-4. Workspace-local `config/assistant_config` (current working directory)
-5. Installed global plugin paths (`~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/assistant_config` and `~/.gemini/config/plugins/google-ads-api-developer-assistant/config/assistant_config`, ordered for the active CLI)
+    ```toml
+    api_version = "<api_version> (e.g., vXX)"
+    customer_id = "12345678"
+    execute_mutates = true
+    ```
+2.  **Use the `config_init.py` CLI flag:**
 
-*(If `execute_mutates = false` and a command tries to run a live mutation, the `PreToolUse` hook and `run_mutation.py` block it with: `BLOCKED BY HITL MUTATION GUARD: Mutate support is disabled by configuration (execute_mutates = false in config/assistant_config). Set 'execute_mutates = true' in config/assistant_config to enable live Google Ads API mutations.`)*
+    ```bash
+    # Enable live mutations in config/assistant_config (from repo root)
+    python3 plugins/google-ads-api-developer-assistant/config/config_init.py --execute-mutates true
 
----
+    # Disable live mutations (default)
+    python3 plugins/google-ads-api-developer-assistant/config/config_init.py --execute-mutates false
+    ```
+
+**Configuration File Priority:** When resolving settings
+(`config_init.get_assistant_config_paths()`), the plugin checks these paths in
+order and uses the **first file that exists**:
+
+1.  `$GOOGLE_ADS_ASSISTANT_CONFIG_DIR/assistant_config` (explicit config dir
+    override, when set)
+2.  `$PLUGIN_ROOT/config/assistant_config`,
+    `$CLAUDE_PLUGIN_ROOT/config/assistant_config`, or
+    `$GOOGLE_ADS_ASSISTANT_DIR/config/assistant_config` (active CLI plugin root)
+3.  The running plugin's own `config/assistant_config` (adjacent to
+    `config/config_init.py`)
+4.  Workspace-local `config/assistant_config` (current working directory)
+5.  Installed global plugin paths
+    (`~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/config/assistant_config`
+    and
+    `~/.gemini/config/plugins/google-ads-api-developer-assistant/config/assistant_config`,
+    ordered for the active CLI)
+
+*(If `execute_mutates = false` and a command tries to run a live mutation, the
+`PreToolUse` hook and `run_mutation.py` block it with: `BLOCKED BY HITL MUTATION
+GUARD: Mutate support is disabled by configuration (execute_mutates = false in
+config/assistant_config). Set 'execute_mutates = true' in
+config/assistant_config to enable live Google Ads API mutations.`)*
+
+--------------------------------------------------------------------------------
 
 #### Financial Transaction Upper Limits (`config/financial_limits` & `set_financial_limits.py`)
-In addition to `execute_mutates`, you can set upper limits for financial Google Ads API mutate fields in [`config/financial_limits`](plugins/google-ads-api-developer-assistant/config/financial_limits) using `Service.field` keys (for example, `CampaignBudgetService.amount_micros`, `AssetService.amount_micros`, `AdGroupService.cpc_bid_micros`, and `AdGroupCriterionService.cpc_bid_micros`).
 
-* **API Format & Units:** Write each `Service.field` value in `config/financial_limits` in the exact numeric format that the Google Ads API field uses:
-  * **`micros` (`int64` integer):** `1,000,000` micros = `1.00` unit of the account's local currency (for example, `50000000` = `50.00` currency units). Used for budgets (`CampaignBudgetService.amount_micros`, `CampaignBudgetService.total_amount_micros`, `RecommendationService.new_budget_amount_micros`), bids (`AdGroupService.cpc_bid_micros`, `AdGroupCriterionService.cpc_bid_micros`, `BiddingStrategyService.target_cpa_micros`), promotions and prices (`AssetService.amount_micros`), and user transactions (`UserDataService.transaction_amount_micros`).
-  * **`currency_units` (`double` / `float`):** Standard decimal units of the account's currency (not micros; for example, `500.0` = `500.00` currency units). Used for conversion uploads (`ConversionUploadService.conversion_value`, `ConversionUploadService.unit_price`), adjustments (`ConversionAdjustmentUploadService.adjusted_value`), value rules (`ConversionValueRuleService.value`), and goals (`GoalService.additional_value`, `CampaignGoalConfigService.additional_value`).
-  * **`decimal_ratio` (`double` / `float`):** Decimal multiplier or ROAS ratio (not micros; for example, `5.0` = `500%` Target ROAS, `2.0` = `+100%` bid modifier). Used for `BiddingStrategyService.target_roas`, `CampaignService.target_roas`, `AdGroupBidModifierService.bid_modifier`, `BiddingSeasonalityAdjustmentService.conversion_rate_modifier`, and `GoalService.value_multiplier`.
-  * **`micros_proportion` (`int64` integer):** Proportion in micros (`1,000,000` = `100%`; for example, `150000` = `15%`). Used for `AdGroupService.percent_cpc_bid_micros`, `CampaignService.commission_rate_micros`, and `BiddingStrategyService.location_fraction_micros`.
-* **Default (`0` / `0.0` = Not Modifiable):** By default, each `Service.field` value is `0` (for `int64` fields) or `0.0` (for `double` fields). A value of `0` or `0.0` means that the field **cannot be changed**. Set a value **greater than zero (`> 0`)** to allow changes up to that **upper limit**.
-* **Enforcement at HITL & RPC Execution:** `run_mutation.py` (`--dry-run` and `--execute`), the `PreToolUse` hook (`config/config_init.py`), and the A2A sidecar (`server.py`) check both the Protobuf `Mutate*Request` payload and the mutation script against `config/financial_limits`. If a mutation tries to change a `0` / `0.0` field or exceeds its upper limit (`> 0`), the plugin blocks the call at the HITL step (`[HITL BLOCKED - FINANCIAL UPPER LIMIT EXCEEDED]`), writes `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`, and does not run the command.
+In addition to `execute_mutates`, you can set upper limits for financial Google
+Ads API mutate fields in
+[`config/financial_limits`](plugins/google-ads-api-developer-assistant/config/financial_limits)
+using `Service.field` keys (for example, `CampaignBudgetService.amount_micros`,
+`AssetService.amount_micros`, `AdGroupService.cpc_bid_micros`, and
+`AdGroupCriterionService.cpc_bid_micros`).
 
-Use [`set_financial_limits.py`](set_financial_limits.py) (at `./set_financial_limits.py`, `config/set_financial_limits.py`, and `skills/execute-mutation/scripts/set_financial_limits.py`) to list, set (`> 0`), or reset (`0` / `0.0`) limits by `Service.field`, wildcard `*.field`, or flag:
+*   **API Format & Units:** Write each `Service.field` value in
+    `config/financial_limits` in the exact numeric format that the Google Ads
+    API field uses:
+    *   **`micros` (`int64` integer):** `1,000,000` micros = `1.00` unit of the
+        account's local currency (for example, `50000000` = `50.00` currency
+        units). Used for budgets (`CampaignBudgetService.amount_micros`,
+        `CampaignBudgetService.total_amount_micros`,
+        `RecommendationService.new_budget_amount_micros`), bids
+        (`AdGroupService.cpc_bid_micros`,
+        `AdGroupCriterionService.cpc_bid_micros`,
+        `BiddingStrategyService.target_cpa_micros`), promotions and prices
+        (`AssetService.amount_micros`), and user transactions
+        (`UserDataService.transaction_amount_micros`).
+    *   **`currency_units` (`double` / `float`):** Standard decimal units of the
+        account's currency (not micros; for example, `500.0` = `500.00` currency
+        units). Used for conversion uploads
+        (`ConversionUploadService.conversion_value`,
+        `ConversionUploadService.unit_price`), adjustments
+        (`ConversionAdjustmentUploadService.adjusted_value`), value rules
+        (`ConversionValueRuleService.value`), and goals
+        (`GoalService.additional_value`,
+        `CampaignGoalConfigService.additional_value`).
+    *   **`decimal_ratio` (`double` / `float`):** Decimal multiplier or ROAS
+        ratio (not micros; for example, `5.0` = `500%` Target ROAS, `2.0` =
+        `+100%` bid modifier). Used for `BiddingStrategyService.target_roas`,
+        `CampaignService.target_roas`, `AdGroupBidModifierService.bid_modifier`,
+        `BiddingSeasonalityAdjustmentService.conversion_rate_modifier`, and
+        `GoalService.value_multiplier`.
+    *   **`micros_proportion` (`int64` integer):** Proportion in micros
+        (`1,000,000` = `100%`; for example, `150000` = `15%`). Used for
+        `AdGroupService.percent_cpc_bid_micros`,
+        `CampaignService.commission_rate_micros`, and
+        `BiddingStrategyService.location_fraction_micros`.
+*   **Default (`0` / `0.0` = Not Modifiable):** By default, each `Service.field`
+    value is `0` (for `int64` fields) or `0.0` (for `double` fields). A value of
+    `0` or `0.0` means that the field **cannot be changed**. Set a value
+    **greater than zero (`> 0`)** to allow changes up to that **upper limit**.
+*   **Enforcement at HITL & RPC Execution:** `run_mutation.py` (`--dry-run` and
+    `--execute`), the `PreToolUse` hook (`config/config_init.py`), and the A2A
+    sidecar (`server.py`) check both the Protobuf `Mutate*Request` payload and
+    the mutation script against `config/financial_limits`. If a mutation tries
+    to change a `0` / `0.0` field or exceeds its upper limit (`> 0`), the plugin
+    blocks the call at the HITL step
+    (`[HITL BLOCKED - FINANCIAL UPPER LIMIT EXCEEDED]`), writes
+    `BLOCKED_FINANCIAL_LIMIT_EXCEEDED` to `saved/logs/mutation_audit.jsonl`, and
+    does not run the command.
+
+Use [`set_financial_limits.py`](set_financial_limits.py) (at
+`./set_financial_limits.py`, `config/set_financial_limits.py`, and
+`skills/execute-mutation/scripts/set_financial_limits.py`) to list, set (`> 0`),
+or reset (`0` / `0.0`) limits by `Service.field`, wildcard `*.field`, or flag:
 
 ```bash
 # List all Service.field financial limits, units, and current upper limits
@@ -683,21 +1069,33 @@ python3 ~/.gemini/config/plugins/google-ads-api-developer-assistant/set_financia
 ./set_financial_limits.py --reset-all
 ```
 
----
+--------------------------------------------------------------------------------
 
 ### 2. The 4-Step HITL Mutation Workflow & What You See on Screen
 
-Every mutation request follows 4 steps so you can check the current state, the API dry-run result, the SHA-256 request hash, and the financial or serving effects before any live change runs.
+Every mutation request follows 4 steps so you can check the current state, the
+API dry-run result, the SHA-256 request hash, and the financial or serving
+effects before any live change runs.
 
 #### Step 1 — Pre-Mutation State & Blast Radius Lookup (Mandatory GAQL Read)
-Before the assistant generates or runs mutation code, it queries your account with `GoogleAdsService.search_stream` to get the **Before State** and **Blast Radius**:
-* Resource names (for example, `customers/1234567890/campaignBudgets/98765`).
-* Current `status` (`ENABLED`, `PAUSED`, `REMOVED`).
-* Current budget or bid amounts (`amount_micros`, `cpc_bid_micros`) converted to standard currency (`micros / 1,000,000`).
-* Count of active child entities affected (such as active `ad_group` and `ad_group_ad` counts, or shared campaigns).
+
+Before the assistant generates or runs mutation code, it queries your account
+with `GoogleAdsService.search_stream` to get the **Before State** and **Blast
+Radius**:
+
+*   Resource names (for example, `customers/1234567890/campaignBudgets/98765`).
+*   Current `status` (`ENABLED`, `PAUSED`, `REMOVED`).
+*   Current budget or bid amounts (`amount_micros`, `cpc_bid_micros`) converted
+    to standard currency (`micros / 1,000,000`).
+*   Count of active child entities affected (such as active `ad_group` and
+    `ad_group_ad` counts, or shared campaigns).
 
 #### Step 2 — Mandatory `validate_only=True` Dry-Run & Signed Receipt
-The assistant writes a Python script in `saved/code/` that supports `--dry-run` (`validate_only=True`, default) and `--execute` (`validate_only=False`), checks it with `ruff`, and runs the dry-run through `run_mutation.py`:
+
+The assistant writes a Python script in `saved/code/` that supports `--dry-run`
+(`validate_only=True`, default) and `--execute` (`validate_only=False`), checks
+it with `ruff`, and runs the dry-run through `run_mutation.py`:
+
 ```bash
 python3 skills/execute-mutation/scripts/run_mutation.py \
   --script saved/code/update_campaign_budget.py \
@@ -709,11 +1107,18 @@ python3 skills/execute-mutation/scripts/run_mutation.py \
   --consequences "Daily budget cap increases by +$200.00/day (+400%); Max monthly spend exposure increases to ~$7,600.00/mo" \
   --reversibility "REVERSIBLE"
 ```
-* The Google Ads API checks all schema rules, resource IDs, and policy rules with `validate_only=True` **without** changing your account.
-* If validation passes, `run_mutation.py` calculates the script SHA-256 (`script_sha256`) and the normalized Protobuf request SHA-256 (`request_sha256`), and writes a receipt to `saved/data/last_dry_run.json` (valid for 30 minutes).
+
+*   The Google Ads API checks all schema rules, resource IDs, and policy rules
+    with `validate_only=True` **without** changing your account.
+*   If validation passes, `run_mutation.py` calculates the script SHA-256
+    (`script_sha256`) and the normalized Protobuf request SHA-256
+    (`request_sha256`), and writes a receipt to `saved/data/last_dry_run.json`
+    (valid for 30 minutes).
 
 #### Step 3 — On-Screen Verification Card & Consequence Disclosure
-After `--dry-run` passes, `run_mutation.py` prints the **Mutation & Consequence Verification Card** to your screen:
+
+After `--dry-run` passes, `run_mutation.py` prints the **Mutation & Consequence
+Verification Card** to your screen:
 
 ```text
 ======================================================================
@@ -736,94 +1141,164 @@ before running with --execute.
 ======================================================================
 ```
 
-The assistant explains the effects of the change and **waits for your confirmation**:
-* **Budgets & Bidding:** Shows the currency change (`$X.XX/day` $\rightarrow$ `$Y.YY/day`, `%` change), maximum monthly spend (`daily_budget * 30.4`), and Smart Bidding learning-phase warnings for changes $>20\%$.
-* **Status Changes (`PAUSED` $\leftrightarrow$ `ENABLED`):** Shows the number of active Ad Groups and Ads that will stop or start serving.
-* **Deletion / `REMOVE` Operations (Prohibited):** Blocks all delete operations (`remove` / `remove_all` operations, `remove_*` RPCs, or `status = REMOVED`) with `BLOCKED_PROHIBITED_DELETION`. Only `create` and `update` mutations are allowed (set `status = PAUSED` to stop serving).
-* **Targeting & Conversion Goals:** Shows warnings about traffic changes or automated bidding signals.
+The assistant explains the effects of the change and **waits for your
+confirmation**:
+
+*   **Budgets & Bidding:** Shows the currency change (`$X.XX/day` $\rightarrow$
+    `$Y.YY/day`, `%` change), maximum monthly spend (`daily_budget * 30.4`), and
+    Smart Bidding learning-phase warnings for changes $>20\%$.
+*   **Status Changes (`PAUSED` $\leftrightarrow$ `ENABLED`):** Shows the number
+    of active Ad Groups and Ads that will stop or start serving.
+*   **Deletion / `REMOVE` Operations (Prohibited):** Blocks all delete
+    operations (`remove` / `remove_all` operations, `remove_*` RPCs, or
+    `status = REMOVED`) with `BLOCKED_PROHIBITED_DELETION`. Only `create` and
+    `update` mutations are allowed (set `status = PAUSED` to stop serving).
+*   **Targeting & Conversion Goals:** Shows warnings about traffic changes or
+    automated bidding signals.
 
 #### Step 4 — Hook-Gated CLI Confirmation & Live Execution (`--execute`)
-After you confirm in chat and `execute_mutates = true` is set in `config/assistant_config`, the assistant runs:
+
+After you confirm in chat and `execute_mutates = true` is set in
+`config/assistant_config`, the assistant runs:
+
 ```bash
 python3 skills/execute-mutation/scripts/run_mutation.py \
   --script saved/code/update_campaign_budget.py \
   --execute
 ```
 
-1. **CLI Hook Confirmation Prompt (`PreToolUse`):**
-   Before the command runs, the `PreToolUse` hook (`config/config_init.py`) checks `execute_mutates = true`, `script_sha256`, and `request_sha256` against `saved/data/last_dry_run.json`. It then forces an interactive CLI permission prompt (`"decision": "force_ask"` in **Antigravity (`agy`)** or `"permissionDecision": "ask"` in **Claude Code CLI**):
-   ```text
-   ⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION [Customer ID: 1234567890]
-   • Operation: Update CampaignBudget (customers/1234567890/campaignBudgets/98765)
-   • Change: $50.00/day (50,000,000 micros), Status: ENABLED -> $250.00/day (250,000,000 micros), Status: ENABLED
-   • Request SHA256: 8f4e2b9a1c3d5e7f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d3e5f
-   • Reversibility: REVERSIBLE
-   • Consequences: Daily budget cap increases by +$200.00/day (+400%); Max monthly spend exposure increases to ~$7,600.00/mo
-   Confirm execution of this live Google Ads API mutation?
-   ```
-2. **Pre-RPC SHA-256 Check:**
-   When you approve the prompt, `run_mutation.py` intercepts `GoogleAdsClient.get_service` and calculates the SHA-256 hash of the outgoing `Mutate*Request` **before** it sends the gRPC call. If the request payload differs from the `validate_only=True` dry-run (except for `validate_only` changing from `True` to `False`), or if the script tries to send an extra mutation call, `run_mutation.py` blocks the RPC (`BLOCKED_SHA256_MISMATCH`).
-3. **Live Result & One-Time Receipt Use:**
-   The live mutation runs with `ResponseContentType.MUTABLE_RESOURCE` and prints the mutated resource names. `run_mutation.py` marks `saved/data/last_dry_run.json` as `"status": "EXECUTED"` so the receipt cannot be used a second time.
-4. **Audit Log (`saved/logs/mutation_audit.jsonl`):**
-   Both `--dry-run` and `--execute` write a JSONL audit record (`0600` permissions, with credentials removed) to `saved/logs/mutation_audit.jsonl` containing:
-   * `actor`: OS user, hostname, `login_customer_id`, `target_customer_id`, auth type, and CLI conversation/transcript IDs.
-   * `request`: `sent_at_iso`, `validate_only`, `script_sha256`, `request_sha256`, `request_sha256_verified`, and the Protobuf request payload.
-   * `approval`: `dry_run_validated_at_iso`, `hook_prompted_at_iso`, `user_approved_at_iso`, `before_state`, `after_state`, `consequences`, and `reversibility`.
-   * `response`: `received_at_iso`, `duration_ms`, `google_ads_request_ids`, and the Protobuf response or error payload.
+1.  **CLI Hook Confirmation Prompt (`PreToolUse`):** Before the command runs,
+    the `PreToolUse` hook (`config/config_init.py`) checks
+    `execute_mutates = true`, `script_sha256`, and `request_sha256` against
+    `saved/data/last_dry_run.json`. It then forces an interactive CLI permission
+    prompt (`"decision": "force_ask"` in **Antigravity (`agy`)** or
+    `"permissionDecision": "ask"` in **Claude Code CLI**):
 
----
+    ```text
+    ⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION [Customer ID: 1234567890]
+    • Operation: Update CampaignBudget (customers/1234567890/campaignBudgets/98765)
+    • Change: $50.00/day (50,000,000 micros), Status: ENABLED -> $250.00/day (250,000,000 micros), Status: ENABLED
+    • Request SHA256: 8f4e2b9a1c3d5e7f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d3e5f
+    • Reversibility: REVERSIBLE
+    • Consequences: Daily budget cap increases by +$200.00/day (+400%); Max monthly spend exposure increases to ~$7,600.00/mo
+    Confirm execution of this live Google Ads API mutation?
+    ```
+2.  **Pre-RPC SHA-256 Check:** When you approve the prompt, `run_mutation.py`
+    intercepts `GoogleAdsClient.get_service` and calculates the SHA-256 hash of
+    the outgoing `Mutate*Request` **before** it sends the gRPC call. If the
+    request payload differs from the `validate_only=True` dry-run (except for
+    `validate_only` changing from `True` to `False`), or if the script tries to
+    send an extra mutation call, `run_mutation.py` blocks the RPC
+    (`BLOCKED_SHA256_MISMATCH`).
+3.  **Live Result & One-Time Receipt Use:** The live mutation runs with
+    `ResponseContentType.MUTABLE_RESOURCE` and prints the mutated resource
+    names. `run_mutation.py` marks `saved/data/last_dry_run.json` as
+    `"status": "EXECUTED"` so the receipt cannot be used a second time.
+4.  **Audit Log (`saved/logs/mutation_audit.jsonl`):** Both `--dry-run` and
+    `--execute` write a JSONL audit record (`0600` permissions, with credentials
+    removed) to `saved/logs/mutation_audit.jsonl` containing:
+
+    *   `actor`: OS user, hostname, `login_customer_id`, `target_customer_id`,
+        auth type, and CLI conversation/transcript IDs.
+    *   `request`: `sent_at_iso`, `validate_only`, `script_sha256`,
+        `request_sha256`, `request_sha256_verified`, and the Protobuf request
+        payload.
+    *   `approval`: `dry_run_validated_at_iso`, `hook_prompted_at_iso`,
+        `user_approved_at_iso`, `before_state`, `after_state`, `consequences`,
+        and `reversibility`.
+    *   `response`: `received_at_iso`, `duration_ms`, `google_ads_request_ids`,
+        and the Protobuf response or error payload.
+
+--------------------------------------------------------------------------------
 
 ### 3. Summary of Safeguards (`config/config_init.py` & `run_mutation.py`)
 
-| Condition | Hook / Runner Decision | What Happens on Screen |
-| :--- | :--- | :--- |
-| Read-only query (`search`, `search_stream`) or `--dry-run` (`validate_only=True`) within configured limits | **`allow`** | Runs immediately and shows query results or the **Mutation & Consequence Verification Card**. |
-| Delete / `remove` operation attempted (`remove` / `remove_all` operations, `remove_*` / `delete_*` RPCs, or `status = REMOVED`) | **`deny` / `BLOCKED_PROHIBITED_DELETION`** | Blocked across the `PreToolUse` hook, `run_mutation.py` (`--dry-run` and `--execute`), and A2A sidecar before any RPC runs; recommends `status = PAUSED` with an `update` operation and writes to `saved/logs/mutation_audit.jsonl`. |
-| Financial transaction amount exceeds the upper limit in `config/financial_limits` (`> 0`) or modifies a `0` / `0.0` field | **`deny` / `BLOCKED_FINANCIAL_LIMIT_EXCEEDED`** | Blocked at the HITL step (`--dry-run`, `--execute`, `PreToolUse` hook, and sidecar); shows the limit and unit, writes to `saved/logs/mutation_audit.jsonl`, and does not run. |
-| Live mutation attempted while `execute_mutates = false` (default) | **`deny` (Hard Block)** | Blocked before execution with instructions to set `execute_mutates = true` in `config/assistant_config`. |
-| Live mutation attempted without a valid ($\le 30\text{ min}$) `DRY_RUN_PASSED` receipt | **`deny` (Hard Block)** | Blocked before execution with instructions to run `--dry-run` first. |
-| Script file (`script_sha256`) or RPC request payload (`request_sha256`) changed after dry-run | **`deny` / `BLOCKED_SHA256_MISMATCH`** | Blocked before any live RPC is sent to Google Ads; writes mismatch to `saved/logs/mutation_audit.jsonl`. |
-| Valid receipt + `execute_mutates = true` + matching SHA-256 hashes + within financial limits | **`force_ask` (Interactive CLI Prompt)** | Shows the `⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION` card in the CLI and waits for your approval. |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
+
+Condition                                                                                                                       | Hook / Runner Decision                          | What Happens on Screen
+:------------------------------------------------------------------------------------------------------------------------------ | :---------------------------------------------- | :---------------------
+Read-only query (`search`, `search_stream`) or `--dry-run` (`validate_only=True`) within configured limits                      | **`allow`**                                     | Runs immediately and shows query results or the **Mutation & Consequence Verification Card**.
+Delete / `remove` operation attempted (`remove` / `remove_all` operations, `remove_*` / `delete_*` RPCs, or `status = REMOVED`) | **`deny` / `BLOCKED_PROHIBITED_DELETION`**      | Blocked across the `PreToolUse` hook, `run_mutation.py` (`--dry-run` and `--execute`), and A2A sidecar before any RPC runs; recommends `status = PAUSED` with an `update` operation and writes to `saved/logs/mutation_audit.jsonl`.
+Financial transaction amount exceeds the upper limit in `config/financial_limits` (`> 0`) or modifies a `0` / `0.0` field       | **`deny` / `BLOCKED_FINANCIAL_LIMIT_EXCEEDED`** | Blocked at the HITL step (`--dry-run`, `--execute`, `PreToolUse` hook, and sidecar); shows the limit and unit, writes to `saved/logs/mutation_audit.jsonl`, and does not run.
+Live mutation attempted while `execute_mutates = false` (default)                                                               | **`deny` (Hard Block)**                         | Blocked before execution with instructions to set `execute_mutates = true` in `config/assistant_config`.
+Live mutation attempted without a valid ($\le 30\text{ min}$) `DRY_RUN_PASSED` receipt                                          | **`deny` (Hard Block)**                         | Blocked before execution with instructions to run `--dry-run` first.
+Script file (`script_sha256`) or RPC request payload (`request_sha256`) changed after dry-run                                   | **`deny` / `BLOCKED_SHA256_MISMATCH`**          | Blocked before any live RPC is sent to Google Ads; writes mismatch to `saved/logs/mutation_audit.jsonl`.
+Valid receipt + `execute_mutates = true` + matching SHA-256 hashes + within financial limits                                    | **`force_ask` (Interactive CLI Prompt)**        | Shows the `⚠️ GOOGLE ADS LIVE MUTATION VERIFICATION` card in the CLI and waits for your approval.
+
+<!-- mdformat on -->
 
 ## Behavioral Differences in 4.1.0
 
-When you upgrade from `4.0.0` to `4.1.0`, existing CLI arguments, A2A sidecar payloads, and old configuration files (`config/customer_id`, `config/customer_id.txt`, `config/api_version.txt`, and `~/google-ads.yaml`) continue to work and migrate automatically. Note these two changes:
+When you upgrade from `4.0.0` to `4.1.0`, existing CLI arguments, A2A sidecar
+payloads, and old configuration files (`config/customer_id`,
+`config/customer_id.txt`, `config/api_version.txt`, and `~/google-ads.yaml`)
+continue to work and migrate automatically. Note these two changes:
 
-1. **Default Output Path (`~/saved/...` $\rightarrow$ `./saved/...`):**
-   * In `4.0.0`, skill scripts (`get_cids_under_mcc.py` and `troubleshoot_conversions.py`) wrote default output files to `~/saved/csv/` and `~/saved/logs/` in your home directory.
-   * In `4.1.0`, scripts write default outputs to `saved/data/`, `saved/logs/`, and `saved/code/` in the current workspace (unless you pass `--output_dir`).
-2. **Hook-Enforced Mutation Guard (`evaluate_mutation_guard` — `create` & `update` Only):**
-   * In `4.0.0`, only prompt rules (`NO MUTATE`) restricted live mutations.
-   * In `4.1.0`, the plugin allows only **`create`** and **`update`** mutations and blocks all delete (**`remove`**) operations (`BLOCKED_PROHIBITED_DELETION`). In addition, the `PreToolUse` hook in `config/config_init.py` (`handle_hook`) blocks (`deny`) any live `.mutate*()` command unless `execute_mutates = true` in `config/assistant_config` and a valid dry-run receipt (`saved/data/last_dry_run.json`) exists. Read-only queries and `validate_only=True` dry-runs (for `create` and `update` operations) continue to run normally.
+1.  **Default Output Path (`~/saved/...` $\rightarrow$ `./saved/...`):**
+    *   In `4.0.0`, skill scripts (`get_cids_under_mcc.py` and
+        `troubleshoot_conversions.py`) wrote default output files to
+        `~/saved/csv/` and `~/saved/logs/` in your home directory.
+    *   In `4.1.0`, scripts write default outputs to `saved/data/`,
+        `saved/logs/`, and `saved/code/` in the current workspace (unless you
+        pass `--output_dir`).
+2.  **Hook-Enforced Mutation Guard (`evaluate_mutation_guard` — `create` &
+    `update` Only):**
+    *   In `4.0.0`, only prompt rules (`NO MUTATE`) restricted live mutations.
+    *   In `4.1.0`, the plugin allows only **`create`** and **`update`**
+        mutations and blocks all delete (**`remove`**) operations
+        (`BLOCKED_PROHIBITED_DELETION`). In addition, the `PreToolUse` hook in
+        `config/config_init.py` (`handle_hook`) blocks (`deny`) any live
+        `.mutate*()` command unless `execute_mutates = true` in
+        `config/assistant_config` and a valid dry-run receipt
+        (`saved/data/last_dry_run.json`) exists. Read-only queries and
+        `validate_only=True` dry-runs (for `create` and `update` operations)
+        continue to run normally.
 
 ## Performance & Functionality Benchmarks
 
-The repository includes a benchmark suite (`tests/benchmark_suite.py`) that checks functional correctness and execution speed (`total_ms`, `mean_ms`, `p50_ms`, `p95_ms`, `ops/sec`) across 8 subsystems of the Google Ads API Developer Assistant. It compares results between **any two versions that you specify** (`<base_version>` and `<target_version>`). The benchmark runner does not use default fallback versions or hardcoded version numbers.
+The repository includes a benchmark suite (`tests/benchmark_suite.py`) that
+checks functional correctness and execution speed (`total_ms`, `mean_ms`,
+`p50_ms`, `p95_ms`, `ops/sec`) across 8 subsystems of the Google Ads API
+Developer Assistant. It compares results between **any two versions that you
+specify** (`<base_version>` and `<target_version>`). The benchmark runner does
+not use default fallback versions or hardcoded version numbers.
 
-| Benchmark | Iterations | `<base_version>` (ms) | `<target_version>` (ms) | Budget (ms) | Delta | Speedup | Status |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | :---: |
-| `version_resolution_in_process` | 1,000 | `119.87` | `0.57` | `50.0` | `-99.5%` | **211.41x** | `PASS` |
-| `gaql_static_analysis` | 200 | `42.79` | `4.68` | `150.0` | `-89.1%` | **9.15x** | `PASS` |
-| `protobuf_type_discovery_and_inspection` | 200 | `99.53` | `10.30` | `60.0` | `-89.7%` | **9.66x** | `PASS` |
-| `client_libs_parallel_release_sync` | 5 | `632.77` | `145.02` | `400.0` | `-77.1%` | **4.36x** | `PASS` |
-| `conversion_csv_validation` | 50 | `101.16` | `91.35` | `450.0` | `-9.7%` | **1.11x** | `PASS` |
-| `config_sync_and_legacy_migration` | 50 | `N/A` | `99.31` | `350.0` | `NEW` | `N/A` | `PASS` |
-| `hook_pre_tool_use_interception` | 500 | `N/A` | `49.63` | `250.0` | `NEW` | `N/A` | `PASS` |
-| `hitl_mutation_receipt_and_sha256_normalization` | 100 | `N/A` | `82.47` | `450.0` | `NEW` | `N/A` | `PASS` |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
+
+Benchmark                                        | Iterations | `<base_version>` (ms) | `<target_version>` (ms) | Budget (ms) | Delta    | Speedup     | Status
+:----------------------------------------------- | ---------: | --------------------: | ----------------------: | ----------: | -------: | ----------: | :----:
+`version_resolution_in_process`                  | 1,000      | `119.87`              | `0.57`                  | `50.0`      | `-99.5%` | **211.41x** | `PASS`
+`gaql_static_analysis`                           | 200        | `42.79`               | `4.68`                  | `150.0`     | `-89.1%` | **9.15x**   | `PASS`
+`protobuf_type_discovery_and_inspection`         | 200        | `99.53`               | `10.30`                 | `60.0`      | `-89.7%` | **9.66x**   | `PASS`
+`client_libs_parallel_release_sync`              | 5          | `632.77`              | `145.02`                | `400.0`     | `-77.1%` | **4.36x**   | `PASS`
+`conversion_csv_validation`                      | 50         | `101.16`              | `91.35`                 | `450.0`     | `-9.7%`  | **1.11x**   | `PASS`
+`config_sync_and_legacy_migration`               | 50         | `N/A`                 | `99.31`                 | `350.0`     | `NEW`    | `N/A`       | `PASS`
+`hook_pre_tool_use_interception`                 | 500        | `N/A`                 | `49.63`                 | `250.0`     | `NEW`    | `N/A`       | `PASS`
+`hitl_mutation_receipt_and_sha256_normalization` | 100        | `N/A`                 | `82.47`                 | `450.0`     | `NEW`    | `N/A`       | `PASS`
+
+<!-- mdformat on -->
 
 ### How to Run the Benchmarks
 
-Specify the **two versions to compare** (`<base_version>` and `<target_version>`), or pass `--run-current` to test only the current working tree. If you run `python3 tests/benchmark_suite.py` with no arguments, the script exits with an error.
+Specify the **two versions to compare** (`<base_version>` and
+`<target_version>`), or pass `--run-current` to test only the current working
+tree. If you run `python3 tests/benchmark_suite.py` with no arguments, the
+script exits with an error.
 
 Each version argument (`<base_version>` or `<target_version>`) can be:
-* **A Git ref** (a tag, branch, or commit SHA in the repository, such as `<tag_a>`, `<tag_b>`, `main`, `dev_next`, or `HEAD~1`),
-* **A saved baseline name** in `tests/benchmarks/` (matching `tests/benchmarks/baseline_<version>.json`),
-* **A baseline JSON file path** (for example, `path/to/baseline_a.json`), or
-* **`workspace`** (or `current` / `.`) to test the current working tree.
+
+*   **A Git ref** (a tag, branch, or commit SHA in the repository, such as
+    `<tag_a>`, `<tag_b>`, `main`, `dev_next`, or `HEAD~1`),
+*   **A saved baseline name** in `tests/benchmarks/` (matching
+    `tests/benchmarks/baseline_<version>.json`),
+*   **A baseline JSON file path** (for example, `path/to/baseline_a.json`), or
+*   **`workspace`** (or `current` / `.`) to test the current working tree.
 
 #### 1. Compare Any Two Versions (`<base_version> <target_version>`)
-Pass the two versions as positional arguments, with `--compare`, or with `--base-version` and `--target-version`:
+
+Pass the two versions as positional arguments, with `--compare`, or with
+`--base-version` and `--target-version`:
+
 ```bash
 # Positional: compare <base_version> against <target_version>
 python3 tests/benchmark_suite.py <base_version> <target_version>
@@ -837,6 +1312,7 @@ python3 tests/benchmark_suite.py --base-version <base_version> --target-version 
 ```
 
 #### 2. Compare Two Saved Baseline JSON Files
+
 ```bash
 python3 tests/benchmark_suite.py \
   tests/benchmarks/baseline_<base_version>.json \
@@ -844,20 +1320,29 @@ python3 tests/benchmark_suite.py \
 ```
 
 #### 3. Compare Two Git Tags, Branches, or Commits Live
-When you pass Git refs that do not have saved JSON files, the runner checks out each ref into a temporary Git worktree, runs the benchmarks on each ref, and compares them:
+
+When you pass Git refs that do not have saved JSON files, the runner checks out
+each ref into a temporary Git worktree, runs the benchmarks on each ref, and
+compares them:
+
 ```bash
 python3 tests/benchmark_suite.py <git_ref_1> <git_ref_2>
 python3 tests/benchmark_suite.py main dev_next
 ```
 
 #### 4. Run on the Current Working Tree Only (`--run-current`)
-Run all benchmarks and check functional assertions and latency budgets on the current workspace without comparing two versions:
+
+Run all benchmarks and check functional assertions and latency budgets on the
+current workspace without comparing two versions:
+
 ```bash
 python3 tests/benchmark_suite.py --run-current
 ```
 
 #### 5. Save or Update Version Baselines (`--save-baseline` & `--save-git-ref-baseline`)
+
 Save baseline JSON files when you create a new release:
+
 ```bash
 # Save the current workspace benchmark results to a JSON file
 python3 tests/benchmark_suite.py --save-baseline tests/benchmarks/baseline_<version>.json
@@ -867,7 +1352,12 @@ python3 tests/benchmark_suite.py --save-git-ref-baseline <git_ref> tests/benchma
 ```
 
 #### 6. Set the Regression Threshold & JSON Output (`--max-regression-pct` & `--json`)
-By default, the runner flags a regression if a benchmark exceeds its latency budget (`max_total_ms`) or slows down by more than `50%` (with at least a `+5.0 ms` increase) compared to `<base_version>`. Use `--max-regression-pct` to change this threshold, or pass `--json` for CI pipelines:
+
+By default, the runner flags a regression if a benchmark exceeds its latency
+budget (`max_total_ms`) or slows down by more than `50%` (with at least a
+`+5.0 ms` increase) compared to `<base_version>`. Use `--max-regression-pct` to
+change this threshold, or pass `--json` for CI pipelines:
+
 ```bash
 # Use a 25% regression threshold between two versions
 python3 tests/benchmark_suite.py --compare <base_version> <target_version> --max-regression-pct 25
@@ -877,46 +1367,56 @@ python3 tests/benchmark_suite.py --compare <base_version> <target_version> --jso
 ```
 
 #### 7. Run from the Assistant
-`tests/benchmark_suite.py` also includes `pytest` test cases that check functional assertions, latency budgets, two-version comparisons, CLI argument rules, and regression detection:
+
+`tests/benchmark_suite.py` also includes `pytest` test cases that check
+functional assertions, latency budgets, two-version comparisons, CLI argument
+rules, and regression detection:
+
 ```text
 prompt: benchmark <version_1> <version_2>
 ```
 
 #### 8. CLI Options Summary (`tests/benchmark_suite.py`)
 
-| Flag / Argument | Description |
-| :--- | :--- |
-| `<base_version> <target_version>` | Positional arguments for the two versions to compare (required unless you use `--compare`, `--base-version`/`--target-version`, `--run-current`, or `--save-*`). |
-| `--compare BASE TARGET` | Compares `BASE` version against `TARGET` version (Git refs, baseline JSON paths, saved baseline names, or `workspace`). |
-| `--base-version BASE` | Base version to compare from (use with `--target-version TARGET`). |
-| `--target-version TARGET` | Target version to compare against `--base-version BASE`. |
-| `--run-current` | Runs benchmarks on the current working tree only. |
-| `--save-baseline PATH` | Writes the current working tree benchmark report to `PATH` as JSON. |
-| `--save-git-ref-baseline REF PATH` | Runs benchmarks on Git `REF` and writes the report to `PATH`. |
-| `--max-regression-pct PCT` | Maximum allowed latency increase percentage before flagging a regression (default: `50.0`). |
-| `--json` | Prints the benchmark report and comparison results as JSON to `stdout`. |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
 
----
+Flag / Argument                    | Description
+:--------------------------------- | :----------
+`<base_version> <target_version>`  | Positional arguments for the two versions to compare (required unless you use `--compare`, `--base-version`/`--target-version`, `--run-current`, or `--save-*`).
+`--compare BASE TARGET`            | Compares `BASE` version against `TARGET` version (Git refs, baseline JSON paths, saved baseline names, or `workspace`).
+`--base-version BASE`              | Base version to compare from (use with `--target-version TARGET`).
+`--target-version TARGET`          | Target version to compare against `--base-version BASE`.
+`--run-current`                    | Runs benchmarks on the current working tree only.
+`--save-baseline PATH`             | Writes the current working tree benchmark report to `PATH` as JSON.
+`--save-git-ref-baseline REF PATH` | Runs benchmarks on Git `REF` and writes the report to `PATH`.
+`--max-regression-pct PCT`         | Maximum allowed latency increase percentage before flagging a regression (default: `50.0`).
+`--json`                           | Prints the benchmark report and comparison results as JSON to `stdout`.
+
+<!-- mdformat on -->
+
+--------------------------------------------------------------------------------
 
 ### How to Read the Benchmark Results
 
 #### 1. Read the Comparison Table
-When you compare two versions (`<base_version>` and `<target_version>`), `tests/benchmark_suite.py` prints this table:
+
+When you compare two versions (`<base_version>` and `<target_version>`),
+`tests/benchmark_suite.py` prints this table:
 
 ```text
 ============================================================================================================
 GOOGLE ADS API DEVELOPER ASSISTANT — BENCHMARK SUITE (<target_version>) vs Baseline (<base_version>)
 ============================================================================================================
-Benchmark                                  | Func   |  Base (ms) |  Curr (ms) |    Budget |     Delta |  Speedup | Status  
+Benchmark                                  | Func   |  Base (ms) |  Curr (ms) |    Budget |     Delta |  Speedup | Status
 ------------------------------------------------------------------------------------------------------------
-version_resolution_in_process              | PASS   |     119.87 |       0.57 |    50.0ms |    -99.5% |  211.41x | PASS    
-config_sync_and_legacy_migration           | PASS   |        N/A |      99.31 |   350.0ms |       NEW |      N/A | PASS    
-hook_pre_tool_use_interception             | PASS   |        N/A |      49.63 |   250.0ms |       NEW |      N/A | PASS    
-gaql_static_analysis                       | PASS   |      42.79 |       4.68 |   150.0ms |    -89.1% |    9.15x | PASS    
-protobuf_type_discovery_and_inspection     | PASS   |      99.53 |      10.30 |    60.0ms |    -89.7% |    9.66x | PASS    
-client_libs_parallel_release_sync          | PASS   |     632.77 |     145.02 |   400.0ms |    -77.1% |    4.36x | PASS    
-conversion_csv_validation                  | PASS   |     101.16 |      91.35 |   450.0ms |     -9.7% |    1.11x | PASS    
-hitl_mutation_receipt_and_sha256_normaliza | PASS   |        N/A |      82.47 |   450.0ms |       NEW |      N/A | PASS    
+version_resolution_in_process              | PASS   |     119.87 |       0.57 |    50.0ms |    -99.5% |  211.41x | PASS
+config_sync_and_legacy_migration           | PASS   |        N/A |      99.31 |   350.0ms |       NEW |      N/A | PASS
+hook_pre_tool_use_interception             | PASS   |        N/A |      49.63 |   250.0ms |       NEW |      N/A | PASS
+gaql_static_analysis                       | PASS   |      42.79 |       4.68 |   150.0ms |    -89.1% |    9.15x | PASS
+protobuf_type_discovery_and_inspection     | PASS   |      99.53 |      10.30 |    60.0ms |    -89.7% |    9.66x | PASS
+client_libs_parallel_release_sync          | PASS   |     632.77 |     145.02 |   400.0ms |    -77.1% |    4.36x | PASS
+conversion_csv_validation                  | PASS   |     101.16 |      91.35 |   450.0ms |     -9.7% |    1.11x | PASS
+hitl_mutation_receipt_and_sha256_normaliza | PASS   |        N/A |      82.47 |   450.0ms |       NEW |      N/A | PASS
 ============================================================================================================
 Total Suite Time: 483.33 ms | Verdict: PASSED (No functional or performance regressions)
 ============================================================================================================
@@ -924,71 +1424,118 @@ Total Suite Time: 483.33 ms | Verdict: PASSED (No functional or performance regr
 
 Column descriptions:
 
-| Column | JSON Field | Meaning |
-| :--- | :--- | :--- |
-| **`Benchmark`** | `name` | Name of the subsystem benchmark. |
-| **`Func`** | `functional_passed` | **`PASS`** if the functional checks (`verify_fn`) passed before timing; **`FAIL`** if any check failed. |
-| **`Base (ms)`** | `baseline_ms` | Total time (in milliseconds) across all iterations in `<base_version>`. Shows **`N/A`** if the benchmark did not exist in `<base_version>`. |
-| **`Curr (ms)`** | `current_ms` / `total_ms` | Total time (in milliseconds) across all iterations in `<target_version>`. Lower values are faster. |
-| **`Budget`** | `max_total_ms` | Maximum allowed total time (in milliseconds) for that benchmark. **`Curr (ms)` must be `<= Budget`**. |
-| **`Delta`** | `pct_change` | Percentage change in time from `<base_version>` to `<target_version>` (`((Curr - Base) / Base) * 100%`):<br>• **Negative (`-89.1%`)**: `<target_version>` is faster than `<base_version>`.<br>• **Positive (`+15.2%`)**: `<target_version>` is slower than `<base_version>`.<br>• **`NEW`**: Benchmark exists only in `<target_version>`.<br>• **`REMOVED`**: Benchmark existed only in `<base_version>`. |
-| **`Speedup`** | `speedup_factor` | Ratio of `Base (ms) / Curr (ms)`:<br>• **`> 1.00x`** (for example, `9.66x`): `<target_version>` is that many times faster.<br>• **`1.00x`**: Same speed.<br>• **`< 1.00x`** (for example, `0.80x`): `<target_version>` is slower.<br>• **`N/A`**: Benchmark exists in only one version. |
-| **`Status`** | `regressed` | **`PASS`** when functional checks pass, `Curr (ms) <= Budget`, and no latency regression occurred; **`REGRESS`** (or **`FAIL`**) if any check fails. |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
+
+Column          | JSON Field                | Meaning
+:-------------- | :------------------------ | :------
+**`Benchmark`** | `name`                    | Name of the subsystem benchmark.
+**`Func`**      | `functional_passed`       | **`PASS`** if the functional checks (`verify_fn`) passed before timing; **`FAIL`** if any check failed.
+**`Base (ms)`** | `baseline_ms`             | Total time (in milliseconds) across all iterations in `<base_version>`. Shows **`N/A`** if the benchmark did not exist in `<base_version>`.
+**`Curr (ms)`** | `current_ms` / `total_ms` | Total time (in milliseconds) across all iterations in `<target_version>`. Lower values are faster.
+**`Budget`**    | `max_total_ms`            | Maximum allowed total time (in milliseconds) for that benchmark. **`Curr (ms)` must be `<= Budget`**.
+**`Delta`**     | `pct_change`              | Percentage change in time from `<base_version>` to `<target_version>` (`((Curr - Base) / Base) * 100%`):<br>• **Negative (`-89.1%`)**: `<target_version>` is faster than `<base_version>`.<br>• **Positive (`+15.2%`)**: `<target_version>` is slower than `<base_version>`.<br>• **`NEW`**: Benchmark exists only in `<target_version>`.<br>• **`REMOVED`**: Benchmark existed only in `<base_version>`.
+**`Speedup`**   | `speedup_factor`          | Ratio of `Base (ms) / Curr (ms)`:<br>• **`> 1.00x`** (for example, `9.66x`): `<target_version>` is that many times faster.<br>• **`1.00x`**: Same speed.<br>• **`< 1.00x`** (for example, `0.80x`): `<target_version>` is slower.<br>• **`N/A`**: Benchmark exists in only one version.
+**`Status`**    | `regressed`               | **`PASS`** when functional checks pass, `Curr (ms) <= Budget`, and no latency regression occurred; **`REGRESS`** (or **`FAIL`**) if any check fails.
+
+<!-- mdformat on -->
 
 #### 2. Read Single-Run Metrics (`Iters`, `p50`, `p95`, `ops_per_sec`)
-When you run `--run-current` (or inspect `"baseline"` and `"current"` in `--json` output), each benchmark also reports per-iteration metrics:
-* **`iterations` (`Iters`)**: Number of timed runs after the functional check.
-* **`total_ms` (`Total (ms)`)**: Total time across all iterations in milliseconds.
-* **`mean_ms`**: Average time per operation (`total_ms / iterations`).
-* **`p50_ms` (`p50 (ms)`)**: Median time per operation (`50th` percentile).
-* **`p95_ms` (`p95 (ms)`)**: `95th` percentile time per operation.
-* **`ops_per_sec`**: Operations per second (`iterations / (total_ms / 1000)`).
+
+When you run `--run-current` (or inspect `"baseline"` and `"current"` in
+`--json` output), each benchmark also reports per-iteration metrics:
+
+*   **`iterations` (`Iters`)**: Number of timed runs after the functional check.
+*   **`total_ms` (`Total (ms)`)**: Total time across all iterations in
+    milliseconds.
+*   **`mean_ms`**: Average time per operation (`total_ms / iterations`).
+*   **`p50_ms` (`p50 (ms)`)**: Median time per operation (`50th` percentile).
+*   **`p95_ms` (`p95 (ms)`)**: `95th` percentile time per operation.
+*   **`ops_per_sec`**: Operations per second (`iterations / (total_ms / 1000)`).
 
 #### 3. How the Runner Flags Regressions
-The runner marks a benchmark as **`REGRESS`** (and exits with code **`1`**) if **any** of these three conditions occur:
-1. **Functional Failure (`Func == FAIL`)**: Any assertion in `verify_fn()` fails.
-2. **Budget Exceeded (`Curr (ms) > Budget`)**: The total runtime exceeds `max_total_ms`.
-3. **Relative Slowdown (`Delta > --max-regression-pct` AND `delta_ms > 5.0 ms`)**: The benchmark slows down by more than `--max-regression-pct` (default **`+50.0%`**) compared to `<base_version>` **and** the slowdown is greater than **`5.0 ms`**.
+
+The runner marks a benchmark as **`REGRESS`** (and exits with code **`1`**) if
+**any** of these three conditions occur:
+
+1.  **Functional Failure (`Func == FAIL`)**: Any assertion in `verify_fn()`
+    fails.
+2.  **Budget Exceeded (`Curr (ms) > Budget`)**: The total runtime exceeds
+    `max_total_ms`.
+3.  **Relative Slowdown (`Delta > --max-regression-pct` AND
+    `delta_ms > 5.0 ms`)**: The benchmark slows down by more than
+    `--max-regression-pct` (default **`+50.0%`**) compared to `<base_version>`
+    **and** the slowdown is greater than **`5.0 ms`**.
 
 **Exit Codes:**
-* **`0`**: All functional checks passed, all budgets were met, and no latency regressions occurred (`Verdict: PASSED`).
-* **`1`**: One or more functional checks failed, a budget was exceeded, or a latency regression occurred (`Verdict: FAILED`).
-* **`2`**: Invalid CLI arguments.
+
+*   **`0`**: All functional checks passed, all budgets were met, and no latency
+    regressions occurred (`Verdict: PASSED`).
+*   **`1`**: One or more functional checks failed, a budget was exceeded, or a
+    latency regression occurred (`Verdict: FAILED`).
+*   **`2`**: Invalid CLI arguments.
 
 #### 4. What Each Benchmark Measures
 
-| Benchmark Name | What It Tests | Purpose |
-| :--- | :--- | :--- |
-| **`version_resolution_in_process`** | Reads the plugin version across `config_init.get_version()` and `server.get_plugin_version()` (1,000 iterations). | Tests in-memory version caching (`_CACHED_VERSION`). |
-| **`config_sync_and_legacy_migration`** | Copies `~/google-ads.yaml` to `config/google-ads.yaml` (`0600`), deletes dummy YAML files in `client_libs/`, and migrates `customer_id` / `api_version.txt` into `config/assistant_config` (50 iterations). | Tests top-level directory checks and config sync speed. |
-| **`hook_pre_tool_use_interception`** | Runs `evaluate_mutation_guard()` on read-only GAQL commands (`allow`), `--dry-run` mutation commands (`allow`), and unverified live `.mutate*()` commands (`deny`) (500 iterations). | Measures `PreToolUse` hook speed on terminal tool calls. |
-| **`gaql_static_analysis`** | Checks GAQL syntax, rejects `OR` clauses, `COUNT()` aggregates, and invalid `segments.hour_of_day` fields, and checks dry-run cache hits (200 iterations). | Tests SHA-256 query cache (`compute_gaql_cache_key`) and static validator speed. |
-| **`protobuf_type_discovery_and_inspection`** | Finds available Protobuf message and enum types for the active API version and reads field definitions (200 iterations). | Tests two-tier memory (`_AVAILABLE_TYPES_CACHE`) and disk (`gads_assistant_types_<ver>.json`) caching. |
-| **`client_libs_parallel_release_sync`** | Checks client library repositories against GitHub releases (`check_only=True`) with simulated `25 ms` network latency per repo (5 iterations). | Tests concurrent `ThreadPoolExecutor` release checks. |
-| **`conversion_csv_validation`** | Validates a 100-row offline conversion CSV file (headers, ISO-8601 timestamps with timezones, and GCLIDs) (50 iterations). | Checks CSV validation speed across 5,000 rows. |
-| **`hitl_mutation_receipt_and_sha256_normalization`** | Calculates normalized Protobuf SHA-256 hashes, writes signed `last_dry_run.json` receipts, and checks receipt integrity (100 iterations). | Tests the receipt verification pipeline that gates live mutations. |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
+
+Benchmark Name                                       | What It Tests                                                                                                                                                                                               | Purpose
+:--------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------
+**`version_resolution_in_process`**                  | Reads the plugin version across `config_init.get_version()` and `server.get_plugin_version()` (1,000 iterations).                                                                                           | Tests in-memory version caching (`_CACHED_VERSION`).
+**`config_sync_and_legacy_migration`**               | Copies `~/google-ads.yaml` to `config/google-ads.yaml` (`0600`), deletes dummy YAML files in `client_libs/`, and migrates `customer_id` / `api_version.txt` into `config/assistant_config` (50 iterations). | Tests top-level directory checks and config sync speed.
+**`hook_pre_tool_use_interception`**                 | Runs `evaluate_mutation_guard()` on read-only GAQL commands (`allow`), `--dry-run` mutation commands (`allow`), and unverified live `.mutate*()` commands (`deny`) (500 iterations).                        | Measures `PreToolUse` hook speed on terminal tool calls.
+**`gaql_static_analysis`**                           | Checks GAQL syntax, rejects `OR` clauses, `COUNT()` aggregates, and invalid `segments.hour_of_day` fields, and checks dry-run cache hits (200 iterations).                                                  | Tests SHA-256 query cache (`compute_gaql_cache_key`) and static validator speed.
+**`protobuf_type_discovery_and_inspection`**         | Finds available Protobuf message and enum types for the active API version and reads field definitions (200 iterations).                                                                                    | Tests two-tier memory (`_AVAILABLE_TYPES_CACHE`) and disk (`gads_assistant_types_<ver>.json`) caching.
+**`client_libs_parallel_release_sync`**              | Checks client library repositories against GitHub releases (`check_only=True`) with simulated `25 ms` network latency per repo (5 iterations).                                                              | Tests concurrent `ThreadPoolExecutor` release checks.
+**`conversion_csv_validation`**                      | Validates a 100-row offline conversion CSV file (headers, ISO-8601 timestamps with timezones, and GCLIDs) (50 iterations).                                                                                  | Checks CSV validation speed across 5,000 rows.
+**`hitl_mutation_receipt_and_sha256_normalization`** | Calculates normalized Protobuf SHA-256 hashes, writes signed `last_dry_run.json` receipts, and checks receipt integrity (100 iterations).                                                                   | Tests the receipt verification pipeline that gates live mutations.
+
+<!-- mdformat on -->
 
 ## Functional Tests Against a Test Account
 
-The repository includes a 72-test functional verification suite in [`tests/hitl_policy_functional_suite.py`](tests/hitl_policy_functional_suite.py) (backed by [`tests/hitl_audit_logger.py`](tests/hitl_audit_logger.py) and [`tests/test_account_config.yaml`](tests/test_account_config.yaml)) that exercises the assistant's Human-in-the-Loop (HITL) mutation guardrails, configuration gates, `PreToolUse` hooks, SHA-256 dry-run receipts, A2A sidecar endpoints, tiered mutation controls (`Tier 1`–`Tier 4`), and end-to-end prompt scenarios (`H1`–`H10`) against a **Google Ads Test Account**.
+The repository includes a 72-test functional verification suite in
+[`tests/hitl_policy_functional_suite.py`](tests/hitl_policy_functional_suite.py)
+(backed by [`tests/hitl_audit_logger.py`](tests/hitl_audit_logger.py) and
+[`tests/test_account_config.yaml`](tests/test_account_config.yaml)) that
+exercises the assistant's Human-in-the-Loop (HITL) mutation guardrails,
+configuration gates, `PreToolUse` hooks, SHA-256 dry-run receipts, A2A sidecar
+endpoints, tiered mutation controls (`Tier 1`–`Tier 4`), and end-to-end prompt
+scenarios (`H1`–`H10`) against a **Google Ads Test Account**.
 
-Every test case runs inside an isolated temporary sandbox directory so your workspace `config/assistant_config`, `config/financial_limits`, and `saved/` files are never modified.
+Every test case runs inside an isolated temporary sandbox directory so your
+workspace `config/assistant_config`, `config/financial_limits`, and `saved/`
+files are never modified.
 
 ### 1. Prerequisites & Test Account Access
 
-> **N.B. — Mandatory Operator Access & Test Account Verification:**
-> 1. **Active Account Access Required:** The person running these functional tests **must** have active OAuth 2.0 or Service Account access to the configured `test_customer_id` (and to `login_customer_id` when authenticating through a Google Ads Manager / MCC account).
-> 2. **Test Account Only (`customer.test_account == true`):** Never point this suite at a live production ad-serving account. Preflight gates `PF-01`–`PF-03` call `CustomerService.list_accessible_customers()` to verify caller access and query `SELECT customer.id, customer.test_account FROM customer` to confirm `customer.test_account == true`. If the caller lacks access or `customer.test_account` is `false`, the runner aborts all live mutation RPCs immediately (fail-closed).
+> **N.B. — Mandatory Operator Access & Test Account Verification:** 1. **Active
+> Account Access Required:** The person running these functional tests **must**
+> have active OAuth 2.0 or Service Account access to the configured
+> `test_customer_id` (and to `login_customer_id` when authenticating through a
+> Google Ads Manager / MCC account). 2. **Test Account Only
+> (`customer.test_account == true`):** Never point this suite at a live
+> production ad-serving account. Preflight gates `PF-01`–`PF-03` call
+> `CustomerService.list_accessible_customers()` to verify caller access and
+> query `SELECT customer.id, customer.test_account FROM customer` to confirm
+> `customer.test_account == true`. If the caller lacks access or
+> `customer.test_account` is `false`, the runner aborts all live mutation RPCs
+> immediately (fail-closed).
 
 Before running the functional tests, make sure:
-1. Python `>= 3.11` is active with dependencies installed (`pip install google-ads pyyaml pytest ruff`).
-2. Your OAuth 2.0 or Service Account credentials file (`~/google-ads.yaml` or `config/google-ads.yaml`) exists with `0600` permissions (`chmod 600 config/google-ads.yaml`) and `use_proto_plus: true`.
 
----
+1.  Python `>= 3.11` is active with dependencies installed
+    (`pip install google-ads pyyaml pytest ruff`).
+2.  Your OAuth 2.0 or Service Account credentials file (`~/google-ads.yaml` or
+    `config/google-ads.yaml`) exists with `0600` permissions
+    (`chmod 600 config/google-ads.yaml`) and `use_proto_plus: true`.
+
+--------------------------------------------------------------------------------
 
 ### 2. Configure the Test Account (`tests/test_account_config.yaml`)
 
-Edit [`tests/test_account_config.yaml`](tests/test_account_config.yaml) to set your 10-digit Google Ads Test Client Customer ID (hyphens are stripped automatically) and optional Test Manager (`MCC`) `login_customer_id`:
+Edit [`tests/test_account_config.yaml`](tests/test_account_config.yaml) to set
+your 10-digit Google Ads Test Client Customer ID (hyphens are stripped
+automatically) and optional Test Manager (`MCC`) `login_customer_id`:
 
 ```yaml
 # N.B. The person running these tests MUST have OAuth 2.0 / Service Account access
@@ -1013,20 +1560,25 @@ audit_log:
   filename_prefix: "hitl_policy_functional_audit"
 ```
 
-| Configuration Key | Env Var / CLI Override | Description |
-| :--- | :--- | :--- |
-| **`test_account.test_customer_id`** | `GOOGLE_ADS_TEST_CUSTOMER_ID` / `--customer-id` | Target 10-digit Google Ads Test Client Customer ID (`customer.test_account == true` required). |
-| **`test_account.login_customer_id`** | `GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID` / `--login-customer-id` | Optional 10-digit Manager (MCC) Customer ID set as `login-customer-id` on API requests. |
-| **`test_account.credentials_yaml_path`** | `GOOGLE_ADS_CONFIGURATION_FILE_PATH` / `--credentials-yaml` | Path to `google-ads.yaml` (resolves workspace `config/google-ads.yaml`, plugin `config/google-ads.yaml`, or `~/google-ads.yaml`). |
-| **`test_account.api_version`** | `--api-version` | Target Google Ads API version (`v<N>`; leave empty to detect dynamically). |
-| **`execution.allow_live_execute`** | `--validate-only` / `--dry-run-only` (sets `false`) | Enables live reversible/`PAUSED` writes against the verified Test Account during `TC-RUN` and `H1`–`H4`. |
-| **`audit_log.directory` / `filename_prefix`** | `--audit-log PATH` | Directory and filename prefix for timestamped `.jsonl` audit logs (`0600` permissions). |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
 
----
+Configuration Key                             | Env Var / CLI Override                                      | Description
+:-------------------------------------------- | :---------------------------------------------------------- | :----------
+**`test_account.test_customer_id`**           | `GOOGLE_ADS_TEST_CUSTOMER_ID` / `--customer-id`             | Target 10-digit Google Ads Test Client Customer ID (`customer.test_account == true` required).
+**`test_account.login_customer_id`**          | `GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID` / `--login-customer-id` | Optional 10-digit Manager (MCC) Customer ID set as `login-customer-id` on API requests.
+**`test_account.credentials_yaml_path`**      | `GOOGLE_ADS_CONFIGURATION_FILE_PATH` / `--credentials-yaml` | Path to `google-ads.yaml` (resolves workspace `config/google-ads.yaml`, plugin `config/google-ads.yaml`, or `~/google-ads.yaml`).
+**`test_account.api_version`**                | `--api-version`                                             | Target Google Ads API version (`v<N>`; leave empty to detect dynamically).
+**`execution.allow_live_execute`**            | `--validate-only` / `--dry-run-only` (sets `false`)         | Enables live reversible/`PAUSED` writes against the verified Test Account during `TC-RUN` and `H1`–`H4`.
+**`audit_log.directory` / `filename_prefix`** | `--audit-log PATH`                                          | Directory and filename prefix for timestamped `.jsonl` audit logs (`0600` permissions).
+
+<!-- mdformat on -->
+
+--------------------------------------------------------------------------------
 
 ### 3. Run the Functional Test Suite
 
 #### Run All Suites Against Your Configured Test Account
+
 ```bash
 # Run using settings in tests/test_account_config.yaml
 python3 tests/hitl_policy_functional_suite.py
@@ -1040,6 +1592,7 @@ python3 tests/hitl_policy_functional_suite.py \
 ```
 
 #### List Suites, Run Specific Suites/Tests, or Validate-Only (`--list-suites`, `--suite`, `--test-id`, `--validate-only`)
+
 ```bash
 # List all available --suite values, test counts, and test ID ranges
 python3 tests/hitl_policy_functional_suite.py --list-suites
@@ -1057,38 +1610,60 @@ python3 tests/hitl_policy_functional_suite.py --validate-only
 ```
 
 #### Run Offline Unit & Simulated Test Account Verification (`pytest`)
-To verify configuration parsing, JSONL correlation invariants, error-only log filtering, fail-closed non-test-account aborts, and all 72 functional cases offline without live network credentials:
+
+To verify configuration parsing, JSONL correlation invariants, error-only log
+filtering, fail-closed non-test-account aborts, and all 72 functional cases
+offline without live network credentials:
+
 ```bash
 pytest tests/test_hitl_functional_suite.py -v
 ```
 
 #### CLI Options Summary (`tests/hitl_policy_functional_suite.py`)
 
-| Flag | Description |
-| :--- | :--- |
-| `--config PATH` | Path to YAML config file (default: `tests/test_account_config.yaml`). |
-| `--customer-id CID` | Overrides `test_customer_id` (10-digit Test Account ID, with or without dashes). |
-| `--login-customer-id CID` | Overrides `login_customer_id` (10-digit Manager / MCC ID). |
-| `--credentials-yaml PATH` | Overrides `credentials_yaml_path`. |
-| `--api-version VER` | Overrides `api_version` (format `v<N>`). |
-| `--audit-log PATH` | Explicit output path for the `0600`-permissioned `.jsonl` audit log. |
-| `--suite SUITE` | Runs `all` (default) or a specific suite (`preflight`, `cfg`/`TC-CFG`, `hook`/`TC-HOOK`, `run`/`TC-RUN`, `msg`/`TC-MSG`, `aud`/`TC-AUD`, `a2a`/`TC-A2A`, `t1`/`TC-T1`..`t4`/`TC-T4`, `scenarios`). |
-| `--list-suites` | Lists all available `--suite` values, test counts, and test ID ranges, then exits. |
-| `--test-id ID` | Runs specific test ID(s) (repeatable, e.g. `--test-id TC-CFG-01 --test-id TC-T1-03`). |
-| `--validate-only`, `--dry-run-only` | Disables live `--execute` writes and runs strictly `validate_only=True` + read-only RPCs. |
-| `--filter-errors JSONL_PATH` | Filters an existing `.jsonl` audit log and prints **only** `ERROR` records as JSONL to `stdout`. |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
 
----
+Flag                                | Description
+:---------------------------------- | :----------
+`--config PATH`                     | Path to YAML config file (default: `tests/test_account_config.yaml`).
+`--customer-id CID`                 | Overrides `test_customer_id` (10-digit Test Account ID, with or without dashes).
+`--login-customer-id CID`           | Overrides `login_customer_id` (10-digit Manager / MCC ID).
+`--credentials-yaml PATH`           | Overrides `credentials_yaml_path`.
+`--api-version VER`                 | Overrides `api_version` (format `v<N>`).
+`--audit-log PATH`                  | Explicit output path for the `0600`-permissioned `.jsonl` audit log.
+`--suite SUITE`                     | Runs `all` (default) or a specific suite (`preflight`, `cfg`/`TC-CFG`, `hook`/`TC-HOOK`, `run`/`TC-RUN`, `msg`/`TC-MSG`, `aud`/`TC-AUD`, `a2a`/`TC-A2A`, `t1`/`TC-T1`..`t4`/`TC-T4`, `scenarios`).
+`--list-suites`                     | Lists all available `--suite` values, test counts, and test ID ranges, then exits.
+`--test-id ID`                      | Runs specific test ID(s) (repeatable, e.g. `--test-id TC-CFG-01 --test-id TC-T1-03`).
+`--validate-only`, `--dry-run-only` | Disables live `--execute` writes and runs strictly `validate_only=True` + read-only RPCs.
+`--filter-errors JSONL_PATH`        | Filters an existing `.jsonl` audit log and prints **only** `ERROR` records as JSONL to `stdout`.
+
+<!-- mdformat on -->
+
+--------------------------------------------------------------------------------
 
 ### 4. Inspect & Filter the JSONL Audit Log
 
-Every run writes a structured JSON Lines (`.jsonl`) audit log (by default `saved/mutate_test_logs/<UTC_TIMESTAMP>_hitl_policy_functional_audit.jsonl`, or the path passed to `--audit-log`, with `0600` permissions and automatic credential redaction):
-* **Unique Record Identifier (`record_id`):** Every JSONL record has its own unique UUIDv4 `record_id`.
-* **Record Type Discriminator (`record_type`):** Identifies each record as `"SUITE_START"`, `"REQUEST"`, `"RESPONSE"`, `"ERROR"`, `"TEST_RESULT"`, or `"SUITE_SUMMARY"`.
-* **Request $\rightarrow$ Response Correlation (`request_record_id`):** Every `"RESPONSE"` record includes `request_record_id` containing the exact `record_id` of the `"REQUEST"` record that generated it.
-* **Filterable Error Records (`record_type == "ERROR"`):** Every test failure or exception emits an `"ERROR"` record (`"record_type": "ERROR"`, `"is_error": true`, `"level": "ERROR"`) linked to `request_record_id` (and `response_record_id` when applicable).
+Every run writes a structured JSON Lines (`.jsonl`) audit log (by default
+`saved/mutate_test_logs/<UTC_TIMESTAMP>_hitl_policy_functional_audit.jsonl`, or
+the path passed to `--audit-log`, with `0600` permissions and automatic
+credential redaction):
 
-Filter an audit log down to **just the error records** with the built-in CLI flag or `jq`:
+*   **Unique Record Identifier (`record_id`):** Every JSONL record has its own
+    unique UUIDv4 `record_id`.
+*   **Record Type Discriminator (`record_type`):** Identifies each record as
+    `"SUITE_START"`, `"REQUEST"`, `"RESPONSE"`, `"ERROR"`, `"TEST_RESULT"`, or
+    `"SUITE_SUMMARY"`.
+*   **Request $\rightarrow$ Response Correlation (`request_record_id`):** Every
+    `"RESPONSE"` record includes `request_record_id` containing the exact
+    `record_id` of the `"REQUEST"` record that generated it.
+*   **Filterable Error Records (`record_type == "ERROR"`):** Every test failure
+    or exception emits an `"ERROR"` record (`"record_type": "ERROR"`,
+    `"is_error": true`, `"level": "ERROR"`) linked to `request_record_id` (and
+    `response_record_id` when applicable).
+
+Filter an audit log down to **just the error records** with the built-in CLI
+flag or `jq`:
+
 ```bash
 # Built-in CLI error filter (outputs only ERROR JSONL lines)
 python3 tests/hitl_policy_functional_suite.py \
@@ -1102,82 +1677,150 @@ jq 'select(.record_id == "<request_record_id>" or .request_record_id == "<reques
   saved/mutate_test_logs/hitl_functional_audit.jsonl
 ```
 
----
+--------------------------------------------------------------------------------
 
 ### 5. Read the End-of-Run Results Tables
 
-At the conclusion of every run, the runner prints three formatted tables to `stdout`:
-1. **Overall Summary Table:** Total tests executed, number **Passed**, number **Failed**, and overall pass rate.
-2. **Suite Breakdown Table:** Per-suite totals, passed counts, and failed counts (`PREFLIGHT`, `TC-CFG`, `TC-HOOK`, `TC-RUN`, `TC-MSG`, `TC-AUD`, `TC-A2A`, `TC-T1`–`TC-T4`, and `SCENARIOS`).
-3. **Failed Test Cases Detail Table:** Lists every failed test's `Test ID`, `Suite`, `Test Name`, failure diagnostic message, and correlated `error_record_id` in the `.jsonl` audit log.
+At the conclusion of every run, the runner prints three formatted tables to
+`stdout`:
+
+1.  **Overall Summary Table:** Total tests executed, number **Passed**, number
+    **Failed**, and overall pass rate.
+2.  **Suite Breakdown Table:** Per-suite totals, passed counts, and failed
+    counts (`PREFLIGHT`, `TC-CFG`, `TC-HOOK`, `TC-RUN`, `TC-MSG`, `TC-AUD`,
+    `TC-A2A`, `TC-T1`–`TC-T4`, and `SCENARIOS`).
+3.  **Failed Test Cases Detail Table:** Lists every failed test's `Test ID`,
+    `Suite`, `Test Name`, failure diagnostic message, and correlated
+    `error_record_id` in the `.jsonl` audit log.
 
 **Exit Codes:**
-* **`0`**: All executed tests passed.
-* **`1`**: One or more tests failed (inspect the **Failed Test Cases** table or run `--filter-errors` on the `.jsonl` audit log).
 
----
+*   **`0`**: All executed tests passed.
+*   **`1`**: One or more tests failed (inspect the **Failed Test Cases** table
+    or run `--filter-errors` on the `.jsonl` audit log).
+
+--------------------------------------------------------------------------------
 
 ### 6. Non-Mutation Skills Functional Suite & Dual-Mode Skill Eval Harness
 
-In addition to the 72-test HITL policy suite, two companion suites provide full functional and prompt-level coverage across all 11 skills, all 13 slash commands, built-in creation helpers, and the A2A/MCP sidecar:
+In addition to the 72-test HITL policy suite, two companion suites provide full
+functional and prompt-level coverage across all 11 skills, all 13 slash
+commands, built-in creation helpers, and the A2A/MCP sidecar:
 
-* **Non-Mutation Skills, Creation Helpers & Sidecar Functional Suite ([`tests/skills_functional_suite.py`](tests/skills_functional_suite.py)):** Runs 30 functional tests across 11 suites (`SK-PF`, `SK-VER`, `SK-INSPECT`, `SK-GAQL`, `SK-MCC`, `SK-CONV`, `SK-SYNC`, `SK-LIMITS`, `SK-CREATE`, `SK-SIDECAR`, `SK-CWD`) with the same `customer.test_account == true` fail-closed preflight and correlated `0600` JSONL audit logger:
-  ```bash
-  # Run offline-capable checks (used automatically in CI)
-  python3 tests/skills_functional_suite.py --offline
+*   **Non-Mutation Skills, Creation Helpers & Sidecar Functional Suite
+    ([`tests/skills_functional_suite.py`](tests/skills_functional_suite.py)):**
+    Runs 30 functional tests across 11 suites (`SK-PF`, `SK-VER`, `SK-INSPECT`,
+    `SK-GAQL`, `SK-MCC`, `SK-CONV`, `SK-SYNC`, `SK-LIMITS`, `SK-CREATE`,
+    `SK-SIDECAR`, `SK-CWD`) with the same `customer.test_account == true`
+    fail-closed preflight and correlated `0600` JSONL audit logger:
 
-  # Run full 30-test suite against a verified Google Ads Test Account
-  python3 tests/skills_functional_suite.py --customer-id 123-456-7890 --login-customer-id 987-654-3210
+    ```bash
+    # Run offline-capable checks (used automatically in CI)
+    python3 tests/skills_functional_suite.py --offline
 
-  # Run simulated Test Account verification offline via pytest
-  pytest tests/test_skills_functional_suite.py -v
-  ```
-* **Dual-Mode Skill & Prompt Evaluation Harness ([`tests/eval_skills_suite.py`](tests/eval_skills_suite.py)):** Covers all 11 skills (including prompt-only `explain`, `step-by-step`, and `assistant-tutorial`) and all 13 commands:
-  ```bash
-  # Deterministic offline CI mode (frontmatter, CLI --help flag parity, policy contracts, 22 skill routing & rubric checks)
-  python3 tests/eval_skills_suite.py --mode offline
+    # Run full 30-test suite against a verified Google Ads Test Account
+    python3 tests/skills_functional_suite.py --customer-id 123-456-7890 --login-customer-id 987-654-3210
 
-  # Optional live LLM-in-the-loop mode (supports gemini-api, gemini-cli, or claude)
-  GEMINI_API_KEY=... python3 tests/eval_skills_suite.py --mode live --provider gemini-api
-  python3 tests/eval_skills_suite.py --mode live --provider claude --skill explain
-  ```
-* **Secret-Gated Live CI Job ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):** The `live-functional-test-account` job runs on `workflow_dispatch` (with `suite`, `validate_only`, and `run_llm_evals` inputs) and on a weekly Sunday schedule (`0 5 * * 0`). It runs only from `main` or `dev_next`, uses the `live-test-account` GitHub environment (which can add required reviewers and a branch restriction), and activates only when the secrets `GOOGLE_ADS_TEST_CUSTOMER_ID` and `GOOGLE_ADS_YAML_B64` (base64-encoded `google-ads.yaml`) are configured, preferably as environment secrets (with optional `GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID` and `GEMINI_API_KEY`). It materializes `0600` temporary credentials outside the repo, shreds them on exit, and uploads only a pass/fail summary (kept for 3 days). Scheduled runs are validate-only and skip every test that runs `run_mutation.py --execute`.
+    # Run simulated Test Account verification offline via pytest
+    pytest tests/test_skills_functional_suite.py -v
+    ```
+*   **Dual-Mode Skill & Prompt Evaluation Harness
+    ([`tests/eval_skills_suite.py`](tests/eval_skills_suite.py)):** Covers all
+    11 skills (including prompt-only `explain`, `step-by-step`, and
+    `assistant-tutorial`) and all 13 commands:
+
+    ```bash
+    # Deterministic offline CI mode (frontmatter, CLI --help flag parity, policy contracts, 22 skill routing & rubric checks)
+    python3 tests/eval_skills_suite.py --mode offline
+
+    # Optional live LLM-in-the-loop mode (supports gemini-api, gemini-cli, or claude)
+    GEMINI_API_KEY=... python3 tests/eval_skills_suite.py --mode live --provider gemini-api
+    python3 tests/eval_skills_suite.py --mode live --provider claude --skill explain
+    ```
+*   **Secret-Gated Live CI Job
+    ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):** The
+    `live-functional-test-account` job runs on `workflow_dispatch` (with
+    `suite`, `validate_only`, and `run_llm_evals` inputs) and on a weekly Sunday
+    schedule (`0 5 * * 0`). It runs only from `main` or `dev_next`, uses the
+    `live-test-account` GitHub environment (which can add required reviewers and
+    a branch restriction), and activates only when the secrets
+    `GOOGLE_ADS_TEST_CUSTOMER_ID` and `GOOGLE_ADS_YAML_B64` (base64-encoded
+    `google-ads.yaml`) are configured, preferably as environment secrets (with
+    optional `GOOGLE_ADS_TEST_LOGIN_CUSTOMER_ID` and `GEMINI_API_KEY`). It
+    materializes `0600` temporary credentials outside the repo, shreds them on
+    exit, and uploads only a pass/fail summary (kept for 3 days). Scheduled runs
+    are validate-only and skip every test that runs `run_mutation.py --execute`.
 
 ## Audit Logs
 
-The assistant and its test suites produce **three append-only JSON Lines (`.jsonl`) audit logs** (one JSON object per line, UTF-8 encoded, enforced to `0600` file permissions on POSIX systems, with OAuth secrets and private keys automatically redacted). All default log directories under `saved/` are gitignored.
+The assistant and its test suites produce **three append-only JSON Lines
+(`.jsonl`) audit logs** (one JSON object per line, UTF-8 encoded, enforced to
+`0600` file permissions on POSIX systems, with OAuth secrets and private keys
+automatically redacted). All default log directories under `saved/` are
+gitignored.
 
-| Audit Log | Producer(s) | Default Location(s) | Override | Purpose |
-| :--- | :--- | :--- | :--- | :--- |
-| **`mutation_audit.jsonl`** | [`run_mutation.py`](plugins/google-ads-api-developer-assistant/skills/execute-mutation/scripts/run_mutation.py), [`server.py`](plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/server.py) | `saved/logs/mutation_audit.jsonl` (mirrored to plugin & installed `~/.gemini` / `~/.claude` `saved/logs/`) | `GOOGLE_ADS_MUTATION_AUDIT_LOG` | Runtime HITL audit trail for every `--dry-run`, `--execute`, sidecar mutation task, and guardrail block. |
-| **`<UTC_TIMESTAMP>_hitl_policy_functional_audit.jsonl`** | [`tests/hitl_policy_functional_suite.py`](tests/hitl_policy_functional_suite.py) ([`tests/hitl_audit_logger.py`](tests/hitl_audit_logger.py)) | `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_hitl_policy_functional_audit.jsonl` | `--audit-log PATH` or `audit_log` in [`tests/test_account_config.yaml`](tests/test_account_config.yaml) | Correlated `REQUEST` / `RESPONSE` / `ERROR` / `TEST_RESULT` audit trail for the 72-test HITL & Post-MCP policy functional suite. |
-| **`<UTC_TIMESTAMP>_<conversation_id>.jsonl`** | [`tests/mutate_test_harness.py`](tests/mutate_test_harness.py) | `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_<conversation_id>.jsonl` | `--log-dir DIR` & `--conversation-id ID` | Per-RPC audit trail for GAPIC write-RPC discovery, topological fixture provisioning, and `validate_only` / live test-account validation. |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
 
----
+Audit Log                                                | Producer(s)                                                                                                                                                                                                          | Default Location(s)                                                                                        | Override                                                                                                | Purpose
+:------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------ | :------
+**`mutation_audit.jsonl`**                               | [`run_mutation.py`](plugins/google-ads-api-developer-assistant/skills/execute-mutation/scripts/run_mutation.py), [`server.py`](plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/server.py) | `saved/logs/mutation_audit.jsonl` (mirrored to plugin & installed `~/.gemini` / `~/.claude` `saved/logs/`) | `GOOGLE_ADS_MUTATION_AUDIT_LOG`                                                                         | Runtime HITL audit trail for every `--dry-run`, `--execute`, sidecar mutation task, and guardrail block.
+**`<UTC_TIMESTAMP>_hitl_policy_functional_audit.jsonl`** | [`tests/hitl_policy_functional_suite.py`](tests/hitl_policy_functional_suite.py) ([`tests/hitl_audit_logger.py`](tests/hitl_audit_logger.py))                                                                        | `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_hitl_policy_functional_audit.jsonl`                          | `--audit-log PATH` or `audit_log` in [`tests/test_account_config.yaml`](tests/test_account_config.yaml) | Correlated `REQUEST` / `RESPONSE` / `ERROR` / `TEST_RESULT` audit trail for the 72-test HITL & Post-MCP policy functional suite.
+**`<UTC_TIMESTAMP>_<conversation_id>.jsonl`**            | [`tests/mutate_test_harness.py`](tests/mutate_test_harness.py)                                                                                                                                                       | `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_<conversation_id>.jsonl`                                     | `--log-dir DIR` & `--conversation-id ID`                                                                | Per-RPC audit trail for GAPIC write-RPC discovery, topological fixture provisioning, and `validate_only` / live test-account validation.
+
+<!-- mdformat on -->
+
+--------------------------------------------------------------------------------
 
 ### 1. Runtime HITL Mutation Audit Log (`mutation_audit.jsonl`)
 
-* **Description:** Append-only runtime audit trail written by `append_mutation_audit_log()` in [`skills/execute-mutation/scripts/run_mutation.py`](plugins/google-ads-api-developer-assistant/skills/execute-mutation/scripts/run_mutation.py) and by the A2A sidecar ([`sidecars/google-ads-a2a-service/server.py`](plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/server.py)) during `PREPARE_MUTATION`, `EXECUTE_MUTATION`, and live `CREATE_*` intents. It records every `DRY_RUN` and `EXECUTE` attempt, including pre-RPC blocks (`BLOCKED_MUTATES_DISABLED`, `BLOCKED_PROHIBITED_DELETION`, `BLOCKED_FINANCIAL_LIMIT_EXCEEDED`, `BLOCKED_FINANCIAL_CONSEQUENCE_MISSING`, `BLOCKED_MISSING_VALIDATE_ONLY`, `BLOCKED_SHA256_MISMATCH`), API dry-run outcomes (`DRY_RUN_PASSED`, `DRY_RUN_FAILED`), and live execution outcomes (`SUCCESS`, `FAILED`). Direct agent file edits to `mutation_audit.jsonl` are blocked (`"decision": "deny"`) by the `PreToolUse` hook in [`config/config_init.py`](plugins/google-ads-api-developer-assistant/config/config_init.py).
-* **Locations:**
-  * When `GOOGLE_ADS_MUTATION_AUDIT_LOG` is **unset**, each entry is appended to every accessible candidate path returned by `get_audit_log_paths()`:
-    1. `./saved/logs/mutation_audit.jsonl` (active workspace directory)
-    2. `plugins/google-ads-api-developer-assistant/saved/logs/mutation_audit.jsonl` (plugin source directory)
-    3. `~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/logs/mutation_audit.jsonl` (installed Antigravity plugin)
-    4. `~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/saved/logs/mutation_audit.jsonl` (installed Claude Code plugin)
-  * When `GOOGLE_ADS_MUTATION_AUDIT_LOG=<path>` is **set**, entries are written exclusively to `<path>`.
-  * *Companion Verification Receipt:* Each record's `receipt_id` correlates with the single-use `0600` JSON dry-run receipt at `saved/data/last_dry_run.json` (mirrored across the corresponding `saved/data/` directories).
-* **Record Format (JSONL):** Each line is a JSON object with the following top-level and nested fields:
+*   **Description:** Append-only runtime audit trail written by
+    `append_mutation_audit_log()` in
+    [`skills/execute-mutation/scripts/run_mutation.py`](plugins/google-ads-api-developer-assistant/skills/execute-mutation/scripts/run_mutation.py)
+    and by the A2A sidecar
+    ([`sidecars/google-ads-a2a-service/server.py`](plugins/google-ads-api-developer-assistant/sidecars/google-ads-a2a-service/server.py))
+    during `PREPARE_MUTATION`, `EXECUTE_MUTATION`, and live `CREATE_*` intents.
+    It records every `DRY_RUN` and `EXECUTE` attempt, including pre-RPC blocks
+    (`BLOCKED_MUTATES_DISABLED`, `BLOCKED_PROHIBITED_DELETION`,
+    `BLOCKED_FINANCIAL_LIMIT_EXCEEDED`, `BLOCKED_FINANCIAL_CONSEQUENCE_MISSING`,
+    `BLOCKED_MISSING_VALIDATE_ONLY`, `BLOCKED_SHA256_MISMATCH`), API dry-run
+    outcomes (`DRY_RUN_PASSED`, `DRY_RUN_FAILED`), and live execution outcomes
+    (`SUCCESS`, `FAILED`). Direct agent file edits to `mutation_audit.jsonl` are
+    blocked (`"decision": "deny"`) by the `PreToolUse` hook in
+    [`config/config_init.py`](plugins/google-ads-api-developer-assistant/config/config_init.py).
+*   **Locations:**
+    *   When `GOOGLE_ADS_MUTATION_AUDIT_LOG` is **unset**, each entry is
+        appended to every accessible candidate path returned by
+        `get_audit_log_paths()`:
+    *   `./saved/logs/mutation_audit.jsonl` (active workspace directory)
+    *   `plugins/google-ads-api-developer-assistant/saved/logs/mutation_audit.jsonl`
+        (plugin source directory)
+    *   `~/.gemini/config/plugins/google-ads-api-developer-assistant/saved/logs/mutation_audit.jsonl`
+        (installed Antigravity plugin)
+    *   `~/.claude/plugins/google-ads-assistant-local/plugins/google-ads-api-developer-assistant/saved/logs/mutation_audit.jsonl`
+        (installed Claude Code plugin)
+    *   When `GOOGLE_ADS_MUTATION_AUDIT_LOG=<path>` is **set**, entries are
+        written exclusively to `<path>`.
+    *   *Companion Verification Receipt:* Each record's `receipt_id` correlates
+        with the single-use `0600` JSON dry-run receipt at
+        `saved/data/last_dry_run.json` (mirrored across the corresponding
+        `saved/data/` directories).
+*   **Record Format (JSONL):** Each line is a JSON object with the following
+    top-level and nested fields:
 
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `audit_id` | `string` (UUIDv4) | Unique identifier for this audit log entry. |
-| `receipt_id` | `string` (UUIDv4) | Identifier of the associated `saved/data/last_dry_run.json` dry-run receipt. |
-| `phase` | `string` | Execution phase: `"DRY_RUN"` or `"EXECUTE"`. |
-| `status` | `string` | Outcome code (`"DRY_RUN_PASSED"`, `"DRY_RUN_FAILED"`, `"SUCCESS"`, `"FAILED"`, `"BLOCKED_MUTATES_DISABLED"`, `"BLOCKED_SHA256_MISMATCH"`, `"BLOCKED_MISSING_VALIDATE_ONLY"`, `"BLOCKED_FINANCIAL_CONSEQUENCE_MISSING"`, `"BLOCKED_FINANCIAL_LIMIT_EXCEEDED"`, or `"BLOCKED_PROHIBITED_DELETION"`). |
-| `actor` | `object` | Identity and session metadata: `os_user`, `hostname`, `login_customer_id`, `target_customer_id`, `auth_type` (`"oauth2"` \| `"service_account"` \| `"unknown"`), `impersonated_email`, `client_id_masked`, `ads_assistant_version`, `cli_conversation_id`, `cli_transcript_path`, and `model_name`. |
-| `request` | `object` | Outbound call metadata and SHA-256 digests: `sent_at_iso`, `customer_id`, `validate_only`, `is_financial_transaction`, `operation_summary`, `script_path`, `script_sha256`, `request_sha256`, `request_sha256_list`, `expected_request_sha256`, `request_sha256_verified`, `command`, `payload`, and `rpc_calls[]` (`service`, `method`, `sent_at_iso`, `request_sha256`, `expected_request_sha256`, `request_sha256_verified`, `request_payload`). |
-| `approval` | `object` | HITL disclosure and approval timestamps: `dry_run_validated_at_iso`, `hook_prompted_at_iso`, `user_approved_at_iso`, `is_financial_transaction`, `before_state`, `after_state`, `consequences[]`, and `reversibility` (`"REVERSIBLE"` \| `"IRREVERSIBLE"`). |
-| `response` | `object` | API/process result: `received_at_iso`, `duration_ms`, `exit_code`, `google_ads_request_ids[]`, `payload`, `rpc_responses[]` (`service`, `method`, `received_at_iso`, `duration_ms`, `status`, `google_ads_request_id`, `response_payload`, `error`), `stdout`, `stderr`, and `error`. |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
+
+Field        | Type              | Description
+:----------- | :---------------- | :----------
+`audit_id`   | `string` (UUIDv4) | Unique identifier for this audit log entry.
+`receipt_id` | `string` (UUIDv4) | Identifier of the associated `saved/data/last_dry_run.json` dry-run receipt.
+`phase`      | `string`          | Execution phase: `"DRY_RUN"` or `"EXECUTE"`.
+`status`     | `string`          | Outcome code (`"DRY_RUN_PASSED"`, `"DRY_RUN_FAILED"`, `"SUCCESS"`, `"FAILED"`, `"BLOCKED_MUTATES_DISABLED"`, `"BLOCKED_SHA256_MISMATCH"`, `"BLOCKED_MISSING_VALIDATE_ONLY"`, `"BLOCKED_FINANCIAL_CONSEQUENCE_MISSING"`, `"BLOCKED_FINANCIAL_LIMIT_EXCEEDED"`, or `"BLOCKED_PROHIBITED_DELETION"`).
+`actor`      | `object`          | Identity and session metadata: `os_user`, `hostname`, `login_customer_id`, `target_customer_id`, `auth_type` (`"oauth2"` \| `"service_account"` \| `"unknown"`), `impersonated_email`, `client_id_masked`, `ads_assistant_version`, `cli_conversation_id`, `cli_transcript_path`, and `model_name`.
+`request`    | `object`          | Outbound call metadata and SHA-256 digests: `sent_at_iso`, `customer_id`, `validate_only`, `is_financial_transaction`, `operation_summary`, `script_path`, `script_sha256`, `request_sha256`, `request_sha256_list`, `expected_request_sha256`, `request_sha256_verified`, `command`, `payload`, and `rpc_calls[]` (`service`, `method`, `sent_at_iso`, `request_sha256`, `expected_request_sha256`, `request_sha256_verified`, `request_payload`).
+`approval`   | `object`          | HITL disclosure and approval timestamps: `dry_run_validated_at_iso`, `hook_prompted_at_iso`, `user_approved_at_iso`, `is_financial_transaction`, `before_state`, `after_state`, `consequences[]`, and `reversibility` (`"REVERSIBLE"` \| `"IRREVERSIBLE"`).
+`response`   | `object`          | API/process result: `received_at_iso`, `duration_ms`, `exit_code`, `google_ads_request_ids[]`, `payload`, `rpc_responses[]` (`service`, `method`, `received_at_iso`, `duration_ms`, `status`, `google_ads_request_id`, `response_payload`, `error`), `stdout`, `stderr`, and `error`.
+
+<!-- mdformat on -->
 
 ```json
 {
@@ -1238,50 +1881,85 @@ The assistant and its test suites produce **three append-only JSON Lines (`.json
 }
 ```
 
----
+--------------------------------------------------------------------------------
 
 ### 2. HITL Policy Functional Test Audit Log (`<UTC_TIMESTAMP>_hitl_policy_functional_audit.jsonl`)
 
-* **Description:** Event-stream JSONL audit log generated by `FunctionalAuditLogger` ([`tests/hitl_audit_logger.py`](tests/hitl_audit_logger.py)) when running [`tests/hitl_policy_functional_suite.py`](tests/hitl_policy_functional_suite.py). Every line is flushed immediately with `os.fsync()`, assigned a unique UUIDv4 `record_id`, tagged with `record_type` for deterministic filtering, and verified at end-of-run by `verify_audit_log_integrity()`.
-* **Locations:**
-  * Default: `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_hitl_policy_functional_audit.jsonl` (configured via `audit_log.directory` and `audit_log.filename_prefix` in [`tests/test_account_config.yaml`](tests/test_account_config.yaml)).
-  * Override: `--audit-log <path>` on `tests/hitl_policy_functional_suite.py`.
-* **Record Format (JSONL):** Every record shares seven base fields plus `record_type`-specific fields:
-  * **Common Base Fields (all 6 record types):** `record_id` (`string`, unique UUIDv4), `record_type` (`"SUITE_START"` \| `"REQUEST"` \| `"RESPONSE"` \| `"ERROR"` \| `"TEST_RESULT"` \| `"SUITE_SUMMARY"`), `is_error` (`boolean`, `true` iff `record_type == "ERROR"`), `level` (`"INFO"` \| `"ERROR"`), `timestamp` (UTC ISO-8601 `YYYY-MM-DDTHH:MM:SS.mmmZ`), `run_id` (UUIDv4 shared across the run), and `operator` (OS username).
+*   **Description:** Event-stream JSONL audit log generated by
+    `FunctionalAuditLogger`
+    ([`tests/hitl_audit_logger.py`](tests/hitl_audit_logger.py)) when running
+    [`tests/hitl_policy_functional_suite.py`](tests/hitl_policy_functional_suite.py).
+    Every line is flushed immediately with `os.fsync()`, assigned a unique
+    UUIDv4 `record_id`, tagged with `record_type` for deterministic filtering,
+    and verified at end-of-run by `verify_audit_log_integrity()`.
+*   **Locations:**
+    *   Default:
+        `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_hitl_policy_functional_audit.jsonl`
+        (configured via `audit_log.directory` and `audit_log.filename_prefix` in
+        [`tests/test_account_config.yaml`](tests/test_account_config.yaml)).
+    *   Override: `--audit-log <path>` on
+        `tests/hitl_policy_functional_suite.py`.
+*   **Record Format (JSONL):** Every record shares seven base fields plus
+    `record_type`-specific fields:
+    *   **Common Base Fields (all 6 record types):** `record_id` (`string`,
+        unique UUIDv4), `record_type` (`"SUITE_START"` \| `"REQUEST"` \|
+        `"RESPONSE"` \| `"ERROR"` \| `"TEST_RESULT"` \| `"SUITE_SUMMARY"`),
+        `is_error` (`boolean`, `true` iff `record_type == "ERROR"`), `level`
+        (`"INFO"` \| `"ERROR"`), `timestamp` (UTC ISO-8601
+        `YYYY-MM-DDTHH:MM:SS.mmmZ`), `run_id` (UUIDv4 shared across the run),
+        and `operator` (OS username).
 
-| `record_type` | Type-Specific Fields |
-| :--- | :--- |
-| **`"SUITE_START"`** | `target_customer_id`, `login_customer_id`, `api_version`, `config` (resolved test-run configuration summary). |
-| **`"REQUEST"`** | `test_id`, `suite`, `action`, `target_customer_id`, `login_customer_id`, `api_version`, `payload`, and optional `service`, `method`. |
-| **`"RESPONSE"`** | **`request_record_id`** (UUIDv4 of the `"REQUEST"` record that generated this response), `test_id`, `suite`, `status`, `duration_ms`, `google_ads_request_id`, `payload`. |
-| **`"ERROR"`** | `is_error: true`, `level: "ERROR"`, `test_id`, `suite`, `error_code`, `error_message`, `request_record_id`, `response_record_id`, `details` (filterable via `--filter-errors <path.jsonl>` or `jq 'select(.record_type == "ERROR")'`). |
-| **`"TEST_RESULT"`** | `test_id`, `suite`, `name`, `passed` (`boolean`), `outcome` (`"PASSED"` \| `"FAILED"`), `duration_ms`, `details`, `last_request_record_id`, `error_record_id`. |
-| **`"SUITE_SUMMARY"`** | `target_customer_id`, `total_tests`, `passed_tests`, `failed_tests`, `error_records_logged`, `duration_ms`, `failed_test_details[]`. |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
+
+`record_type`         | Type-Specific Fields
+:-------------------- | :-------------------
+**`"SUITE_START"`**   | `target_customer_id`, `login_customer_id`, `api_version`, `config` (resolved test-run configuration summary).
+**`"REQUEST"`**       | `test_id`, `suite`, `action`, `target_customer_id`, `login_customer_id`, `api_version`, `payload`, and optional `service`, `method`.
+**`"RESPONSE"`**      | **`request_record_id`** (UUIDv4 of the `"REQUEST"` record that generated this response), `test_id`, `suite`, `status`, `duration_ms`, `google_ads_request_id`, `payload`.
+**`"ERROR"`**         | `is_error: true`, `level: "ERROR"`, `test_id`, `suite`, `error_code`, `error_message`, `request_record_id`, `response_record_id`, `details` (filterable via `--filter-errors <path.jsonl>` or `jq 'select(.record_type == "ERROR")'`).
+**`"TEST_RESULT"`**   | `test_id`, `suite`, `name`, `passed` (`boolean`), `outcome` (`"PASSED"` \| `"FAILED"`), `duration_ms`, `details`, `last_request_record_id`, `error_record_id`.
+**`"SUITE_SUMMARY"`** | `target_customer_id`, `total_tests`, `passed_tests`, `failed_tests`, `error_records_logged`, `duration_ms`, `failed_test_details[]`.
+
+<!-- mdformat on -->
 
 ```json
 {"record_id": "0b0a420a-df1e-4fec-9b80-3b9186f1da13", "record_type": "REQUEST", "is_error": false, "level": "INFO", "timestamp": "2026-11-10T16:20:01.104Z", "run_id": "619e2bb3-924c-4b4d-a07d-a28560cace8b", "operator": "alice", "test_id": "PF-03", "suite": "PREFLIGHT", "action": "GoogleAdsService.search", "target_customer_id": "1234567890", "login_customer_id": "9876543210", "api_version": "<api_version>", "payload": {"query": "SELECT customer.id, customer.test_account FROM customer LIMIT 1"}, "service": "GoogleAdsService", "method": "search"}
 {"record_id": "84c91d52-3b18-4a77-8d12-90f312ab4401", "record_type": "RESPONSE", "request_record_id": "0b0a420a-df1e-4fec-9b80-3b9186f1da13", "is_error": false, "level": "INFO", "timestamp": "2026-11-10T16:20:01.289Z", "run_id": "619e2bb3-924c-4b4d-a07d-a28560cace8b", "operator": "alice", "test_id": "PF-03", "suite": "PREFLIGHT", "status": "OK", "duration_ms": 185.2, "google_ads_request_id": "ReqId987654", "payload": {"test_account": true}}
 ```
 
----
+--------------------------------------------------------------------------------
 
 ### 3. Live Mutate RPC Test Harness Audit Log (`<UTC_TIMESTAMP>_<conversation_id>.jsonl`)
 
-* **Description:** Per-RPC JSONL audit log written by `AuditLogger` in [`tests/mutate_test_harness.py`](tests/mutate_test_harness.py). It records pre-flight `customer.test_account == true` verification, dependency-ordered GAPIC write-RPC validation (`validate_only=True` and controlled live test-account writes), client-side financial guardrail checks, and teardown operations with `os.fsync()` durability and secret redaction.
-* **Locations:**
-  * Default: `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_<conversation_id>.jsonl` (`<conversation_id>` defaults to `standalone` when `--conversation-id` is omitted).
-  * Override: `--log-dir <directory>` and `--conversation-id <id>` on `tests/mutate_test_harness.py`.
-* **Record Format (JSONL):** Each line represents one pre-flight check, guardrail check, or RPC invocation:
+*   **Description:** Per-RPC JSONL audit log written by `AuditLogger` in
+    [`tests/mutate_test_harness.py`](tests/mutate_test_harness.py). It records
+    pre-flight `customer.test_account == true` verification, dependency-ordered
+    GAPIC write-RPC validation (`validate_only=True` and controlled live
+    test-account writes), client-side financial guardrail checks, and teardown
+    operations with `os.fsync()` durability and secret redaction.
+*   **Locations:**
+    *   Default:
+        `saved/mutate_test_logs/<YYYY_MM_DD_HH_MM_SS>_<conversation_id>.jsonl`
+        (`<conversation_id>` defaults to `standalone` when `--conversation-id`
+        is omitted).
+    *   Override: `--log-dir <directory>` and `--conversation-id <id>` on
+        `tests/mutate_test_harness.py`.
+*   **Record Format (JSONL):** Each line represents one pre-flight check,
+    guardrail check, or RPC invocation:
 
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `datetime` | `string` | UTC timestamp in `YYYY-MM-DDTHH:MM:SS.mmmZ` format. |
-| `username` | `string` | Local OS username running the test harness. |
-| `service` | `string` | Google Ads API service name (for example, `"CampaignBudgetService"` or `"GoogleAdsService"`). |
-| `test_case` | `object` | Scenario metadata: `scenario` (`string`), `assertion_passed` (`boolean`), plus optional scenario-specific fields. |
-| `request` | `object` | Request details: `method`, `api_version`, `gcp_project_number`, `login_customer_id`, and redacted `payload`. |
-| `response` | `object` | Response details: `grpc_status`, `request_id`, `duration_ms` (`int`), redacted `payload`, and `error` (or `null`). |
-| `status` | `string` *(optional)* | Optional top-level lifecycle status (for example, `"ABORTED_NON_TEST_ACCOUNT"` or `"BLOCKED_PROHIBITED_DELETION"`). |
+<!-- mdformat off(reason: standard GFM table rendering on GitHub) -->
+
+Field       | Type                  | Description
+:---------- | :-------------------- | :----------
+`datetime`  | `string`              | UTC timestamp in `YYYY-MM-DDTHH:MM:SS.mmmZ` format.
+`username`  | `string`              | Local OS username running the test harness.
+`service`   | `string`              | Google Ads API service name (for example, `"CampaignBudgetService"` or `"GoogleAdsService"`).
+`test_case` | `object`              | Scenario metadata: `scenario` (`string`), `assertion_passed` (`boolean`), plus optional scenario-specific fields.
+`request`   | `object`              | Request details: `method`, `api_version`, `gcp_project_number`, `login_customer_id`, and redacted `payload`.
+`response`  | `object`              | Response details: `grpc_status`, `request_id`, `duration_ms` (`int`), redacted `payload`, and `error` (or `null`).
+`status`    | `string` *(optional)* | Optional top-level lifecycle status (for example, `"ABORTED_NON_TEST_ACCOUNT"` or `"BLOCKED_PROHIBITED_DELETION"`).
+
+<!-- mdformat on -->
 
 ```json
 {
@@ -1311,18 +1989,24 @@ The assistant and its test suites produce **three append-only JSON Lines (`.json
 
 ## Maintenance
 
-During installation, the installer copies `update.sh` and `update.ps1` (and the repository path in `config/.repo_root`) into your installed plugin directory. You can run updates from the repository root or from **any directory**:
+During installation, the installer copies `update.sh` and `update.ps1` (and the
+repository path in `config/.repo_root`) into your installed plugin directory.
+You can run updates from the repository root or from **any directory**:
 
 *   **Linux/macOS (from repository root):**
+
     ```bash
     ./update.sh agy          # Update Antigravity plugin
     ./update.sh claude       # Update Claude Code plugin
     ```
+
     To add or update specific client libraries:
+
     ```bash
     ./update.sh agy --java --dotnet
     ```
 *   **Linux/macOS (from any directory):**
+
     ```bash
     # Update plugin and client libraries
     ~/.gemini/config/plugins/google-ads-api-developer-assistant/update.sh agy
@@ -1336,15 +2020,19 @@ During installation, the installer copies `update.sh` and `update.ps1` (and the 
     ~/.gemini/config/plugins/google-ads-api-developer-assistant/plugin.sh enable
     ```
 *   **Windows PowerShell (from repository root):**
+
     ```powershell
     .\update.ps1 -Type agy
     .\update.ps1 -Type claude
     ```
+
     To add or update specific client libraries:
+
     ```powershell
     .\update.ps1 -Type agy -Java -Dotnet
     ```
 *   **Windows PowerShell (from any directory):**
+
     ```powershell
     # Update plugin and client libraries
     & "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant\update.ps1" -Type agy
@@ -1367,10 +2055,12 @@ Use the uninstallation command for your platform to remove the plugin:
 Delete the installed plugin directory:
 
 *   **Linux/macOS:**
+
     ```bash
     rm -rf ~/.gemini/config/plugins/google-ads-api-developer-assistant
     ```
 *   **Windows (PowerShell):**
+
     ```powershell
     Remove-Item -Recurse -Force "$HOME\.gemini\config\plugins\google-ads-api-developer-assistant"
     ```
@@ -1380,35 +2070,44 @@ Restart your Antigravity / `agy` session to finish uninstallation.
 ### Claude Code
 
 *   **In an active Claude Code session:**
+
     ```text
     /plugin uninstall google-ads-api-developer-assistant@google-ads-assistant-local
     ```
 *   **Or in your terminal:**
+
     ```bash
     claude plugin uninstall google-ads-api-developer-assistant@google-ads-assistant-local
     ```
 
 *(Optional)* Remove the local marketplace registration:
+
 *   **In Claude Code:** `/plugin marketplace remove google-ads-assistant-local`
-*   **In your terminal:** `claude plugin marketplace remove google-ads-assistant-local`
+*   **In your terminal:**
+    `claude plugin marketplace remove google-ads-assistant-local`
 
 Delete the local marketplace plugin directory:
+
 *   **Linux/macOS:**
+
     ```bash
     rm -rf ~/.claude/plugins/google-ads-assistant-local
     ```
 *   **Windows (PowerShell):**
+
     ```powershell
     Remove-Item -Recurse -Force "$HOME\.claude\plugins\google-ads-assistant-local"
     ```
 
 ## Contributing
 
-Read `CONTRIBUTING.md` for instructions on how to report bugs, request features, and send pull requests.
+Read `CONTRIBUTING.md` for instructions on how to report bugs, request features,
+and send pull requests.
 
 ## Support
 
-Use the GitHub Issues tab for bug reports, feature requests, and support questions.
+Use the GitHub Issues tab for bug reports, feature requests, and support
+questions.
 
 ## License
 

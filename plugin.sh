@@ -349,11 +349,16 @@ else:
     print(f"  Live Hook Test    : {'PASS' if hook_test['passed'] else 'FAIL'} ({hook_test['hook_entrypoint']}, cli={hook_test['cli']})")
     print(f"    SessionStart    : {hook_test['session_start_hook']}")
     print(f"    PreToolUse      : {hook_test['pre_tool_use_hook']}")
+    cli_label = (
+        "Claude Code CLI"
+        if target_type == "claude"
+        else ("jetski/agy CLI" if target_type == "agy" else "your CLI")
+    )
     if enabled:
-        print("\nPlugin is ENABLED and will be active when you invoke jetski/agy.")
+        print(f"\nPlugin is ENABLED and will be active when you invoke {cli_label}.")
         print("To disable it, run: ./plugin.sh disable")
     else:
-        print("\nPlugin is DISABLED and will NOT be invoked when you run jetski/agy.")
+        print(f"\nPlugin is DISABLED and will NOT be invoked when you run {cli_label}.")
         print("To re-enable it, run: ./plugin.sh enable")
 
 sys.exit(0 if hook_test["passed"] else 1)

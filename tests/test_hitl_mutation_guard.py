@@ -479,7 +479,10 @@ def test_subprocess_google_ads_client_interception_and_failure_audit(
         text=True,
     )
 
-    # 2. Execute with --fail records FAILED audit entry with request_id and failure payload
+    # 2. Execute with simulated API failure records FAILED audit entry with request_id and failure payload,
+    #    and keeps the receipt burned because a live RPC was dispatched (no silent re-arming).
+    fail_env = dict(os.environ)
+    fail_env["FAKE_ADS_SIMULATE_FAILURE"] = "1"
     failed_proc = subprocess.run(
         [
             sys.executable,
@@ -487,15 +490,48 @@ def test_subprocess_google_ads_client_interception_and_failure_audit(
             "--script",
             str(script_file),
             "--execute",
-            "--script-args=--fail",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=fail_env,
+    )
+    assert failed_proc.returncode == 1
+
+    # Re-attempting --execute without a fresh dry-run must be blocked after a dispatched FAILED RPC
+    replay_proc = subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(script_file),
+            "--execute",
         ],
         check=False,
         capture_output=True,
         text=True,
     )
-    assert failed_proc.returncode == 1
+    assert replay_proc.returncode == 2
 
-    # 3. Execute without --fail succeeds and records live RPC payload + request_id
+    # 3. Fresh dry-run without --fail followed by --execute succeeds and records live RPC payload + request_id
+    subprocess.run(
+        [
+            sys.executable,
+            str(runner_path),
+            "--script",
+            str(script_file),
+            "--dry-run",
+            "--customer-id",
+            "1234567890",
+            "--operation",
+            "Update budget 999",
+            "--consequences",
+            "Budget increases to $90/day",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     ok_proc = subprocess.run(
         [
             sys.executable,
@@ -515,8 +551,8 @@ def test_subprocess_google_ads_client_interception_and_failure_audit(
         for line in audit_log_file.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert len(entries) == 3
-    dry_rec, fail_rec, ok_rec = entries
+    assert len(entries) == 4
+    dry_rec, fail_rec, _dry_rec2, ok_rec = entries
 
     assert dry_rec["status"] == "DRY_RUN_PASSED"
     assert dry_rec["request"]["payload"]["validate_only"] is True
@@ -3349,12 +3385,19 @@ def test_financial_limits_config_and_helper_script(
     )
     assert all(v == 0 or v == 0.0 for v in reset_toml.values())
 
-    # 6. Verify evaluate_mutation_guard treats set_financial_limits.py as a read-only helper script
+    # 6. Verify evaluate_mutation_guard allows read-only set_financial_limits.py --show
+    #    and gates mutating flags (--set) behind force_ask to prevent guard self-elevation.
+    decision_show, reason_show = evaluate_mutation_guard(
+        f"python3 {root_wrapper} --show"
+    )
+    assert decision_show == "allow"
+    assert reason_show is None
+
     decision, reason = evaluate_mutation_guard(
         f"python3 {root_wrapper} --set CampaignBudgetService.amount_micros=50000000"
     )
-    assert decision == "allow"
-    assert reason is None
+    assert decision == "force_ask"
+    assert reason is not None and "financial limits" in reason.lower()
 
 
 def test_financial_transaction_upper_limits_enforced_at_hitl_and_rpc(

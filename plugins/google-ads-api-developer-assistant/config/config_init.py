@@ -98,7 +98,7 @@ def get_version(ext_version_script: Optional[str] = None) -> str:
         manifest_path = os.path.normpath(manifest)
         if os.path.isfile(manifest_path):
             try:
-                with open(manifest_path, "r", encoding="utf-8") as f:
+                with open(manifest_path, "r", encoding="utf-8-sig") as f:
                     data = json.load(f)
                     ver = data.get("version")
                     if ver:
@@ -1255,7 +1255,7 @@ def fetch_latest_pypi_python_version(
         for cand in read_candidates:
             if os.path.isfile(cand) and not os.path.islink(cand):
                 try:
-                    with open(cand, "r", encoding="utf-8") as f:
+                    with open(cand, "r", encoding="utf-8-sig") as f:
                         cached = json.load(f)
                     ts = float(cached.get("timestamp", 0.0))
                     ver = str(cached.get("pypi_version") or "").strip().lstrip("v")
@@ -1305,7 +1305,7 @@ def fetch_latest_github_python_version(
         for cand in read_candidates:
             if os.path.isfile(cand) and not os.path.islink(cand):
                 try:
-                    with open(cand, "r", encoding="utf-8") as f:
+                    with open(cand, "r", encoding="utf-8-sig") as f:
                         cached = json.load(f)
                     ts = float(cached.get("timestamp", 0.0))
                     ver = str(cached.get("github_version") or "").strip().lstrip("v")
@@ -1498,7 +1498,7 @@ def check_python_client_lib_parity(
         pyproject = os.path.join(lib_dir, "pyproject.toml")
         if os.path.isfile(pyproject):
             try:
-                with open(pyproject, "r", encoding="utf-8") as f:
+                with open(pyproject, "r", encoding="utf-8-sig") as f:
                     m = re.search(r'version\s*=\s*["\']([^"\']+)["\']', f.read())
                 if m:
                     local_version = m.group(1).strip().lstrip("v")
@@ -1632,7 +1632,7 @@ def ensure_client_libs_synced(
         for cand_stamp in read_stamps:
             if os.path.isfile(cand_stamp) and not os.path.islink(cand_stamp):
                 try:
-                    with open(cand_stamp, "r", encoding="utf-8") as f:
+                    with open(cand_stamp, "r", encoding="utf-8-sig") as f:
                         stamp_data = json.load(f)
                     last_ts = float(stamp_data.get("timestamp", 0.0))
                     if 0 <= (now - last_ts) < ttl_seconds:
@@ -1894,9 +1894,12 @@ def get_assistant_config_paths(config_dir: Optional[str] = None) -> list[str]:
         ),
     ])
     deduped: list[str] = []
+    seen_keys: set[str] = set()
     for path in candidates:
         norm = os.path.normpath(path)
-        if norm not in deduped:
+        key = os.path.normcase(norm)
+        if key not in seen_keys:
+            seen_keys.add(key)
             deduped.append(norm)
     return deduped
 
@@ -1906,7 +1909,7 @@ def read_assistant_config(config_dir: Optional[str] = None) -> Dict[str, Any]:
     for candidate in get_assistant_config_paths(config_dir=config_dir):
         if os.path.isfile(candidate):
             try:
-                with open(candidate, "r", encoding="utf-8") as f:
+                with open(candidate, "r", encoding="utf-8-sig") as f:
                     parsed = parse_assistant_config(f.read())
                 if parsed:
                     return parsed
@@ -1954,7 +1957,7 @@ def _write_assistant_config_to_dir(
     current_data: Dict[str, Any] = {}
     if os.path.isfile(target_path):
         try:
-            with open(target_path, "r", encoding="utf-8") as f:
+            with open(target_path, "r", encoding="utf-8-sig") as f:
                 current_data = parse_assistant_config(f.read())
         except OSError:
             current_data = {}
@@ -1962,7 +1965,7 @@ def _write_assistant_config_to_dir(
         for candidate in get_assistant_config_paths(config_dir=target_cfg_dir):
             if os.path.isfile(candidate):
                 try:
-                    with open(candidate, "r", encoding="utf-8") as f:
+                    with open(candidate, "r", encoding="utf-8-sig") as f:
                         current_data = parse_assistant_config(f.read())
                     if current_data:
                         break
@@ -2079,11 +2082,13 @@ def is_execute_mutates_enabled(config_dir: Optional[str] = None) -> bool:
     for candidate in get_assistant_config_paths(config_dir=config_dir):
         if os.path.isfile(candidate):
             try:
-                with open(candidate, "r", encoding="utf-8") as f:
+                with open(candidate, "r", encoding="utf-8-sig") as f:
                     parsed = parse_execute_mutates_value(f.read())
                 if parsed is not None:
                     return parsed
-                continue
+                # Stop at the highest-precedence readable assistant_config so lower-precedence
+                # configs cannot silently enable mutations when omitted here.
+                return False
             except OSError:
                 continue
 
@@ -2149,10 +2154,13 @@ def is_tier1_financial_mutates_enabled(config_dir: Optional[str] = None) -> bool
     for candidate in get_assistant_config_paths(config_dir=config_dir):
         if os.path.isfile(candidate):
             try:
-                with open(candidate, "r", encoding="utf-8") as f:
+                with open(candidate, "r", encoding="utf-8-sig") as f:
                     parsed = parse_allow_tier1_financial_mutates_value(f.read())
                 if parsed is not None:
                     return parsed
+                # Stop at the highest-precedence readable assistant_config so lower-precedence
+                # configs cannot silently elevate Tier 1 financial posture when omitted here.
+                return False
             except OSError:
                 continue
     return False
@@ -2242,7 +2250,7 @@ def _is_hooks_json_disabled(hooks_path: str) -> Optional[bool]:
     if not os.path.isfile(hooks_path):
         return None
     try:
-        with open(hooks_path, "r", encoding="utf-8") as f:
+        with open(hooks_path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except Exception:
         return None
@@ -2329,7 +2337,7 @@ def _set_hooks_json_enabled(hooks_path: str, enabled: bool) -> bool:
     if not os.path.isfile(hooks_path):
         return False
     try:
-        with open(hooks_path, "r", encoding="utf-8") as f:
+        with open(hooks_path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             return False
@@ -2510,10 +2518,13 @@ def is_plugin_enabled(config_dir: Optional[str] = None) -> bool:
     for candidate in get_assistant_config_paths(config_dir=config_dir):
         if os.path.isfile(candidate):
             try:
-                with open(candidate, "r", encoding="utf-8") as f:
+                with open(candidate, "r", encoding="utf-8-sig") as f:
                     parsed = parse_plugin_enabled_value(f.read())
                 if parsed is not None:
                     return parsed
+                # Stop at the highest-precedence readable assistant_config rather than leaking
+                # enabled=false/true from a lower-precedence config file.
+                break
             except OSError:
                 continue
 
@@ -2676,7 +2687,7 @@ def get_plugin_status(config_dir: Optional[str] = None) -> Dict[str, Any]:
         if os.path.isfile(candidate):
             active_cfg_path = candidate
             try:
-                with open(candidate, "r", encoding="utf-8") as f:
+                with open(candidate, "r", encoding="utf-8-sig") as f:
                     active_cfg_enabled = parse_plugin_enabled_value(f.read())
             except OSError:
                 active_cfg_enabled = None
@@ -2700,7 +2711,7 @@ def get_plugin_status(config_dir: Optional[str] = None) -> Dict[str, Any]:
         cfg_enabled = None
         if os.path.isfile(cfg_file):
             try:
-                with open(cfg_file, "r", encoding="utf-8") as f:
+                with open(cfg_file, "r", encoding="utf-8-sig") as f:
                     cfg_enabled = parse_plugin_enabled_value(f.read())
             except OSError:
                 pass
@@ -2797,9 +2808,12 @@ def get_configured_customer_id(config_dir: Optional[str] = None) -> Optional[str
     ])
 
     seen_dirs: list[str] = []
+    seen_keys: set[str] = set()
     for d in search_dirs:
         norm_d = os.path.normpath(d)
-        if norm_d not in seen_dirs:
+        key_d = os.path.normcase(norm_d)
+        if key_d not in seen_keys:
+            seen_keys.add(key_d)
             seen_dirs.append(norm_d)
 
     fallback_default_cid: Optional[str] = None
@@ -2808,7 +2822,7 @@ def get_configured_customer_id(config_dir: Optional[str] = None) -> Optional[str
         cfg_file = os.path.join(d, ASSISTANT_CONFIG_FILENAME)
         if os.path.isfile(cfg_file):
             try:
-                with open(cfg_file, "r", encoding="utf-8") as f:
+                with open(cfg_file, "r", encoding="utf-8-sig") as f:
                     cfg = parse_assistant_config(f.read())
                 toml_cid = str(cfg.get("customer_id", "")).strip()
             except OSError:
@@ -2838,7 +2852,7 @@ def get_configured_api_version(config_dir: Optional[str] = None) -> Optional[str
     for candidate in get_assistant_config_paths(config_dir=config_dir):
         if os.path.isfile(candidate):
             try:
-                with open(candidate, "r", encoding="utf-8") as f:
+                with open(candidate, "r", encoding="utf-8-sig") as f:
                     cfg = parse_assistant_config(f.read())
                 ver = _validated_api_version_or_none(cfg.get("api_version"))
                 if ver:
@@ -2872,8 +2886,9 @@ READONLY_SKILL_SCRIPTS = (
 
 _READONLY_SKILL_SCRIPTS_SET = frozenset(READONLY_SKILL_SCRIPTS)
 
-MUTATION_CALL_PATTERN = re.compile(
-    r"(?:\.\s*(?:mutate(?:_[a-z0-9_]+)?|(?:remove|delete)_[a-z0-9_]+|"
+_MUTATION_METHOD_CORE = (
+    r"(?:mutate(?!_operations?\b|_operation_responses?\b)(?:_[a-z0-9_]+)?|"
+    r"(?:remove|delete)_[a-z0-9_]+|"
     r"apply_recommendation|dismiss_recommendation|"
     r"upload_click_conversions|upload_call_conversions|upload_conversion_adjustments|"
     r"upload_user_data|create_offline_user_data_job|add_offline_user_data_job_operations|"
@@ -2886,7 +2901,13 @@ MUTATION_CALL_PATTERN = re.compile(
     r"resolve_multi_party_auth_review|regenerate_shareable_link_id|"
     r"move_manager_link|append_lead_conversation|generate_p_max_draft_campaign|"
     r"promote_campaign_draft|graduate_experiment|promote_experiment|"
-    r"schedule_experiment|end_experiment)\s*\("
+    r"schedule_experiment|end_experiment)"
+)
+_MUTATION_METHOD_EXACT_RE = re.compile(rf"^{_MUTATION_METHOD_CORE}$")
+_MUTATION_ATTR_REF_RE = re.compile(rf"\.\s*{_MUTATION_METHOD_CORE}\b")
+
+MUTATION_CALL_PATTERN = re.compile(
+    rf"(?:\.\s*{_MUTATION_METHOD_CORE}\s*\("
     r"|\b(?:op|operation|[a-zA-Z0-9_]*_op|[a-zA-Z0-9_]*_operation)\s*\.\s*remove(?:_all)?\s*=(?!=)"
     r"|\b[A-Za-z0-9_]*Operation\s*\([^)]*\bremove(?:_all)?\s*=)"
 )
@@ -2898,8 +2919,11 @@ _NON_VALIDATE_ONLY_CALL_RE = re.compile(
     r"mutate_batch_job|add_batch_job_operations|run_batch_job|"
     r"create_offline_user_data_job|add_offline_user_data_job_operations|run_offline_user_data_job|"
     r"mutate_customer_user_access|mutate_customer_user_access_invitation|"
-    r"upload_user_data|create_account_link|create_data_link|update_data_link|"
+    r"upload_user_data|create_account_link|create_data_link|update_data_link|remove_data_link|"
     r"create_product_link|create_product_link_invitation|update_product_link_invitation|"
+    r"remove_product_link_invitation|"
+    r"create_you_tube_video_upload|update_you_tube_video_upload|remove_you_tube_video_upload|"
+    r"remove_automatically_created_assets|remove_campaign_automatically_created_asset|"
     r"start_identity_verification|enable_p_max_brand_guidelines|"
     r"resolve_multi_party_auth_review|regenerate_shareable_link_id)\s*\("
 )
@@ -3276,6 +3300,91 @@ def _resolve_candidate_script_path(
     return script_path
 
 
+def _update_receipt_hook_metadata_locked(
+    candidate: str,
+    expected_receipt_id: str,
+    meta_updates: Dict[str, Any],
+    rm_mod: Any = None,
+) -> bool:
+    """Updates hook metadata on a DRY_RUN_PASSED receipt under a cross-platform lock.
+
+    Re-reads the receipt inside the lock and refuses to write if the receipt was
+    concurrently claimed (EXECUTING), executed (EXECUTED), rejected (REJECTED),
+    or replaced with a different receipt_id.
+    """
+    if not os.path.isfile(candidate):
+        return False
+
+    def _apply_update() -> bool:
+        if not os.path.isfile(candidate):
+            return False
+        try:
+            with open(candidate, "r", encoding="utf-8-sig") as f:
+                latest = json.load(f)
+        except Exception:
+            return False
+        if not isinstance(latest, dict):
+            return False
+        if str(latest.get("status", "")) != "DRY_RUN_PASSED":
+            return False
+        if expected_receipt_id and str(latest.get("receipt_id") or "") != expected_receipt_id:
+            return False
+        latest.update(meta_updates)
+        _write_json_file_atomic(candidate, latest, private=True)
+        return True
+
+    lock_cm = getattr(rm_mod, "_receipt_paths_lock", None) if rm_mod is not None else None
+    if callable(lock_cm):
+        try:
+            with lock_cm([candidate]):
+                return _apply_update()
+        except OSError:
+            return False
+
+    lock_dir = os.path.dirname(os.path.abspath(candidate)) or "."
+    os.makedirs(lock_dir, exist_ok=True)
+    lock_path = os.path.join(lock_dir, ".last_dry_run.lock")
+
+    if sys.platform != "win32":
+        import fcntl
+
+        lock_flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(lock_path, lock_flags, 0o600)
+        except OSError:
+            return False
+        with os.fdopen(fd, "r+", encoding="utf-8") as lf:
+            try:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                return _apply_update()
+            finally:
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+    else:
+        import msvcrt  # type: ignore[import-not-found]
+
+        try:
+            with open(lock_path, "a+b") as lf:
+                lf.seek(0, os.SEEK_END)
+                if lf.tell() == 0:
+                    lf.write(b"\0")
+                    lf.flush()
+                lf.seek(0)
+                msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+                try:
+                    return _apply_update()
+                finally:
+                    try:
+                        lf.seek(0)
+                        msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+                    except OSError:
+                        pass
+        except OSError:
+            return False
+
+
 def _verify_dry_run_receipt_for_hook(
     script_path: Optional[str] = None,
     max_age_seconds: int = 1800,
@@ -3330,10 +3439,11 @@ def _verify_dry_run_receipt_for_hook(
     for candidate in candidate_receipts:
         if os.path.isfile(candidate):
             try:
-                with open(candidate, "r", encoding="utf-8") as f:
+                with open(candidate, "r", encoding="utf-8-sig") as f:
                     data = json.load(f)
                 if isinstance(data, dict) and data:
-                    if str(data.get("status", "")) == "DRY_RUN_PASSED":
+                    cand_status = str(data.get("status", ""))
+                    if cand_status in ("DRY_RUN_PASSED", "EXECUTING", "EXECUTED", "REJECTED"):
                         receipt = data
                         matched_receipt_path = candidate
                         break
@@ -3451,10 +3561,25 @@ def _verify_dry_run_receipt_for_hook(
                 receipt,
             )
 
+    resolved_script: Optional[str] = None
     if resolved_script_arg:
+        if str(receipt.get("create_params_sha256") or "").strip():
+            return (
+                False,
+                "BLOCKED BY HITL MUTATION GUARD: Cannot execute a script using a sidecar create_* receipt. "
+                "Run --dry-run for this script via skills/execute-mutation/scripts/run_mutation.py first.",
+                receipt,
+            )
         resolved_script = os.path.abspath(resolved_script_arg)
-        expected_hash = str(receipt.get("script_sha256", ""))
-        if expected_hash and os.path.isfile(resolved_script):
+        expected_hash = str(receipt.get("script_sha256") or "").strip()
+        if os.path.isfile(resolved_script):
+            if not expected_hash:
+                return (
+                    False,
+                    f"BLOCKED BY HITL MUTATION GUARD: Dry-run receipt is missing script_sha256 for "
+                    f"'{script_path or resolved_script_arg}'. Re-run --dry-run first.",
+                    receipt,
+                )
             hasher = hashlib.sha256()
             with open(resolved_script, "rb") as f:
                 for chunk in iter(lambda: f.read(65536), b""):
@@ -3537,6 +3662,9 @@ def _verify_dry_run_receipt_for_hook(
             "script_path": str(receipt.get("script_path", "")),
             "script_sha256": str(receipt.get("script_sha256", "")),
         }
+        create_params_sha = str(receipt.get("create_params_sha256") or "").strip()
+        if create_params_sha:
+            fallback_meta["create_params_sha256"] = create_params_sha
         recomputed_fallback_sha = _compute_canonical_request_sha256(
             "ScriptExecution", "mutate", fallback_meta
         )
@@ -3646,7 +3774,9 @@ def _verify_dry_run_receipt_for_hook(
         ).rstrip()
         return False, tier1_block_msg, receipt
 
-    receipt["hook_prompted_at_iso"] = datetime.now(timezone.utc).isoformat()
+    hook_meta_updates: Dict[str, Any] = {
+        "hook_prompted_at_iso": datetime.now(timezone.utc).isoformat()
+    }
     if isinstance(hook_context, dict):
         conv_id = hook_context.get("conversationId") or hook_context.get("session_id")
         transcript_path = (
@@ -3654,12 +3784,14 @@ def _verify_dry_run_receipt_for_hook(
         )
         model_name = hook_context.get("modelName") or hook_context.get("model")
         if conv_id:
-            receipt["cli_conversation_id"] = str(conv_id)
+            hook_meta_updates["cli_conversation_id"] = str(conv_id)
         if transcript_path:
-            receipt["cli_transcript_path"] = str(transcript_path)
+            hook_meta_updates["cli_transcript_path"] = str(transcript_path)
         if model_name:
-            receipt["model_name"] = str(model_name)
+            hook_meta_updates["model_name"] = str(model_name)
 
+    receipt.update(hook_meta_updates)
+    expected_rid = str(receipt.get("receipt_id") or "")
     targets_to_update = (
         [matched_receipt_path]
         if matched_receipt_path
@@ -3668,7 +3800,9 @@ def _verify_dry_run_receipt_for_hook(
     for candidate in targets_to_update:
         if os.path.isfile(candidate):
             try:
-                _write_json_file_atomic(candidate, receipt, private=True)
+                _update_receipt_hook_metadata_locked(
+                    candidate, expected_rid, hook_meta_updates, rm_mod=rm_mod
+                )
             except OSError:
                 continue
 
@@ -3700,8 +3834,9 @@ def _verify_dry_run_receipt_for_hook(
 
 
 _TEST_OR_LINTER_CMD_RE = re.compile(
-    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:(?:[\w./-]+/)?(?:pytest|ruff|mypy|flake8)(?=\s|$)|"
-    r"python3?\s+-m\s+(?:pytest|ruff|mypy|flake8)(?=\s|$))"
+    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:(?:[\w./\\:-]+[/\\])?(?:pytest|ruff|mypy|flake8)(?:\.exe)?(?=\s|$)|"
+    r"(?:[\w./\\:-]+[/\\])?python(?:3(?:\.\d+)?)?(?:\.exe)?\s+-m\s+(?:pytest|ruff|mypy|flake8)(?=\s|$))",
+    re.IGNORECASE,
 )
 _CHAIN_SPLIT_RE = re.compile(r"(?:&&|\|\||;|\||\n)")
 _DIRECT_REST_MUTATE_RE = re.compile(
@@ -3783,17 +3918,22 @@ _HOME_PARENT_DIRS = sorted(
         for p in (
             "/home",
             "/Users",
+            "C:/Users",
             os.path.dirname(os.path.expanduser("~")).replace("\\", "/"),
         )
-        if p and p != "/" and p.startswith("/")
+        if p
+        and p != "/"
+        and (p.startswith("/") or bool(re.match(r"^[A-Za-z]:/[^/]", p)))
     }
 )
-_HOME_PARENT_ALT = "|".join(re.escape(p) for p in _HOME_PARENT_DIRS)
+_HOME_PARENT_ALT = "|".join(
+    re.escape(p).replace("/", r"[/\\]") for p in _HOME_PARENT_DIRS
+)
 _QUOTED_HOME_YAML_RE = re.compile(
-    rf"(['\"])(?:~|(?:{_HOME_PARENT_ALT})/[^/'\"]+|client_libs/[^/'\"]+)/google-ads\.yaml\1"
+    rf"(['\"])(?:~|(?:{_HOME_PARENT_ALT})[/\\][^/'\"\\]+|client_libs[/\\][^/'\"\\]+)[/\\]google-ads\.yaml\1"
 )
 _BARE_HOME_YAML_RE = re.compile(
-    rf"(?:~/google-ads\.yaml|(?:{_HOME_PARENT_ALT})/[^/\s'\"]+/google-ads\.yaml|client_libs/[^/\s'\"]+/google-ads\.yaml)"
+    rf"(?:~[/\\]google-ads\.yaml|(?:{_HOME_PARENT_ALT})[/\\][^/\s'\"\\]+[/\\]google-ads\.yaml|client_libs[/\\][^/\s'\"\\]+[/\\]google-ads\.yaml)"
 )
 # Only bare relative paths are rewritten; already-rooted paths such as
 # "$GADS_DIR/skills/..." or "${CLAUDE_PLUGIN_ROOT}/skills/..." or "/abs/skills/..." pass through.
@@ -3809,11 +3949,19 @@ _PROTECTED_CREDENTIAL_FILES = frozenset({
     "ads.properties",
     ".a2a_token",
 })
-_PROTECTED_DENY_FILES = frozenset({"last_dry_run.json", "mutation_audit.jsonl"})
+_PROTECTED_DENY_FILES = frozenset({
+    "last_dry_run.json",
+    ".last_dry_run.lock",
+    "mutation_audit.jsonl",
+})
 _PROTECTED_ASK_FILES = frozenset({
     "assistant_config",
     "financial_limits",
     "google-ads.yaml",
+    "google_ads_php.ini",
+    "google_ads_config.rb",
+    "ads.properties",
+    ".a2a_token",
     "hooks.json",
     "config_init.py",
     "hook_guard.py",
@@ -3832,10 +3980,17 @@ _PROTECTED_ASK_FILES = frozenset({
     "sidecar.json",
     "plugin.json",
 })
+_PROTECTED_CREDENTIAL_FILES_LOWER = frozenset(
+    f.lower() for f in _PROTECTED_CREDENTIAL_FILES
+)
+_PROTECTED_DENY_FILES_LOWER = frozenset(f.lower() for f in _PROTECTED_DENY_FILES)
+_PROTECTED_ASK_FILES_LOWER = frozenset(f.lower() for f in _PROTECTED_ASK_FILES)
 _FILE_READ_TOOLS = frozenset({
     "read_file",
     "view_file",
+    "grep_search",
     "Read",
+    "Grep",
 })
 _FILE_WRITE_TOOLS = frozenset({
     "write_file",
@@ -3855,9 +4010,10 @@ _GUARD_OVERRIDE_ENV_RE = re.compile(
 )
 _PYTHON_SELF_ELEVATION_RE = re.compile(
     r"\b(?:set_execute_mutates|set_allow_tier1_financial_mutates|set_plugin_enabled|"
-    r"write_assistant_config|write_financial_limits|_set_hooks_json_enabled)\s*\("
-    r"|\b(?:from\s+config\s+import\s+config_init|import\s+config_init)\b"
-    r"|(?:spec_from_file_location|run_path)\s*\([^)]*(?:config_init|set_financial_limits)"
+    r"write_assistant_config|_write_assistant_config_to_dir|write_financial_limits|_set_hooks_json_enabled)\s*\("
+    r"|\b(?:from\s+(?:config\.)?config_init\s+import|from\s+config\s+import\s+config_init|import\s+(?:config\.)?config_init)\b"
+    r"|\s-m\s+(?:config\.)?(?:config_init|set_financial_limits)\b"
+    r"|(?:spec_from_file_location|run_path|run_module|import_module)\s*\([^)]*(?:config_init|set_financial_limits)"
 )
 _ADS_SDK_OR_SERVICE_RE = re.compile(
     r"(?:google\.ads\.googleads|GoogleAdsClient|googleads\.googleapis\.com|"
@@ -3865,8 +4021,12 @@ _ADS_SDK_OR_SERVICE_RE = re.compile(
     r"GoogleAdsService|CustomerService|BillingSetupService|ConversionUploadService)"
 )
 _DYNAMIC_DISPATCH_RE = re.compile(
-    r"\b(?:getattr|setattr|exec|eval|__import__)\s*\("
+    r"\b(?:getattr|setattr|delattr|exec|eval|compile|__import__|"
+    r"import_module|run_path|run_module|spec_from_file_location|"
+    r"partial|methodcaller|attrgetter|globals|locals|vars|__call__)\s*\("
+    r"|\b(?:importlib|runpy)\s*\."
 )
+_INLINE_EXEC_EVAL_RE = re.compile(r"\b(?:exec|eval|compile)\s*\(")
 _NON_PY_SCRIPT_ARG_RE = re.compile(
     r"(?:'([^']+\.(?:php|rb))'|\"([^\"]+\.(?:php|rb))\"|([^\s'\"]+\.(?:php|rb)))"
 )
@@ -3890,7 +4050,7 @@ _PY_EXEC_ARG_RE = re.compile(
     re.IGNORECASE,
 )
 _SIMPLE_SHELL_VAR_RE = re.compile(
-    r"(?:^|[;&|\n(])\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(?:'([^'\n]*)'|\"([^\"$\n`]*)\"|([^\s;|&<>()'\"$`]+))"
+    r"(?:^|[;&|\n(\s])(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(?:'([^'\n]*)'|\"([^\"\n`]*)\"|([^\s;|&<>()'\"`]+))"
 )
 _TRUSTED_LIFECYCLE_SH_NAMES = frozenset({
     "install.sh",
@@ -3942,25 +4102,68 @@ _TRUSTED_ROOT_VAR_PREFIXES = {
 }
 
 _PROTECTED_CONFIG_BASENAMES = _PROTECTED_DENY_FILES | _PROTECTED_ASK_FILES
+_PROTECTED_CONFIG_BASENAMES_LOWER = tuple(sorted(b.lower() for b in _PROTECTED_CONFIG_BASENAMES))
+_PROTECTED_CREDENTIAL_FILES_LOWER_TUPLE = tuple(sorted(b.lower() for b in _PROTECTED_CREDENTIAL_FILES))
+_PY_COMBINED_C_FLAG_RE = re.compile(r"(?:^|\s)-[A-Za-z]*c")
 _ANY_PROTECTED_BASENAME_RE = re.compile(
     "|".join(
         re.escape(b)
         for b in sorted(_PROTECTED_CONFIG_BASENAMES, key=len, reverse=True)
-    )
+    ),
+    re.IGNORECASE,
+)
+_ANY_CREDENTIAL_BASENAME_RE = re.compile(
+    "|".join(
+        re.escape(b)
+        for b in sorted(_PROTECTED_CREDENTIAL_FILES, key=len, reverse=True)
+    ),
+    re.IGNORECASE,
 )
 _SHELL_REDIRECT_TARGET_RE = re.compile(
     r"(?<![<>&0-9])[0-9&]?>{1,2}\|?\s*(?!&)(?:'([^']*)'|\"([^\"]*)\"|([^\s;|&<>()]+))"
+)
+_SHELL_INPUT_REDIRECT_RE = re.compile(
+    r"(?<![<>&])<\s*(?!<)(?:'([^']*)'|\"([^\"]*)\"|([^\s;|&<>()]+))"
 )
 _SHELL_VAR_ASSIGN_RE = re.compile(
     r"(?:^|[;&|\n\s])(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(?:'([^']*)'|\"([^\"]*)\"|([^\s;|&<>]+))"
 )
 _INPLACE_EDIT_RE = re.compile(
-    r"\b(?:sed|perl|ruby)\b[^;|&\n]*?\s(?:-[A-Za-z]*i[A-Za-z]*\b|--in-place\b)"
-    r"|\b(?:gawk|awk|mawk|nawk)\b[^;|&\n]*?\s-i\s+inplace\b"
-    r"|\bpatch\b"
+    r"\b(?:[\w./\\:-]+[/\\])?(?:sed|perl|ruby)\b[^;|&\n]*?\s(?:-[A-Za-z]*i[A-Za-z]*\b|--in-place\b)"
+    r"|\b(?:[\w./\\:-]+[/\\])?(?:gawk|awk|mawk|nawk)\b[^;|&\n]*?\s-i\s+inplace\b"
+    r"|\b(?:[\w./\\:-]+[/\\])?patch\b",
+    re.IGNORECASE,
 )
 _SHELL_WRITER_CMD_RE = re.compile(
-    r"(?:^|[;&|\n(]|\bsudo\s+|\bthen\s+|\bdo\s+)\s*(tee|cp|mv|install|ln|rm|truncate|dd|rsync)\b"
+    r"(?:^|[;&|\n(]|\bthen\s+|\bdo\s+)\s*"
+    r"(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|\"[^\"]*\"|\S+)\s+)*"
+    r"(?:(?:sudo|command|env|xargs|nohup|time|nice)\s+(?:-\S+\s+)*)*"
+    r"(?:[\w./\\:-]+[/\\])?(tee|cp|mv|install|ln|rm|truncate|dd|rsync|ed|ex)\b",
+    re.IGNORECASE,
+)
+_CURL_OUT_RE = re.compile(
+    r"\b(?:[\w./\\:-]+[/\\])?curl\b[^;|&\n]*?(?:\s-[A-Za-z]*[oO](?:\b|\S)|\s--(?:output|remote-name)(?:=|\s|$))",
+    re.IGNORECASE,
+)
+_WGET_OUT_RE = re.compile(
+    r"\b(?:[\w./\\:-]+[/\\])?wget\b[^;|&\n]*?(?:\s-O(?:\b|\S)|\s--output-document(?:=|\s|$))",
+    re.IGNORECASE,
+)
+_FIND_DELETE_RE = re.compile(
+    r"\b(?:[\w./\\:-]+[/\\])?find\b[^;|&\n]*?\s-delete\b",
+    re.IGNORECASE,
+)
+_CRED_READER_CMD_RE = re.compile(
+    r"(?:^|[;&|\n(]|\bthen\s+|\bdo\s+)\s*"
+    r"(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|\"[^\"]*\"|\S+)\s+)*"
+    r"(?:(?:sudo|command|env|xargs|nohup|time|nice)\s+(?:-\S+\s+)*)*"
+    r"(?:[\w./\\:-]+[/\\])?"
+    r"(cat|head|tail|less|more|nl|od|hexdump|bat|grep|egrep|fgrep|rg|ag|ack|"
+    r"sed|awk|gawk|mawk|nawk|strings|base64|xxd|perl|ruby|jq|yq|cut|sort|uniq|tr|rev|tac|type|Get-Content|gc)\b",
+    re.IGNORECASE,
+)
+_PY_READ_RE = re.compile(
+    r"\b(?:open|read_text|read_bytes|load|safe_load|Path|os\.open|codecs\.open|io\.open|File\.read|file_get_contents)\s*\("
 )
 _PY_WRITE_RE = re.compile(
     r"open\s*\([^)]*?,\s*(?:mode\s*=\s*)?['\"][^'\"]*[waxWAX+][^'\"]*['\"]|"
@@ -3977,6 +4180,7 @@ def _split_shell_segments(cmd: str) -> Optional[list[str]]:
     segments: list[str] = []
     buf: list[str] = []
     quote: Optional[str] = None
+    quote_start = -1
     i = 0
     n = len(cmd)
     while i < n:
@@ -3984,11 +4188,24 @@ def _split_shell_segments(cmd: str) -> Optional[list[str]]:
         if quote:
             buf.append(ch)
             if ch == "\\" and quote == '"' and i + 1 < n:
-                buf.append(cmd[i + 1])
-                i += 2
-                continue
+                # Preserve Windows drive-prefixed quoted paths ending in a backslash
+                # (e.g. "C:\dir\") so the trailing backslash does not escape the closing quote.
+                is_win_drive_trailing = (
+                    cmd[i + 1] == '"'
+                    and quote_start >= 0
+                    and quote_start + 3 < n
+                    and cmd[quote_start + 1].isalpha()
+                    and cmd[quote_start + 2] == ":"
+                    and cmd[quote_start + 3] == "\\"
+                    and (i + 2 >= n or cmd[i + 2] in " \t;|&<>()\n\r")
+                )
+                if not is_win_drive_trailing:
+                    buf.append(cmd[i + 1])
+                    i += 2
+                    continue
             if ch == quote:
                 quote = None
+                quote_start = -1
             i += 1
             continue
         if ch == "\\" and i + 1 < n:
@@ -3997,6 +4214,7 @@ def _split_shell_segments(cmd: str) -> Optional[list[str]]:
             continue
         if ch in ("'", '"'):
             quote = ch
+            quote_start = i
             buf.append(ch)
             i += 1
             continue
@@ -4266,40 +4484,380 @@ _WIN_PATH_TOKEN_RE = re.compile(
     r"|\"(?:[A-Za-z]:\\|\\\\|\.\.?\\)[^\"]*\""
     r"|(?<![A-Za-z0-9_])(?:[A-Za-z]:\\|\\\\|\.\.?\\)[^\s'\"|;&<>()]+)"
 )
+_ANSI_C_QUOTE_RE = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
+_ANSI_C_ESC_RE = re.compile(
+    r"\\(?:x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|([0-7]{1,3})|(.))"
+)
+_ANSI_C_SIMPLE_ESCAPES = {
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "E": "\x1b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    "\\": "\\",
+    "'": "'",
+    '"': '"',
+    "?": "?",
+}
+_INTRA_TOKEN_QUOTE_RE = re.compile(
+    r"""(?:(?<![\s;|&<>()=])(?:'[^']*'|"[^"\\]*(?:\\.[^"\\]*)*")|(?:'[^']*'|"[^"\\]*(?:\\.[^"\\]*)*")(?![\s;|&<>()]|$))"""
+)
+_SHELL_TOKEN_META_RE = re.compile(r"[\s;|&<>()`'\"\n\r]")
+_OBFUSCATED_CMD_NAMES = frozenset({
+    "tee",
+    "cp",
+    "mv",
+    "rm",
+    "ln",
+    "dd",
+    "ed",
+    "ex",
+    "cat",
+    "sed",
+    "awk",
+    "gawk",
+    "mawk",
+    "nawk",
+    "curl",
+    "wget",
+    "http",
+    "xh",
+    "bash",
+    "sh",
+    "zsh",
+    "dash",
+    "ksh",
+    "python",
+    "python3",
+    "pytest",
+    "node",
+    "nodejs",
+    "deno",
+    "bun",
+    "php",
+    "ruby",
+    "perl",
+    "env",
+    "sudo",
+    "xargs",
+    "find",
+    "grep",
+    "rg",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "strings",
+    "base64",
+    "xxd",
+    "truncate",
+    "install",
+    "rsync",
+    "patch",
+})
+_WIN_KNOWN_REL_DIRS = frozenset({
+    "saved",
+    "config",
+    "skills",
+    "tests",
+    "plugins",
+    "client_libs",
+    "sidecars",
+    "rules",
+    "commands",
+})
+
+
+def _decode_ansi_c_quotes(text: str) -> str:
+    """Decodes POSIX/Bash $'...' ANSI-C quoted strings."""
+    if "$'" not in text:
+        return text
+
+    def _unescape_match(em: re.Match) -> str:
+        if em.group(1) is not None:
+            return chr(int(em.group(1), 16))
+        if em.group(2) is not None:
+            return chr(int(em.group(2), 16))
+        if em.group(3) is not None:
+            try:
+                return chr(int(em.group(3), 16))
+            except ValueError:
+                return ""
+        if em.group(4) is not None:
+            return chr(int(em.group(4), 8) & 0xFF)
+        ch = em.group(5) or ""
+        return _ANSI_C_SIMPLE_ESCAPES.get(ch, ch)
+
+    def _replace_ansi(m: re.Match) -> str:
+        decoded = _ANSI_C_ESC_RE.sub(_unescape_match, m.group(1))
+        if decoded and not _SHELL_TOKEN_META_RE.search(decoded) and "$" not in decoded and "\\" not in decoded:
+            return decoded
+        escaped = decoded.replace("'", "'\\''")
+        return f"'{escaped}'"
+
+    return _ANSI_C_QUOTE_RE.sub(_replace_ansi, text)
+
+
+def _collapse_midtoken_quotes(text: str) -> str:
+    """Collapses intra-token POSIX quote concatenation (e.g. c'u'rl -> curl, last_'d'ry_run.json -> last_dry_run.json)."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    delims = set(" \t;|&<>()\n\r")
+
+    def _is_single_outer_quoted(tok: str) -> bool:
+        if len(tok) < 2 or tok[0] not in ("'", '"') or tok[-1] != tok[0]:
+            return False
+        q = tok[0]
+        j = 1
+        end = len(tok) - 1
+        while j < end:
+            if q == '"' and tok[j] == "\\" and j + 1 < end:
+                j += 2
+                continue
+            if tok[j] == q:
+                return False
+            j += 1
+        return True
+
+    def _unquote_posix_token(tok: str) -> Optional[str]:
+        parts: list[str] = []
+        q: Optional[str] = None
+        j = 0
+        m = len(tok)
+        while j < m:
+            ch = tok[j]
+            if q == "'":
+                if ch == "'":
+                    q = None
+                else:
+                    parts.append(ch)
+                j += 1
+                continue
+            if q == '"':
+                if ch == "\\" and j + 1 < m and tok[j + 1] in ('"', "\\", "$", "`"):
+                    parts.append(tok[j + 1])
+                    j += 2
+                    continue
+                if ch == '"':
+                    q = None
+                else:
+                    parts.append(ch)
+                j += 1
+                continue
+            if ch in ("'", '"'):
+                q = ch
+                j += 1
+                continue
+            parts.append(ch)
+            j += 1
+        if q is not None:
+            return None
+        return "".join(parts)
+
+    while i < n:
+        if text[i] in delims:
+            out.append(text[i])
+            i += 1
+            continue
+        start = i
+        q: Optional[str] = None
+        while i < n:
+            ch = text[i]
+            if q == "'":
+                if ch == "'":
+                    q = None
+                i += 1
+                continue
+            if q == '"':
+                if ch == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if ch == '"':
+                    q = None
+                i += 1
+                continue
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch in ("'", '"'):
+                q = ch
+                i += 1
+                continue
+            if ch in delims:
+                break
+            i += 1
+        tok = text[start:i]
+        if ("'" not in tok and '"' not in tok) or _is_single_outer_quoted(tok):
+            out.append(tok)
+            continue
+        # Preserve single-quoted attached python -c'...' while collapsing split -c'a''b'
+        if len(tok) >= 4 and tok.startswith(("-c'", '-c"')) and _is_single_outer_quoted(tok[2:]):
+            out.append(tok)
+            continue
+        if len(tok) >= 4 and tok.startswith("-c") and tok[2] in ("'", '"'):
+            unq_c = _unquote_posix_token(tok[2:])
+            if unq_c is not None:
+                if "'" not in unq_c:
+                    out.append(f"-c'{unq_c}'")
+                else:
+                    out.append('-c"' + unq_c.replace("\\", "\\\\").replace('"', '\\"') + '"')
+                continue
+        # Preserve KEY="val with spaces" / --flag="val with spaces" when only RHS is a single quote
+        if "=" in tok:
+            eq_idx = tok.find("=")
+            lhs, rhs = tok[:eq_idx], tok[eq_idx + 1 :]
+            if ("'" not in lhs and '"' not in lhs) and _is_single_outer_quoted(rhs):
+                out.append(tok)
+                continue
+            if ("'" in lhs or '"' in lhs) and _is_single_outer_quoted(rhs):
+                unq_lhs = _unquote_posix_token(lhs)
+                if unq_lhs is not None and not _SHELL_TOKEN_META_RE.search(unq_lhs):
+                    out.append(f"{unq_lhs}={rhs}")
+                    continue
+        unq = _unquote_posix_token(tok)
+        if unq is None:
+            out.append(tok)
+        elif not _SHELL_TOKEN_META_RE.search(unq):
+            out.append(unq)
+        elif "'" not in unq:
+            out.append(f"'{unq}'")
+        else:
+            out.append('"' + unq.replace("\\", "\\\\").replace('"', '\\"') + '"')
+    return "".join(out)
+
+
+def _deobfuscate_posix_backslashes(chunk: str) -> str:
+    """Collapses POSIX single-char backslash obfuscations while preserving Windows relative paths on win32."""
+    if "\\" not in chunk:
+        return chunk
+    if sys.platform != "win32":
+        return re.sub(r"\\([A-Za-z0-9_./:-])", r"\1", chunk)
+
+    # On win32 (including Git Bash under Claude Code), preserve genuine relative Windows path tokens
+    # (e.g. saved\code\live_budget.py, config\assistant_config) while still collapsing POSIX escapes
+    # like t\ee, \python3, config/assistant_\config, or last_dry_\run.json.
+    def _fix_token(m: re.Match) -> str:
+        tok = m.group(0)
+        if "\\" not in tok:
+            return tok
+        stripped = re.sub(r"\\([A-Za-z0-9_./:-])", r"\1", tok)
+        if tok.startswith("\\") or "/" in tok:
+            return stripped
+        raw_exists = False
+        try:
+            raw_exists = os.path.exists(tok.strip("'\""))
+        except OSError:
+            raw_exists = False
+        if raw_exists:
+            return tok
+        parts = tok.strip("'\"").split("\\")
+        raw_base = parts[-1].lower()
+        # Preserve valid relative Windows paths (e.g. config\assistant_config, saved\code\live.py)
+        # when their raw basename is already intact or they don't hide an obfuscated command/target.
+        if (
+            len(parts) >= 2
+            and parts[0].lower() in _WIN_KNOWN_REL_DIRS
+            and (
+                raw_base in _PROTECTED_DENY_FILES_LOWER
+                or raw_base in _PROTECTED_ASK_FILES_LOWER
+                or raw_base in _PROTECTED_CREDENTIAL_FILES_LOWER
+            )
+        ):
+            return tok
+        # If collapsing segments after a known Windows dir exposes a protected basename (e.g. config\assistant_\config)
+        if len(parts) >= 3 and parts[0].lower() in _WIN_KNOWN_REL_DIRS:
+            joined_tail = "".join(parts[1:])
+            if _ANY_PROTECTED_BASENAME_RE.search(joined_tail) or _ANY_CREDENTIAL_BASENAME_RE.search(joined_tail):
+                return f"{parts[0]}\\{joined_tail}"
+        if (
+            stripped.lower() in _OBFUSCATED_CMD_NAMES
+            or _ANY_PROTECTED_BASENAME_RE.search(stripped)
+            or _ANY_CREDENTIAL_BASENAME_RE.search(stripped)
+        ):
+            return stripped
+        # Relative Windows path with extension or known workspace prefix (e.g. saved\code\live_budget.py)
+        if len(parts) >= 2 and (
+            parts[0].lower() in _WIN_KNOWN_REL_DIRS
+            or bool(re.search(r"\.[A-Za-z0-9]{1,8}$", parts[-1]))
+        ):
+            return tok
+        return stripped
+
+    return re.sub(r"[^\s;|&<>()]+", _fix_token, chunk)
 
 
 def _normalize_shell_obfuscation(cmd: str) -> str:
-    """De-obfuscates simple shell quote-splitting, backslash escapes, and inline var concats."""
-    if not cmd or ("''" not in cmd and '""' not in cmd and "$" not in cmd and "\\" not in cmd):
+    """De-obfuscates shell line continuations, $'...' escapes, quote-splitting, backslashes, and var concats."""
+    if not cmd:
         return cmd
-    norm = cmd.replace("''", "").replace('""', "")
+    if "\\" not in cmd and "$" not in cmd and "'" not in cmd and '"' not in cmd:
+        return cmd
+    norm = cmd
+    if "\\" in norm and "\n" in norm:
+        norm = re.sub(r"\\\r?\n", "", norm)
+    if "$'" in norm:
+        norm = _decode_ansi_c_quotes(norm)
+    if "''" in norm or '""' in norm:
+        norm = norm.replace("''", "").replace('""', "")
+    if ("'" in norm or '"' in norm) and _INTRA_TOKEN_QUOTE_RE.search(norm):
+        norm = _collapse_midtoken_quotes(norm)
     # Collapse POSIX single-char backslash escapes (e.g. t\ee, \python3) without corrupting
-    # Windows path separators (e.g. C:\Users\..., \\server\share\..., .\script.py, or win32 paths).
-    if "\\" in norm and sys.platform != "win32":
+    # Windows path separators (e.g. C:\Users\..., \\server\share\..., .\script.py, or win32 rel paths).
+    if "\\" in norm:
         parts = _WIN_PATH_TOKEN_RE.split(norm)
         matches = _WIN_PATH_TOKEN_RE.findall(norm)
         rebuilt: list[str] = []
         for idx, chunk in enumerate(parts):
-            rebuilt.append(re.sub(r"\\([A-Za-z0-9_./:-])", r"\1", chunk))
+            rebuilt.append(_deobfuscate_posix_backslashes(chunk))
             if idx < len(matches):
                 rebuilt.append(matches[idx])
         norm = "".join(rebuilt)
     if "$" not in norm:
         return norm
-    var_map: Dict[str, str] = {}
-    for vm in _SIMPLE_SHELL_VAR_RE.finditer(norm):
-        vname = vm.group(1)
-        vval = (
-            vm.group(2)
-            if vm.group(2) is not None
-            else (vm.group(3) if vm.group(3) is not None else vm.group(4) or "")
-        )
-        if vname and vname not in ("GADS_DIR", "PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "HOME", "PATH"):
-            var_map[vname] = vval
-    if var_map:
+    _SKIP_VAR_NAMES = frozenset({"GADS_DIR", "PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "HOME", "PATH"})
+    for _ in range(3):
+        var_map: Dict[str, str] = {}
+        for vm in _SIMPLE_SHELL_VAR_RE.finditer(norm):
+            vname = vm.group(1)
+            vval = (
+                vm.group(2)
+                if vm.group(2) is not None
+                else (vm.group(3) if vm.group(3) is not None else vm.group(4) or "")
+            )
+            if vname and vname not in _SKIP_VAR_NAMES:
+                var_map[vname] = vval
+        if not var_map:
+            break
+        # Resolve transitive assignments (e.g. A=py B=thon3; C="$A$B") up to 3 hops
+        for _ in range(3):
+            changed_map = False
+            for k, v in list(var_map.items()):
+                if "$" not in v:
+                    continue
+                nv = v
+                for rk, rv in sorted(var_map.items(), key=lambda kv: -len(kv[0])):
+                    if rk == k or "$" in rv:
+                        continue
+                    nv = nv.replace(f"${{{rk}}}", rv)
+                    nv = re.sub(rf"\${re.escape(rk)}(?![A-Za-z0-9_])", lambda _, _rv=rv: _rv, nv)
+                if nv != v and len(nv) <= 4096:
+                    var_map[k] = nv
+                    changed_map = True
+            if not changed_map:
+                break
+        prev = norm
         for vname, vval in sorted(var_map.items(), key=lambda kv: -len(kv[0])):
+            if "$" in vval or len(vval) > 4096:
+                continue
             norm = norm.replace(f"${{{vname}}}", vval)
-            norm = re.sub(rf"\${re.escape(vname)}(?![A-Za-z0-9_])", lambda _: vval, norm)
+            norm = re.sub(rf"\${re.escape(vname)}(?![A-Za-z0-9_])", lambda _, _v=vval: _v, norm)
+        if norm == prev or "$" not in norm:
+            break
     return norm
 
 
@@ -4320,6 +4878,49 @@ def _extract_cd_dirs(cmd: str, workspace_cwd: Optional[str]) -> list[str]:
     return dirs
 
 
+def _glob_hits_protected_basenames(
+    text: str, protected_names: frozenset[str]
+) -> set[str]:
+    """Matches shell glob patterns in text against protected basenames (case-insensitive)."""
+    if not any(ch in text for ch in ("*", "?", "[")):
+        return set()
+    import fnmatch
+
+    hits: set[str] = set()
+    for raw_tok in re.findall(r"'([^']+)'|\"([^\"]+)\"|([^\s;|&<>()]+)", text):
+        tok = (raw_tok[0] or raw_tok[1] or raw_tok[2] or "").strip()
+        if not tok or not any(ch in tok for ch in ("*", "?", "[")):
+            continue
+        norm_tok = tok.replace("\\", "/").rstrip("/")
+        tok_dir = os.path.dirname(norm_tok).lower()
+        tok_base = os.path.basename(norm_tok).lower()
+        if not tok_base:
+            continue
+        # Catch wildcards explicitly targeting protected directories (e.g. rm saved/data/*, rm config/*)
+        if tok_base in ("*", "*.*") or tok_base.startswith("*."):
+            if tok_dir.endswith("saved/data") or tok_dir == "saved/data":
+                for p in ("last_dry_run.json", ".last_dry_run.lock"):
+                    if p in protected_names and fnmatch.fnmatchcase(p.lower(), tok_base):
+                        hits.add(p)
+            elif tok_dir.endswith("saved/logs") or tok_dir == "saved/logs":
+                if "mutation_audit.jsonl" in protected_names and fnmatch.fnmatchcase(
+                    "mutation_audit.jsonl", tok_base
+                ):
+                    hits.add("mutation_audit.jsonl")
+            elif tok_dir.endswith("/config") or tok_dir == "config":
+                for p in ("assistant_config", "financial_limits", "google-ads.yaml"):
+                    if p in protected_names and fnmatch.fnmatchcase(p.lower(), tok_base):
+                        hits.add(p)
+            continue
+        literal_chars = re.sub(r"[*?\[\]!]", "", tok_base)
+        if len(literal_chars) < 3:
+            continue
+        for prot in protected_names:
+            if fnmatch.fnmatchcase(prot.lower(), tok_base):
+                hits.add(prot)
+    return hits
+
+
 def _protected_shell_write_decision(
     cmd: str, _normalized: bool = False
 ) -> Optional[Tuple[str, str]]:
@@ -4331,19 +4932,24 @@ def _protected_shell_write_decision(
     if not cmd:
         return None
     norm_cmd = cmd if _normalized else _normalize_shell_obfuscation(cmd)
-    if not _ANY_PROTECTED_BASENAME_RE.search(norm_cmd):
+    has_glob = "*" in norm_cmd or "?" in norm_cmd or "[" in norm_cmd
+    norm_lower = norm_cmd.lower()
+    if not has_glob and not any(b in norm_lower for b in _PROTECTED_CONFIG_BASENAMES_LOWER):
         return None
-    named = sorted(b for b in _PROTECTED_CONFIG_BASENAMES if b in norm_cmd)
-    if not named:
-        return None
+    named = sorted(b for b in _PROTECTED_CONFIG_BASENAMES if b.lower() in norm_lower)
+    named_lower_map = {b.lower(): b for b in named}
 
     hits: set[str] = set()
 
     def _basename_hits(text: str) -> set[str]:
         found: set[str] = set()
         for b in named:
-            if re.search(r"(?<![\w.-])" + re.escape(b) + r"(?![\w.-])", text):
+            if re.search(
+                r"(?<![\w.-])" + re.escape(b) + r"(?![\w.-])", text, re.IGNORECASE
+            ):
                 found.add(b)
+        if has_glob:
+            found |= _glob_hits_protected_basenames(text, _PROTECTED_CONFIG_BASENAMES)
         return found
 
     # Map shell variables assigned to protected basenames (e.g. F=assistant_config; echo > config/$F)
@@ -4366,8 +4972,9 @@ def _protected_shell_write_decision(
     for m in _SHELL_REDIRECT_TARGET_RE.finditer(norm_cmd):
         target = m.group(1) or m.group(2) or m.group(3) or ""
         base = os.path.basename(target.strip().replace("\\", "/").rstrip("/"))
-        if base in named:
-            hits.add(base)
+        canon = named_lower_map.get(base.lower())
+        if canon:
+            hits.add(canon)
         else:
             hits |= _expand_var_hits(target)
 
@@ -4380,8 +4987,13 @@ def _protected_shell_write_decision(
         if _INPLACE_EDIT_RE.search(seg):
             hits |= seg_hits
             continue
-        # 3. Writer commands: tee, cp, mv, install, ln, rm, truncate, dd, rsync
-        if _SHELL_WRITER_CMD_RE.search(" " + seg):
+        # 3. Writer commands: tee, cp, mv, install, ln, rm, truncate, dd, rsync, ed, ex
+        if (
+            _SHELL_WRITER_CMD_RE.search(" " + seg)
+            or _CURL_OUT_RE.search(seg)
+            or _WGET_OUT_RE.search(seg)
+            or _FIND_DELETE_RE.search(seg)
+        ):
             hits |= seg_hits
             continue
 
@@ -4391,7 +5003,7 @@ def _protected_shell_write_decision(
 
     if not hits:
         return None
-    deny_hits = sorted(h for h in hits if h in _PROTECTED_DENY_FILES)
+    deny_hits = sorted(h for h in hits if h.lower() in _PROTECTED_DENY_FILES_LOWER)
     if deny_hits:
         return (
             "deny",
@@ -4403,6 +5015,235 @@ def _protected_shell_write_decision(
         f"⚠️ PROTECTED CONFIGURATION EDIT: This command modifies {', '.join(sorted(hits))}. "
         "Confirm this change to the assistant's protected configuration?",
     )
+
+
+def _is_trusted_plugin_script_invocation(
+    seg: str, effective_ws: Optional[str], gads_root: Optional[str] = None
+) -> bool:
+    """True when seg directly invokes a trusted plugin .py script without inline -c code."""
+    try:
+        argv = _split_shell_argv(seg)
+    except ValueError:
+        return False
+    idx = 0
+    while idx < len(argv) and "=" in argv[idx] and not argv[idx].startswith("-"):
+        idx += 1
+    if idx >= len(argv) or not _PYTHON_ARGV0_RE.fullmatch(argv[idx]):
+        return False
+    j = idx + 1
+    while j < len(argv) and argv[j].startswith("-"):
+        if argv[j] in ("-c", "-m") or argv[j].startswith("-c"):
+            return False
+        j += 1
+    if j >= len(argv):
+        return False
+    raw_script = argv[j]
+    if not raw_script.lower().endswith(".py"):
+        return False
+    expanded = (
+        _expand_trusted_path_vars(raw_script, gads_root)
+        if "$" in raw_script or raw_script.startswith("~")
+        else raw_script
+    )
+    resolved = _resolve_candidate_script_path(expanded, effective_ws)
+    if resolved and os.path.isfile(resolved):
+        return _is_trusted_plugin_script(resolved)
+    norm_s = expanded.replace("\\", "/")
+    return (
+        (
+            norm_s.startswith("skills/")
+            or norm_s.startswith("config/")
+            or norm_s == "set_financial_limits.py"
+        )
+        and ".." not in norm_s.split("/")
+        and "saved/" not in norm_s
+    )
+
+
+def _protected_credential_shell_read_decision(
+    norm_cmd: str, effective_ws: Optional[str] = None
+) -> Optional[Tuple[str, str]]:
+    """Blocks direct shell/interpreter reads of credential files unless invoking a trusted plugin script."""
+    if not norm_cmd:
+        return None
+    norm_lower = norm_cmd.lower()
+    if not any(b in norm_lower for b in _PROTECTED_CREDENTIAL_FILES_LOWER_TUPLE):
+        return None
+    segments = _split_shell_segments(norm_cmd) or [norm_cmd]
+    if segments and all(_is_safe_test_or_linter_segment(s, effective_ws) for s in segments):
+        return None
+    gads_root = _trusted_gads_dir_root(norm_cmd) if "GADS_DIR" in norm_cmd else None
+
+    for seg in segments:
+        if not _ANY_CREDENTIAL_BASENAME_RE.search(seg):
+            continue
+        matched_creds = [
+            c
+            for c in sorted(_PROTECTED_CREDENTIAL_FILES)
+            if re.search(r"(?<![\w.-])" + re.escape(c) + r"(?![\w.-])", seg, re.IGNORECASE)
+        ]
+        if not matched_creds:
+            continue
+        # Benign env export of GOOGLE_ADS_CONFIGURATION_FILE_PATH or trusted plugin CLI invocation
+        if re.match(
+            r"^\s*(?:export\s+|set\s+\"?)GOOGLE_ADS_CONFIGURATION_FILE_PATH=",
+            seg,
+            re.IGNORECASE,
+        ):
+            continue
+        if _is_trusted_plugin_script_invocation(seg, effective_ws, gads_root=gads_root):
+            continue
+        is_direct_read = (
+            bool(_CRED_READER_CMD_RE.search(" " + seg))
+            or bool(_PY_READ_RE.search(seg))
+            or any(
+                os.path.basename(
+                    (m.group(1) or m.group(2) or m.group(3) or "").strip().replace("\\", "/").rstrip("/")
+                ).lower()
+                in _PROTECTED_CREDENTIAL_FILES_LOWER
+                for m in _SHELL_INPUT_REDIRECT_RE.finditer(seg)
+            )
+        )
+        if is_direct_read:
+            return (
+                "deny",
+                f"BLOCKED BY CREDENTIAL ISOLATION GUARD: Direct shell inspection of "
+                f"'{', '.join(matched_creds)}' is prohibited to prevent leaking OAuth secrets "
+                "or sidecar tokens into model context.",
+            )
+    return None
+
+
+def _is_readonly_set_financial_limits_cmd(norm_cmd: str) -> bool:
+    """True only when every set_financial_limits invocation uses strictly read-only flags."""
+    if any(tok in norm_cmd for tok in ("$(", "`", "<(", ">(", ">")):
+        return False
+    segments = _split_shell_segments(norm_cmd)
+    if not segments:
+        return False
+    _RO_FLAGS = frozenset({"--show", "--list", "--json", "-h", "--help"})
+    _RO_VALUE_FLAGS = frozenset({"--config-dir", "--config-file"})
+    found_any = False
+    for seg in segments:
+        if "set_financial_limits" not in seg:
+            continue
+        found_any = True
+        try:
+            argv = _split_shell_argv(seg)
+        except ValueError:
+            return False
+        script_idx = -1
+        for i, tok in enumerate(argv):
+            base = os.path.basename(tok.replace("\\", "/")).lower()
+            if base == "set_financial_limits.py" or tok in (
+                "set_financial_limits",
+                "config.set_financial_limits",
+            ):
+                script_idx = i
+                break
+        if script_idx < 0:
+            return False
+        flags = argv[script_idx + 1 :]
+        j = 0
+        while j < len(flags):
+            f = flags[j]
+            if f in _RO_FLAGS:
+                j += 1
+                continue
+            if f in _RO_VALUE_FLAGS:
+                if j + 1 >= len(flags):
+                    return False
+                j += 2
+                continue
+            if any(f.startswith(opt + "=") for opt in _RO_VALUE_FLAGS):
+                j += 1
+                continue
+            return False
+    return found_any
+
+
+def _extract_python_c_snippets(cmd: str) -> list[str]:
+    """Extracts inline Python code strings from `python -c ...` and `python -c'...'` commands."""
+    if not cmd or ("python" not in cmd.lower()):
+        return []
+    if "-c" not in cmd and not _PY_COMBINED_C_FLAG_RE.search(cmd):
+        return []
+    snippets: list[str] = []
+    segments = _split_shell_segments(cmd) or [cmd]
+    _PY_SHORT_FLAGS = set("BbdeEiIOqPsSuvx")
+    for seg in segments:
+        if "python" not in seg.lower() or (
+            "-c" not in seg and not _PY_COMBINED_C_FLAG_RE.search(seg)
+        ):
+            continue
+        try:
+            argv = _split_shell_argv(seg)
+        except ValueError:
+            for cm in re.finditer(r"(?:^|\s)-c\s*(?:'([^']*)'|\"([^\"]*)\")", seg):
+                snip = cm.group(1) if cm.group(1) is not None else (cm.group(2) or "")
+                if snip.strip():
+                    snippets.append(snip)
+            continue
+        idx = 0
+        while idx < len(argv) and "=" in argv[idx] and not argv[idx].startswith("-"):
+            idx += 1
+        while idx < len(argv) and argv[idx] in ("sudo", "env", "command", "nohup", "time", "nice"):
+            idx += 1
+            while idx < len(argv) and (
+                argv[idx].startswith("-") or ("=" in argv[idx] and not argv[idx].startswith("-"))
+            ):
+                idx += 1
+        if idx >= len(argv) or not _PYTHON_ARGV0_RE.fullmatch(argv[idx]):
+            continue
+        j = idx + 1
+        while j < len(argv):
+            tok = argv[j]
+            if tok == "-c":
+                if j + 1 < len(argv) and argv[j + 1].strip():
+                    snippets.append(argv[j + 1])
+                break
+            if tok.startswith("-c") and len(tok) > 2:
+                if tok[2:].strip():
+                    snippets.append(tok[2:])
+                break
+            if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]:
+                c_pos = tok.index("c", 1)
+                prefix_flags = tok[1:c_pos]
+                if all(ch in _PY_SHORT_FLAGS for ch in prefix_flags):
+                    tail = tok[c_pos + 1 :]
+                    if tail.strip():
+                        snippets.append(tail)
+                    elif j + 1 < len(argv) and argv[j + 1].strip():
+                        snippets.append(argv[j + 1])
+                    break
+            if tok in ("-m", "-W", "-X"):
+                if tok == "-m":
+                    break
+                j += 2
+                continue
+            if not tok.startswith("-"):
+                break
+            j += 1
+    return snippets
+
+
+def _has_mutation_attr_reference(py_blobs: list[str]) -> bool:
+    """True if any Python source blob references a Google Ads mutation method as an attribute (even without `(`)."""
+    import ast as _ast
+
+    for blob in py_blobs:
+        if not blob or not _MUTATION_ATTR_REF_RE.search(_COMMENT_LINE_RE.sub("", blob)):
+            continue
+        try:
+            tree = _ast.parse(blob)
+        except SyntaxError:
+            return True
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Attribute) and _MUTATION_METHOD_EXACT_RE.fullmatch(
+                node.attr
+            ):
+                return True
+    return False
 
 
 _EXTLESS_TOK_RE = re.compile(
@@ -4436,12 +5277,41 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
     receives an untainted validate_only=True.
 
     Defeats decoy `validate_only = True` lines, `not C.execute` tricks, `req` reassignments,
-    cross-function scope collisions, and dynamic `getattr`/`setattr`/`exec`/`eval` dispatch.
-    Returns False (fail closed) on parse errors or any unverifiable mutation call.
+    aliasing/in-place mutation (ClearField/CopyFrom/MergeFrom/_pb/update/pop/|=), cross-function
+    scope collisions, lambda/decorator/default-arg/match/TryStar/walrus/tuple-unpack bypasses,
+    indirect attribute references, and dynamic dispatch calls.
+    Returns False (fail closed) on parse errors, unknown AST statements, or unverifiable calls.
     """
     import ast as _ast
 
-    _UNSAFE_DYNAMIC_CALLS = frozenset({"getattr", "setattr", "delattr", "exec", "eval", "__import__"})
+    _UNSAFE_DYNAMIC_CALLS = frozenset({
+        "getattr",
+        "setattr",
+        "delattr",
+        "exec",
+        "eval",
+        "compile",
+        "__import__",
+        "importlib",
+        "import_module",
+        "runpy",
+        "run_path",
+        "run_module",
+        "spec_from_file_location",
+        "partial",
+        "methodcaller",
+        "attrgetter",
+        "globals",
+        "locals",
+        "vars",
+        "__call__",
+    })
+    _UNSAFE_DYNAMIC_MODULES = frozenset({"importlib", "runpy", "ctypes"})
+    _TRY_TYPES: Tuple[type, ...] = (
+        (_ast.Try, _ast.TryStar) if hasattr(_ast, "TryStar") else (_ast.Try,)
+    )
+    _MATCH_TYPE: Optional[type] = getattr(_ast, "Match", None)
+    _TYPE_ALIAS_TYPE: Optional[type] = getattr(_ast, "TypeAlias", None)
 
     def _is_true_expr(node: _ast.AST, safe_bools: set[str]) -> bool:
         if isinstance(node, _ast.Constant) and node.value is True:
@@ -4453,23 +5323,58 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
     def _is_safe_dict_req(node: _ast.AST, safe_bools: set[str]) -> bool:
         if not isinstance(node, _ast.Dict):
             return False
+        validate_vals: list[_ast.AST] = []
         for k, v in zip(node.keys, node.values):
+            if k is None:
+                return False
             if isinstance(k, _ast.Constant) and k.value == "validate_only":
-                return _is_true_expr(v, safe_bools)
-        return False
+                validate_vals.append(v)
+        return len(validate_vals) == 1 and _is_true_expr(validate_vals[0], safe_bools)
 
-    def _iter_expr_calls(node: _ast.AST) -> list[_ast.Call]:
-        """Collects Call nodes in an expression without descending into nested defs/lambdas."""
-        calls: list[_ast.Call] = []
-        stack: list[_ast.AST] = [node]
-        while stack:
-            cur = stack.pop()
-            if isinstance(cur, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef, _ast.Lambda)):
-                continue
-            if isinstance(cur, _ast.Call):
-                calls.append(cur)
-            stack.extend(_ast.iter_child_nodes(cur))
-        return calls
+    def _is_safe_request_ctor(node: _ast.AST, safe_bools: set[str]) -> bool:
+        if not isinstance(node, _ast.Call):
+            return False
+        callee_name = ""
+        if isinstance(node.func, _ast.Name):
+            callee_name = node.func.id
+        elif isinstance(node.func, _ast.Attribute):
+            callee_name = node.func.attr
+        if not callee_name.endswith("Request"):
+            return False
+        validate_vals: list[_ast.AST] = []
+        for kw in node.keywords:
+            if kw.arg is None:
+                return False
+            if kw.arg == "validate_only":
+                validate_vals.append(kw.value)
+        return len(validate_vals) == 1 and _is_true_expr(validate_vals[0], safe_bools)
+
+    def _iter_target_names(target: Optional[_ast.AST]) -> list[str]:
+        if target is None:
+            return []
+        if isinstance(target, _ast.Name):
+            return [target.id]
+        if isinstance(target, (_ast.Tuple, _ast.List)):
+            names: list[str] = []
+            for elt in target.elts:
+                names.extend(_iter_target_names(elt))
+            return names
+        if isinstance(target, _ast.Starred):
+            return _iter_target_names(target.value)
+        return []
+
+    def _collect_pattern_names(pattern: Optional[_ast.AST]) -> set[str]:
+        names: set[str] = set()
+        if pattern is None:
+            return names
+        for sub in _ast.walk(pattern):
+            pname = getattr(sub, "name", None)
+            if isinstance(pname, str) and pname:
+                names.add(pname)
+            prest = getattr(sub, "rest", None)
+            if isinstance(prest, str) and prest:
+                names.add(prest)
+        return names
 
     def _collect_assigned_names(stmts: list[_ast.stmt]) -> set[str]:
         names: set[str] = set()
@@ -4477,116 +5382,331 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
             for sub in _ast.walk(s):
                 if isinstance(sub, _ast.Name) and isinstance(sub.ctx, (_ast.Store, _ast.Del)):
                     names.add(sub.id)
-                elif isinstance(sub, _ast.Attribute) and sub.attr == "validate_only" and isinstance(sub.ctx, (_ast.Store, _ast.Del)):
-                    if isinstance(sub.value, _ast.Name):
-                        names.add(sub.value.id)
+                elif isinstance(sub, _ast.NamedExpr):
+                    names.update(_iter_target_names(sub.target))
+                elif (
+                    isinstance(sub, (_ast.Attribute, _ast.Subscript))
+                    and isinstance(sub.ctx, (_ast.Store, _ast.Del))
+                    and isinstance(sub.value, _ast.Name)
+                ):
+                    names.add(sub.value.id)
+                elif isinstance(sub, _ast.ExceptHandler) and isinstance(sub.name, str):
+                    names.add(sub.name)
+                elif isinstance(sub, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+                    names.add(sub.name)
+                elif _MATCH_TYPE is not None and isinstance(sub, _MATCH_TYPE):
+                    for case in sub.cases:
+                        names.update(_collect_pattern_names(case.pattern))
         return names
 
     total_mut_calls = 0
 
-    def _check_calls_in_expr(
-        expr: Optional[_ast.AST], safe_bools: set[str], safe_reqs: set[str]
+    def _check_expr(
+        node: Optional[_ast.AST], safe_bools: set[str], safe_reqs: set[str]
     ) -> bool:
+        """Inspects an expression for mutation calls, dynamic dispatch, walrus, lambdas, and req aliasing."""
         nonlocal total_mut_calls
-        if expr is None:
+        if node is None:
             return True
-        for call in _iter_expr_calls(expr):
+
+        if isinstance(node, _ast.Lambda):
+            for d in node.args.defaults:
+                if not _check_expr(d, safe_bools, safe_reqs):
+                    return False
+            for d in node.args.kw_defaults:
+                if d is not None and not _check_expr(d, safe_bools, safe_reqs):
+                    return False
+            return _check_expr(node.body, set(), set())
+
+        if isinstance(node, _ast.NamedExpr):
+            if not _check_expr(node.value, safe_bools, safe_reqs):
+                return False
+            for nm in _iter_target_names(node.target):
+                safe_bools.discard(nm)
+                safe_reqs.discard(nm)
+            return True
+
+        if isinstance(node, (_ast.ListComp, _ast.SetComp, _ast.GeneratorExp, _ast.DictComp)):
+            c_bools, c_reqs = set(safe_bools), set(safe_reqs)
+            bound_targets: set[str] = set()
+            for gen in node.generators:
+                if not _check_expr(gen.iter, c_bools, c_reqs):
+                    return False
+                tnames = _iter_target_names(gen.target)
+                bound_targets.update(tnames)
+                for nm in tnames:
+                    c_bools.discard(nm)
+                    c_reqs.discard(nm)
+                for cond in gen.ifs:
+                    if not _check_expr(cond, c_bools, c_reqs):
+                        return False
+            if isinstance(node, _ast.DictComp):
+                if not _check_expr(node.key, c_bools, c_reqs):
+                    return False
+                if not _check_expr(node.value, c_bools, c_reqs):
+                    return False
+            else:
+                if not _check_expr(node.elt, c_bools, c_reqs):
+                    return False
+            safe_reqs.intersection_update(c_reqs | bound_targets)
+            return True
+
+        if isinstance(node, _ast.Call):
             call_name = ""
-            if isinstance(call.func, _ast.Attribute):
-                call_name = call.func.attr
-            elif isinstance(call.func, _ast.Name):
-                call_name = call.func.id
+            if isinstance(node.func, _ast.Attribute):
+                call_name = node.func.attr
+                if (
+                    isinstance(node.func.value, _ast.Name)
+                    and node.func.value.id in _UNSAFE_DYNAMIC_MODULES
+                ):
+                    return False
+            elif isinstance(node.func, _ast.Name):
+                call_name = node.func.id
             if call_name in _UNSAFE_DYNAMIC_CALLS:
                 return False
-            if not call_name or not MUTATION_CALL_PATTERN.search(f".{call_name}("):
-                continue
-            total_mut_calls += 1
-            kw_map = {kw.arg: kw.value for kw in call.keywords if kw.arg}
-            if "validate_only" in kw_map:
-                if not _is_true_expr(kw_map["validate_only"], safe_bools):
+
+            is_mut_call = bool(call_name and _MUTATION_METHOD_EXACT_RE.fullmatch(call_name))
+            if is_mut_call:
+                total_mut_calls += 1
+                if any(kw.arg is None for kw in node.keywords):
                     return False
-                continue
-            req_node = kw_map.get("request") or (call.args[0] if call.args else None)
-            if isinstance(req_node, _ast.Name) and req_node.id in safe_reqs:
-                continue
-            if req_node is not None and _is_safe_dict_req(req_node, safe_bools):
-                continue
-            return False
+                if any(isinstance(a, _ast.Starred) for a in node.args):
+                    return False
+                kw_map = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+                req_kw = kw_map.get("request")
+                req_pos = node.args[0] if (req_kw is None and node.args) else None
+                req_node = req_kw if req_kw is not None else req_pos
+
+                # Inspect receiver and all non-req_node arguments first (invalidates req if aliased/mutated)
+                if isinstance(node.func, _ast.Attribute):
+                    if not _check_expr(node.func.value, safe_bools, safe_reqs):
+                        return False
+                for arg in node.args:
+                    if arg is req_node and isinstance(arg, _ast.Name):
+                        continue
+                    if not _check_expr(arg, safe_bools, safe_reqs):
+                        return False
+                for kw in node.keywords:
+                    if kw.value is req_node and isinstance(kw.value, _ast.Name):
+                        continue
+                    if not _check_expr(kw.value, safe_bools, safe_reqs):
+                        return False
+
+                if "validate_only" in kw_map:
+                    return _is_true_expr(kw_map["validate_only"], safe_bools)
+                if isinstance(req_node, _ast.Name) and req_node.id in safe_reqs:
+                    return True
+                if req_node is not None and (
+                    _is_safe_dict_req(req_node, safe_bools)
+                    or _is_safe_request_ctor(req_node, safe_bools)
+                ):
+                    return True
+                return False
+
+            # Non-mutation call: inspect callee and all arguments (invalidating any referenced safe_reqs)
+            if not _check_expr(node.func, safe_bools, safe_reqs):
+                return False
+            for arg in node.args:
+                if not _check_expr(arg, safe_bools, safe_reqs):
+                    return False
+            for kw in node.keywords:
+                if not _check_expr(kw.value, safe_bools, safe_reqs):
+                    return False
+            return True
+
+        if isinstance(node, _ast.Attribute):
+            # Reject indirect attribute references to mutation methods (e.g. fn = svc.mutate_campaigns)
+            if _MUTATION_METHOD_EXACT_RE.fullmatch(node.attr):
+                return False
+            return _check_expr(node.value, safe_bools, safe_reqs)
+
+        if isinstance(node, _ast.Name):
+            # Any reference to a safe_reqs variable outside req.validate_only = True or
+            # svc.mutate_*(request=req) invalidates it (defeats aliasing and in-place mutation).
+            safe_reqs.discard(node.id)
+            return True
+
+        for child in _ast.iter_child_nodes(node):
+            if not _check_expr(child, safe_bools, safe_reqs):
+                return False
         return True
+
+    def _inspect_def_args_and_annotations(
+        args_node: _ast.arguments, safe_bools: set[str], safe_reqs: set[str]
+    ) -> bool:
+        for d in args_node.defaults:
+            if not _check_expr(d, safe_bools, safe_reqs):
+                return False
+        for d in args_node.kw_defaults:
+            if d is not None and not _check_expr(d, safe_bools, safe_reqs):
+                return False
+        all_args = list(args_node.posonlyargs) + list(args_node.args) + list(args_node.kwonlyargs)
+        if args_node.vararg is not None:
+            all_args.append(args_node.vararg)
+        if args_node.kwarg is not None:
+            all_args.append(args_node.kwarg)
+        for a in all_args:
+            if a.annotation is not None and not _check_expr(a.annotation, safe_bools, safe_reqs):
+                return False
+        return True
+
+    def _apply_assign_target(
+        tgt: _ast.AST,
+        value: Optional[_ast.AST],
+        single_target: bool,
+        safe_bools: set[str],
+        safe_reqs: set[str],
+    ) -> bool:
+        if isinstance(tgt, _ast.Name):
+            if value is not None and _is_true_expr(value, safe_bools):
+                safe_bools.add(tgt.id)
+                safe_reqs.discard(tgt.id)
+            elif (
+                single_target
+                and value is not None
+                and (
+                    _is_safe_dict_req(value, safe_bools)
+                    or _is_safe_request_ctor(value, safe_bools)
+                )
+            ):
+                safe_reqs.add(tgt.id)
+                safe_bools.discard(tgt.id)
+            else:
+                safe_bools.discard(tgt.id)
+                safe_reqs.discard(tgt.id)
+            return True
+        if isinstance(tgt, _ast.Attribute) and tgt.attr == "validate_only":
+            if isinstance(tgt.value, _ast.Name) and single_target:
+                if value is not None and _is_true_expr(value, safe_bools):
+                    safe_reqs.add(tgt.value.id)
+                else:
+                    safe_reqs.discard(tgt.value.id)
+                return True
+            if not _check_expr(tgt.value, safe_bools, safe_reqs):
+                return False
+            if value is None or not _is_true_expr(value, safe_bools):
+                return False
+            return True
+        if isinstance(tgt, _ast.Subscript) and isinstance(tgt.value, _ast.Name):
+            if not _check_expr(tgt.slice, safe_bools, safe_reqs):
+                return False
+            if (
+                single_target
+                and value is not None
+                and isinstance(tgt.slice, _ast.Constant)
+                and tgt.slice.value == "validate_only"
+                and _is_true_expr(value, safe_bools)
+            ):
+                safe_reqs.add(tgt.value.id)
+            else:
+                safe_reqs.discard(tgt.value.id)
+            return True
+        if isinstance(tgt, (_ast.Attribute, _ast.Subscript)):
+            if not _check_expr(tgt.value, safe_bools, safe_reqs):
+                return False
+            if isinstance(tgt, _ast.Subscript) and not _check_expr(
+                tgt.slice, safe_bools, safe_reqs
+            ):
+                return False
+            return True
+        if isinstance(tgt, (_ast.Tuple, _ast.List, _ast.Starred)):
+            for nm in _iter_target_names(tgt):
+                safe_bools.discard(nm)
+                safe_reqs.discard(nm)
+            for sub in _ast.iter_child_nodes(tgt):
+                if isinstance(sub, (_ast.Attribute, _ast.Subscript)):
+                    if not _check_expr(sub.value, safe_bools, safe_reqs):
+                        return False
+                    if isinstance(sub, _ast.Subscript) and not _check_expr(
+                        sub.slice, safe_bools, safe_reqs
+                    ):
+                        return False
+            return True
+        return False
 
     def _walk_block(
         stmts: list[_ast.stmt], safe_bools: set[str], safe_reqs: set[str]
     ) -> bool:
         for stmt in stmts:
             if isinstance(stmt, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
-                # Each function/method has its own isolated scope so a decoy function
-                # setting req.validate_only = True cannot pollute another function.
+                for dec in stmt.decorator_list:
+                    if not _check_expr(dec, safe_bools, safe_reqs):
+                        return False
+                if not _inspect_def_args_and_annotations(stmt.args, safe_bools, safe_reqs):
+                    return False
+                if stmt.returns is not None and not _check_expr(
+                    stmt.returns, safe_bools, safe_reqs
+                ):
+                    return False
+                safe_bools.discard(stmt.name)
+                safe_reqs.discard(stmt.name)
                 if not _walk_block(stmt.body, set(), set()):
                     return False
                 continue
             if isinstance(stmt, _ast.ClassDef):
+                for dec in stmt.decorator_list:
+                    if not _check_expr(dec, safe_bools, safe_reqs):
+                        return False
+                for base in stmt.bases:
+                    if not _check_expr(base, safe_bools, safe_reqs):
+                        return False
+                for kw in stmt.keywords:
+                    if not _check_expr(kw.value, safe_bools, safe_reqs):
+                        return False
+                safe_bools.discard(stmt.name)
+                safe_reqs.discard(stmt.name)
                 if not _walk_block(stmt.body, set(), set()):
                     return False
                 continue
             if isinstance(stmt, _ast.Assign):
-                if not _check_calls_in_expr(stmt.value, safe_bools, safe_reqs):
+                if not _check_expr(stmt.value, safe_bools, safe_reqs):
                     return False
+                single_tgt = len(stmt.targets) == 1
                 for tgt in stmt.targets:
-                    if isinstance(tgt, _ast.Name):
-                        if _is_true_expr(stmt.value, safe_bools):
-                            safe_bools.add(tgt.id)
-                            safe_reqs.discard(tgt.id)
-                        elif _is_safe_dict_req(stmt.value, safe_bools):
-                            safe_reqs.add(tgt.id)
-                            safe_bools.discard(tgt.id)
-                        else:
-                            safe_bools.discard(tgt.id)
-                            safe_reqs.discard(tgt.id)
-                    elif isinstance(tgt, _ast.Attribute) and tgt.attr == "validate_only":
-                        if isinstance(tgt.value, _ast.Name):
-                            if _is_true_expr(stmt.value, safe_bools):
-                                safe_reqs.add(tgt.value.id)
-                            else:
-                                safe_reqs.discard(tgt.value.id)
-                        elif not _is_true_expr(stmt.value, safe_bools):
-                            return False
-                    elif isinstance(tgt, _ast.Subscript) and isinstance(tgt.value, _ast.Name):
-                        if (
-                            isinstance(tgt.slice, _ast.Constant)
-                            and tgt.slice.value == "validate_only"
-                            and _is_true_expr(stmt.value, safe_bools)
-                        ):
-                            safe_reqs.add(tgt.value.id)
-                        else:
-                            safe_reqs.discard(tgt.value.id)
+                    if not _apply_assign_target(
+                        tgt, stmt.value, single_tgt, safe_bools, safe_reqs
+                    ):
+                        return False
                 continue
             if isinstance(stmt, _ast.AnnAssign):
-                if not _check_calls_in_expr(stmt.value, safe_bools, safe_reqs):
+                if not _check_expr(stmt.annotation, safe_bools, safe_reqs):
                     return False
-                tgt = stmt.target
-                if isinstance(tgt, _ast.Name):
-                    if stmt.value is not None and _is_true_expr(stmt.value, safe_bools):
-                        safe_bools.add(tgt.id)
-                        safe_reqs.discard(tgt.id)
-                    elif stmt.value is not None and _is_safe_dict_req(stmt.value, safe_bools):
-                        safe_reqs.add(tgt.id)
-                        safe_bools.discard(tgt.id)
-                    else:
-                        safe_bools.discard(tgt.id)
-                        safe_reqs.discard(tgt.id)
+                if not _check_expr(stmt.value, safe_bools, safe_reqs):
+                    return False
+                if not _apply_assign_target(
+                    stmt.target, stmt.value, True, safe_bools, safe_reqs
+                ):
+                    return False
+                continue
+            if isinstance(stmt, _ast.AugAssign):
+                if not _check_expr(stmt.value, safe_bools, safe_reqs):
+                    return False
+                if isinstance(stmt.target, (_ast.Attribute, _ast.Subscript)):
+                    if not _check_expr(stmt.target.value, safe_bools, safe_reqs):
+                        return False
+                    if isinstance(stmt.target, _ast.Subscript) and not _check_expr(
+                        stmt.target.slice, safe_bools, safe_reqs
+                    ):
+                        return False
+                for nm in _iter_target_names(stmt.target):
+                    safe_bools.discard(nm)
+                    safe_reqs.discard(nm)
                 continue
             if isinstance(stmt, _ast.Delete):
                 for tgt in stmt.targets:
-                    if isinstance(tgt, _ast.Name):
-                        safe_bools.discard(tgt.id)
-                        safe_reqs.discard(tgt.id)
-                    elif isinstance(tgt, (_ast.Attribute, _ast.Subscript)) and isinstance(
-                        tgt.value, _ast.Name
-                    ):
-                        safe_reqs.discard(tgt.value.id)
+                    for nm in _iter_target_names(tgt):
+                        safe_bools.discard(nm)
+                        safe_reqs.discard(nm)
+                    if isinstance(tgt, (_ast.Attribute, _ast.Subscript)):
+                        if not _check_expr(tgt.value, safe_bools, safe_reqs):
+                            return False
+                        if isinstance(tgt, _ast.Subscript) and not _check_expr(
+                            tgt.slice, safe_bools, safe_reqs
+                        ):
+                            return False
                 continue
             if isinstance(stmt, _ast.If):
-                if not _check_calls_in_expr(stmt.test, safe_bools, safe_reqs):
+                if not _check_expr(stmt.test, safe_bools, safe_reqs):
                     return False
                 b_bools, b_reqs = set(safe_bools), set(safe_reqs)
                 if not _walk_block(stmt.body, b_bools, b_reqs):
@@ -4595,64 +5715,197 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
                     e_bools, e_reqs = set(safe_bools), set(safe_reqs)
                     if not _walk_block(stmt.orelse, e_bools, e_reqs):
                         return False
-                    safe_bools.intersection_update(b_bools & e_bools)
+                    safe_bools.clear()
                     safe_bools.update(b_bools & e_bools)
-                    safe_reqs.intersection_update(b_reqs & e_reqs)
+                    safe_reqs.clear()
                     safe_reqs.update(b_reqs & e_reqs)
                 else:
                     modified = _collect_assigned_names(stmt.body)
+                    safe_bools.intersection_update(b_bools)
                     safe_bools.difference_update(modified)
+                    safe_reqs.intersection_update(b_reqs)
                     safe_reqs.difference_update(modified)
                 continue
             if isinstance(stmt, (_ast.For, _ast.AsyncFor, _ast.While)):
                 if isinstance(stmt, _ast.While):
-                    if not _check_calls_in_expr(stmt.test, safe_bools, safe_reqs):
+                    if not _check_expr(stmt.test, safe_bools, safe_reqs):
                         return False
                 else:
-                    if not _check_calls_in_expr(stmt.iter, safe_bools, safe_reqs):
+                    if not _check_expr(stmt.iter, safe_bools, safe_reqs):
                         return False
+                    for nm in _iter_target_names(stmt.target):
+                        safe_bools.discard(nm)
+                        safe_reqs.discard(nm)
                 modified = _collect_assigned_names(stmt.body + stmt.orelse)
                 safe_bools.difference_update(modified)
                 safe_reqs.difference_update(modified)
-                if not _walk_block(stmt.body, set(safe_bools), set(safe_reqs)):
+                # 2-pass fixpoint catches in-place mutation of a loop-invariant req across iterations
+                loop_b1, loop_r1 = set(safe_bools), set(safe_reqs)
+                if not _walk_block(stmt.body, loop_b1, loop_r1):
                     return False
-                if stmt.orelse and not _walk_block(stmt.orelse, set(safe_bools), set(safe_reqs)):
-                    return False
+                narrowed_b = safe_bools & loop_b1
+                narrowed_r = safe_reqs & loop_r1
+                if narrowed_b != safe_bools or narrowed_r != safe_reqs:
+                    safe_bools.clear()
+                    safe_bools.update(narrowed_b)
+                    safe_reqs.clear()
+                    safe_reqs.update(narrowed_r)
+                    if not _walk_block(stmt.body, set(safe_bools), set(safe_reqs)):
+                        return False
+                if stmt.orelse:
+                    o_b, o_r = set(safe_bools), set(safe_reqs)
+                    if not _walk_block(stmt.orelse, o_b, o_r):
+                        return False
+                    safe_bools.intersection_update(o_b)
+                    safe_reqs.intersection_update(o_r)
                 continue
             if isinstance(stmt, (_ast.With, _ast.AsyncWith)):
                 for item in stmt.items:
-                    if not _check_calls_in_expr(item.context_expr, safe_bools, safe_reqs):
+                    if not _check_expr(item.context_expr, safe_bools, safe_reqs):
                         return False
-                    if isinstance(item.optional_vars, _ast.Name):
-                        safe_bools.discard(item.optional_vars.id)
-                        safe_reqs.discard(item.optional_vars.id)
+                    if item.optional_vars is not None:
+                        for nm in _iter_target_names(item.optional_vars):
+                            safe_bools.discard(nm)
+                            safe_reqs.discard(nm)
+                        if isinstance(item.optional_vars, (_ast.Attribute, _ast.Subscript)):
+                            if not _check_expr(item.optional_vars.value, safe_bools, safe_reqs):
+                                return False
                 if not _walk_block(stmt.body, safe_bools, safe_reqs):
                     return False
                 continue
-            if isinstance(stmt, _ast.Try):
+            if isinstance(stmt, _TRY_TYPES):
                 pre_bools, pre_reqs = set(safe_bools), set(safe_reqs)
-                if not _walk_block(stmt.body, set(pre_bools), set(pre_reqs)):
+                body_b, body_r = set(pre_bools), set(pre_reqs)
+                if not _walk_block(stmt.body, body_b, body_r):
                     return False
+                body_mod = _collect_assigned_names(stmt.body)
+                after_body_b = (pre_bools - body_mod) & body_b
+                after_body_r = (pre_reqs - body_mod) & body_r
+                all_handler_r = set(after_body_r)
+                all_handler_b = set(after_body_b)
                 for handler in stmt.handlers:
-                    if not _walk_block(handler.body, set(pre_bools), set(pre_reqs)):
+                    h_b, h_r = set(after_body_b), set(after_body_r)
+                    if handler.type is not None and not _check_expr(handler.type, h_b, h_r):
                         return False
-                if stmt.orelse and not _walk_block(stmt.orelse, set(pre_bools), set(pre_reqs)):
-                    return False
-                if stmt.finalbody and not _walk_block(stmt.finalbody, set(pre_bools), set(pre_reqs)):
-                    return False
-                modified = _collect_assigned_names(
-                    stmt.body + [s for h in stmt.handlers for s in h.body] + stmt.orelse + stmt.finalbody
+                    if isinstance(handler.name, str) and handler.name:
+                        h_b.discard(handler.name)
+                        h_r.discard(handler.name)
+                    if not _walk_block(handler.body, h_b, h_r):
+                        return False
+                    all_handler_b &= h_b
+                    all_handler_r &= h_r
+                o_b, o_r = set(after_body_b), set(after_body_r)
+                if stmt.orelse:
+                    if not _walk_block(stmt.orelse, o_b, o_r):
+                        return False
+                pre_final_mod = _collect_assigned_names(
+                    stmt.body + [s for h in stmt.handlers for s in h.body] + stmt.orelse
                 )
-                safe_bools.difference_update(modified)
-                safe_reqs.difference_update(modified)
+                final_in_b = (pre_bools - pre_final_mod) & all_handler_b & o_b
+                final_in_r = (pre_reqs - pre_final_mod) & all_handler_r & o_r
+                f_b, f_r = set(final_in_b), set(final_in_r)
+                if stmt.finalbody:
+                    if not _walk_block(stmt.finalbody, f_b, f_r):
+                        return False
+                all_mod = pre_final_mod | _collect_assigned_names(stmt.finalbody)
+                safe_bools.intersection_update(f_b)
+                safe_bools.difference_update(all_mod)
+                safe_reqs.intersection_update(f_r)
+                safe_reqs.difference_update(all_mod)
                 continue
-            # All other statements (Expr, Return, Assert, Raise, AugAssign, etc.)
-            if not _check_calls_in_expr(stmt, safe_bools, safe_reqs):
-                return False
+            if _MATCH_TYPE is not None and isinstance(stmt, _MATCH_TYPE):
+                if not _check_expr(stmt.subject, safe_bools, safe_reqs):
+                    return False
+                pre_bools, pre_reqs = set(safe_bools), set(safe_reqs)
+                all_mod: set[str] = set()
+                for case in stmt.cases:
+                    c_b, c_r = set(pre_bools), set(pre_reqs)
+                    pnames = _collect_pattern_names(case.pattern)
+                    c_b.difference_update(pnames)
+                    c_r.difference_update(pnames)
+                    # Check any pattern value expressions for safe_reqs references
+                    for sub in _ast.walk(case.pattern):
+                        val_node = getattr(sub, "value", None)
+                        if isinstance(val_node, _ast.AST) and not _check_expr(
+                            val_node, c_b, c_r
+                        ):
+                            return False
+                    if case.guard is not None and not _check_expr(case.guard, c_b, c_r):
+                        return False
+                    if not _walk_block(case.body, c_b, c_r):
+                        return False
+                    all_mod.update(pnames)
+                    all_mod.update(_collect_assigned_names(case.body))
+                    safe_bools.intersection_update(c_b)
+                    safe_reqs.intersection_update(c_r)
+                safe_bools.difference_update(all_mod)
+                safe_reqs.difference_update(all_mod)
+                continue
+            if isinstance(stmt, _ast.Expr):
+                if not _check_expr(stmt.value, safe_bools, safe_reqs):
+                    return False
+                continue
+            if isinstance(stmt, _ast.Return):
+                if not _check_expr(stmt.value, safe_bools, safe_reqs):
+                    return False
+                continue
+            if isinstance(stmt, _ast.Assert):
+                if not _check_expr(stmt.test, safe_bools, safe_reqs):
+                    return False
+                if not _check_expr(stmt.msg, safe_bools, safe_reqs):
+                    return False
+                continue
+            if isinstance(stmt, _ast.Raise):
+                if not _check_expr(stmt.exc, safe_bools, safe_reqs):
+                    return False
+                if not _check_expr(stmt.cause, safe_bools, safe_reqs):
+                    return False
+                continue
+            if isinstance(stmt, _ast.Import):
+                for alias in stmt.names:
+                    top_mod = alias.name.split(".", 1)[0]
+                    if top_mod in _UNSAFE_DYNAMIC_MODULES:
+                        return False
+                    bound = alias.asname or top_mod
+                    safe_bools.discard(bound)
+                    safe_reqs.discard(bound)
+                continue
+            if isinstance(stmt, _ast.ImportFrom):
+                mod_top = (stmt.module or "").split(".", 1)[0]
+                if mod_top in _UNSAFE_DYNAMIC_MODULES:
+                    return False
+                for alias in stmt.names:
+                    if alias.name in _UNSAFE_DYNAMIC_CALLS:
+                        return False
+                    bound = alias.asname or alias.name
+                    safe_bools.discard(bound)
+                    safe_reqs.discard(bound)
+                continue
+            if isinstance(stmt, (_ast.Pass, _ast.Break, _ast.Continue)):
+                continue
+            if isinstance(stmt, (_ast.Global, _ast.Nonlocal)):
+                for nm in stmt.names:
+                    safe_bools.discard(nm)
+                    safe_reqs.discard(nm)
+                continue
+            if _TYPE_ALIAS_TYPE is not None and isinstance(stmt, _TYPE_ALIAS_TYPE):
+                if not _check_expr(stmt.value, safe_bools, safe_reqs):
+                    return False
+                for nm in _iter_target_names(stmt.name):
+                    safe_bools.discard(nm)
+                    safe_reqs.discard(nm)
+                continue
+            # Fail closed on any unrecognized ast.stmt subclass
+            return False
         return True
 
     for blob in source_blobs:
-        if not blob or not MUTATION_CALL_PATTERN.search(_COMMENT_LINE_RE.sub("", blob)):
+        if not blob:
+            continue
+        uncommented = _COMMENT_LINE_RE.sub("", blob)
+        if not MUTATION_CALL_PATTERN.search(uncommented) and not _MUTATION_ATTR_REF_RE.search(
+            uncommented
+        ):
             continue
         try:
             tree = _ast.parse(blob)
@@ -4722,34 +5975,65 @@ def _is_safe_test_or_linter_segment(seg: str, effective_ws: Optional[str]) -> bo
     """Returns True only for benign linter or tests/-scoped pytest commands without subshells."""
     if not _TEST_OR_LINTER_CMD_RE.search(seg):
         return False
-    if any(tok in seg for tok in ("$(", "`", "<(", ">(")):
+    if any(tok in seg for tok in ("$(", "`", "<(", ">(", "&", ";", "|", "<", ">")):
         return False
     try:
         argv = _split_shell_argv(seg)
     except ValueError:
         return False
+    _FORBIDDEN_ENV_PREFIXES = frozenset({
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTHONHOME",
+        "PYTEST_ADDOPTS",
+        "PYTEST_PLUGINS",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+    })
     idx = 0
     while idx < len(argv) and "=" in argv[idx] and not argv[idx].startswith("-"):
+        env_name = argv[idx].split("=", 1)[0].strip().upper()
+        if env_name in _FORBIDDEN_ENV_PREFIXES:
+            return False
         idx += 1
     if idx >= len(argv):
         return False
-    exe = os.path.basename(argv[idx]).lower()
+    exe = os.path.basename(argv[idx].replace("\\", "/")).lower()
+    if exe.endswith(".exe"):
+        exe = exe[:-4]
     rest = argv[idx + 1 :]
     if exe.startswith("python") and len(rest) >= 2 and rest[0] == "-m":
         exe = rest[1].lower()
         rest = rest[2:]
-    if exe in ("ruff", "mypy", "flake8"):
+    if exe == "mypy":
+        if any(t == "--config-file" or t.startswith("--config-file=") for t in rest):
+            return False
+        return True
+    if exe in ("ruff", "flake8"):
         return True
     if exe != "pytest":
         return False
 
-    # Pytest executes arbitrary Python during collection: never allow -o/-c/--confcutdir/--rootdir
-    # or targets outside tests/.
-    _PYTEST_FORBIDDEN_OPTS = ("-o", "--override-ini", "-c", "--config-file", "--confcutdir", "--rootdir")
+    # Pytest executes arbitrary Python during collection: never allow -o/-c/-p/--plugin/
+    # --confcutdir/--rootdir/--import-mode/--pyargs or targets outside tests/.
+    _PYTEST_FORBIDDEN_OPTS = (
+        "-o",
+        "--override-ini",
+        "-c",
+        "--config-file",
+        "--confcutdir",
+        "--rootdir",
+        "-p",
+        "--plugin",
+        "--import-mode",
+        "--pyargs",
+    )
+    _PYTEST_FORBIDDEN_SHORT = frozenset({"o", "c", "p"})
+    _PYTEST_SHORT_TAKES_VAL = frozenset({"k", "m", "n", "W", "r"})
     _PYTEST_VALUE_OPTS = {
         "-k", "-m", "-n", "-W", "--maxfail", "--tb", "--junitxml", "--cache-dir",
         "--basetemp", "--log-level", "--timeout", "--cov", "--cov-report", "--ignore",
-        "-p", "--durations", "--verbosity",
+        "--durations", "--verbosity",
     }
     positional: list[str] = []
     i = 0
@@ -4757,6 +6041,12 @@ def _is_safe_test_or_linter_segment(seg: str, effective_ws: Optional[str]) -> bo
         tok = rest[i]
         if any(tok == opt or tok.startswith(opt + "=") for opt in _PYTEST_FORBIDDEN_OPTS):
             return False
+        if tok.startswith("-") and not tok.startswith("--") and len(tok) >= 2:
+            for ch in tok[1:]:
+                if ch in _PYTEST_FORBIDDEN_SHORT:
+                    return False
+                if ch in _PYTEST_SHORT_TAKES_VAL:
+                    break
         if tok in _PYTEST_VALUE_OPTS:
             i += 2
             continue
@@ -4775,18 +6065,103 @@ def _is_safe_test_or_linter_segment(seg: str, effective_ws: Optional[str]) -> bo
                 return False
         return True
 
-    # Bare `pytest` with no positional targets: only safe if tests/ exists and saved/ has no test files
+    # Bare `pytest` with no positional targets: only safe if tests/ exists and saved/ has no
+    # test_*.py, *_test.py, or conftest.py anywhere under it.
     base_dir = effective_ws or os.getcwd()
     if not os.path.isdir(os.path.join(base_dir, "tests")):
         return False
-    saved_code = os.path.join(base_dir, "saved", "code")
-    if os.path.isdir(saved_code):
+    saved_dir = os.path.join(base_dir, "saved")
+    if os.path.isdir(saved_dir):
         try:
-            if any(f.startswith("test_") or f.endswith("_test.py") for f in os.listdir(saved_code)):
-                return False
+            for _root, _dirs, files in os.walk(saved_dir):
+                for fname in files:
+                    low = fname.lower()
+                    if (
+                        (low.startswith("test_") and low.endswith(".py"))
+                        or low.endswith("_test.py")
+                        or low == "conftest.py"
+                    ):
+                        return False
         except OSError:
             return False
     return True
+
+
+def _has_unsafe_test_runner_injection(seg: str) -> bool:
+    """True when seg invokes pytest or mypy with plugin/config/env-injection flags."""
+    seg_lower = seg.lower()
+    if "pytest" not in seg_lower and "mypy" not in seg_lower:
+        return False
+    try:
+        argv = _split_shell_argv(seg)
+    except ValueError:
+        return True
+    _FORBIDDEN_ENV_PREFIXES = frozenset({
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTHONHOME",
+        "PYTEST_ADDOPTS",
+        "PYTEST_PLUGINS",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+    })
+    has_forbidden_env = False
+    idx = 0
+    while idx < len(argv) and "=" in argv[idx] and not argv[idx].startswith("-"):
+        env_name = argv[idx].split("=", 1)[0].strip().upper()
+        if env_name in _FORBIDDEN_ENV_PREFIXES:
+            has_forbidden_env = True
+        idx += 1
+    if idx >= len(argv):
+        return False
+    exe = os.path.basename(argv[idx].replace("\\", "/")).lower()
+    if exe.endswith(".exe"):
+        exe = exe[:-4]
+    rest = argv[idx + 1 :]
+    if exe.startswith("python") and len(rest) >= 2 and rest[0] == "-m":
+        exe = rest[1].lower()
+        rest = rest[2:]
+    if exe not in ("pytest", "mypy"):
+        return False
+    if has_forbidden_env:
+        return True
+    if exe == "mypy":
+        return any(t == "--config-file" or t.startswith("--config-file=") for t in rest)
+    _PYTEST_FORBIDDEN_OPTS = (
+        "-o",
+        "--override-ini",
+        "-c",
+        "--config-file",
+        "--confcutdir",
+        "--rootdir",
+        "-p",
+        "--plugin",
+        "--import-mode",
+        "--pyargs",
+    )
+    _PYTEST_FORBIDDEN_SHORT = frozenset({"o", "c", "p"})
+    _PYTEST_SHORT_TAKES_VAL = frozenset({"k", "m", "n", "W", "r"})
+    _PYTEST_VALUE_OPTS = {
+        "-k", "-m", "-n", "-W", "--maxfail", "--tb", "--junitxml", "--cache-dir",
+        "--basetemp", "--log-level", "--timeout", "--cov", "--cov-report", "--ignore",
+        "--durations", "--verbosity",
+    }
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if any(tok == opt or tok.startswith(opt + "=") for opt in _PYTEST_FORBIDDEN_OPTS):
+            return True
+        if tok.startswith("-") and not tok.startswith("--") and len(tok) >= 2:
+            for ch in tok[1:]:
+                if ch in _PYTEST_FORBIDDEN_SHORT:
+                    return True
+                if ch in _PYTEST_SHORT_TAKES_VAL:
+                    break
+        if tok in _PYTEST_VALUE_OPTS:
+            i += 2
+            continue
+        i += 1
+    return False
 
 
 def evaluate_mutation_guard(
@@ -4832,15 +6207,28 @@ def evaluate_mutation_guard(
     if protected_write is not None and protected_write[0] == "deny":
         return protected_write
 
-    # Gate CLI self-modification via config_init.py or programmatic Python API self-elevation
+    # Gate CLI self-modification via config_init.py, set_financial_limits.py, or programmatic Python APIs
     if "config_init.py" in norm_cmd and _SET_EXEC_MUTATES_TRUE_RE.search(norm_cmd):
         return (
             "force_ask",
             "⚠️ PROTECTED CONFIGURATION CHANGE: Confirm modifying Google Ads Assistant configuration via config_init.py?",
         )
-    if "(" in norm_cmd or "config_init" in norm_cmd:
+    if "set_financial_limits" in norm_cmd and not _is_readonly_set_financial_limits_cmd(
+        norm_cmd
+    ):
+        seg_check_fl = _split_shell_segments(norm_cmd)
+        if not (
+            seg_check_fl
+            and all(_is_safe_test_or_linter_segment(s, effective_ws) for s in seg_check_fl)
+        ):
+            return (
+                "force_ask",
+                "⚠️ PROTECTED CONFIGURATION CHANGE: Confirm modifying Google Ads Assistant "
+                "financial limits via set_financial_limits.py?",
+            )
+    if "(" in norm_cmd or "config_init" in norm_cmd or "set_financial_limits" in norm_cmd:
         if _PYTHON_SELF_ELEVATION_RE.search(norm_cmd):
-            seg_check = [seg.strip() for seg in _CHAIN_SPLIT_RE.split(norm_cmd) if seg.strip()]
+            seg_check = _split_shell_segments(norm_cmd)
             if not (seg_check and all(_is_safe_test_or_linter_segment(s, effective_ws) for s in seg_check)):
                 return (
                     "force_ask",
@@ -4849,6 +6237,11 @@ def evaluate_mutation_guard(
                 )
     if protected_write is not None:
         return protected_write
+
+    # Block direct shell/interpreter inspection of credential files (google-ads.yaml, .a2a_token, etc.)
+    cred_read = _protected_credential_shell_read_decision(norm_cmd, effective_ws=effective_ws)
+    if cred_read is not None:
+        return cred_read
 
     # Safe run_mutation.py --reject / --dry-run segments are removed; the rest of the
     # command (if any) is evaluated by the full guard below.
@@ -4941,6 +6334,16 @@ def evaluate_mutation_guard(
 
     extensionless_py = _collect_extensionless_python_scripts(effective_cmd, effective_ws, cd_dirs=cd_dirs)
 
+    effective_lower = effective_cmd.lower()
+    if "pytest" in effective_lower or "mypy" in effective_lower:
+        _pm_segments = _split_shell_segments(effective_cmd) or [effective_cmd]
+        if any(_has_unsafe_test_runner_injection(s) for s in _pm_segments):
+            return (
+                "deny",
+                "BLOCKED BY HITL MUTATION GUARD: Unsafe pytest/mypy plugin, config-file, "
+                "or Python environment-injection flag is prohibited.",
+            )
+
     if not extensionless_py and not any(
         tok in effective_cmd
         for tok in ("python", "python3", "run_mutation.py", ".py")
@@ -4948,9 +6351,8 @@ def evaluate_mutation_guard(
         return "allow", None
 
     # Only short-circuit safe test suites and linters when EVERY chained segment is verified safe
-    effective_lower = effective_cmd.lower()
     if any(t in effective_lower for t in ("pytest", "ruff", "mypy", "flake8")):
-        segments = [seg.strip() for seg in _CHAIN_SPLIT_RE.split(effective_cmd) if seg.strip()]
+        segments = _split_shell_segments(effective_cmd)
         if segments and all(_is_safe_test_or_linter_segment(seg, effective_ws) for seg in segments):
             return "allow", None
 
@@ -5060,6 +6462,7 @@ def evaluate_mutation_guard(
                         py_files.append(resolved_mod)
                         break
 
+    inline_c_blobs = _extract_python_c_snippets(effective_cmd)
     code_blobs: list[str] = [effective_cmd]
     file_code_blobs: list[str] = []
     resolved_scripts: list[str] = []
@@ -5098,8 +6501,14 @@ def evaluate_mutation_guard(
     combined_code = code_blobs[0] if len(code_blobs) == 1 else "\n".join(code_blobs)
     uncommented_code = _COMMENT_LINE_RE.sub("", combined_code) if "#" in combined_code else combined_code
 
-    if not MUTATION_CALL_PATTERN.search(uncommented_code):
-        # Catch dynamic dispatch (getattr/setattr/exec/eval/__import__) combined with Google Ads SDK usage
+    has_mutation_call = bool(MUTATION_CALL_PATTERN.search(uncommented_code))
+    has_mutation_attr_ref = (
+        not has_mutation_call
+        and _has_mutation_attr_reference(file_code_blobs + inline_c_blobs)
+    )
+    if not has_mutation_call and not has_mutation_attr_ref:
+        # Catch dynamic dispatch (getattr/setattr/exec/eval/compile/importlib/runpy/partial/...)
+        # combined with Google Ads SDK usage
         if (
             "(" in uncommented_code
             and _DYNAMIC_DISPATCH_RE.search(uncommented_code)
@@ -5107,9 +6516,30 @@ def evaluate_mutation_guard(
         ):
             return (
                 "deny",
-                "BLOCKED BY HITL MUTATION GUARD: Dynamic dispatch (getattr/setattr/exec/eval) with "
+                "BLOCKED BY HITL MUTATION GUARD: Dynamic dispatch (getattr/setattr/exec/eval/compile/importlib/runpy) with "
                 "Google Ads API client objects cannot be statically verified as read-only or validate_only=True. "
                 "Call service methods directly and execute mutations via skills/execute-mutation/scripts/run_mutation.py.",
+            )
+        # Treat inline `python -c` (or heredoc) exec/eval/compile as suspicious even without
+        # plaintext SDK tokens (defeats base64/chr/zlib payload obfuscation).
+        inline_dynamic_blobs = list(inline_c_blobs)
+        if "<<" in effective_cmd and "python" in effective_cmd.lower():
+            inline_dynamic_blobs.append(effective_cmd)
+        if any(
+            _INLINE_EXEC_EVAL_RE.search(_COMMENT_LINE_RE.sub("", blob))
+            for blob in inline_dynamic_blobs
+        ):
+            if not is_execute_mutates_enabled():
+                return (
+                    "deny",
+                    "BLOCKED BY HITL MUTATION GUARD: Inline Python exec/eval/compile cannot be "
+                    "statically verified as read-only while execute_mutates = false. "
+                    "Save scripts under saved/code/ instead.",
+                )
+            return (
+                "force_ask",
+                "⚠️ UNVERIFIABLE INLINE PYTHON EXECUTION: Inline exec/eval/compile cannot be "
+                "statically verified for Google Ads mutations. Confirm running this command?",
             )
         return "allow", None
 
@@ -5140,13 +6570,22 @@ def evaluate_mutation_guard(
     has_validate_only_false = bool(_VALIDATE_ONLY_FALSE_RE.search(_HELP_KW_RE.sub("", uncommented_code)))
     has_non_validate_only_call = bool(_NON_VALIDATE_ONLY_CALL_RE.search(uncommented_code))
 
-    # Extract any inline `python -c "..."` code for AST verification alongside script files
-    ast_blobs = list(file_code_blobs)
-    if not ast_blobs:
-        for cm in re.finditer(r"\s-c\s+(?:'([^']*)'|\"([^\"]*)\")", cmd):
-            snippet = cm.group(1) if cm.group(1) is not None else (cm.group(2) or "")
-            if snippet.strip():
-                ast_blobs.append(snippet)
+    # Restrict AST validate_only=True allow path to a single shell segment with no shell blobs,
+    # no heredocs, and no mixed .py + -c execution.
+    cmd_segments = _split_shell_segments(norm_cmd)
+    is_single_clean_segment = (
+        cmd_segments is not None
+        and len(cmd_segments) == 1
+        and not sh_blobs
+        and "<<" not in norm_cmd
+        and not (file_code_blobs and inline_c_blobs)
+    )
+    ast_blobs: list[str] = []
+    if is_single_clean_segment:
+        if file_code_blobs:
+            ast_blobs = list(file_code_blobs)
+        elif inline_c_blobs:
+            ast_blobs = list(inline_c_blobs)
 
     # Trusted built-in creation/filter skill scripts honor --dry-run (validate_only=True)
     # when invoked without --execute / --ex* and without chained segments.
@@ -5159,6 +6598,7 @@ def evaluate_mutation_guard(
             "create_pmax_webpage_filter.py",
         }
     )
+    builtin_segments = _split_shell_segments(effective_cmd)
     is_trusted_builtin_dry_run = False
     if (
         len(resolved_scripts) == 1
@@ -5166,7 +6606,11 @@ def evaluate_mutation_guard(
         and os.path.basename(resolved_target_script) in _builtin_dry_run_names
         and "--dry-run" in cmd
         and not explicit_execute_flag
-        and len([s for s in _CHAIN_SPLIT_RE.split(effective_cmd) if s.strip()]) <= 1
+        and builtin_segments is not None
+        and len(builtin_segments) == 1
+        and not sh_blobs
+        and not inline_c_blobs
+        and "<<" not in norm_cmd
     ):
         real_target = os.path.realpath(resolved_target_script)
         plugin_roots = [
@@ -5195,6 +6639,7 @@ def evaluate_mutation_guard(
 
     if (
         ast_blobs
+        and not has_mutation_attr_ref
         and not has_validate_only_false
         and not has_non_validate_only_call
         and not explicit_execute_flag
@@ -5403,7 +6848,7 @@ def _log_execute_failure_for_hook(
         receipt_paths = []
     for rpath in receipt_paths:
         try:
-            with open(rpath, "r", encoding="utf-8") as f:
+            with open(rpath, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
         except (OSError, ValueError, UnicodeDecodeError):
             continue
@@ -5469,7 +6914,9 @@ def handle_hook(
     raw_stdin: Optional[str] = None,
 ) -> int:
     """Handles Antigravity and Claude Code CLI lifecycle hooks (SessionStart, PreInvocation,
-    PreToolUse, PostToolUseFailure). Returns the process exit code (2 = Claude Code deny)."""
+    PreToolUse, PostToolUseFailure). Returns the process exit code (0 with structured JSON
+    hookSpecificOutput.permissionDecision on Claude Code PreToolUse; the hooks/hooks.json
+    shell wrapper still exits 2 when Python or hook_guard.py is missing)."""
     input_data: Dict[str, Any] = {}
     if raw_stdin is None:
         raw_stdin = ""
@@ -5564,6 +7011,7 @@ def handle_hook(
             args.get("Path")
             or args.get("TargetFile")
             or args.get("AbsolutePath")
+            or args.get("SearchPath")
             or args.get("file_path")
             or args.get("path")
             or ""
@@ -5670,7 +7118,11 @@ def handle_hook(
         if tool_name in _FILE_READ_TOOLS:
             if isinstance(target_file, str) and target_file.strip():
                 cred_hit = next(
-                    (b for b in _target_basenames(target_file) if b in _PROTECTED_CREDENTIAL_FILES),
+                    (
+                        b
+                        for b in _target_basenames(target_file)
+                        if b.lower() in _PROTECTED_CREDENTIAL_FILES_LOWER
+                    ),
                     None,
                 )
                 if cred_hit:
@@ -5680,13 +7132,39 @@ def handle_hook(
                         "are prohibited to prevent leaking OAuth secrets or sidecar tokens into model context.",
                         is_claude,
                     )
+            raw_globs: list[str] = []
+            g_val = args.get("glob")
+            if isinstance(g_val, str) and g_val.strip():
+                raw_globs.append(g_val.strip())
+            inc_val = args.get("Includes")
+            if isinstance(inc_val, list):
+                raw_globs.extend(
+                    str(x).strip() for x in inc_val if isinstance(x, str) and x.strip()
+                )
+            if raw_globs:
+                import fnmatch
+
+                for gpat in raw_globs:
+                    gbase = os.path.basename(gpat.replace("\\", "/").rstrip("/")).lower()
+                    literal_chars = re.sub(r"[*?\[\]!]", "", gbase)
+                    if len(literal_chars) >= 3:
+                        for cred_name in _PROTECTED_CREDENTIAL_FILES:
+                            if fnmatch.fnmatchcase(cred_name.lower(), gbase):
+                                return _emit_pretooluse_response(
+                                    "deny",
+                                    f"BLOCKED BY CREDENTIAL ISOLATION GUARD: Direct file search targeting '{cred_name}' "
+                                    "is prohibited to prevent leaking OAuth secrets or sidecar tokens into model context.",
+                                    is_claude,
+                                )
             return _emit_pretooluse_response("allow", None, is_claude)
 
         if (tool_name in _FILE_WRITE_TOOLS or (target_file and not cmd)) and isinstance(
             target_file, str
         ):
             bases = _target_basenames(target_file)
-            deny_hit = next((b for b in bases if b in _PROTECTED_DENY_FILES), None)
+            deny_hit = next(
+                (b for b in bases if b.lower() in _PROTECTED_DENY_FILES_LOWER), None
+            )
             if deny_hit:
                 return _emit_pretooluse_response(
                     "deny",
@@ -5694,7 +7172,9 @@ def handle_hook(
                     "Receipts and audit logs may only be written by run_mutation.py.",
                     is_claude,
                 )
-            ask_hit = next((b for b in bases if b in _PROTECTED_ASK_FILES), None)
+            ask_hit = next(
+                (b for b in bases if b.lower() in _PROTECTED_ASK_FILES_LOWER), None
+            )
             if ask_hit:
                 return _emit_pretooluse_response(
                     "force_ask",

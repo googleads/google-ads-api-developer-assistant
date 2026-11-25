@@ -20,6 +20,17 @@ AGY_PLUGIN_DIR="${TEST_HOME}/.gemini/config/plugins/google-ads-api-developer-ass
 CLAUDE_MARKETPLACE_DIR="${TEST_HOME}/.claude/plugins/google-ads-assistant-local"
 CLAUDE_PLUGIN_DIR="${CLAUDE_MARKETPLACE_DIR}/plugins/google-ads-api-developer-assistant"
 
+assert_no_claude_only_files() {
+  local plugin_dir="$1"
+  local ctx="$2"
+  for rel in .claude-plugin .mcp.json .mcp.json.disabled hooks commands; do
+    if [[ -e "${plugin_dir}/${rel}" || -L "${plugin_dir}/${rel}" ]]; then
+      echo "FAIL: Claude-only item '${rel}' should not exist in agy plugin dir (${ctx}): ${plugin_dir}/${rel}"
+      exit 1
+    fi
+  done
+}
+
 # Create mock claude CLI in TEST_HOME/bin
 mkdir -p "${TEST_HOME}/bin"
 export PATH="${TEST_HOME}/bin:${PATH}"
@@ -59,6 +70,7 @@ if [[ ! -f "${AGY_PLUGIN_DIR}/config/assistant_config" ]]; then
   echo "FAIL: config/assistant_config missing in ${AGY_PLUGIN_DIR}"
   exit 1
 fi
+assert_no_claude_only_files "${AGY_PLUGIN_DIR}" "install agy"
 echo "PASS: Antigravity plugin successfully installed."
 
 echo "Test 4: install.sh claude installs standalone copy and executes claude CLI marketplace commands"
@@ -116,6 +128,7 @@ if ! grep -q '^custom_operator_note = "keep-me"$' "${AGY_PLUGIN_DIR}/config/assi
   echo "FAIL: update.sh clobbered custom TOML keys in assistant_config"
   exit 1
 fi
+assert_no_claude_only_files "${AGY_PLUGIN_DIR}" "update agy"
 echo "PASS: update.sh agy preserved allow_tier1_financial_mutates and custom keys."
 
 echo "Test 8: update.sh claude --no-git-pull updates standalone Claude Code plugin including dotfiles (.claude-plugin, .mcp.json)"
@@ -169,6 +182,7 @@ if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
   echo "FAIL: plugin.json missing in migrated standalone directory ${AGY_PLUGIN_DIR}"
   exit 1
 fi
+assert_no_claude_only_files "${AGY_PLUGIN_DIR}" "symlink migration"
 echo "PASS: update.sh agy migrated legacy symbolic link to standalone copy."
 
 echo "Test 12: global script execution from arbitrary directory using GOOGLE_ADS_ASSISTANT_DIR"
@@ -192,12 +206,21 @@ if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json.disabled" || -f "${AGY_PLUGIN_DIR}/plu
 fi
 "${PROJECT_ROOT}/plugin.sh" test --config-dir "${AGY_PLUGIN_DIR}/config" --expect disabled >/dev/null
 
-# Verify update.sh preserves disabled state unless --enable is specified
+# Verify update.sh preserves disabled state unless --enable is specified and leaves no Claude-only artifacts
 "${PROJECT_ROOT}/update.sh" agy --no-git-pull >/dev/null
 if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json.disabled" || -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
   echo "FAIL: update.sh did not preserve disabled state in ${AGY_PLUGIN_DIR}"
   exit 1
 fi
+assert_no_claude_only_files "${AGY_PLUGIN_DIR}" "update agy while disabled"
+
+# Verify install.sh agy --disable also leaves no Claude-only artifacts (including .mcp.json.disabled)
+"${PROJECT_ROOT}/install.sh" agy --disable >/dev/null
+if [[ ! -f "${AGY_PLUGIN_DIR}/plugin.json.disabled" || -f "${AGY_PLUGIN_DIR}/plugin.json" ]]; then
+  echo "FAIL: install.sh agy --disable did not install in disabled state in ${AGY_PLUGIN_DIR}"
+  exit 1
+fi
+assert_no_claude_only_files "${AGY_PLUGIN_DIR}" "install agy --disable"
 
 # Re-enable and verify
 "${PROJECT_ROOT}/plugin.sh" enable agy >/dev/null

@@ -42,6 +42,15 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PluginName = "google-ads-api-developer-assistant"
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
 
+$HasActionSwitch = $Enable -or $Disable -or $Status -or $Test -or $IsEnabled
+if ($HasActionSwitch -and -not $PSBoundParameters.ContainsKey('TargetType') -and -not [string]::IsNullOrWhiteSpace($Action)) {
+    $CandidateTarget = $Action.Trim().ToLowerInvariant()
+    if ($CandidateTarget -in @("agy", "claude", "claudecode", "all")) {
+        $TargetType = $CandidateTarget
+        $Action = ""
+    }
+}
+
 $TargetType = $TargetType.Trim().ToLowerInvariant()
 if ($TargetType -eq "claudecode") {
     $TargetType = "claude"
@@ -113,7 +122,7 @@ if (-not $PythonCmd) {
 
 $PyArgs = @($ConfigInit, "--target", $TargetType)
 if (-not [string]::IsNullOrWhiteSpace($ConfigDir)) {
-    $PyArgs += @("--config-dir", $ConfigDir)
+    $PyArgs += @("--config-dir", $ConfigDir.TrimEnd('\'))
 }
 
 function Invoke-LiveHookTest {
@@ -191,7 +200,7 @@ session_proc = subprocess.run(
 try:
     session_out = json.loads(session_proc.stdout.strip() or "{}")
 except Exception:
-    session_out = {}
+    session_out = {"raw": session_proc.stdout.strip()}
 
 pre_tool_proc = subprocess.run(
     [sys.executable, hook_guard_path, "--cli", cli_mode, "--event", "PreToolUse"],
@@ -204,7 +213,7 @@ pre_tool_proc = subprocess.run(
 try:
     pre_tool_out = json.loads(pre_tool_proc.stdout.strip() or "{}")
 except Exception:
-    pre_tool_out = {}
+    pre_tool_out = {"raw": pre_tool_proc.stdout.strip()}
 
 if cli_mode == "claude":
     session_active = (session_out.get("hookSpecificOutput") or {}).get("hookEventName") == "SessionStart"
@@ -261,16 +270,21 @@ else:
     print(f"  Live Hook Test    : {'PASS' if hook_test['passed'] else 'FAIL'} ({hook_test['hook_entrypoint']}, cli={hook_test['cli']})")
     print(f"    SessionStart    : {hook_test['session_start_hook']}")
     print(f"    PreToolUse      : {hook_test['pre_tool_use_hook']}")
+    cli_label = (
+        "Claude Code CLI"
+        if target_type == "claude"
+        else ("jetski/agy CLI" if target_type == "agy" else "your CLI")
+    )
     if enabled:
-        print("\nPlugin is ENABLED and will be active when you invoke jetski/agy.")
+        print(f"\nPlugin is ENABLED and will be active when you invoke {cli_label}.")
         print("To disable it, run: .\\plugin.ps1 disable")
     else:
-        print("\nPlugin is DISABLED and will NOT be invoked when you run jetski/agy.")
+        print(f"\nPlugin is DISABLED and will NOT be invoked when you run {cli_label}.")
         print("To re-enable it, run: .\\plugin.ps1 enable")
 
 sys.exit(0 if hook_test["passed"] else 1)
 '@
-    $CfgArg = if ([string]::IsNullOrWhiteSpace($CfgDir)) { "__DEFAULT__" } else { $CfgDir }
+    $CfgArg = if ([string]::IsNullOrWhiteSpace($CfgDir)) { "__DEFAULT__" } else { $CfgDir.TrimEnd('\') }
     $JsonStr = if ($AsJson) { "true" } else { "false" }
     $PyCode | & $PythonCmd - $ConfigInit $CfgArg $Target $JsonStr
     if ($LASTEXITCODE -ne 0) {
@@ -305,19 +319,32 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(config_init_p
 from config import config_init
 print("enabled" if config_init.is_plugin_enabled(config_dir=cfg_dir) else "disabled")
 '@
-    $CfgArgMain = if ([string]::IsNullOrWhiteSpace($CfgDir)) { "__DEFAULT__" } else { $CfgDir }
-    return ($StateCode | & $PythonCmd - $ConfigInit $CfgArgMain $Target).Trim()
+    $CfgArgMain = if ([string]::IsNullOrWhiteSpace($CfgDir)) { "__DEFAULT__" } else { $CfgDir.TrimEnd('\') }
+    $RawState = ($StateCode | & $PythonCmd - $ConfigInit $CfgArgMain $Target) | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to determine plugin enabled state (exit code $LASTEXITCODE)."
+        exit $LASTEXITCODE
+    }
+    return $RawState.Trim()
 }
 
 switch ($Action) {
     "enable" {
         & $PythonCmd @PyArgs --enable | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to enable plugin via config_init.py (exit code $LASTEXITCODE)."
+            exit $LASTEXITCODE
+        }
         if ($Json -or -not $Quiet) {
             Invoke-LiveHookTest -CfgDir $ConfigDir -Target $TargetType -AsJson $Json.IsPresent
         }
     }
     "disable" {
         & $PythonCmd @PyArgs --disable | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to disable plugin via config_init.py (exit code $LASTEXITCODE)."
+            exit $LASTEXITCODE
+        }
         if ($Json -or -not $Quiet) {
             Invoke-LiveHookTest -CfgDir $ConfigDir -Target $TargetType -AsJson $Json.IsPresent
         }
@@ -343,3 +370,4 @@ switch ($Action) {
         if ($Actual -eq "enabled") { exit 0 } else { exit 1 }
     }
 }
+exit 0

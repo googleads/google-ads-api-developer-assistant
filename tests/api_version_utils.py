@@ -55,7 +55,14 @@ def get_current_api_version() -> str:
     if detected:
         return _config_init.validate_api_version(detected)
 
-    return _config_init.resolve_active_api_version()
+    try:
+        return _config_init.resolve_active_api_version()
+    except ValueError as exc:
+        raise ValueError(
+            "Could not resolve current Google Ads API version for tests. "
+            "Install google-ads, clone client_libs/google-ads-python, "
+            "or set GOOGLE_ADS_API_VERSION=vN."
+        ) from exc
 
 
 def offset_api_version(delta: int, base: str | None = None) -> str:

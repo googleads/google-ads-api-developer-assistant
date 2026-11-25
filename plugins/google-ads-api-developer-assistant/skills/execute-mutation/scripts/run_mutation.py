@@ -2,8 +2,10 @@
 """Executes Google Ads mutations with Dry-Run Receipt, HITL Gate & Audit Log."""
 
 import argparse
+import contextlib
 import datetime
 import enum
+import errno
 import functools
 import getpass
 import hashlib
@@ -22,7 +24,7 @@ import tempfile
 import threading
 import time
 import tomllib
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 import uuid
 
 _MESSAGE_TO_DICT: Any = None
@@ -2341,6 +2343,34 @@ def _serialize_rpc_object(obj: Any, depth: int = 0) -> Any:
     return str(obj)
 
 
+class _TraceCallList(list):  # type: ignore[type-arg]
+    """List of captured RPC calls carrying subprocess trace lifecycle metadata."""
+
+    def __init__(
+        self,
+        items: Sequence[Dict[str, Any]] = (),
+        *,
+        clean_exit_seen: bool = False,
+        any_rpc_dispatched: bool = False,
+    ) -> None:
+        super().__init__(items)
+        self.clean_exit_seen = bool(clean_exit_seen)
+        self.any_rpc_dispatched = bool(any_rpc_dispatched)
+
+
+def _append_trace_event(trace_file: str, event: Dict[str, Any]) -> None:
+    """Appends a single NDJSON trace record to trace_file with flush + fsync."""
+    if not trace_file:
+        return
+    try:
+        with open(trace_file, "a", encoding="utf-8") as tf:
+            tf.write(json.dumps(event, default=str) + "\n")
+            tf.flush()
+            os.fsync(tf.fileno())
+    except OSError:
+        pass
+
+
 def _wrap_service_for_audit(
     service: Any,
     service_name: str,
@@ -2348,6 +2378,7 @@ def _wrap_service_for_audit(
     expected_request_hashes: Optional[List[str]] = None,
     enforce_request_hash: bool = False,
     dry_run_mode: bool = False,
+    trace_file: str = "",
 ) -> Any:
     """Wraps service mutation methods to verify SHA-256 and record payloads."""
     should_enforce = enforce_request_hash or (
@@ -2661,6 +2692,13 @@ def _wrap_service_for_audit(
                 _prev_depth = getattr(_IN_AUDITED_SERVICE_CALL, "depth", 0)
                 _IN_AUDITED_SERVICE_CALL.depth = _prev_depth + 1
                 try:
+                    if not dry_run_mode and trace_file:
+                        dispatched_rec = dict(call_record)
+                        dispatched_rec["status"] = "DISPATCHED"
+                        _append_trace_event(
+                            trace_file,
+                            {"event": "DISPATCHED", "call": dispatched_rec},
+                        )
                     response = method_fn(*args, **kwargs)
                     received_at_iso = datetime.datetime.now(
                         datetime.timezone.utc
@@ -2745,6 +2783,7 @@ class FinancialGuardrailInterceptor(_GRPC_UNARY_BASE):
         expected_request_hashes: Optional[List[str]] = None,
         enforce_request_hash: bool = False,
         dry_run_mode: bool = False,
+        trace_file: str = "",
     ) -> None:
         self.captured_calls: List[Dict[str, Any]] = (
             captured_calls if captured_calls is not None else []
@@ -2756,6 +2795,7 @@ class FinancialGuardrailInterceptor(_GRPC_UNARY_BASE):
             enforce_request_hash or expected_request_hashes is not None
         )
         self.dry_run_mode = bool(dry_run_mode)
+        self.trace_file = str(trace_file or "")
 
     @staticmethod
     def _parse_method_path(method_path: str) -> Optional[Tuple[str, str]]:
@@ -2777,6 +2817,13 @@ class FinancialGuardrailInterceptor(_GRPC_UNARY_BASE):
         if pre is None:
             return continuation(client_call_details, request)
         call_rec, t0 = pre
+        if not self.dry_run_mode and self.trace_file:
+            dispatched_rec = dict(call_rec)
+            dispatched_rec["status"] = "DISPATCHED"
+            _append_trace_event(
+                self.trace_file,
+                {"event": "DISPATCHED", "call": dispatched_rec},
+            )
         try:
             resp = continuation(client_call_details, request)
         except Exception as exc:  # pylint: disable=broad-except
@@ -2973,6 +3020,13 @@ class AioFinancialGuardrailInterceptor(_GRPC_AIO_UNARY_BASE):
         if pre is None:
             return await continuation(client_call_details, request)
         call_rec, t0 = pre
+        if not self._sync.dry_run_mode and self._sync.trace_file:
+            dispatched_rec = dict(call_rec)
+            dispatched_rec["status"] = "DISPATCHED"
+            _append_trace_event(
+                self._sync.trace_file,
+                {"event": "DISPATCHED", "call": dispatched_rec},
+            )
         try:
             call = await continuation(client_call_details, request)
             await call
@@ -3033,6 +3087,7 @@ def _run_target_script_with_interception(
                 expected_request_hashes=expected_hashes,
                 enforce_request_hash=enforce_hash,
                 dry_run_mode=dry_run_mode,
+                trace_file=trace_file,
             )
 
         setattr(gads_client_cls, "get_service", _hooked_get_service)
@@ -3049,6 +3104,7 @@ def _run_target_script_with_interception(
             expected_request_hashes=expected_hashes,
             enforce_request_hash=enforce_hash,
             dry_run_mode=dry_run_mode,
+            trace_file=trace_file,
         )
         orig_grpc_secure = grpc_live.secure_channel
         orig_grpc_insecure = grpc_live.insecure_channel
@@ -3116,8 +3172,18 @@ def _run_target_script_with_interception(
             aio_mod.insecure_channel = orig_aio_insecure
         if trace_file:
             try:
-                with open(trace_file, "w", encoding="utf-8") as f:
-                    json.dump(captured_calls, f)
+                with open(trace_file, "a", encoding="utf-8") as f:
+                    for call_item in captured_calls:
+                        f.write(
+                            json.dumps(
+                                {"event": "CALL_RECORD", "call": call_item},
+                                default=str,
+                            )
+                            + "\n"
+                        )
+                    f.write(json.dumps({"event": "CLEAN_EXIT"}) + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
             except OSError:
                 pass
 
@@ -3204,6 +3270,83 @@ def _write_exec_token_file(
     return nonce, tok_path
 
 
+def _parse_trace_file(trace_path: str) -> _TraceCallList:
+    """Parses NDJSON or legacy JSON-array subprocess trace into _TraceCallList."""
+    if not trace_path or not os.path.isfile(trace_path):
+        return _TraceCallList([], clean_exit_seen=False, any_rpc_dispatched=False)
+    try:
+        with open(trace_path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return _TraceCallList([], clean_exit_seen=False, any_rpc_dispatched=False)
+    if not raw:
+        return _TraceCallList([], clean_exit_seen=False, any_rpc_dispatched=False)
+
+    dispatched_statuses = {"DISPATCHED", "SUCCESS", "FAILED"}
+    if raw.startswith("["):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                calls = [item for item in data if isinstance(item, dict)]
+                any_disp = any(
+                    str(c.get("status", "")) in dispatched_statuses
+                    for c in calls
+                )
+                return _TraceCallList(
+                    calls, clean_exit_seen=True, any_rpc_dispatched=any_disp
+                )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return _TraceCallList(
+                [], clean_exit_seen=False, any_rpc_dispatched=False
+            )
+
+    final_calls: List[Dict[str, Any]] = []
+    dispatched_calls: List[Dict[str, Any]] = []
+    clean_exit_seen = False
+    any_rpc_dispatched = False
+    had_corrupt_line = False
+
+    for line in raw.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            obj = json.loads(text)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            had_corrupt_line = True
+            continue
+        if not isinstance(obj, dict):
+            had_corrupt_line = True
+            continue
+        ev = obj.get("event")
+        if ev == "CLEAN_EXIT":
+            clean_exit_seen = True
+        elif ev == "DISPATCHED":
+            any_rpc_dispatched = True
+            call_obj = obj.get("call")
+            if isinstance(call_obj, dict):
+                dispatched_calls.append(call_obj)
+        elif ev == "CALL_RECORD":
+            call_obj = obj.get("call")
+            if isinstance(call_obj, dict):
+                final_calls.append(call_obj)
+                if str(call_obj.get("status", "")) in dispatched_statuses:
+                    any_rpc_dispatched = True
+        else:
+            final_calls.append(obj)
+            if str(obj.get("status", "")) in dispatched_statuses:
+                any_rpc_dispatched = True
+
+    if had_corrupt_line:
+        clean_exit_seen = False
+    calls_out = final_calls if final_calls else dispatched_calls
+    return _TraceCallList(
+        calls_out,
+        clean_exit_seen=clean_exit_seen,
+        any_rpc_dispatched=any_rpc_dispatched,
+    )
+
+
 def _execute_script_subprocess(
     script_path: str,
     script_args: List[str],
@@ -3219,127 +3362,117 @@ def _execute_script_subprocess(
         prefix="ads_mutation_trace_", suffix=".json"
     )
     os.close(trace_fd)
-    if sys.platform != "win32":
-        try:
-            os.chmod(trace_path, 0o600)
-        except OSError:
-            pass
-
-    env = os.environ.copy()
-    this_dir = os.path.dirname(os.path.abspath(__file__))
-    plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
-    plugin_config_dir = os.path.join(plugin_root, "config")
-    if os.path.isdir(plugin_config_dir):
-        existing_pp = env.get("PYTHONPATH", "").strip()
-        pp_parts = [
-            os.path.normpath(p) for p in existing_pp.split(os.pathsep) if p
-        ]
-        if os.path.normpath(plugin_config_dir) not in pp_parts:
-            env["PYTHONPATH"] = (
-                f"{existing_pp}{os.pathsep}{plugin_config_dir}"
-                if existing_pp
-                else plugin_config_dir
-            )
-
-    if not env.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH", "").strip():
-        resolved_yaml = _find_google_ads_yaml()
-        if resolved_yaml:
-            env["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = resolved_yaml
-
-    env[_TRACE_ENV_VAR] = trace_path
-    if dry_run_mode:
-        env[_DRY_RUN_MODE_ENV_VAR] = "1"
-    else:
-        env.pop(_DRY_RUN_MODE_ENV_VAR, None)
-    if enforce_request_hash or expected_request_hashes is not None:
-        env[_ENFORCE_HASH_ENV_VAR] = "1"
-        env[_EXPECTED_HASHES_ENV_VAR] = json.dumps(
-            expected_request_hashes or []
-        )
-    else:
-        env.pop(_ENFORCE_HASH_ENV_VAR, None)
-        env.pop(_EXPECTED_HASHES_ENV_VAR, None)
-
-    nonce, tok_path = _write_exec_token_file(
-        script_path,
-        dry_run_mode=dry_run_mode,
-        enforce_request_hash=bool(
-            enforce_request_hash or expected_request_hashes is not None
-        ),
-    )
-    env[_EXEC_TOKEN_ENV_VAR] = nonce
-    env[_EXEC_TOKEN_FILE_ENV_VAR] = tok_path
-
-    cmd = [
-        sys.executable,
-        os.path.abspath(__file__),
-        "--_exec-target",
-        script_path,
-        *script_args,
-    ]
-    sent_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    t0 = time.perf_counter()
+    tok_path = ""
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-            timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+        if sys.platform != "win32":
+            try:
+                os.chmod(trace_path, 0o600)
+            except OSError:
+                pass
+
+        env = os.environ.copy()
+        this_dir = os.path.dirname(os.path.abspath(__file__))
+        plugin_root = os.path.abspath(os.path.join(this_dir, "../../.."))
+        plugin_config_dir = os.path.join(plugin_root, "config")
+        if os.path.isdir(plugin_config_dir):
+            existing_pp = env.get("PYTHONPATH", "").strip()
+            pp_parts = [
+                os.path.normpath(p) for p in existing_pp.split(os.pathsep) if p
+            ]
+            if os.path.normpath(plugin_config_dir) not in pp_parts:
+                env["PYTHONPATH"] = (
+                    f"{existing_pp}{os.pathsep}{plugin_config_dir}"
+                    if existing_pp
+                    else plugin_config_dir
+                )
+
+        if not env.get("GOOGLE_ADS_CONFIGURATION_FILE_PATH", "").strip():
+            resolved_yaml = _find_google_ads_yaml()
+            if resolved_yaml:
+                env["GOOGLE_ADS_CONFIGURATION_FILE_PATH"] = resolved_yaml
+
+        env[_TRACE_ENV_VAR] = trace_path
+        if dry_run_mode:
+            env[_DRY_RUN_MODE_ENV_VAR] = "1"
+        else:
+            env.pop(_DRY_RUN_MODE_ENV_VAR, None)
+        if enforce_request_hash or expected_request_hashes is not None:
+            env[_ENFORCE_HASH_ENV_VAR] = "1"
+            env[_EXPECTED_HASHES_ENV_VAR] = json.dumps(
+                expected_request_hashes or []
+            )
+        else:
+            env.pop(_ENFORCE_HASH_ENV_VAR, None)
+            env.pop(_EXPECTED_HASHES_ENV_VAR, None)
+
+        nonce, tok_path = _write_exec_token_file(
+            script_path,
+            dry_run_mode=dry_run_mode,
+            enforce_request_hash=bool(
+                enforce_request_hash or expected_request_hashes is not None
+            ),
         )
-    except subprocess.TimeoutExpired as exc:
-        out_s = (
-            exc.stdout.decode("utf-8", errors="replace")
-            if isinstance(exc.stdout, bytes)
-            else (exc.stdout or "")
-        )
-        err_s = (
-            exc.stderr.decode("utf-8", errors="replace")
-            if isinstance(exc.stderr, bytes)
-            else (exc.stderr or "")
-        )
-        result = subprocess.CompletedProcess(
-            args=cmd,
-            returncode=124,
-            stdout=out_s,
-            stderr=(
-                f"{err_s}\nMutation script timed out after {timeout_seconds}s."
-            ).strip(),
-        )
+        env[_EXEC_TOKEN_ENV_VAR] = nonce
+        env[_EXEC_TOKEN_FILE_ENV_VAR] = tok_path
+
+        cmd = [
+            sys.executable,
+            os.path.abspath(__file__),
+            "--_exec-target",
+            script_path,
+            *script_args,
+        ]
+        sent_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        t0 = time.perf_counter()
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+                timeout=(
+                    timeout_seconds
+                    if timeout_seconds and timeout_seconds > 0
+                    else None
+                ),
+            )
+        except subprocess.TimeoutExpired as exc:
+            out_s = (
+                exc.stdout.decode("utf-8", errors="replace")
+                if isinstance(exc.stdout, bytes)
+                else (exc.stdout or "")
+            )
+            err_s = (
+                exc.stderr.decode("utf-8", errors="replace")
+                if isinstance(exc.stderr, bytes)
+                else (exc.stderr or "")
+            )
+            result = subprocess.CompletedProcess(
+                args=cmd,
+                returncode=124,
+                stdout=out_s,
+                stderr=(
+                    f"{err_s}\nMutation script timed out after {timeout_seconds}s."
+                ).strip(),
+            )
+        duration_ms = round((time.perf_counter() - t0) * 1000.0, 3)
+        received_at_iso = datetime.datetime.now(
+            datetime.timezone.utc
+        ).isoformat()
+        captured_calls: List[Dict[str, Any]] = _parse_trace_file(trace_path)
+        return result, sent_at_iso, received_at_iso, duration_ms, captured_calls
     finally:
-        if os.path.isfile(tok_path):
+        if tok_path and os.path.isfile(tok_path):
             try:
                 os.remove(tok_path)
             except OSError:
                 pass
-    duration_ms = round((time.perf_counter() - t0) * 1000.0, 3)
-    received_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-    captured_calls: List[Dict[str, Any]] = []
-    if os.path.isfile(trace_path):
-        try:
-            with open(trace_path, "r", encoding="utf-8") as f:
-                raw = f.read().strip()
-                if raw:
-                    data = json.loads(raw)
-                    if isinstance(data, list):
-                        captured_calls = data
-        except (
-            OSError,
-            UnicodeDecodeError,
-            json.JSONDecodeError,
-            TypeError,
-            ValueError,
-        ):
-            pass
-        finally:
+        if trace_path and os.path.isfile(trace_path):
             try:
                 os.remove(trace_path)
             except OSError:
                 pass
-
-    return result, sent_at_iso, received_at_iso, duration_ms, captured_calls
 
 
 def append_mutation_audit_log(
@@ -3506,6 +3639,7 @@ def append_mutation_audit_log(
         "BLOCKED_FINANCIAL_LIMIT_EXCEEDED",
         "BLOCKED_PROHIBITED_DELETION",
         "BLOCKED_CUSTOMER_ID_MISMATCH",
+        "BLOCKED_CONCURRENT_REPLAY",
     ):
         if rpc_errors:
             error_summary = "; ".join(rpc_errors)
@@ -3614,35 +3748,174 @@ def append_mutation_audit_log(
                     import fcntl
 
                     try:
+                        if hasattr(os, "fchmod"):
+                            os.fchmod(f.fileno(), 0o600)
+                        else:
+                            os.chmod(log_path, 0o600)
+                    except OSError:
+                        pass
+                    try:
                         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                     except OSError:
                         pass
-                f.write(serialized_line)
-                f.flush()
-                if sys.platform != "win32":
-                    try:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                    except OSError:
-                        pass
-            if sys.platform != "win32" and os.path.isfile(log_path):
                 try:
-                    os.chmod(log_path, 0o600)
-                except OSError:
-                    pass
+                    f.write(serialized_line)
+                    f.flush()
+                finally:
+                    if sys.platform != "win32":
+                        try:
+                            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                        except OSError:
+                            pass
         except OSError:
             continue
 
     return audit_record
 
 
+@contextlib.contextmanager
+def _receipt_paths_lock(
+    paths: Sequence[str], *, create_dirs: bool = False
+) -> Iterator[None]:
+    """Acquires cross-platform exclusive locks on canonical receipt parent dirs.
+
+    Locks unique canonical parent directories in lexicographical order to avoid
+    deadlocks across multi-path/cross-CWD callers. Raises immediately on symlink
+    attacks (errno.ELOOP). Skips read-only secondary directories only if at
+    least one writable lock is acquired; otherwise re-raises.
+    """
+    canon_dirs = sorted({
+        os.path.realpath(os.path.dirname(os.path.abspath(p)))
+        for p in paths
+        if str(p).strip()
+    })
+    if not canon_dirs:
+        yield
+        return
+
+    acquired: List[int] = []
+    ro_errors: List[OSError] = []
+
+    def _release_all() -> None:
+        while acquired:
+            fd = acquired.pop()
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    try:
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        pass
+                else:
+                    import fcntl
+
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+            finally:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+    try:
+        for lock_dir in canon_dirs:
+            if not os.path.isdir(lock_dir):
+                if not create_dirs:
+                    continue
+                try:
+                    os.makedirs(lock_dir, exist_ok=True)
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise
+                    if exc.errno in (
+                        errno.EACCES,
+                        errno.EROFS,
+                        errno.EPERM,
+                    ) or isinstance(exc, PermissionError):
+                        ro_errors.append(exc)
+                        continue
+                    raise
+
+            lock_path = os.path.join(lock_dir, ".last_dry_run.lock")
+            if sys.platform == "win32" and os.path.islink(lock_path):
+                raise OSError(
+                    errno.ELOOP,
+                    "Refusing to follow symlink lock file",
+                    lock_path,
+                )
+            lock_flags = (
+                os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+            )
+            try:
+                fd = os.open(lock_path, lock_flags, 0o600)
+            except OSError as exc:
+                if exc.errno == errno.ELOOP:
+                    raise
+                if exc.errno in (
+                    errno.EACCES,
+                    errno.EROFS,
+                    errno.EPERM,
+                ) or isinstance(exc, PermissionError):
+                    ro_errors.append(exc)
+                    continue
+                raise
+
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    if os.fstat(fd).st_size == 0:
+                        os.write(fd, b"0")
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    deadline = time.monotonic() + 5.0
+                    while True:
+                        try:
+                            os.lseek(fd, 0, os.SEEK_SET)
+                            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                            break
+                        except OSError:
+                            if time.monotonic() >= deadline:
+                                raise
+                            time.sleep(0.02)
+                else:
+                    import fcntl
+
+                    if hasattr(os, "fchmod"):
+                        try:
+                            os.fchmod(fd, 0o600)
+                        except OSError:
+                            pass
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+            except BaseException:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
+            acquired.append(fd)
+
+        if not acquired and ro_errors:
+            raise ro_errors[0]
+
+        yield
+    finally:
+        _release_all()
+
+
 def _remove_stale_receipts() -> None:
     """Removes existing dry-run receipt files when a check fails."""
-    for target_path in get_receipt_paths():
-        if os.path.isfile(target_path):
-            try:
-                os.remove(target_path)
-            except OSError:
-                pass
+    paths = get_receipt_paths()
+    with _receipt_paths_lock(paths):
+        for target_path in paths:
+            if os.path.isfile(target_path):
+                try:
+                    os.remove(target_path)
+                except OSError:
+                    pass
 
 
 def write_dry_run_receipt(
@@ -3763,6 +4036,9 @@ def write_dry_run_receipt(
             f"--consequences (operation: '{operation_summary.strip()}')."
         )
 
+    clean_create_sha = (
+        str(create_params_sha256).strip() if create_params_sha256 else ""
+    )
     fallback_req_meta = {
         "customer_id": str(customer_id).strip(),
         "operation_summary": operation_summary.strip(),
@@ -3771,6 +4047,8 @@ def write_dry_run_receipt(
         "script_path": resolved_script,
         "script_sha256": script_hash,
     }
+    if clean_create_sha:
+        fallback_req_meta["create_params_sha256"] = clean_create_sha
     request_sha256 = compute_aggregate_request_sha256(
         request_sha256_list, fallback_req_meta
     )
@@ -3803,9 +4081,7 @@ def write_dry_run_receipt(
         "script_sha256": script_hash,
         "script_args": [str(a) for a in script_args or []],
         "record_only": bool(record_only),
-        "create_params_sha256": (
-            str(create_params_sha256).strip() if create_params_sha256 else None
-        ),
+        "create_params_sha256": clean_create_sha or None,
         "request_sha256": request_sha256,
         "request_sha256_list": request_sha256_list,
         "dry_run_output": dry_run_output.strip(),
@@ -3813,16 +4089,19 @@ def write_dry_run_receipt(
     if normalized_calls:
         receipt["dry_run_rpc_calls"] = normalized_calls
     # The returned in-memory receipt keeps full values for the on-screen card;
-    # the stored copy masks emails (ATO details, card, and dry_run_rpc_calls
-    # payloads flagged request_payload_masked with the unmasked request_sha256).
+    # the stored copy masks emails (ATO details, card, consequences, and
+    # dry_run_rpc_calls payloads flagged request_payload_masked with the
+    # unmasked request_sha256).
     receipt["rendered_verification_card"] = format_verification_card(receipt)
     stored_receipt = _mask_receipt_for_storage(receipt)
 
-    for target_path in get_receipt_paths():
-        try:
-            _write_json_atomic(target_path, stored_receipt)
-        except OSError:
-            continue
+    receipt_paths = get_receipt_paths()
+    with _receipt_paths_lock(receipt_paths, create_dirs=True):
+        for target_path in receipt_paths:
+            try:
+                _write_json_atomic(target_path, stored_receipt)
+            except OSError:
+                continue
 
     return receipt
 
@@ -3855,14 +4134,14 @@ def _mask_emails_in_obj(obj: Any, depth: int = 0) -> Any:
 def _mask_receipt_for_storage(receipt: Dict[str, Any]) -> Dict[str, Any]:
     """Returns the on-disk receipt copy with emails masked.
 
-    Masks ato_escalation, rendered_verification_card, and email values inside
-    dry_run_rpc_calls[].request_payload. Each masked call keeps the
-    request_sha256 computed from its unmasked payload and is flagged with
+    Masks ato_escalation, rendered_verification_card, consequences, and email
+    values inside dry_run_rpc_calls[].request_payload. Each masked call keeps
+    the request_sha256 computed from its unmasked payload and is flagged with
     request_payload_masked=True so verifiers trust that hash instead of
     re-hashing the masked payload.
     """
     stored = dict(receipt)
-    for key in ("ato_escalation", "rendered_verification_card"):
+    for key in ("ato_escalation", "rendered_verification_card", "consequences"):
         if key in stored:
             stored[key] = _mask_emails_in_obj(stored[key])
     calls = stored.get("dry_run_rpc_calls")
@@ -3928,39 +4207,41 @@ def reject_dry_run_receipt(
     )
     matched_receipt: Dict[str, Any] = {}
     rejected_count = 0
-    for target_path in get_receipt_paths():
-        if not os.path.isfile(target_path):
-            continue
-        try:
-            with open(target_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
+    receipt_paths = get_receipt_paths()
+    with _receipt_paths_lock(receipt_paths):
+        for target_path in receipt_paths:
+            if not os.path.isfile(target_path):
                 continue
-            if str(data.get("status", "")) != "DRY_RUN_PASSED":
+            try:
+                with open(target_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    continue
+                if str(data.get("status", "")) != "DRY_RUN_PASSED":
+                    continue
+                if not _receipt_matches_script(data, abs_script, script_sha):
+                    continue
+                if isinstance(hook_context, dict):
+                    conv_id = hook_context.get(
+                        "conversationId"
+                    ) or hook_context.get("session_id")
+                    if conv_id:
+                        data["cli_conversation_id"] = str(conv_id)
+                data["status"] = "REJECTED"
+                data["rejected_at_iso"] = rejected_iso
+                data["rejection_reason"] = reason
+                _write_json_atomic(target_path, data)
+                rejected_count += 1
+                if not matched_receipt:
+                    matched_receipt = data
+            except (
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ):
                 continue
-            if not _receipt_matches_script(data, abs_script, script_sha):
-                continue
-            if isinstance(hook_context, dict):
-                conv_id = hook_context.get(
-                    "conversationId"
-                ) or hook_context.get("session_id")
-                if conv_id:
-                    data["cli_conversation_id"] = str(conv_id)
-            data["status"] = "REJECTED"
-            data["rejected_at_iso"] = rejected_iso
-            data["rejection_reason"] = reason
-            _write_json_atomic(target_path, data)
-            rejected_count += 1
-            if not matched_receipt:
-                matched_receipt = data
-        except (
-            OSError,
-            UnicodeDecodeError,
-            json.JSONDecodeError,
-            TypeError,
-            ValueError,
-        ):
-            continue
 
     if not rejected_count:
         return {
@@ -4023,106 +4304,214 @@ def _write_json_atomic(target_path: str, payload: Dict[str, Any]) -> None:
     tmp_fd, tmp_path = tempfile.mkstemp(
         prefix=".receipt_", suffix=".tmp", dir=parent_dir or None
     )
+    fd_closed = False
     try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
         if sys.platform != "win32":
             try:
-                os.chmod(tmp_path, 0o600)
+                if hasattr(os, "fchmod"):
+                    os.fchmod(tmp_fd, 0o600)
+                else:
+                    os.chmod(tmp_path, 0o600)
             except OSError:
                 pass
-        os.replace(tmp_path, abs_target)
-    except OSError:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            fd_closed = True
+            json.dump(payload, f, indent=2)
+            f.flush()
+        if sys.platform == "win32":
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_path, abs_target)
+                    break
+                except PermissionError as exc:
+                    if getattr(exc, "winerror", None) in (5, 32) and attempt < 4:
+                        time.sleep(0.02 * (attempt + 1))
+                        continue
+                    raise
+        else:
+            os.replace(tmp_path, abs_target)
+    except BaseException:
+        if not fd_closed:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
         if os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
             except OSError:
                 pass
         raise
-    if sys.platform != "win32" and os.path.isfile(abs_target):
-        try:
-            os.chmod(abs_target, 0o600)
-        except OSError:
-            pass
 
 
-def claim_receipt_for_execution() -> Tuple[bool, str, Dict[str, Any]]:
-    """Atomically claims a single-use DRY_RUN_PASSED receipt as EXECUTING to prevent concurrent replay."""
+def claim_receipt_for_execution(
+    expected_receipt_id: Optional[str] = None,
+) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    """Atomically claims a single-use DRY_RUN_PASSED receipt as EXECUTING."""
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    receipt_paths = get_receipt_paths()
-    existing_paths = [p for p in receipt_paths if os.path.isfile(p)]
-    if not existing_paths:
-        return (
-            False,
-            "No pending validate_only=True dry-run receipt found to claim for execution.",
-            {},
-        )
+    all_paths = get_receipt_paths()
+    non_claimable = ("EXECUTING", "EXECUTED", "REJECTED")
+    exp_rid = (
+        str(expected_receipt_id).strip()
+        if expected_receipt_id is not None and str(expected_receipt_id).strip()
+        else None
+    )
 
-    primary_path = existing_paths[0]
-    lock_dir = os.path.dirname(os.path.abspath(primary_path)) or "."
-    os.makedirs(lock_dir, exist_ok=True)
-    lock_path = os.path.join(lock_dir, ".last_dry_run.lock")
+    with _receipt_paths_lock(all_paths):
+        existing_paths = [p for p in all_paths if os.path.isfile(p)]
+        if not existing_paths:
+            return (
+                False,
+                "No pending validate_only=True dry-run receipt found to claim for execution.",
+                None,
+            )
 
-    def _do_claim() -> Tuple[bool, str, Dict[str, Any]]:
-        claimed_data: Optional[Dict[str, Any]] = None
-        last_status = "MISSING"
+        readable: List[Tuple[str, Dict[str, Any]]] = []
         for target_path in existing_paths:
             try:
                 with open(target_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            except (
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ):
                 continue
-            if not isinstance(data, dict):
-                continue
-            status = str(data.get("status", ""))
-            last_status = status
-            if status != "DRY_RUN_PASSED":
-                continue
-            data["status"] = "EXECUTING"
-            data["executing_started_at_iso"] = now_iso
-            data["executing_pid"] = os.getpid()
-            _write_json_atomic(target_path, data)
-            if claimed_data is None:
-                claimed_data = data
-        if claimed_data is not None:
-            return True, "Claimed receipt for single-use execution.", claimed_data
-        return (
-            False,
-            f"Dry-run receipt status is '{last_status}' (expected 'DRY_RUN_PASSED'; "
-            "receipt may already be EXECUTING or EXECUTED). Re-run --dry-run first.",
-            {},
-        )
+            if isinstance(data, dict) and data:
+                readable.append((target_path, data))
 
-    if sys.platform != "win32":
-        import fcntl
+        if not readable:
+            return (
+                False,
+                "No readable validate_only=True dry-run receipt found to claim for execution.",
+                None,
+            )
 
-        lock_flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(lock_path, lock_flags, 0o600)
-        with os.fdopen(fd, "r+", encoding="utf-8") as lf:
+        if exp_rid is not None:
+            for _, data in readable:
+                if str(data.get("receipt_id") or "").strip() == exp_rid:
+                    st = str(data.get("status", ""))
+                    if st in non_claimable:
+                        return (
+                            False,
+                            f"Receipt already {st} (receipt_id='{exp_rid}'; "
+                            "expected 'DRY_RUN_PASSED'). Re-run --dry-run first.",
+                            None,
+                        )
+            matching = [
+                (p, d)
+                for p, d in readable
+                if str(d.get("receipt_id") or "").strip() == exp_rid
+                and str(d.get("status", "")) == "DRY_RUN_PASSED"
+            ]
+            if not matching:
+                top_status = str(readable[0][1].get("status", "MISSING"))
+                return (
+                    False,
+                    f"Dry-run receipt '{exp_rid}' is not pending "
+                    f"(highest-priority status is '{top_status}'). Re-run --dry-run first.",
+                    None,
+                )
+        else:
+            top_path, top_data = readable[0]
+            top_status = str(top_data.get("status", ""))
+            if top_status in non_claimable or top_status != "DRY_RUN_PASSED":
+                return (
+                    False,
+                    f"Dry-run receipt status is '{top_status}' (expected 'DRY_RUN_PASSED'; "
+                    "receipt may already be EXECUTING, EXECUTED, or REJECTED). Re-run --dry-run first.",
+                    None,
+                )
+            target_rid = str(top_data.get("receipt_id") or "").strip()
+            if target_rid:
+                for _, data in readable:
+                    if str(data.get("receipt_id") or "").strip() == target_rid:
+                        st = str(data.get("status", ""))
+                        if st in non_claimable:
+                            return (
+                                False,
+                                f"Receipt already {st} (receipt_id='{target_rid}'; "
+                                "expected 'DRY_RUN_PASSED'). Re-run --dry-run first.",
+                                None,
+                            )
+                matching = [
+                    (p, d)
+                    for p, d in readable
+                    if str(d.get("receipt_id") or "").strip() == target_rid
+                    and str(d.get("status", "")) == "DRY_RUN_PASSED"
+                ]
+            else:
+                matching = [
+                    (p, d)
+                    for p, d in readable
+                    if not str(d.get("receipt_id") or "").strip()
+                    and str(d.get("status", "")) == "DRY_RUN_PASSED"
+                ]
+                if not matching:
+                    matching = [(top_path, top_data)]
+
+        claim_id = str(uuid.uuid4())
+        my_pid = os.getpid()
+        written_originals: List[Tuple[str, Dict[str, Any]]] = []
+        claimed_data: Optional[Dict[str, Any]] = None
+        last_exc: Optional[OSError] = None
+
+        for idx, (target_path, orig_data) in enumerate(matching):
+            updated = dict(orig_data)
+            updated["status"] = "EXECUTING"
+            updated["executing_started_at_iso"] = now_iso
+            updated["executing_pid"] = my_pid
+            updated["executing_claim_id"] = claim_id
             try:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
-                return _do_claim()
-            finally:
-                try:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-                except OSError:
-                    pass
-    return _do_claim()
+                _write_json_atomic(target_path, updated)
+                written_originals.append((target_path, dict(orig_data)))
+                if claimed_data is None:
+                    claimed_data = updated
+            except OSError as exc:
+                last_exc = exc
+                if idx == 0:
+                    for rb_path, rb_orig in written_originals:
+                        try:
+                            _write_json_atomic(rb_path, rb_orig)
+                        except OSError:
+                            pass
+                    return False, f"Failed to persist claim: {exc}", None
+                continue
+
+        if claimed_data is None:
+            return False, f"Failed to persist claim: {last_exc}", None
+
+        return True, "Claimed receipt for single-use execution.", claimed_data
 
 
-def release_claimed_receipt_if_not_executed() -> None:
-    """Restores an EXECUTING receipt claimed by this PID back to DRY_RUN_PASSED.
+def release_claimed_receipt_if_not_executed(
+    expected_receipt_id: Optional[str] = None,
+    expected_claim_id: Optional[str] = None,
+) -> None:
+    """Restores an EXECUTING receipt claimed by this PID/claim back to DRY_RUN_PASSED.
 
-    Only called when execution was blocked pre-RPC or failed with zero succeeded
-    live RPCs; never reverts another PID's claim or any partially executed run.
+    Only called when execution was blocked strictly pre-RPC or failed pre-spawn;
+    never reverts another PID's claim or any dispatched/executed run.
     """
-    receipt_paths = get_receipt_paths()
-    existing_paths = [p for p in receipt_paths if os.path.isfile(p)]
-    if not existing_paths:
-        return
+    all_paths = get_receipt_paths()
     my_pid = os.getpid()
+    exp_rid = (
+        str(expected_receipt_id).strip()
+        if expected_receipt_id is not None and str(expected_receipt_id).strip()
+        else None
+    )
+    exp_cid = (
+        str(expected_claim_id).strip()
+        if expected_claim_id is not None and str(expected_claim_id).strip()
+        else None
+    )
 
-    def _do_release() -> None:
+    with _receipt_paths_lock(all_paths):
+        existing_paths = [p for p in all_paths if os.path.isfile(p)]
+        if not existing_paths:
+            return
         for target_path in existing_paths:
             try:
                 with open(target_path, "r", encoding="utf-8") as f:
@@ -4138,37 +4527,28 @@ def release_claimed_receipt_if_not_executed() -> None:
             if not isinstance(data, dict):
                 continue
             if (
-                str(data.get("status", "")) == "EXECUTING"
-                and data.get("executing_pid") == my_pid
+                str(data.get("status", "")) != "EXECUTING"
+                or data.get("executing_pid") != my_pid
             ):
-                data["status"] = "DRY_RUN_PASSED"
-                data.pop("executing_started_at_iso", None)
-                data.pop("executing_pid", None)
-                _write_json_atomic(target_path, data)
-
-    if sys.platform != "win32":
-        import fcntl
-
-        lock_dir = os.path.dirname(os.path.abspath(existing_paths[0])) or "."
-        os.makedirs(lock_dir, exist_ok=True)
-        lock_path = os.path.join(lock_dir, ".last_dry_run.lock")
-        lock_flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-        try:
-            fd = os.open(lock_path, lock_flags, 0o600)
-        except OSError:
-            _do_release()
-            return
-        with os.fdopen(fd, "r+", encoding="utf-8") as lf:
+                continue
+            if (
+                exp_rid is not None
+                and str(data.get("receipt_id") or "").strip() != exp_rid
+            ):
+                continue
+            if (
+                exp_cid is not None
+                and str(data.get("executing_claim_id") or "").strip() != exp_cid
+            ):
+                continue
+            data["status"] = "DRY_RUN_PASSED"
+            data.pop("executing_started_at_iso", None)
+            data.pop("executing_pid", None)
+            data.pop("executing_claim_id", None)
             try:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
-                _do_release()
-            finally:
-                try:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-                except OSError:
-                    pass
-    else:
-        _do_release()
+                _write_json_atomic(target_path, data)
+            except OSError:
+                continue
 
 
 def mark_receipt_executed(
@@ -4182,32 +4562,34 @@ def mark_receipt_executed(
         response_received_at_iso
         or datetime.datetime.now(datetime.timezone.utc).isoformat()
     )
-    for target_path in get_receipt_paths():
-        if os.path.isfile(target_path):
-            try:
-                with open(target_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                data["status"] = "EXECUTED"
-                data["executed_at_iso"] = executed_iso
-                if user_approved_at_iso:
-                    data["user_approved_at_iso"] = user_approved_at_iso
-                if request_sent_at_iso:
-                    data["live_request_sent_at_iso"] = request_sent_at_iso
-                if response_received_at_iso:
-                    data["live_response_received_at_iso"] = (
-                        response_received_at_iso
-                    )
-                if audit_id:
-                    data["audit_id"] = audit_id
-                _write_json_atomic(target_path, data)
-            except (
-                OSError,
-                UnicodeDecodeError,
-                json.JSONDecodeError,
-                TypeError,
-                ValueError,
-            ):
-                continue
+    receipt_paths = get_receipt_paths()
+    with _receipt_paths_lock(receipt_paths):
+        for target_path in receipt_paths:
+            if os.path.isfile(target_path):
+                try:
+                    with open(target_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    data["status"] = "EXECUTED"
+                    data["executed_at_iso"] = executed_iso
+                    if user_approved_at_iso:
+                        data["user_approved_at_iso"] = user_approved_at_iso
+                    if request_sent_at_iso:
+                        data["live_request_sent_at_iso"] = request_sent_at_iso
+                    if response_received_at_iso:
+                        data["live_response_received_at_iso"] = (
+                            response_received_at_iso
+                        )
+                    if audit_id:
+                        data["audit_id"] = audit_id
+                    _write_json_atomic(target_path, data)
+                except (
+                    OSError,
+                    UnicodeDecodeError,
+                    json.JSONDecodeError,
+                    TypeError,
+                    ValueError,
+                ):
+                    continue
 
 
 def load_and_verify_receipt(
@@ -4233,12 +4615,28 @@ def load_and_verify_receipt(
                 continue
 
     receipt: Optional[Dict[str, Any]] = None
-    for cand in loaded_candidates:
-        if str(cand.get("status", "")) == "DRY_RUN_PASSED":
-            receipt = cand
-            break
-    if receipt is None and loaded_candidates:
-        receipt = loaded_candidates[0]
+    non_pending = ("EXECUTING", "EXECUTED", "REJECTED")
+    if loaded_candidates:
+        top_status = str(loaded_candidates[0].get("status", ""))
+        if top_status in non_pending:
+            receipt = loaded_candidates[0]
+        else:
+            for cand in loaded_candidates:
+                if str(cand.get("status", "")) == "DRY_RUN_PASSED":
+                    receipt = cand
+                    break
+            if receipt is None:
+                receipt = loaded_candidates[0]
+            elif str(receipt.get("status", "")) == "DRY_RUN_PASSED":
+                top_rid = str(receipt.get("receipt_id") or "").strip()
+                if top_rid:
+                    for cand in loaded_candidates:
+                        if (
+                            str(cand.get("receipt_id") or "").strip() == top_rid
+                            and str(cand.get("status", "")) in non_pending
+                        ):
+                            receipt = cand
+                            break
 
     if not receipt:
         return (
@@ -4373,20 +4771,60 @@ def load_and_verify_receipt(
         )
 
     if script_path:
+        if str(receipt.get("create_params_sha256") or "").strip():
+            return (
+                False,
+                (
+                    "Cannot execute a script using a sidecar create_* "
+                    "parameter receipt. Run --dry-run on the script first."
+                ),
+                receipt,
+            )
         resolved_script = os.path.abspath(script_path)
-        expected_hash = receipt.get("script_sha256", "")
-        if expected_hash and os.path.isfile(resolved_script):
-            actual_hash = compute_file_sha256(resolved_script)
-            if actual_hash != expected_hash:
-                return (
-                    False,
-                    (
-                        f"Script '{script_path}' was modified after the "
-                        "validate_only=True dry-run (SHA-256 mismatch). Re-run "
-                        "--dry-run before executing."
-                    ),
-                    receipt,
-                )
+        recorded_script = str(receipt.get("script_path") or "").strip()
+        expected_hash = str(receipt.get("script_sha256") or "").strip()
+        if not recorded_script or not expected_hash:
+            return (
+                False,
+                (
+                    "Dry-run receipt is missing script_path or script_sha256 "
+                    "binding required for script execution. Re-run --dry-run "
+                    "with --script before executing."
+                ),
+                receipt,
+            )
+        if os.path.realpath(recorded_script) != os.path.realpath(
+            resolved_script
+        ):
+            return (
+                False,
+                (
+                    f"Dry-run receipt targets script '{recorded_script}', not "
+                    f"'{script_path}'. Re-run --dry-run for the target script "
+                    "before executing."
+                ),
+                receipt,
+            )
+        if not os.path.isfile(resolved_script):
+            return (
+                False,
+                (
+                    f"Script '{script_path}' does not exist on disk and "
+                    "cannot be verified against the dry-run receipt."
+                ),
+                receipt,
+            )
+        actual_hash = compute_file_sha256(resolved_script)
+        if actual_hash != expected_hash:
+            return (
+                False,
+                (
+                    f"Script '{script_path}' was modified after the "
+                    "validate_only=True dry-run (SHA-256 mismatch). Re-run "
+                    "--dry-run before executing."
+                ),
+                receipt,
+            )
 
     # Verify canonical mutate request SHA-256 integrity on the receipt
     recorded_req_sha = str(receipt.get("request_sha256", "")).strip()
@@ -4469,6 +4907,11 @@ def load_and_verify_receipt(
             "script_path": str(receipt.get("script_path", "")),
             "script_sha256": str(receipt.get("script_sha256", "")),
         }
+        rec_create_sha = str(
+            receipt.get("create_params_sha256") or ""
+        ).strip()
+        if rec_create_sha:
+            fallback_meta["create_params_sha256"] = rec_create_sha
         recomputed_fallback_sha = compute_aggregate_request_sha256(
             [], fallback_meta
         )
@@ -5302,7 +5745,7 @@ def main() -> None:
         extra_args = list(receipt_extra_args)
     elif (
         explicit_script_args_passed
-        and receipt_extra_args
+        and isinstance(recorded_script_args, list)
         and extra_args != receipt_extra_args
     ):
         blocked_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -5351,7 +5794,59 @@ def main() -> None:
         datetime.timezone.utc
     ).isoformat()
 
-    cid = args.customer_id or str(receipt.get("customer_id", ""))
+    receipt_cid_raw = str(receipt.get("customer_id", "")).strip()
+    if args.customer_id and receipt_cid_raw:
+        cli_cid_digits = re.sub(r"\D", "", str(args.customer_id))
+        rec_cid_digits = re.sub(r"\D", "", receipt_cid_raw)
+        if not cli_cid_digits or (
+            rec_cid_digits and cli_cid_digits != rec_cid_digits
+        ):
+            blocked_iso = datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat()
+            cid_err = (
+                "BLOCKED BY CUSTOMER ID MISMATCH: --customer-id "
+                f"'{str(args.customer_id).strip()}' on --execute does not "
+                f"match verified dry-run receipt customer_id "
+                f"'{receipt_cid_raw}'. Re-run --dry-run with the target "
+                "customer_id first."
+            )
+            append_mutation_audit_log(
+                phase="EXECUTE",
+                status="BLOCKED_CUSTOMER_ID_MISMATCH",
+                customer_id=str(args.customer_id).strip(),
+                operation_summary=str(
+                    args.operation or receipt.get("operation_summary", "")
+                ),
+                before_state=str(receipt.get("before_state", args.before)),
+                after_state=str(
+                    receipt.get("after_state", args.after or args.operation)
+                ),
+                consequences=[
+                    str(c)
+                    for c in receipt.get("consequences", [])
+                    if str(c).strip()
+                ],
+                reversibility=str(
+                    receipt.get("reversibility", args.reversibility)
+                ),
+                script_path=script_path,
+                script_sha256=script_sha256,
+                validate_only=False,
+                request_sent_at_iso=blocked_iso,
+                response_received_at_iso=blocked_iso,
+                duration_ms=0.0,
+                exit_code=2,
+                stdout="",
+                stderr=cid_err,
+                command=[sys.executable, script_path, "--execute", *extra_args],
+                rpc_calls=[],
+                receipt=receipt,
+            )
+            print(cid_err, file=sys.stderr)
+            sys.exit(2)
+
+    cid = args.customer_id or receipt_cid_raw
     script_args = ["--execute"]
     if cid and "--customer-id" not in extra_args:
         script_args.extend(["--customer-id", cid])
@@ -5385,7 +5880,10 @@ def main() -> None:
     )
     expected_hashes_arg = expected_rpc_hashes if enforce_live_hash else None
 
-    claimed, claim_msg, _ = claim_receipt_for_execution()
+    claimed, claim_msg, claimed_receipt = claim_receipt_for_execution(
+        expected_receipt_id=receipt.get("receipt_id")
+    )
+    claim_id = (claimed_receipt or {}).get("executing_claim_id")
     if not claimed:
         # Allow unit tests that monkeypatch load_and_verify_receipt without an
         # on-disk receipt file; any real loader or on-disk receipt must be claimed.
@@ -5396,18 +5894,99 @@ def main() -> None:
             os.path.isfile(p) for p in get_receipt_paths()
         )
         if not (is_mocked_loader and not has_any_receipt_file):
-            print(f"BLOCKED: {claim_msg}", file=sys.stderr)
+            blocked_iso = datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat()
+            replay_err = f"BLOCKED: {claim_msg}"
+            append_mutation_audit_log(
+                phase="EXECUTE",
+                status="BLOCKED_CONCURRENT_REPLAY",
+                customer_id=cid,
+                operation_summary=str(
+                    args.operation or receipt.get("operation_summary", "")
+                ),
+                before_state=str(receipt.get("before_state", args.before)),
+                after_state=str(
+                    receipt.get("after_state", args.after or args.operation)
+                ),
+                consequences=[
+                    str(c)
+                    for c in receipt.get("consequences", [])
+                    if str(c).strip()
+                ],
+                reversibility=str(
+                    receipt.get("reversibility", args.reversibility)
+                ),
+                script_path=script_path,
+                script_sha256=script_sha256,
+                validate_only=False,
+                request_sent_at_iso=blocked_iso,
+                response_received_at_iso=blocked_iso,
+                duration_ms=0.0,
+                exit_code=2,
+                stdout="",
+                stderr=replay_err,
+                command=[sys.executable, script_path, "--execute", *extra_args],
+                rpc_calls=[],
+                receipt=receipt,
+            )
+            print(replay_err, file=sys.stderr)
             sys.exit(2)
 
-    result, sent_at_iso, received_at_iso, duration_ms, captured_calls = (
-        _execute_script_subprocess(
-            script_path,
-            script_args,
-            expected_request_hashes=expected_hashes_arg,
-            enforce_request_hash=enforce_live_hash,
-            timeout_seconds=args.timeout,
+    try:
+        result, sent_at_iso, received_at_iso, duration_ms, captured_calls = (
+            _execute_script_subprocess(
+                script_path,
+                script_args,
+                expected_request_hashes=expected_hashes_arg,
+                enforce_request_hash=enforce_live_hash,
+                timeout_seconds=args.timeout,
+            )
         )
-    )
+    except OSError as exc:
+        if claimed:
+            release_claimed_receipt_if_not_executed(
+                expected_receipt_id=receipt.get("receipt_id"),
+                expected_claim_id=claim_id,
+            )
+        spawn_err = f"Failed to launch mutation script subprocess: {exc}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        append_mutation_audit_log(
+            phase="EXECUTE",
+            status="FAILED",
+            customer_id=cid,
+            operation_summary=str(
+                args.operation or receipt.get("operation_summary", "")
+            ),
+            before_state=str(receipt.get("before_state", args.before)),
+            after_state=str(
+                receipt.get("after_state", args.after or args.operation)
+            ),
+            consequences=[
+                str(c)
+                for c in receipt.get("consequences", [])
+                if str(c).strip()
+            ],
+            reversibility=str(
+                receipt.get("reversibility", args.reversibility)
+            ),
+            script_path=script_path,
+            script_sha256=script_sha256,
+            validate_only=False,
+            request_sent_at_iso=now_iso,
+            response_received_at_iso=now_iso,
+            duration_ms=0.0,
+            exit_code=1,
+            stdout="",
+            stderr=spawn_err,
+            command=[sys.executable, script_path, "--execute", *extra_args],
+            rpc_calls=[],
+            receipt=receipt,
+            user_approved_at_iso=user_approved_at_iso,
+            approval_decision="HUMAN_APPROVED",
+        )
+        print(spawn_err, file=sys.stderr)
+        sys.exit(1)
 
     consequences_from_receipt = [
         str(c) for c in receipt.get("consequences", []) if str(c).strip()
@@ -5506,11 +6085,28 @@ def main() -> None:
             user_approved_at_iso=user_approved_at_iso,
             approval_decision="HUMAN_APPROVED",
         )
-        any_rpc_succeeded = any(
-            c.get("status") == "SUCCESS" for c in captured_calls
+        any_rpc_dispatched = bool(
+            getattr(captured_calls, "any_rpc_dispatched", False)
+        ) or any(
+            isinstance(c, dict)
+            and str(c.get("status", "")) in {"DISPATCHED", "SUCCESS", "FAILED"}
+            for c in captured_calls
         )
-        if claimed and not any_rpc_succeeded and not missing_expected_calls:
-            release_claimed_receipt_if_not_executed()
+        clean_exit_seen = bool(
+            getattr(captured_calls, "clean_exit_seen", True)
+        )
+        if (
+            claimed
+            and result.returncode > 0
+            and result.returncode != 124
+            and clean_exit_seen
+            and not any_rpc_dispatched
+            and not missing_expected_calls
+        ):
+            release_claimed_receipt_if_not_executed(
+                expected_receipt_id=receipt.get("receipt_id"),
+                expected_claim_id=claim_id,
+            )
         print(
             f"Live mutation {failure_status} "
             f"(exit code {effective_exit_code}):\n"

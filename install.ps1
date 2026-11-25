@@ -149,8 +149,8 @@ Write-Host "Detected project root: $ProjectDirAbs"
 # Helper to safely remove a symlink or directory junction without deleting target contents
 function Remove-ReparsePointSafely {
     param([string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    $Item = Get-Item -LiteralPath $Path -Force
+    $Item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $Item) { return }
     if ($IsWindows -or $env:OS -eq "Windows_NT") {
         if ($Item.PSIsContainer) {
             [System.IO.Directory]::Delete($Item.FullName)
@@ -163,6 +163,62 @@ function Remove-ReparsePointSafely {
         } catch {
             Remove-Item -Force -LiteralPath $Item.FullName
         }
+    }
+}
+
+# Helper to write UTF-8 without BOM (compatible with Windows PowerShell 5.1 and PowerShell 7+)
+function Write-Utf8NoBom {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+    $FullPath = if ([System.IO.Path]::IsPathRooted($Path)) { $Path } else { Join-Path (Get-Location).ProviderPath $Path }
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($FullPath, $Content, $Utf8NoBom)
+}
+
+# Helper to locate a working Python 3.11+ interpreter (rejects Windows Store alias stubs)
+function Find-WorkingPython {
+    $FoundVersion = $null
+    $FoundPath = $null
+    foreach ($Candidate in @(
+        @{ Name = "python3"; PrefixArgs = @() },
+        @{ Name = "python";  PrefixArgs = @() },
+        @{ Name = "py";      PrefixArgs = @("-3") },
+        @{ Name = "py";      PrefixArgs = @() }
+    )) {
+        $Cmd = $Candidate.Name
+        $PrefixArgs = $Candidate.PrefixArgs
+        $CmdInfo = Get-Command $Cmd -ErrorAction SilentlyContinue
+        if (-not $CmdInfo) { continue }
+        try {
+            $ProbeArgs = @($PrefixArgs) + @("-c", 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"); sys.exit(0 if sys.version_info >= (3, 11) else 1)')
+            $global:LASTEXITCODE = 0
+            $VerOutput = (& $Cmd @ProbeArgs 2>$null | Out-String)
+            $ExitCode = $LASTEXITCODE
+            $VerTrimmed = if ($null -ne $VerOutput) { $VerOutput.Trim() } else { "" }
+            if ($ExitCode -eq 0 -and $VerTrimmed -match '^\d+\.\d+\.\d+$') {
+                return @{
+                    Found      = $true
+                    Name       = $Cmd
+                    PrefixArgs = $PrefixArgs
+                    Source     = $CmdInfo.Source
+                    Version    = $VerTrimmed
+                }
+            }
+            elseif ($VerTrimmed -match '^\d+\.\d+\.\d+$') {
+                $FoundVersion = $VerTrimmed
+                $FoundPath = $CmdInfo.Source
+            }
+        }
+        catch {}
+    }
+    return @{
+        Found      = $false
+        Name       = $null
+        PrefixArgs = @()
+        Source     = $FoundPath
+        Version    = $FoundVersion
     }
 }
 
@@ -179,7 +235,7 @@ function Merge-FinancialLimits {
     }
     $Overrides = [ordered]@{}
     $CurrentSection = ""
-    foreach ($RawLine in (Get-Content -LiteralPath $BackupPath)) {
+    foreach ($RawLine in (Get-Content -LiteralPath $BackupPath -Encoding UTF8)) {
         $Line = ($RawLine -replace '#.*$', '').Trim()
         if (-not $Line) { continue }
         if ($Line -match '^\[([A-Za-z0-9_.]+)\]$') {
@@ -203,7 +259,7 @@ function Merge-FinancialLimits {
     if ($Overrides.Count -eq 0) { return }
 
     $Applied = @{}
-    $UpdatedLines = foreach ($RawLine in (Get-Content -LiteralPath $TemplatePath)) {
+    $UpdatedLines = @(foreach ($RawLine in (Get-Content -LiteralPath $TemplatePath -Encoding UTF8)) {
         if ($RawLine -match '^(\s*)([A-Za-z0-9_.]+)(\s*=\s*)([^#]+?)(\s*#.*)?$') {
             $Indent = $Matches[1]
             $TKey = $Matches[2]
@@ -216,7 +272,7 @@ function Merge-FinancialLimits {
             }
         }
         $RawLine
-    }
+    })
     $ExtraLines = @()
     foreach ($OKey in $Overrides.Keys) {
         if (-not $Applied.ContainsKey($OKey)) {
@@ -227,7 +283,7 @@ function Merge-FinancialLimits {
     if (-not $FinalContent.EndsWith("`n")) {
         $FinalContent += "`n"
     }
-    Set-Content -LiteralPath $TemplatePath -Value $FinalContent -NoNewline
+    Write-Utf8NoBom -Path $TemplatePath -Content $FinalContent
 }
 
 function Update-GitRepo {
@@ -306,7 +362,7 @@ function Set-LatestApiVersion {
     )
     $Latest = $null
     if (Test-Path -LiteralPath $SearchDir) {
-        $VersionDirs = Get-ChildItem -Directory -Path $SearchDir -Filter "v*" |
+        $VersionDirs = Get-ChildItem -Directory -LiteralPath $SearchDir -Filter "v*" |
             Where-Object { $_.Name -match "^v\d+$" } |
             Sort-Object { [int]($_.Name.Substring(1)) }
         if ($VersionDirs) {
@@ -314,12 +370,16 @@ function Set-LatestApiVersion {
         }
     }
     if (-not $Latest) {
-        $PyCmd = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } elseif (Get-Command python -ErrorAction SilentlyContinue) { "python" } else { $null }
-        if ($PyCmd) {
-            $DetectedPy = & $PyCmd -c 'import importlib.util, os, re; s = importlib.util.find_spec("google.ads.googleads"); locs = list(s.submodule_search_locations or ()) if s else []; vs = sorted([d for p in locs if os.path.isdir(p) for d in os.listdir(p) if re.fullmatch(r"v\d+", d)], key=lambda d: int(d[1:])); print(vs[-1] if vs else "")' 2>$null
-            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($DetectedPy)) {
-                $Latest = $DetectedPy.Trim()
-            }
+        $Py = Find-WorkingPython
+        if ($Py.Found) {
+            try {
+                $DetectArgs = @($Py.PrefixArgs) + @("-c", 'import importlib.util, os, re; s = importlib.util.find_spec("google.ads.googleads"); locs = list(s.submodule_search_locations or ()) if s else []; vs = sorted([d for p in locs if os.path.isdir(p) for d in os.listdir(p) if re.fullmatch(r"v\d+", d)], key=lambda d: int(d[1:])); print(vs[-1] if vs else "")')
+                $global:LASTEXITCODE = 0
+                $DetectedPy = (& $Py.Name @DetectArgs 2>$null | Out-String)
+                if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($DetectedPy)) {
+                    $Latest = $DetectedPy.Trim()
+                }
+            } catch {}
         }
     }
     if ($Latest -or $CustomerId) {
@@ -334,32 +394,34 @@ function Set-LatestApiVersion {
         $PluginEnabled = "true"
         $ExtraLines = @()
         if (Test-Path -LiteralPath $CfgFile) {
-            $Existing = Get-Content -LiteralPath $CfgFile -Raw
-            if (-not $Latest -and ($Existing -match '(?m)^\s*api_version\s*=\s*["'']?([^"''\s#]+)["'']?')) {
-                $ExistingVer = $Matches[1].Trim()
-                if ($ExistingVer -match '^v?(\d+)$') {
-                    $ApiVer = "v$($Matches[1])"
+            $Existing = Get-Content -LiteralPath $CfgFile -Raw -Encoding UTF8
+            if ($null -ne $Existing) {
+                if (-not $Latest -and ($Existing -match '(?m)^\s*api_version\s*=\s*["'']?([^"''\s#]+)["'']?')) {
+                    $ExistingVer = $Matches[1].Trim()
+                    if ($ExistingVer -match '^v?(\d+)$') {
+                        $ApiVer = "v$($Matches[1])"
+                    }
+                    else {
+                        Write-Warning "Ignoring invalid api_version '$ExistingVer' in $CfgFile (expected vNN)."
+                    }
                 }
-                else {
-                    Write-Warning "Ignoring invalid api_version '$ExistingVer' in $CfgFile (expected vNN)."
+                if ($Existing -match '(?m)^\s*customer_id\s*=\s*["'']?([^"''\s#]+)["'']?') {
+                    $Cid = $Matches[1].Trim()
                 }
-            }
-            if ($Existing -match '(?m)^\s*customer_id\s*=\s*["'']?([^"''\s#]+)["'']?') {
-                $Cid = $Matches[1].Trim()
-            }
-            if ($Existing -match '(?mi)^\s*execute_mutates\s*=\s*["'']?(true|false)["'']?') {
-                $ExecMutates = $Matches[1].ToLower()
-            }
-            if ($Existing -match '(?mi)^\s*allow_tier1_financial_mutates\s*=\s*["'']?(true|false)["'']?') {
-                $Tier1Mutates = $Matches[1].ToLower()
-            }
-            if ($Existing -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?(true|false)["'']?') {
-                $PluginEnabled = $Matches[1].ToLower()
-            }
-            foreach ($RawLine in ($Existing -split "`r?`n")) {
-                if ([string]::IsNullOrWhiteSpace($RawLine)) { continue }
-                if ($RawLine -notmatch '^\s*(?:api_version|customer_id|execute_mutates|allow_tier1_financial_mutates|enabled|plugin_enabled)\s*=') {
-                    $ExtraLines += $RawLine
+                if ($Existing -match '(?mi)^\s*execute_mutates\s*=\s*["'']?(true|false)["'']?') {
+                    $ExecMutates = $Matches[1].ToLower()
+                }
+                if ($Existing -match '(?mi)^\s*allow_tier1_financial_mutates\s*=\s*["'']?(true|false)["'']?') {
+                    $Tier1Mutates = $Matches[1].ToLower()
+                }
+                if ($Existing -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?(true|false)["'']?') {
+                    $PluginEnabled = $Matches[1].ToLower()
+                }
+                foreach ($RawLine in ($Existing -split "`r?`n")) {
+                    if ([string]::IsNullOrWhiteSpace($RawLine)) { continue }
+                    if ($RawLine -notmatch '^\s*(?:api_version|customer_id|execute_mutates|allow_tier1_financial_mutates|enabled|plugin_enabled)\s*=') {
+                        $ExtraLines += $RawLine
+                    }
                 }
             }
         }
@@ -377,10 +439,13 @@ function Set-LatestApiVersion {
             )
             foreach ($LegacyFile in $LegacyCandidates) {
                 if ($LegacyFile -and (Test-Path -LiteralPath $LegacyFile)) {
-                    $LegacyCid = (Get-Content -LiteralPath $LegacyFile -Raw).Trim().Trim("`"'")
-                    if ($LegacyCid -and $LegacyCid -ne "12345678") {
-                        $Cid = $LegacyCid
-                        break
+                    $LegacyRaw = Get-Content -LiteralPath $LegacyFile -Raw -Encoding UTF8
+                    if ($null -ne $LegacyRaw) {
+                        $LegacyCid = $LegacyRaw.Trim().Trim("`"'")
+                        if ($LegacyCid -and $LegacyCid -ne "12345678") {
+                            $Cid = $LegacyCid
+                            break
+                        }
                     }
                 }
             }
@@ -389,7 +454,7 @@ function Set-LatestApiVersion {
         if ($ExtraLines.Count -gt 0) {
             $TomlContent += ($ExtraLines -join "`n") + "`n"
         }
-        Set-Content -Path $CfgFile -Value $TomlContent -NoNewline
+        Write-Utf8NoBom -Path $CfgFile -Content $TomlContent
         if ($ApiVer) {
             Write-Host "Configured API version $ApiVer in $CfgFile"
         }
@@ -411,31 +476,15 @@ function Write-NoApiVersionWarning {
 
 # --- Environment Verification ---
 function Test-PythonEnvironment {
-    $Candidates = @("python3", "python", "py")
-    $FoundVersion = $null
-    $FoundPath = $null
-
-    foreach ($Cmd in $Candidates) {
-        $CmdInfo = Get-Command $Cmd -ErrorAction SilentlyContinue
-        if ($CmdInfo) {
-            try {
-                $VerOutput = & $Cmd -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"); sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>$null
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host "Found Python $VerOutput ($($CmdInfo.Source))"
-                    return $true
-                }
-                elseif ($VerOutput) {
-                    $FoundVersion = $VerOutput
-                    $FoundPath = $CmdInfo.Source
-                }
-            }
-            catch {}
-        }
+    $Py = Find-WorkingPython
+    if ($Py.Found) {
+        Write-Host "Found Python $($Py.Version) ($($Py.Source))"
+        return $true
     }
 
     Write-Error "ERROR: Python 3.11 or higher is required."
-    if ($FoundVersion) {
-        Write-Error "Incompatible Python version detected: $FoundVersion ($FoundPath)."
+    if ($Py.Version) {
+        Write-Error "Incompatible Python version detected: $($Py.Version) ($($Py.Source))."
     }
     else {
         Write-Error "No Python interpreter was found on PATH."
@@ -461,28 +510,35 @@ function Test-AntigravityEnvironment {
     }
 
     $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-    $GeminiDir = Join-Path $UserHome ".gemini"
-    $AntigravityDir = Join-Path $UserHome ".antigravity"
-    if ((Test-Path -LiteralPath $GeminiDir) -or (Test-Path -LiteralPath $AntigravityDir)) {
-        Write-Host "Antigravity configuration/installation found in home directory ($GeminiDir or $AntigravityDir)"
-        return $true
-    }
-
-    $ProgramDirs = @(
-        (Join-Path $env:LOCALAPPDATA "Programs\Antigravity"),
-        (Join-Path $env:PROGRAMFILES "Antigravity"),
-        (Join-Path ${env:ProgramFiles(x86)} "Antigravity")
-    )
-    foreach ($Dir in $ProgramDirs) {
-        if ($Dir -and (Test-Path -LiteralPath $Dir)) {
-            Write-Host "Antigravity Desktop installation found at $Dir"
+    if (-not [string]::IsNullOrWhiteSpace($UserHome)) {
+        $GeminiDir = Join-Path $UserHome ".gemini"
+        $AntigravityDir = Join-Path $UserHome ".antigravity"
+        if ((Test-Path -LiteralPath $GeminiDir) -or (Test-Path -LiteralPath $AntigravityDir)) {
+            Write-Host "Antigravity configuration/installation found in home directory ($GeminiDir or $AntigravityDir)"
             return $true
         }
     }
 
-    Write-Error "ERROR: Antigravity CLI or Antigravity Desktop/Web is not installed."
-    Write-Error "The Google Ads API Developer Assistant requires an active Antigravity environment."
-    Write-Error "Please install Antigravity CLI ('agy' or 'antigravity') or Antigravity Desktop/Web to continue."
+    $ProgramDirs = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $ProgramDirs += (Join-Path $env:LOCALAPPDATA "Programs\Antigravity")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:PROGRAMFILES)) {
+        $ProgramDirs += (Join-Path $env:PROGRAMFILES "Antigravity")
+    }
+    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
+        $ProgramDirs += (Join-Path ${env:ProgramFiles(x86)} "Antigravity")
+    }
+    foreach ($Dir in $ProgramDirs) {
+        if ($Dir -and (Test-Path -LiteralPath $Dir)) {
+            Write-Host "Antigravity CLI installation found at $Dir"
+            return $true
+        }
+    }
+
+    Write-Error "ERROR: Antigravity CLI ('agy' or 'antigravity') is not installed."
+    Write-Error "The Google Ads API Developer Assistant requires an active Antigravity CLI environment."
+    Write-Error "Please install Antigravity CLI ('agy' or 'antigravity') to continue."
     return $false
 }
 
@@ -550,18 +606,20 @@ function Install-PluginCopy {
     $BackupLibsDir = Join-Path $TempBackupDir "client_libs"
     $BackupSavedDir = Join-Path $TempBackupDir "saved"
     $WasDisabled = $false
+    $InstallSucceeded = $false
+    $HasBackupData = $false
 
     try {
-        if (Test-Path -LiteralPath $TargetPluginDir) {
-            $TargetItem = Get-Item -LiteralPath $TargetPluginDir -Force
+        $TargetItem = Get-Item -LiteralPath $TargetPluginDir -Force -ErrorAction SilentlyContinue
+        if ($TargetItem) {
             $IsSymlink = [bool](($TargetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $TargetItem.LinkType)
 
             if ((Test-Path -LiteralPath (Join-Path $TargetPluginDir "plugin.json.disabled")) -and -not (Test-Path -LiteralPath (Join-Path $TargetPluginDir "plugin.json"))) {
                 $WasDisabled = $true
             }
             elseif (Test-Path -LiteralPath (Join-Path (Join-Path $TargetPluginDir "config") "assistant_config")) {
-                $PriorCfg = Get-Content -LiteralPath (Join-Path (Join-Path $TargetPluginDir "config") "assistant_config") -Raw
-                if ($PriorCfg -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?false["'']?') {
+                $PriorCfg = Get-Content -LiteralPath (Join-Path (Join-Path $TargetPluginDir "config") "assistant_config") -Raw -Encoding UTF8
+                if ($null -ne $PriorCfg -and $PriorCfg -match '(?mi)^\s*(?:enabled|plugin_enabled)\s*=\s*["'']?false["'']?') {
                     $WasDisabled = $true
                 }
             }
@@ -575,10 +633,12 @@ function Install-PluginCopy {
                     $ExistingCfgFile = Join-Path (Join-Path $TargetPluginDir "config") $CfgName
                     if (Test-Path -LiteralPath $ExistingCfgFile) {
                         Copy-Item -Force -LiteralPath $ExistingCfgFile -Destination (Join-Path $BackupCfgDir $CfgName)
+                        $HasBackupData = $true
                     }
                 }
                 $ExistingSaved = Join-Path $TargetPluginDir "saved"
                 if (Test-Path -LiteralPath $ExistingSaved) {
+                    $HasBackupData = $true
                     try {
                         Move-Item -Force -LiteralPath $ExistingSaved -Destination $BackupSavedDir
                     } catch {
@@ -589,6 +649,7 @@ function Install-PluginCopy {
                 if (Test-Path -LiteralPath $ExistingClientLibs) {
                     New-Item -ItemType Directory -Force -Path $BackupLibsDir | Out-Null
                     foreach ($ExistingLib in Get-ChildItem -LiteralPath $ExistingClientLibs -Directory -Filter "google-ads-*" -ErrorAction SilentlyContinue) {
+                        $HasBackupData = $true
                         $DestBakLib = Join-Path $BackupLibsDir $ExistingLib.Name
                         try {
                             Move-Item -Force -LiteralPath $ExistingLib.FullName -Destination $DestBakLib
@@ -639,25 +700,52 @@ function Install-PluginCopy {
                 Copy-Item -Force -LiteralPath $HelperPs1 -Destination (Join-Path $TargetPluginDir $HelperName)
             }
         }
-        Set-Content -Path (Join-Path $TargetCfgDir ".repo_root") -Value "$ProjectDirAbs`n" -NoNewline
+        Write-Utf8NoBom -Path (Join-Path $TargetCfgDir ".repo_root") -Content "$ProjectDirAbs`n"
 
-        # On Windows hosts where python.exe exists without python3.exe, normalize installed JSON manifests
-        $HasWorkingPython3 = $false
-        $Py3Info = Get-Command "python3" -ErrorAction SilentlyContinue
-        if ($Py3Info) {
-            try {
-                & "python3" -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" *> $null
-                if ($LASTEXITCODE -eq 0) { $HasWorkingPython3 = $true }
-            } catch {}
+        # Strip Claude-Code-only files from the installed agy copy before manifest normalization
+        # and plugin disable/enable so `jetski plugin validate` emits 0 warnings and no orphaned `.mcp.json.disabled` remains
+        if ($Type -eq "agy") {
+            foreach ($ClaudeOnly in @(".claude-plugin", ".mcp.json", ".mcp.json.disabled", "hooks", "commands")) {
+                $ClaudeOnlyPath = Join-Path $TargetPluginDir $ClaudeOnly
+                $ClaudeOnlyItem = Get-Item -LiteralPath $ClaudeOnlyPath -Force -ErrorAction SilentlyContinue
+                if ($ClaudeOnlyItem) {
+                    if (($ClaudeOnlyItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $ClaudeOnlyItem.LinkType) {
+                        Remove-ReparsePointSafely -Path $ClaudeOnlyPath
+                    } else {
+                        Remove-Item -Recurse -Force -LiteralPath $ClaudeOnlyPath -ErrorAction SilentlyContinue
+                    }
+                }
+            }
         }
-        if (-not $HasWorkingPython3 -and (Get-Command "python" -ErrorAction SilentlyContinue)) {
+
+        # On Windows hosts where python3 is missing or a Windows Store alias stub, normalize installed JSON manifests
+        $WorkingPy = Find-WorkingPython
+        if ($WorkingPy.Found -and $WorkingPy.Name -ne "python3") {
             foreach ($RelJson in @("hooks.json", "mcp_config.json", ".mcp.json", "sidecars\google-ads-a2a-service\sidecar.json")) {
                 $ManifestPath = Join-Path $TargetPluginDir $RelJson
                 if (Test-Path -LiteralPath $ManifestPath) {
                     $RawJson = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8
-                    $UpdatedJson = $RawJson -replace '"command"\s*:\s*"python3(?=\s|")', '"command": "python'
+                    if ($null -eq $RawJson) { continue }
+                    if ($WorkingPy.Name -eq "python") {
+                        $UpdatedJson = $RawJson -replace '"command"\s*:\s*"python3(?=\s|")', '"command": "python'
+                    }
+                    else {
+                        $PyPrefix = if ($WorkingPy.PrefixArgs -contains "-3") { "py -3" } else { "py" }
+                        $UpdatedJson = $RawJson -replace '"command"\s*:\s*"python3(?=\s)', ('"command": "' + $PyPrefix)
+                        if ($UpdatedJson -match '"command"\s*:\s*"python3"') {
+                            $UpdatedJson = $UpdatedJson -replace '"command"\s*:\s*"python3"', '"command": "py"'
+                            if ($WorkingPy.PrefixArgs -contains "-3") {
+                                if ($UpdatedJson -match '"args"\s*:\s*\[\s*\]') {
+                                    $UpdatedJson = $UpdatedJson -replace '"args"\s*:\s*\[\s*\]', '"args": ["-3"]'
+                                }
+                                else {
+                                    $UpdatedJson = $UpdatedJson -replace '("args"\s*:\s*\[)(\s*)(?=[^\]\s])', '$1$2"-3", '
+                                }
+                            }
+                        }
+                    }
                     if ($UpdatedJson -ne $RawJson) {
-                        Set-Content -LiteralPath $ManifestPath -Value $UpdatedJson -Encoding UTF8 -NoNewline
+                        Write-Utf8NoBom -Path $ManifestPath -Content $UpdatedJson
                     }
                 }
             }
@@ -722,16 +810,31 @@ function Install-PluginCopy {
 
         $PluginPythonDir = Join-Path $TargetPluginDir "client_libs\google-ads-python\google\ads\googleads"
         Set-LatestApiVersion -SearchDir $PluginPythonDir -TargetConfigDir $TargetCfgDir
+        $global:LASTEXITCODE = 0
         if ($Disable -or (-not $Enable -and $WasDisabled)) {
             & (Join-Path $ProjectDirAbs "plugin.ps1") disable -ConfigDir $TargetCfgDir -Quiet
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "ERROR: Failed to disable plugin via plugin.ps1 (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+            }
         }
         else {
             & (Join-Path $ProjectDirAbs "plugin.ps1") enable -ConfigDir $TargetCfgDir -Quiet
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "ERROR: Failed to enable plugin via plugin.ps1 (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+            }
         }
+        $InstallSucceeded = $true
     }
     finally {
-        if (Test-Path -LiteralPath $TempBackupDir) {
-            Remove-Item -Recurse -Force -LiteralPath $TempBackupDir -ErrorAction SilentlyContinue
+        if ($InstallSucceeded -or -not $HasBackupData) {
+            if (Test-Path -LiteralPath $TempBackupDir) {
+                Remove-Item -Recurse -Force -LiteralPath $TempBackupDir -ErrorAction SilentlyContinue
+            }
+        }
+        elseif (Test-Path -LiteralPath $TempBackupDir) {
+            Write-Warning "Installation did not complete. Preserved backed-up configuration and data at: $TempBackupDir"
         }
     }
 }
@@ -754,10 +857,20 @@ if ($Type -eq "claude") {
     Write-Host "Registering marketplace in Claude Code..."
     Push-Location -LiteralPath $ClaudePluginTargetDir
     try {
-        claude plugin marketplace add $ClaudeMarketplaceDir
+        $global:LASTEXITCODE = 0
+        & claude plugin marketplace add $ClaudeMarketplaceDir
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "ERROR: Failed to register marketplace in Claude Code (exit code $LASTEXITCODE)."
+            exit $LASTEXITCODE
+        }
 
         Write-Host "Installing plugin in Claude Code..."
-        claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
+        $global:LASTEXITCODE = 0
+        & claude plugin install google-ads-api-developer-assistant@google-ads-assistant-local
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "ERROR: Failed to install plugin in Claude Code (exit code $LASTEXITCODE)."
+            exit $LASTEXITCODE
+        }
     }
     finally {
         Pop-Location
@@ -774,14 +887,8 @@ $TargetPluginDir = Join-Path $UserHome ".gemini\config\plugins\google-ads-api-de
 
 Write-Host "Installing plugin for agy into: $TargetPluginDir"
 Install-PluginCopy -TargetPluginDir $TargetPluginDir
-# Strip Claude-Code-only files from the installed agy copy so `jetski plugin validate` emits 0 warnings
-foreach ($ClaudeOnly in @(".claude-plugin", ".mcp.json", "hooks", "commands")) {
-    $ClaudeOnlyPath = Join-Path $TargetPluginDir $ClaudeOnly
-    if (Test-Path -LiteralPath $ClaudeOnlyPath) {
-        Remove-Item -Recurse -Force -LiteralPath $ClaudeOnlyPath -ErrorAction SilentlyContinue
-    }
-}
 
 Write-Host "Plugin installation for agy complete."
 Write-Host ""
 Write-Host "Restart your Antigravity / agy host to activate the plugin."
+exit 0

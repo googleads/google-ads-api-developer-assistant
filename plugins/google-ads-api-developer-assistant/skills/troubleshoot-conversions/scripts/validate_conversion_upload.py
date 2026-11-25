@@ -51,6 +51,15 @@ _CURRENCY_HEADERS = (
     "conversion_currency_code",
     "conversion_currency",
 )
+_MAX_PREVIEW_LEN = 64
+
+
+def _safe_preview(val: str, max_len: int = _MAX_PREVIEW_LEN) -> str:
+    """Returns a bounded single-line preview for non-PII error diagnostics."""
+    cleaned = val.replace("\r", "\\r").replace("\n", "\\n")
+    if len(cleaned) <= max_len:
+        return cleaned
+    return f"{cleaned[:max_len]}... (len={len(val)})"
 
 
 def _parse_conversion_timestamp(raw_ts: str) -> datetime.datetime:
@@ -101,6 +110,14 @@ def validate_conversion_csv(
         max_errors: Maximum per-row error lines printed (0 = unlimited).
     """
     del api_version, client  # Unused; retained for signature compatibility.
+    if (
+        not isinstance(max_errors, int)
+        or isinstance(max_errors, bool)
+        or max_errors < 0
+    ):
+        raise ValueError(
+            "max_errors must be a non-negative integer (0 for unlimited)."
+        )
     if not os.path.isfile(csv_path):
         print(f"ERROR: CSV file not found at '{csv_path}'.", file=sys.stderr)
         sys.exit(1)
@@ -112,7 +129,7 @@ def validate_conversion_csv(
     def _emit_row_error(msg: str) -> None:
         nonlocal errors_found, suppressed_errors
         errors_found += 1
-        if max_errors <= 0 or errors_found <= max_errors:
+        if max_errors == 0 or errors_found <= max_errors:
             print(msg)
         else:
             suppressed_errors += 1
@@ -165,7 +182,7 @@ def validate_conversion_csv(
                 except ValueError:
                     _emit_row_error(
                         f"  [Row {row_idx}] ERROR: Invalid conversion_time "
-                        f"format '{conv_time_str}'. "
+                        f"format '{_safe_preview(conv_time_str)}'. "
                         "Use 'YYYY-MM-DD HH:MM:SS-HH:MM'."
                     )
 
@@ -183,13 +200,14 @@ def validate_conversion_csv(
                             ):
                                 _emit_row_error(
                                     f"  [Row {row_idx}] ERROR: conversion_time "
-                                    f"'{conv_time_str}' must be strictly after "
-                                    f"click_time '{click_time_str}'."
+                                    f"'{_safe_preview(conv_time_str)}' must be "
+                                    "strictly after click_time "
+                                    f"'{_safe_preview(click_time_str)}'."
                                 )
                         except ValueError:
                             _emit_row_error(
                                 f"  [Row {row_idx}] ERROR: Invalid click_time "
-                                f"format '{click_time_str}'. "
+                                f"format '{_safe_preview(click_time_str)}'. "
                                 "Use 'YYYY-MM-DD HH:MM:SS-HH:MM'."
                             )
 
@@ -211,7 +229,7 @@ def validate_conversion_csv(
                     if not gclid_val or len(gclid_val) < 10:
                         _emit_row_error(
                             f"  [Row {row_idx}] ERROR: GCLID is too short or "
-                            f"empty: '{gclid_val}'"
+                            f"empty: '{_safe_preview(gclid_val)}'"
                         )
                     else:
                         has_any_valid_id = True
@@ -225,7 +243,8 @@ def validate_conversion_csv(
                             ):
                                 _emit_row_error(
                                     f"  [Row {row_idx}] ERROR: Invalid "
-                                    f"{braid_col} value: '{b_val}'"
+                                    f"{braid_col} value: "
+                                    f"'{_safe_preview(b_val)}'"
                                 )
                             else:
                                 has_any_valid_id = True
@@ -235,16 +254,25 @@ def validate_conversion_csv(
                         p_val = (row.get(headers[pii_col]) or "").strip()
                         if p_val:
                             if "@" in p_val or "+" in p_val:
+                                reasons: list[str] = []
+                                if "@" in p_val:
+                                    reasons.append("contains '@'")
+                                if "+" in p_val:
+                                    reasons.append("contains '+'")
+                                reason_str = ", ".join(reasons)
                                 _emit_row_error(
                                     f"  [Row {row_idx}] ERROR: Unhashed raw "
-                                    f"PII detected in {pii_col} ('{p_val}'). "
+                                    f"PII detected in {pii_col} "
+                                    f"({reason_str}; length={len(p_val)}, "
+                                    "value redacted). "
                                     "Must be SHA-256 hex digest (64 hex chars)."
                                 )
                             elif not _SHA256_HEX_RE.fullmatch(p_val):
                                 _emit_row_error(
                                     f"  [Row {row_idx}] ERROR: Invalid "
-                                    f"{pii_col} '{p_val}'. Expected "
-                                    "64-character hexadecimal SHA-256 hash."
+                                    f"{pii_col} (length={len(p_val)}, "
+                                    "value redacted). Expected "
+                                    "64 hexadecimal SHA-256 chars."
                                 )
                             else:
                                 has_any_valid_id = True
@@ -271,7 +299,8 @@ def validate_conversion_csv(
                     except ValueError:
                         _emit_row_error(
                             f"  [Row {row_idx}] ERROR: Invalid "
-                            f"conversion_value '{conv_val_str}'. "
+                            "conversion_value "
+                            f"'{_safe_preview(conv_val_str)}'. "
                             "Must be a finite number >= 0."
                         )
 
@@ -281,8 +310,8 @@ def validate_conversion_csv(
                     if curr_val and not _CURRENCY_RE.fullmatch(curr_val):
                         _emit_row_error(
                             f"  [Row {row_idx}] ERROR: Invalid {curr_col} "
-                            f"'{curr_val}'. Expected 3-letter uppercase "
-                            "ISO 4217 code (e.g., 'USD')."
+                            f"'{_safe_preview(curr_val)}'. Expected 3-letter "
+                            "uppercase ISO 4217 code (e.g., 'USD')."
                         )
 
         if errors_found == 0:
@@ -330,10 +359,18 @@ def main() -> None:
         help="Maximum number of per-row errors to print (0 for unlimited). Default: 50.",
     )
     args = parser.parse_args()
+    if args.max_errors < 0:
+        parser.error(
+            "--max-errors must be a non-negative integer (0 for unlimited)."
+        )
 
-    validate_conversion_csv(
-        args.csv_path, args.api_version, max_errors=args.max_errors
-    )
+    try:
+        validate_conversion_csv(
+            args.csv_path, args.api_version, max_errors=args.max_errors
+        )
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
