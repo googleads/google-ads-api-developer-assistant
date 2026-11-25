@@ -348,7 +348,10 @@ def test_hook_rewrite_shape_without_auto_approval(
     if cli == "agy":
         _assert_agy_shape(out)
         assert out["decision"] == "allow"
-        assert "export GOOGLE_ADS_ASSISTANT_DIR=" in out["overwrite"]["CommandLine"]
+        if sys.platform == "win32":
+            assert 'set "GOOGLE_ADS_ASSISTANT_DIR=' in out["overwrite"]["CommandLine"]
+        else:
+            assert "export GOOGLE_ADS_ASSISTANT_DIR=" in out["overwrite"]["CommandLine"]
     else:
         _assert_claude_shape(out)
         hso = out["hookSpecificOutput"]
@@ -839,8 +842,8 @@ def test_config_lookup_prefers_claude_plugin_root(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(root))
     paths = config_init.get_assistant_config_paths()
     assert paths[0] == os.path.normpath(str(root / "config" / "assistant_config"))
-    claude_idx = next(i for i, p in enumerate(paths) if "/.claude/" in p)
-    gemini_idx = next(i for i, p in enumerate(paths) if "/.gemini/" in p)
+    claude_idx = next(i for i, p in enumerate(paths) if "/.claude/" in p.replace("\\", "/"))
+    gemini_idx = next(i for i, p in enumerate(paths) if "/.gemini/" in p.replace("\\", "/"))
     assert claude_idx < gemini_idx
     this_cfg = os.path.normpath(str(PLUGIN_DIR / "config" / "assistant_config"))
     cwd_cfg = os.path.normpath(os.path.abspath(os.path.join("config", "assistant_config")))

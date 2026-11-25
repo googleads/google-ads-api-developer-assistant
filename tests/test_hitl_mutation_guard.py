@@ -1138,10 +1138,13 @@ def test_handle_hook_command_rewriting_and_dual_host_payloads(
     out_agy = json.loads(capsys.readouterr().out)
     assert out_agy["decision"] == "allow"
     rewritten = out_agy["overwrite"]["CommandLine"]
-    # handle_hook() escapes backslashes inside the double-quoted export value, so Windows
-    # paths such as C:\Users\... appear with doubled backslashes.
-    escaped_cfg = fake_cfg.replace("\\", "\\\\")
-    assert f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{escaped_cfg}" &&' in rewritten
+    if sys.platform == "win32":
+        clean_cfg = fake_cfg.replace("\r", "").replace("\n", "").replace('"', "")
+        assert f'set "GOOGLE_ADS_CONFIGURATION_FILE_PATH={clean_cfg}" &&' in rewritten
+    else:
+        # handle_hook() escapes backslashes inside the double-quoted export value.
+        escaped_cfg = fake_cfg.replace("\\", "\\\\")
+        assert f'export GOOGLE_ADS_CONFIGURATION_FILE_PATH="{escaped_cfg}" &&' in rewritten
     assert 'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml")' in rewritten
     assert (
         f'GoogleAdsClient.load_from_storage(path="config/google-ads.yaml", version=\'{CURRENT_API_VERSION}\')'
@@ -1149,7 +1152,10 @@ def test_handle_hook_command_rewriting_and_dual_host_payloads(
     )
     assert "/home/testuser/google-ads.yaml" not in rewritten
     assert "client_libs/google-ads-python/google-ads.yaml" not in rewritten
-    assert "export GOOGLE_ADS_ASSISTANT_DIR=" in rewritten
+    if sys.platform == "win32":
+        assert 'set "GOOGLE_ADS_ASSISTANT_DIR=' in rewritten
+    else:
+        assert "export GOOGLE_ADS_ASSISTANT_DIR=" in rewritten
 
     # 2b. Antigravity PreToolUse hook: rewrites relative skills/ path when executed outside repo
     skills_cmd = "python3 skills/ext-version/scripts/get_extension_version.py"
@@ -1165,7 +1171,10 @@ def test_handle_hook_command_rewriting_and_dual_host_payloads(
     out_skills = json.loads(capsys.readouterr().out)
     assert out_skills["decision"] == "allow"
     rewritten_skills = out_skills["overwrite"]["CommandLine"]
-    assert "export GOOGLE_ADS_ASSISTANT_DIR=" in rewritten_skills
+    if sys.platform == "win32":
+        assert 'set "GOOGLE_ADS_ASSISTANT_DIR=' in rewritten_skills
+    else:
+        assert "export GOOGLE_ADS_ASSISTANT_DIR=" in rewritten_skills
     assert "skills/ext-version/scripts/get_extension_version.py" in rewritten_skills
 
     # 3. Claude Code PreToolUse hook: live mutation denied when no receipt exists

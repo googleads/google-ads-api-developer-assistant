@@ -138,9 +138,14 @@ jobs:
           ruff check .
 
       - name: Run unit tests and enforce 80% coverage gate
+        shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           python tests/run_coverage.py --fast
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pytest tests/run_coverage.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run lifecycle & platform script tests (PowerShell)
         shell: pwsh

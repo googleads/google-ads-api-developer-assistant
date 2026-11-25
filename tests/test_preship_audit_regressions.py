@@ -527,7 +527,11 @@ class TestP0BypassAndSecurityRegressions:
         ci.handle_hook(explicit_event="PreToolUse", explicit_cli="agy", raw_stdin=json.dumps(payload))
         out = json.loads(capsys.readouterr().out)
         rewritten = out["overwrite"]["CommandLine"]
-        assert "'My Custom Plugin Root" in rewritten or f"'{custom_root}/skills/validate-gaql/scripts/validate_gaql.py'" in rewritten
+        expected_target = os.path.join(str(custom_root), "skills/validate-gaql/scripts/validate_gaql.py")
+        if sys.platform == "win32":
+            assert f'"{expected_target}"' in rewritten
+        else:
+            assert "'My Custom Plugin Root" in rewritten or f"'{custom_root}/skills/validate-gaql/scripts/validate_gaql.py'" in rewritten
 
     def test_p0_1_p1_5_p2_1_server_confinement_real_dry_run_tier1_and_mcp_parity(
         self, srv: Any, isolated_env: Path, monkeypatch: pytest.MonkeyPatch
@@ -1130,9 +1134,26 @@ class TestAudit2SecurityParityAndResilienceRegressions:
         (custom_dir / "config" / "hook_guard.py").write_text("import sys; print('{\"decision\":\"allow\"}')\n", encoding="utf-8")
         hooks_data = json.loads((PLUGIN_ROOT / "hooks.json").read_text(encoding="utf-8"))
         cmd = hooks_data["config-init"]["PreToolUse"][0]["hooks"][0]["command"]
-        clean_env = {"PATH": os.environ.get("PATH", ""), "HOME": str(isolated_env / "empty_home")}
+        if sys.platform == "win32":
+            import shlex
+
+            argv = shlex.split(cmd, posix=True)
+            assert argv[0] == "python3"
+            argv[0] = sys.executable
+            clean_env = {
+                "PATH": os.environ.get("PATH", ""),
+                "HOME": str(isolated_env / "empty_home"),
+                "USERPROFILE": str(isolated_env / "empty_home"),
+            }
+            for win_key in ("SYSTEMROOT", "COMSPEC", "WINDIR"):
+                if os.environ.get(win_key):
+                    clean_env[win_key] = os.environ[win_key]
+            proc_cmd = argv
+        else:
+            clean_env = {"PATH": os.environ.get("PATH", ""), "HOME": str(isolated_env / "empty_home")}
+            proc_cmd = ["bash", "-c", cmd]
         proc = subprocess.run(
-            ["bash", "-c", cmd],
+            proc_cmd,
             input=json.dumps({"toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}}),
             capture_output=True,
             text=True,
@@ -1142,6 +1163,24 @@ class TestAudit2SecurityParityAndResilienceRegressions:
             check=False,
         )
         assert proc.returncode == 0 and json.loads(proc.stdout)["decision"] == "allow"
+
+        # Verify _normalize_shell_obfuscation preserves Windows path backslashes on all platforms
+        # and does not corrupt relative Windows paths when sys.platform == "win32".
+        win_abs = r"python3 C:\Users\runneradmin\AppData\Local\Temp\live_budget.py --execute"
+        assert ci._normalize_shell_obfuscation(win_abs) == win_abs
+        win_unc = r"python3 \\fileserver\share\live_budget.py --execute"
+        assert ci._normalize_shell_obfuscation(win_unc) == win_unc
+        win_dot = r"python3 .\saved\code\live_budget.py --execute"
+        assert ci._normalize_shell_obfuscation(win_dot) == win_dot
+        if sys.platform != "win32":
+            assert ci._normalize_shell_obfuscation(r"echo x | t\ee config/assistant_\config") == "echo x | tee config/assistant_config"
+        monkeypatch.setattr(ci.sys, "platform", "win32")
+        assert ci._normalize_shell_obfuscation(r"python3 saved\code\live_budget.py --execute") == r"python3 saved\code\live_budget.py --execute"
+        assert ci._split_shell_argv(r'python3 "C:\My Dir\run_mutation.py" --dry-run') == [
+            "python3",
+            r"C:\My Dir\run_mutation.py",
+            "--dry-run",
+        ]
 
         # P1-5: _set_hooks_json_enabled recognizes hook_guard.py on non-Claude manifests and refuses to inject 'enabled' into Claude hooks/hooks.json
         claude_h_dir = isolated_env / "claude_copy" / "hooks"

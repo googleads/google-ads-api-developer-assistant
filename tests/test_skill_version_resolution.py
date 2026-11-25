@@ -533,7 +533,10 @@ def _preamble():
     return block.strip().splitlines()[0].strip()
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("bash") is None,
+    reason="POSIX bash required",
+)
 @pytest.mark.parametrize(
     "case, expected",
     [

@@ -4112,6 +4112,20 @@ def _is_trusted_run_mutation_script(
     return all(os.path.realpath(c) in trusted for c in existing)
 
 
+def _split_shell_argv(text: str) -> list[str]:
+    """Splits a shell command segment into argv while preserving Windows path backslashes."""
+    import shlex
+
+    posix_mode = sys.platform != "win32"
+    argv = shlex.split(text, posix=posix_mode)
+    if not posix_mode:
+        argv = [
+            tok[1:-1] if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ("'", '"') else tok
+            for tok in argv
+        ]
+    return argv
+
+
 def _run_mutation_shortcut_flag(
     segment: str,
     workspace_cwd: Optional[str],
@@ -4132,9 +4146,7 @@ def _run_mutation_shortcut_flag(
     # _protected_shell_write_decision); strip them so their targets never count as flags.
     cleaned = _REDIRECTION_STRIP_RE.sub(" ", segment)
     try:
-        import shlex
-
-        argv = shlex.split(cleaned)
+        argv = _split_shell_argv(cleaned)
     except ValueError:
         return None
     if len(argv) < 3 or not _PYTHON_ARGV0_RE.fullmatch(argv[0]):
@@ -4249,13 +4261,29 @@ def _is_trusted_plugin_script(resolved_path: str) -> bool:
     return False
 
 
+_WIN_PATH_TOKEN_RE = re.compile(
+    r"(?:'(?:[A-Za-z]:\\|\\\\|\.\.?\\)[^']*'"
+    r"|\"(?:[A-Za-z]:\\|\\\\|\.\.?\\)[^\"]*\""
+    r"|(?<![A-Za-z0-9_])(?:[A-Za-z]:\\|\\\\|\.\.?\\)[^\s'\"|;&<>()]+)"
+)
+
+
 def _normalize_shell_obfuscation(cmd: str) -> str:
     """De-obfuscates simple shell quote-splitting, backslash escapes, and inline var concats."""
     if not cmd or ("''" not in cmd and '""' not in cmd and "$" not in cmd and "\\" not in cmd):
         return cmd
     norm = cmd.replace("''", "").replace('""', "")
-    # Collapse single-char backslash escapes of alphanumerics/dots/slashes (e.g. t\ee, \python3)
-    norm = re.sub(r"\\([A-Za-z0-9_./:-])", r"\1", norm)
+    # Collapse POSIX single-char backslash escapes (e.g. t\ee, \python3) without corrupting
+    # Windows path separators (e.g. C:\Users\..., \\server\share\..., .\script.py, or win32 paths).
+    if "\\" in norm and sys.platform != "win32":
+        parts = _WIN_PATH_TOKEN_RE.split(norm)
+        matches = _WIN_PATH_TOKEN_RE.findall(norm)
+        rebuilt: list[str] = []
+        for idx, chunk in enumerate(parts):
+            rebuilt.append(re.sub(r"\\([A-Za-z0-9_./:-])", r"\1", chunk))
+            if idx < len(matches):
+                rebuilt.append(matches[idx])
+        norm = "".join(rebuilt)
     if "$" not in norm:
         return norm
     var_map: Dict[str, str] = {}
@@ -4337,7 +4365,7 @@ def _protected_shell_write_decision(
     # 1. Redirections (> file, >> file, >| file)
     for m in _SHELL_REDIRECT_TARGET_RE.finditer(norm_cmd):
         target = m.group(1) or m.group(2) or m.group(3) or ""
-        base = os.path.basename(target.strip().rstrip("/"))
+        base = os.path.basename(target.strip().replace("\\", "/").rstrip("/"))
         if base in named:
             hits.add(base)
         else:
@@ -4696,10 +4724,8 @@ def _is_safe_test_or_linter_segment(seg: str, effective_ws: Optional[str]) -> bo
         return False
     if any(tok in seg for tok in ("$(", "`", "<(", ">(")):
         return False
-    import shlex
-
     try:
-        argv = shlex.split(seg)
+        argv = _split_shell_argv(seg)
     except ValueError:
         return False
     idx = 0
