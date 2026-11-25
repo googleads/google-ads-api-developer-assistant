@@ -192,7 +192,7 @@ function Find-WorkingPython {
         $CmdInfo = Get-Command $Cmd -ErrorAction SilentlyContinue
         if (-not $CmdInfo) { continue }
         try {
-            $ProbeArgs = @($PrefixArgs) + @("-c", 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"); sys.exit(0 if sys.version_info >= (3, 11) else 1)')
+            $ProbeArgs = @($PrefixArgs) + @("-c", 'import sys; print(sys.version_info[0], sys.version_info[1], sys.version_info[2], sep=chr(46)); sys.exit(0 if sys.version_info >= (3, 11) else 1)')
             $global:LASTEXITCODE = 0
             $VerOutput = (& $Cmd @ProbeArgs 2>$null | Out-String)
             $ExitCode = $LASTEXITCODE
@@ -373,9 +373,16 @@ function Set-LatestApiVersion {
         $Py = Find-WorkingPython
         if ($Py.Found) {
             try {
-                $DetectArgs = @($Py.PrefixArgs) + @("-c", 'import importlib.util, os, re; s = importlib.util.find_spec("google.ads.googleads"); locs = list(s.submodule_search_locations or ()) if s else []; vs = sorted([d for p in locs if os.path.isdir(p) for d in os.listdir(p) if re.fullmatch(r"v\d+", d)], key=lambda d: int(d[1:])); print(vs[-1] if vs else "")')
+                $DetectCode = @'
+import importlib.util, os, re
+s = importlib.util.find_spec("google.ads.googleads")
+locs = list(s.submodule_search_locations or ()) if s else []
+vs = sorted([d for p in locs if os.path.isdir(p) for d in os.listdir(p) if re.fullmatch(r"v\d+", d)], key=lambda d: int(d[1:]))
+print(vs[-1] if vs else "")
+'@
+                $DetectArgs = @($Py.PrefixArgs) + @("-")
                 $global:LASTEXITCODE = 0
-                $DetectedPy = (& $Py.Name @DetectArgs 2>$null | Out-String)
+                $DetectedPy = ($DetectCode | & $Py.Name @DetectArgs 2>$null | Out-String)
                 if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($DetectedPy)) {
                     $Latest = $DetectedPy.Trim()
                 }

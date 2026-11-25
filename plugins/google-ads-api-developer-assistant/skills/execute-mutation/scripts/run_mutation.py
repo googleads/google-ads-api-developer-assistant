@@ -3784,17 +3784,25 @@ def _receipt_paths_lock(
     attacks (errno.ELOOP). Skips read-only secondary directories only if at
     least one writable lock is acquired; otherwise re-raises.
     """
-    canon_dirs = sorted({
-        os.path.realpath(os.path.dirname(os.path.abspath(p)))
-        for p in paths
-        if str(p).strip()
-    })
+    canon_map: Dict[str, str] = {}
+    dir_has_receipt: Dict[str, bool] = {}
+    for p in paths:
+        if not str(p).strip():
+            continue
+        abs_p = os.path.abspath(p)
+        d = os.path.realpath(os.path.dirname(abs_p))
+        key = os.path.normcase(d)
+        canon_map.setdefault(key, d)
+        if os.path.isfile(abs_p):
+            dir_has_receipt[key] = True
+    canon_dirs = [canon_map[k] for k in sorted(canon_map)]
     if not canon_dirs:
         yield
         return
 
     acquired: List[int] = []
     ro_errors: List[OSError] = []
+    ro_errors_with_receipt: List[OSError] = []
 
     def _release_all() -> None:
         while acquired:
@@ -3861,6 +3869,8 @@ def _receipt_paths_lock(
                     errno.EPERM,
                 ) or isinstance(exc, PermissionError):
                     ro_errors.append(exc)
+                    if dir_has_receipt.get(os.path.normcase(lock_dir)):
+                        ro_errors_with_receipt.append(exc)
                     continue
                 raise
 
@@ -3868,12 +3878,12 @@ def _receipt_paths_lock(
                 if sys.platform == "win32":
                     import msvcrt
 
-                    if os.fstat(fd).st_size == 0:
-                        os.write(fd, b"0")
-                    os.lseek(fd, 0, os.SEEK_SET)
                     deadline = time.monotonic() + 5.0
                     while True:
                         try:
+                            if os.fstat(fd).st_size == 0:
+                                os.lseek(fd, 0, os.SEEK_SET)
+                                os.write(fd, b"0")
                             os.lseek(fd, 0, os.SEEK_SET)
                             msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                             break
@@ -3898,8 +3908,8 @@ def _receipt_paths_lock(
                 raise
             acquired.append(fd)
 
-        if not acquired and ro_errors:
-            raise ro_errors[0]
+        if not acquired and ro_errors and (create_dirs or ro_errors_with_receipt):
+            raise (ro_errors_with_receipt[0] if ro_errors_with_receipt else ro_errors[0])
 
         yield
     finally:

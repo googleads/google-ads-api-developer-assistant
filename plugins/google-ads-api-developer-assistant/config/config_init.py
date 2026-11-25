@@ -4649,6 +4649,10 @@ def _collapse_midtoken_quotes(text: str) -> str:
                     parts.append(ch)
                 j += 1
                 continue
+            if ch == "\\" and j + 1 < m:
+                parts.append(tok[j + 1])
+                j += 2
+                continue
             if ch in ("'", '"'):
                 q = ch
                 j += 1
@@ -4757,27 +4761,29 @@ def _deobfuscate_posix_backslashes(chunk: str) -> str:
             return tok
         parts = tok.strip("'\"").split("\\")
         raw_base = parts[-1].lower()
-        # Preserve valid relative Windows paths (e.g. config\assistant_config, saved\code\live.py)
-        # when their raw basename is already intact or they don't hide an obfuscated command/target.
-        if (
-            len(parts) >= 2
-            and parts[0].lower() in _WIN_KNOWN_REL_DIRS
-            and (
-                raw_base in _PROTECTED_DENY_FILES_LOWER
-                or raw_base in _PROTECTED_ASK_FILES_LOWER
-                or raw_base in _PROTECTED_CREDENTIAL_FILES_LOWER
-            )
+        # Preserve valid relative Windows paths (e.g. config\assistant_config, tmp\last_dry_run.json,
+        # creds\google-ads.yaml) whenever their raw basename is already an intact protected/credential file.
+        if len(parts) >= 2 and (
+            raw_base in _PROTECTED_DENY_FILES_LOWER
+            or raw_base in _PROTECTED_ASK_FILES_LOWER
+            or raw_base in _PROTECTED_CREDENTIAL_FILES_LOWER
         ):
             return tok
-        # If collapsing segments after a known Windows dir exposes a protected basename (e.g. config\assistant_\config)
-        if len(parts) >= 3 and parts[0].lower() in _WIN_KNOWN_REL_DIRS:
-            joined_tail = "".join(parts[1:])
-            if _ANY_PROTECTED_BASENAME_RE.search(joined_tail) or _ANY_CREDENTIAL_BASENAME_RE.search(joined_tail):
-                return f"{parts[0]}\\{joined_tail}"
+        # If collapsing trailing segments after directory prefixes exposes a protected/credential basename
+        # (e.g. config\assistant_\config -> config\assistant_config,
+        #  saved\data\last_dry_\run.json -> saved\data\last_dry_run.json)
+        if len(parts) >= 3:
+            for split_idx in range(len(parts) - 2, 0, -1):
+                joined_tail = "".join(parts[split_idx:])
+                if _ANY_PROTECTED_BASENAME_RE.fullmatch(
+                    joined_tail
+                ) or _ANY_CREDENTIAL_BASENAME_RE.fullmatch(joined_tail):
+                    prefix = "\\".join(parts[:split_idx])
+                    return f"{prefix}\\{joined_tail}"
         if (
             stripped.lower() in _OBFUSCATED_CMD_NAMES
-            or _ANY_PROTECTED_BASENAME_RE.search(stripped)
-            or _ANY_CREDENTIAL_BASENAME_RE.search(stripped)
+            or _ANY_PROTECTED_BASENAME_RE.fullmatch(stripped.strip("'\""))
+            or _ANY_CREDENTIAL_BASENAME_RE.fullmatch(stripped.strip("'\""))
         ):
             return stripped
         # Relative Windows path with extension or known workspace prefix (e.g. saved\code\live_budget.py)
@@ -4803,7 +4809,7 @@ def _normalize_shell_obfuscation(cmd: str) -> str:
     if "$'" in norm:
         norm = _decode_ansi_c_quotes(norm)
     if "''" in norm or '""' in norm:
-        norm = norm.replace("''", "").replace('""', "")
+        norm = re.sub(r"(?<!\\)''", "", norm).replace('""', "")
     if ("'" in norm or '"' in norm) and _INTRA_TOKEN_QUOTE_RE.search(norm):
         norm = _collapse_midtoken_quotes(norm)
     # Collapse POSIX single-char backslash escapes (e.g. t\ee, \python3) without corrupting
@@ -5195,6 +5201,11 @@ def _extract_python_c_snippets(cmd: str) -> list[str]:
                 idx += 1
         if idx >= len(argv) or not _PYTHON_ARGV0_RE.fullmatch(argv[idx]):
             continue
+        def _unquote_attached(raw_s: str) -> str:
+            if len(raw_s) >= 2 and raw_s[0] == raw_s[-1] and raw_s[0] in ("'", '"'):
+                return raw_s[1:-1]
+            return raw_s
+
         j = idx + 1
         while j < len(argv):
             tok = argv[j]
@@ -5203,14 +5214,15 @@ def _extract_python_c_snippets(cmd: str) -> list[str]:
                     snippets.append(argv[j + 1])
                 break
             if tok.startswith("-c") and len(tok) > 2:
-                if tok[2:].strip():
-                    snippets.append(tok[2:])
+                attached = _unquote_attached(tok[2:])
+                if attached.strip():
+                    snippets.append(attached)
                 break
             if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]:
                 c_pos = tok.index("c", 1)
                 prefix_flags = tok[1:c_pos]
                 if all(ch in _PY_SHORT_FLAGS for ch in prefix_flags):
-                    tail = tok[c_pos + 1 :]
+                    tail = _unquote_attached(tok[c_pos + 1 :])
                     if tail.strip():
                         snippets.append(tail)
                     elif j + 1 < len(argv) and argv[j + 1].strip():
@@ -5514,10 +5526,35 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
                     return False
             return True
 
+        _UNSAFE_REQ_ATTRS = frozenset({
+            "_pb",
+            "Clear",
+            "ClearField",
+            "CopyFrom",
+            "MergeFrom",
+            "ParseFromString",
+            "DiscardUnknownFields",
+            "update",
+            "pop",
+            "popitem",
+            "clear",
+            "setdefault",
+            "__setitem__",
+            "__delitem__",
+            "__setattr__",
+            "__delattr__",
+            "__dict__",
+        })
         if isinstance(node, _ast.Attribute):
             # Reject indirect attribute references to mutation methods (e.g. fn = svc.mutate_campaigns)
             if _MUTATION_METHOD_EXACT_RE.fullmatch(node.attr):
                 return False
+            # Allow benign field reads on a safe request object (e.g. req.customer_id, req.operations)
+            # while still invalidating dangerous protobuf/dict mutator attributes and raw _pb access.
+            if isinstance(node.value, _ast.Name) and node.value.id in safe_reqs:
+                if node.attr in _UNSAFE_REQ_ATTRS:
+                    safe_reqs.discard(node.value.id)
+                return True
             return _check_expr(node.value, safe_bools, safe_reqs)
 
         if isinstance(node, _ast.Name):
@@ -5601,6 +5638,12 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
             else:
                 safe_reqs.discard(tgt.value.id)
             return True
+        if isinstance(tgt, _ast.Attribute) and isinstance(tgt.value, _ast.Name):
+            # Setting a benign sibling field (e.g. req.customer_id = "123") preserves req.validate_only;
+            # mutating _pb or dunder attributes invalidates req.
+            if tgt.attr in ("_pb", "__dict__", "__class__"):
+                safe_reqs.discard(tgt.value.id)
+            return True
         if isinstance(tgt, (_ast.Attribute, _ast.Subscript)):
             if not _check_expr(tgt.value, safe_bools, safe_reqs):
                 return False
@@ -5610,19 +5653,30 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
                 return False
             return True
         if isinstance(tgt, (_ast.Tuple, _ast.List, _ast.Starred)):
-            for nm in _iter_target_names(tgt):
-                safe_bools.discard(nm)
-                safe_reqs.discard(nm)
-            for sub in _ast.iter_child_nodes(tgt):
-                if isinstance(sub, (_ast.Attribute, _ast.Subscript)):
-                    if not _check_expr(sub.value, safe_bools, safe_reqs):
-                        return False
-                    if isinstance(sub, _ast.Subscript) and not _check_expr(
-                        sub.slice, safe_bools, safe_reqs
-                    ):
-                        return False
-            return True
+            return _invalidate_target_subtree(tgt, safe_bools, safe_reqs)
         return False
+
+    def _invalidate_target_subtree(
+        tgt: _ast.AST, safe_bools: set[str], safe_reqs: set[str]
+    ) -> bool:
+        """Recursively invalidates all target names and attribute/subscript bases in compound targets."""
+        for sub in _ast.walk(tgt):
+            if isinstance(sub, _ast.Name):
+                safe_bools.discard(sub.id)
+                safe_reqs.discard(sub.id)
+            elif isinstance(sub, _ast.Attribute):
+                if isinstance(sub.value, _ast.Name):
+                    safe_reqs.discard(sub.value.id)
+                elif not _check_expr(sub.value, safe_bools, safe_reqs):
+                    return False
+            elif isinstance(sub, _ast.Subscript):
+                if isinstance(sub.value, _ast.Name):
+                    safe_reqs.discard(sub.value.id)
+                elif not _check_expr(sub.value, safe_bools, safe_reqs):
+                    return False
+                if not _check_expr(sub.slice, safe_bools, safe_reqs):
+                    return False
+        return True
 
     def _walk_block(
         stmts: list[_ast.stmt], safe_bools: set[str], safe_reqs: set[str]
@@ -5694,16 +5748,8 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
                 continue
             if isinstance(stmt, _ast.Delete):
                 for tgt in stmt.targets:
-                    for nm in _iter_target_names(tgt):
-                        safe_bools.discard(nm)
-                        safe_reqs.discard(nm)
-                    if isinstance(tgt, (_ast.Attribute, _ast.Subscript)):
-                        if not _check_expr(tgt.value, safe_bools, safe_reqs):
-                            return False
-                        if isinstance(tgt, _ast.Subscript) and not _check_expr(
-                            tgt.slice, safe_bools, safe_reqs
-                        ):
-                            return False
+                    if not _invalidate_target_subtree(tgt, safe_bools, safe_reqs):
+                        return False
                 continue
             if isinstance(stmt, _ast.If):
                 if not _check_expr(stmt.test, safe_bools, safe_reqs):
@@ -5733,9 +5779,8 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
                 else:
                     if not _check_expr(stmt.iter, safe_bools, safe_reqs):
                         return False
-                    for nm in _iter_target_names(stmt.target):
-                        safe_bools.discard(nm)
-                        safe_reqs.discard(nm)
+                    if not _invalidate_target_subtree(stmt.target, safe_bools, safe_reqs):
+                        return False
                 modified = _collect_assigned_names(stmt.body + stmt.orelse)
                 safe_bools.difference_update(modified)
                 safe_reqs.difference_update(modified)
@@ -5764,12 +5809,10 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
                     if not _check_expr(item.context_expr, safe_bools, safe_reqs):
                         return False
                     if item.optional_vars is not None:
-                        for nm in _iter_target_names(item.optional_vars):
-                            safe_bools.discard(nm)
-                            safe_reqs.discard(nm)
-                        if isinstance(item.optional_vars, (_ast.Attribute, _ast.Subscript)):
-                            if not _check_expr(item.optional_vars.value, safe_bools, safe_reqs):
-                                return False
+                        if not _invalidate_target_subtree(
+                            item.optional_vars, safe_bools, safe_reqs
+                        ):
+                            return False
                 if not _walk_block(stmt.body, safe_bools, safe_reqs):
                     return False
                 continue
@@ -5794,7 +5837,7 @@ def _is_strictly_ast_validate_only_true(source_blobs: list[str]) -> bool:
                         return False
                     all_handler_b &= h_b
                     all_handler_r &= h_r
-                o_b, o_r = set(after_body_b), set(after_body_r)
+                o_b, o_r = set(body_b), set(body_r)
                 if stmt.orelse:
                     if not _walk_block(stmt.orelse, o_b, o_r):
                         return False
@@ -6095,7 +6138,7 @@ def _has_unsafe_test_runner_injection(seg: str) -> bool:
     try:
         argv = _split_shell_argv(seg)
     except ValueError:
-        return True
+        return bool(_TEST_OR_LINTER_CMD_RE.search(seg))
     _FORBIDDEN_ENV_PREFIXES = frozenset({
         "PYTHONPATH",
         "PYTHONSTARTUP",

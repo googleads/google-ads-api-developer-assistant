@@ -1412,16 +1412,18 @@ def _parse_assistant_config_fallback(
 
         ok, val = _parse_fallback_toml_value(raw_rhs)
         if not ok:
-            # If an unclosed inline table `{` has a closing `}` later, skip it.
-            if raw_rhs.startswith("{"):
-                close_idx = next(
-                    (
-                        j
-                        for j in range(idx, len(lines))
-                        if "}" in _strip_toml_comment_outside_quotes(lines[j])
-                    ),
-                    None,
-                )
+            # Skip unclosed multiline inline tables `{...}` and arrays `[...]` up to closing delimiter,
+            # stopping before any `[section]` header so malformed `[` never swallows a table header.
+            if raw_rhs.startswith("{") or raw_rhs.startswith("["):
+                close_ch = "}" if raw_rhs.startswith("{") else "]"
+                close_idx = None
+                for j in range(idx, len(lines)):
+                    cand_line = _strip_toml_comment_outside_quotes(lines[j]).strip()
+                    if cand_line.startswith("[") and cand_line.endswith("]") and len(cand_line) >= 3:
+                        break
+                    if close_ch in cand_line:
+                        close_idx = j
+                        break
                 if close_idx is not None:
                     idx = close_idx + 1
             continue
@@ -1568,7 +1570,7 @@ def update_api_version_cache_if_needed(lib_path: str) -> Optional[str]:
             existing_text = ""
             if os.path.isfile(cfg_path):
                 try:
-                    with open(cfg_path, "r", encoding="utf-8") as f:
+                    with open(cfg_path, "r", encoding="utf-8-sig") as f:
                         existing_text = f.read()
                     try:
                         loaded_cfg = tomllib.loads(existing_text)

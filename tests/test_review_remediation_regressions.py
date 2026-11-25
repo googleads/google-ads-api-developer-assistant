@@ -837,10 +837,20 @@ def test_config_init_new_guard_helpers_and_win32_branches(
     monkeypatch.setattr(ci.sys, "platform", "win32")
     assert ci._deobfuscate_posix_backslashes(r"saved\code\live.py") == r"saved\code\live.py"
     assert ci._deobfuscate_posix_backslashes(r"config\assistant_config") == r"config\assistant_config"
+    assert ci._deobfuscate_posix_backslashes(r"tmp\last_dry_run.json") == r"tmp\last_dry_run.json"
+    assert ci._deobfuscate_posix_backslashes(r"creds\google-ads.yaml") == r"creds\google-ads.yaml"
+    assert ci._deobfuscate_posix_backslashes(r"saved\data\last_dry_\run.json") == r"saved\data\last_dry_run.json"
     assert "assistant_config" in ci._deobfuscate_posix_backslashes(r"config\assistant_\config")
     assert ci._deobfuscate_posix_backslashes(r"\python3") == "python3"
     assert ci._deobfuscate_posix_backslashes(r"t\ee") == "tee"
     assert "assistant_config" in ci._deobfuscate_posix_backslashes(r"config/assistant_\config")
+    # Verify _extract_python_c_snippets strips quotes on attached -c'...' under simulated win32
+    assert ci._extract_python_c_snippets("python3 -c'print(2)'") == ["print(2)"]
+    assert ci._extract_python_c_snippets("python3 -uc'print(3)'") == ["print(3)"]
+    # Verify protected writes and credential reads work under simulated win32 relative paths
+    assert ci._protected_shell_write_decision(r"echo '{}' > tmp\last_dry_run.json") is not None
+    assert ci._protected_shell_write_decision(r"echo '{}' > saved\data\last_dry_\run.json") is not None
+    assert ci._protected_credential_shell_read_decision(ci._normalize_shell_obfuscation(r"type creds\google-ads.yaml")) is not None
     monkeypatch.undo()
 
     # 4. _glob_hits_protected_basenames directory wildcards & literal globs
@@ -925,4 +935,73 @@ def test_config_init_new_guard_helpers_and_win32_branches(
         )
         is False
     )
+
+    # 10. POSIX '\'' escaped single quotes & idiomatic req field assignments remain valid
+    _write_assistant_config(tmp_path / "cfg_esc", execute_mutates=False)
+    monkeypatch.setenv("GOOGLE_ADS_ASSISTANT_CONFIG_DIR", str(tmp_path / "cfg_esc"))
+    dec_esc, _ = ci.evaluate_mutation_guard(
+        "python3 -c 'svc.mutate_campaigns(validate_only=True); print('\\''ok'\\'')'",
+        workspace_cwd=str(tmp_path),
+    )
+    assert dec_esc == "allow"
+    dec_ansi, _ = ci.evaluate_mutation_guard(
+        r"python3 -c $'svc.mutate_campaigns(validate_only=True); print(\'ok\')'",
+        workspace_cwd=str(tmp_path),
+    )
+    assert dec_ansi == "allow"
+
+    # Idiomatic field assignment/read after validate_only = True + try/else
+    idiomatic = (
+        "req = client.get_type('MutateCampaignsRequest')\n"
+        "req.validate_only = True\n"
+        "req.customer_id = '123'\n"
+        "req.operations.append(op)\n"
+        "print(req.customer_id)\n"
+        "svc.mutate_campaigns(request=req)\n"
+    )
+    assert ci._is_strictly_ast_validate_only_true([idiomatic]) is True
+    try_else_safe = (
+        "req = client.get_type('MutateCampaignsRequest')\n"
+        "try:\n"
+        "    req.validate_only = True\n"
+        "except Exception:\n"
+        "    pass\n"
+        "else:\n"
+        "    svc.mutate_campaigns(request=req)\n"
+    )
+    assert ci._is_strictly_ast_validate_only_true([try_else_safe]) is True
+
+    # Nested compound target bypasses denied
+    for bad_target in (
+        "req = client.get_type('MutateCampaignsRequest')\nreq.validate_only = True\n(a, (b, req.validate_only)) = (1, (2, 0))\nsvc.mutate_campaigns(request=req)\n",
+        "req = client.get_type('MutateCampaignsRequest')\nreq.validate_only = True\ndel (a, req.validate_only)\nsvc.mutate_campaigns(request=req)\n",
+        "req = client.get_type('MutateCampaignsRequest')\nreq.validate_only = True\nfor req.validate_only in [0]: pass\nsvc.mutate_campaigns(request=req)\n",
+        "req = client.get_type('MutateCampaignsRequest')\nreq.validate_only = True\nwith ctx() as (a, req.validate_only): pass\nsvc.mutate_campaigns(request=req)\n",
+    ):
+        assert ci._is_strictly_ast_validate_only_true([bad_target]) is False
+
+    # 11. server.py rejects /outside/saved/evil confinement escape
+    import server
+
+    handler = server.A2AHandler.__new__(server.A2AHandler)
+    fake_outside_saved = tmp_path / "outside" / "saved" / "evil"
+    fake_outside_saved.mkdir(parents=True)
+    res_esc = handler.handle_troubleshoot_conversions(
+        "task-esc-saved",
+        {
+            "customer_id": "1234567890",
+            "api_version": CURRENT_API_VERSION,
+            "client": MagicMock(),
+            "output_dir": str(fake_outside_saved),
+        },
+    )
+    assert res_esc["status"] == "VALIDATION_FAILED"
+
+    # 12. sync_client_libs skips unclosed multiline '[' and reads UTF-8 BOM assistant_config
+    scl = _load_module("_scl_bom", "skills/sync-client-libs/scripts/sync_client_libs.py")
+    _cid2, exec2, _, _ = scl._parse_assistant_config_fallback(
+        "arr = [\n  execute_mutates = true\n]\n"
+    )
+    assert exec2 == "false"
+
 
